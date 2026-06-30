@@ -30,12 +30,115 @@ public sealed class LeaseServiceOverlapTests : IDisposable
 
     public void Dispose() => _ctx.Dispose();
 
+    [Theory]
+    [InlineData(LeaseStatus.Active)]
+    [InlineData(LeaseStatus.NoticeGiven)]
+    public async Task CreateAsync_ActiveLeaseOverlappingOccupyingLease_ThrowsConflict(LeaseStatus existingStatus)
+    {
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedLease(property, unit, tenant, "L-EXISTING", existingStatus, Date(2030, 1, 1), Date(2030, 12, 31));
+        var newTenant = SeedTenant("Taylor", "Jones", "taylor.jones@example.local");
+
+        var act = async () => await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = newTenant.Id,
+            LeaseNumber = "L-OVERLAP",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("L-EXISTING");
+        _ctx.Db.Leases.Should().ContainSingle(l => l.LeaseNumber == "L-EXISTING");
+        _ctx.Db.Leases.Should().NotContain(l => l.LeaseNumber == "L-OVERLAP");
+    }
+
+    [Fact]
+    public async Task CreateAsync_DraftLeaseOverlappingOccupyingLease_AllowsLeaseWithoutBookingUnit()
+    {
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 12, 31));
+        var newTenant = SeedTenant("Jordan", "Parker", "jordan.parker@example.local");
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = newTenant.Id,
+            LeaseNumber = "L-DRAFT",
+            Status = LeaseStatus.Draft,
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        result.Should().NotBeNull();
+        result!.Status.Should().Be(LeaseStatus.Draft);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ActiveLeaseStartingWhenExistingLeaseEnds_AllowsAdjacentTerms()
+    {
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 6, 1));
+        var newTenant = SeedTenant("Morgan", "Lee", "morgan.lee@example.local");
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = newTenant.Id,
+            LeaseNumber = "L-ADJACENT",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        result.Should().NotBeNull();
+        result!.LeaseNumber.Should().Be("L-ADJACENT");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DraftToActiveWhenDatesOverlapOccupyingLease_ThrowsConflict()
+    {
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 12, 31));
+        var newTenant = SeedTenant("Avery", "Stone", "avery.stone@example.local");
+        var draft = SeedLease(property, unit, newTenant, "L-DRAFT", LeaseStatus.Draft, Date(2030, 6, 1), Date(2031, 1, 1));
+
+        var act = async () => await _sut.UpdateAsync(PortfolioId, draft.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.Active,
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("L-EXISTING");
+        _ctx.Db.Leases.Single(l => l.Id == draft.Id).Status.Should().Be(LeaseStatus.Draft);
+    }
+
     [Fact]
     public async Task UpdateAsync_RejectsActiveLeaseDateEditThatOverlapsAnotherOccupyingLease()
     {
-        var unit = SeedPropertyUnitTenant(out var tenantA, out var tenantB);
-        var leaseA = SeedLease(unit, tenantA, "QA-2026-A", LeaseStatus.Active, Date(2026, 1, 1), Date(2026, 6, 1));
-        SeedLease(unit, tenantB, "QA-2026-B", LeaseStatus.Active, Date(2026, 6, 1), Date(2026, 12, 31));
+        var (property, unit, tenantA) = SeedPropertyUnitTenant();
+        var tenantB = SeedTenant("Blair", "Leaseholder", "blair.leaseholder@example.local");
+        var leaseA = SeedLease(property, unit, tenantA, "QA-2026-A", LeaseStatus.Active, Date(2026, 1, 1), Date(2026, 6, 1));
+        SeedLease(property, unit, tenantB, "QA-2026-B", LeaseStatus.Active, Date(2026, 6, 1), Date(2026, 12, 31));
 
         var act = async () => await _sut.UpdateAsync(
             PortfolioId,
@@ -50,9 +153,10 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     [Fact]
     public async Task UpdateAsync_AllowsAdjacentActiveLeaseDateEdit()
     {
-        var unit = SeedPropertyUnitTenant(out var tenantA, out var tenantB);
-        var leaseA = SeedLease(unit, tenantA, "QA-2026-A", LeaseStatus.Active, Date(2026, 1, 1), Date(2026, 5, 1));
-        SeedLease(unit, tenantB, "QA-2026-B", LeaseStatus.Active, Date(2026, 6, 1), Date(2026, 12, 31));
+        var (property, unit, tenantA) = SeedPropertyUnitTenant();
+        var tenantB = SeedTenant("Blair", "Leaseholder", "blair.leaseholder@example.local");
+        var leaseA = SeedLease(property, unit, tenantA, "QA-2026-A", LeaseStatus.Active, Date(2026, 1, 1), Date(2026, 5, 1));
+        SeedLease(property, unit, tenantB, "QA-2026-B", LeaseStatus.Active, Date(2026, 6, 1), Date(2026, 12, 31));
 
         var updated = await _sut.UpdateAsync(
             PortfolioId,
@@ -63,64 +167,86 @@ public sealed class LeaseServiceOverlapTests : IDisposable
         updated!.EndDate.Should().Be(Date(2026, 6, 1));
     }
 
-    private Unit SeedPropertyUnitTenant(out Tenant tenantA, out Tenant tenantB)
+    private (Property property, Unit unit, Tenant tenant) SeedPropertyUnitTenant()
     {
         var now = Date(2026, 1, 1);
         var property = new Property
         {
             PortfolioId = PortfolioId,
             Name = "Overlap Test Property",
-            AddressLine1 = "1 Test Way",
-            City = "Columbus",
+            AddressLine1 = "100 Lease Ave",
+            City = "Cincinnati",
             State = "OH",
-            PostalCode = "43215",
+            PostalCode = "45202",
             CreatedAt = now,
             UpdatedAt = now,
         };
         var unit = new Unit
         {
             Property = property,
-            UnitNumber = "1A",
-            Status = UnitStatus.Occupied,
+            UnitNumber = "1",
+            MarketRent = 1275m,
+            Status = UnitStatus.Vacant,
             CreatedAt = now,
             UpdatedAt = now,
         };
-        tenantA = new Tenant
+        var tenant = new Tenant
         {
             PortfolioId = PortfolioId,
-            FirstName = "Avery",
-            LastName = "Leaseholder",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        tenantB = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Blair",
-            LastName = "Leaseholder",
+            FirstName = "Kevin",
+            LastName = "Brown",
+            Email = "kevin.brown@example.local",
             CreatedAt = now,
             UpdatedAt = now,
         };
 
-        _ctx.Db.AddRange(unit, tenantA, tenantB);
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.Tenants.Add(tenant);
         _ctx.Db.SaveChanges();
-        return unit;
+
+        return (property, unit, tenant);
     }
 
-    private Lease SeedLease(Unit unit, Tenant tenant, string leaseNumber, LeaseStatus status, DateTime start, DateTime end)
+    private Tenant SeedTenant(string firstName, string lastName, string email)
+    {
+        var now = Date(2026, 1, 1);
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = email,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+        return tenant;
+    }
+
+    private Lease SeedLease(
+        Property property,
+        Unit unit,
+        Tenant tenant,
+        string leaseNumber,
+        LeaseStatus status,
+        DateTime start,
+        DateTime end)
     {
         var lease = new Lease
         {
             PortfolioId = PortfolioId,
-            PropertyId = unit.PropertyId,
-            UnitId = unit.Id,
-            TenantId = tenant.Id,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
             LeaseNumber = leaseNumber,
             Status = status,
             StartDate = start,
             EndDate = end,
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
             RentDueDay = 1,
             CreatedAt = start,
             UpdatedAt = start,
