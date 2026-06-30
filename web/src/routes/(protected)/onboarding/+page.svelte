@@ -24,7 +24,6 @@
 		parseForm,
 	} from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { formatPhoneInput } from '$lib/utils/phone';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
@@ -1048,7 +1047,7 @@
 								</div>
 								<div>
 									<label for="ob-owner-email" class="mb-1 block text-xs font-medium text-muted-foreground">Email <span class="font-normal">(optional)</span></label>
-									<Input id="ob-owner-email" data-testid="onboarding-owner-email" bind:value={ownerForm.email} placeholder="owner@example.com" />
+									<Input id="ob-owner-email" type="email" autocomplete="email" data-testid="onboarding-owner-email" bind:value={ownerForm.email} placeholder="owner@example.com" />
 									{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive">{ownerErrors.email}</p>{/if}
 								</div>
 								<div class="sm:col-span-2">
@@ -1102,7 +1101,7 @@
 										</div>
 										<div>
 											<label for="ob-prop-zip" class="mb-1 block text-xs font-medium text-muted-foreground">ZIP</label>
-											<Input id="ob-prop-zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
+											<Input id="ob-prop-zip" type="text" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
 											{#if propertyErrors.postalCode}<p class="mt-1 text-xs text-destructive">{propertyErrors.postalCode}</p>{/if}
 										</div>
 									</div>
@@ -1140,18 +1139,18 @@
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
-														<Input type="number" min="0" step="1" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
+														<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
 														{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
-														<Input type="number" min="0" step="0.5" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
+														<Input type="text" inputmode="decimal" mask="decimal" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
 														{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Market rent</span>
 														<div class="flex items-center gap-1">
-															<Input type="number" min="0" step="0.01" data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
+															<Input type="text" inputmode="decimal" mask="currency" data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
 															{#if unitRows.length > 1}
 																<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove unit" data-testid="onboarding-unit-remove-{i}" onclick={() => removeUnitRow(i)}>
 																	<Trash2 class="h-4 w-4" />
@@ -1196,13 +1195,13 @@
 											</div>
 											<div>
 												<span class="mb-1 block text-[11px] text-muted-foreground">Email (optional)</span>
-												<Input data-testid="onboarding-tenant-email-{i}" bind:value={row.email} placeholder="tenant@example.com" />
+												<Input type="email" autocomplete="email" data-testid="onboarding-tenant-email-{i}" bind:value={row.email} placeholder="tenant@example.com" />
 												{#if tenantRowErrors[i]?.email}<p class="mt-1 text-[11px] text-destructive">{tenantRowErrors[i].email}</p>{/if}
 											</div>
 											<div>
 												<span class="mb-1 block text-[11px] text-muted-foreground">Phone (optional)</span>
 												<div class="flex items-center gap-1">
-													<Input data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" oninput={(e) => { row.phone = formatPhoneInput((e.target as HTMLInputElement).value); }} />
+													<Input type="tel" autocomplete="tel" inputmode="tel" mask="phone" data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" />
 													{#if tenantRows.length > 1}
 														<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove tenant" data-testid="onboarding-tenant-remove-{i}" onclick={() => removeTenantRow(i)}>
 															<Trash2 class="h-4 w-4" />
@@ -1280,7 +1279,7 @@
 									</div>
 									<div>
 										<label for="ob-lease-rent" class="mb-1 block text-xs font-medium text-muted-foreground">Monthly rent</label>
-										<Input id="ob-lease-rent" data-testid="onboarding-lease-rent" bind:value={leaseForm.monthlyRent} placeholder="1500" />
+										<Input id="ob-lease-rent" type="text" inputmode="decimal" mask="currency" data-testid="onboarding-lease-rent" bind:value={leaseForm.monthlyRent} placeholder="1500" />
 										{#if leaseErrors.monthlyRent}<p class="mt-1 text-xs text-destructive">{leaseErrors.monthlyRent}</p>{/if}
 									</div>
 									<div>
@@ -1295,12 +1294,12 @@
 									</div>
 									<div>
 										<label for="ob-lease-deposit" class="mb-1 block text-xs font-medium text-muted-foreground">Security deposit</label>
-										<Input id="ob-lease-deposit" data-testid="onboarding-lease-deposit" bind:value={leaseForm.securityDeposit} placeholder="1500" />
+										<Input id="ob-lease-deposit" type="text" inputmode="decimal" mask="currency" data-testid="onboarding-lease-deposit" bind:value={leaseForm.securityDeposit} placeholder="1500" />
 										{#if leaseErrors.securityDeposit}<p class="mt-1 text-xs text-destructive">{leaseErrors.securityDeposit}</p>{/if}
 									</div>
 									<div>
 										<label for="ob-lease-dueday" class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent due day<HelpPopover title="Rent due day" summary="The day of the month rent is expected — e.g. 1 means the 1st of each month. The system posts rent charges and calculates late fees based on this date." testid="help-rent-due-day" /></label>
-										<Input id="ob-lease-dueday" data-testid="onboarding-lease-dueday" bind:value={leaseForm.rentDueDay} placeholder="1" />
+										<Input id="ob-lease-dueday" type="text" inputmode="numeric" maxlength={2} mask="integer" data-testid="onboarding-lease-dueday" bind:value={leaseForm.rentDueDay} placeholder="1" />
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
 									<div class={leaseForm.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
@@ -1330,7 +1329,7 @@
 						<WizardStepScaffold step={currentStep}>
 							<div>
 								<label for="ob-notif-email" class="mb-1 block text-xs font-medium text-muted-foreground">Alert email <span class="font-normal">(optional)</span></label>
-								<Input id="ob-notif-email" type="email" data-testid="onboarding-notification-email" bind:value={notificationEmail} placeholder="your-email@example.com" />
+								<Input id="ob-notif-email" type="email" autocomplete="email" data-testid="onboarding-notification-email" bind:value={notificationEmail} placeholder="your-email@example.com" />
 								<p class="mt-1 text-xs text-muted-foreground">Leave blank to use your login email.</p>
 							</div>
 						</WizardStepScaffold>
@@ -1354,7 +1353,7 @@
 								</div>
 								<div>
 									<label for="ob-sw-from" class="mb-1 block text-xs font-medium text-muted-foreground">From number</label>
-									<Input id="ob-sw-from" autocomplete="off" data-testid="onboarding-texting-from" bind:value={textingForm.fromNumber} placeholder="+13302933081" />
+									<Input id="ob-sw-from" type="tel" inputmode="tel" autocomplete="off" data-testid="onboarding-texting-from" bind:value={textingForm.fromNumber} placeholder="+13302933081" />
 								</div>
 								<div>
 									<label for="ob-sw-token" class="mb-1 block text-xs font-medium text-muted-foreground">

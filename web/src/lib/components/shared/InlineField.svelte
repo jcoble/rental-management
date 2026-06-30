@@ -1,10 +1,13 @@
 <script lang="ts">
+	import type { HTMLInputAttributes } from 'svelte/elements';
 	import * as Select from '$lib/components/ui/select';
+	import { maskInputValue, type InputMask } from '$lib/forms/input-masks';
 
 	type Option = {
 		value: string;
 		label: string;
 	};
+	type InputMode = 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search';
 
 	let {
 		label,
@@ -19,6 +22,10 @@
 		class: className = '',
 		editTrigger = 'none',
 		oneditrequest,
+		mask,
+		inputmode,
+		autocomplete,
+		maxlength,
 	}: {
 		label: string;
 		value?: string;
@@ -30,6 +37,10 @@
 		error?: string;
 		testid: string;
 		class?: string;
+		mask?: InputMask;
+		inputmode?: InputMode;
+		autocomplete?: HTMLInputAttributes['autocomplete'];
+		maxlength?: number;
 		/**
 		 * How a display-mode value lets the user start editing.
 		 *  - 'none'    (default, SAFE): the value is a calm, non-interactive row. The
@@ -64,25 +75,45 @@
 	const inputClass =
 		'm3-field-surface h-11 w-full px-3 py-2 text-sm text-foreground outline-none';
 
-	// Numeric fields are rendered as text inputs with a decimal input mode rather than
-	// a native `type="number"`. This keeps the bound `value` a clean string (a native
-	// number input lets Svelte 5 coerce `bind:value` to a `number`, which broke the
-	// string-first Zod helpers — TSK-195) AND lets us reject non-numeric keystrokes up
-	// front so garbage like "sdfds" can't be typed into a money box (TSK-198). Allowed
-	// characters: digits, one decimal point, a leading minus, and editing keys.
 	const isNumeric = $derived(type === 'number');
-	function filterNumeric(e: Event) {
+	function inferMask(): InputMask | undefined {
+		if (mask) return mask;
+		const key = label.toLowerCase();
+		if (type === 'tel') return 'phone';
+		if (key.includes('zip')) return 'zip';
+		if (!isNumeric) return undefined;
+		if (key.includes('rate') || key.includes('%')) return 'percentage';
+		if (key.includes('day') || key.includes('month') || key.includes('term')) return 'integer';
+		return 'currency';
+	}
+	const activeMask = $derived(inferMask());
+	const activeInputMode = $derived(
+		inputmode ??
+			(activeMask === 'phone'
+				? 'tel'
+				: activeMask === 'integer' || activeMask === 'zip' || activeMask === 'cardLast4'
+					? 'numeric'
+					: activeMask === 'currency' || activeMask === 'decimal' || activeMask === 'percentage'
+						? 'decimal'
+						: undefined)
+	);
+	const activeAutocomplete = $derived(
+		autocomplete ??
+			(type === 'email'
+				? 'email'
+				: type === 'tel'
+					? 'tel'
+					: activeMask === 'zip'
+						? 'postal-code'
+						: undefined)
+	);
+	const activeMaxLength = $derived(
+		maxlength ?? (activeMask === 'zip' ? 10 : activeMask === 'cardLast4' ? 4 : undefined)
+	);
+	function handleMaskedInput(e: Event) {
+		if (!activeMask) return;
 		const input = e.currentTarget as HTMLInputElement;
-		// Strip anything that isn't a digit, dot or minus, collapse to one dot / leading minus.
-		let cleaned = input.value.replace(/[^0-9.\-]/g, '');
-		const negative = cleaned.startsWith('-');
-		cleaned = cleaned.replace(/-/g, '');
-		const firstDot = cleaned.indexOf('.');
-		if (firstDot !== -1) {
-			cleaned =
-				cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
-		}
-		if (negative) cleaned = '-' + cleaned;
+		const cleaned = maskInputValue(input.value, activeMask, { maxLength: activeMaxLength });
 		if (cleaned !== input.value) input.value = cleaned;
 		value = cleaned;
 	}
@@ -124,14 +155,27 @@
 				id={fieldId}
 				data-testid={fieldId}
 				{value}
-				oninput={filterNumeric}
+				oninput={handleMaskedInput}
 				class={inputClass}
 				type="text"
-				inputmode="decimal"
+				inputmode={activeInputMode}
+				autocomplete={activeAutocomplete}
+				maxlength={activeMaxLength}
 				{placeholder}
 			/>
 		{:else}
-			<input id={fieldId} data-testid={fieldId} bind:value class={inputClass} {type} {placeholder} />
+			<input
+				id={fieldId}
+				data-testid={fieldId}
+				bind:value
+				class={inputClass}
+				{type}
+				{placeholder}
+				inputmode={activeInputMode}
+				autocomplete={activeAutocomplete}
+				maxlength={activeMaxLength}
+				oninput={handleMaskedInput}
+			/>
 		{/if}
 		{#if error}
 			<p class="mt-1 text-xs text-destructive" data-testid={`${testid}-error`}>{error}</p>

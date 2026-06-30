@@ -392,9 +392,9 @@
 					data-testid="holding-amount-input"
 					bind:value={newHoldingAmount}
 					placeholder="Defaults to lease deposit"
-					type="number"
-					min="0"
-					step="0.01"
+					type="text"
+					inputmode="decimal"
+					mask="currency"
 				/>
 				{#if newHoldingErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="holding-amount-error">{newHoldingErrors.amount}</p>{/if}
 			</div>
@@ -441,9 +441,9 @@
 				<Input
 					data-testid="deduction-amount-input"
 					bind:value={deductionAmount}
-					type="number"
-					min="0"
-					step="0.01"
+					type="text"
+					inputmode="decimal"
+					mask="currency"
 					placeholder="0.00"
 				/>
 				{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="deduction-amount-error">{deductionErrors.amount}</p>{/if}

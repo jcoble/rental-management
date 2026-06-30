@@ -280,11 +280,11 @@
 			<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
 				<Input data-testid="owner-city-input" bind:value={ownerForm.city} placeholder="City" />
 				<StateSelect testid="owner-state-input" bind:value={ownerForm.state} placeholder="State" />
-				<Input data-testid="owner-zip-input" bind:value={ownerForm.postalCode} placeholder="ZIP" />
+				<Input data-testid="owner-zip-input" bind:value={ownerForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
 			</div>
-			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" />
+			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
 			<div>
-				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" placeholder="Email (optional)" />
+				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" autocomplete="email" placeholder="Email (optional)" />
 				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
 			</div>
 		</div>
