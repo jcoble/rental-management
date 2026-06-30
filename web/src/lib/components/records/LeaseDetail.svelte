@@ -352,9 +352,74 @@
 		onSuccess: () => {
 			showSuccess('Payment marked as paid.');
 			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, leaseId] });
+			queryClient.invalidateQueries({ queryKey: ['lease-ledger', leaseId] });
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	let showPastDuePaidDialog = $state(false);
+	let pastDuePaidDate = $state(new Date().toISOString().slice(0, 10));
+	let pastDueMethod = $state('');
+	let pastDueReference = $state('');
+	let pastDueNotes = $state('');
+	let pastDuePaidErrors = $state<{ paidDate?: string }>({});
+
+	const pastDuePaymentCount = $derived.by(() => {
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		return (paymentsQuery.data ?? []).filter((payment) => {
+			if (!['Scheduled', 'Partial', 'Late'].includes(payment.status)) return false;
+			const dueDate = new Date(payment.dueDate);
+			if (Number.isNaN(dueDate.getTime())) return false;
+			dueDate.setHours(0, 0, 0, 0);
+			return dueDate < today;
+		}).length;
+	});
+
+	function openPastDuePaidDialog() {
+		pastDuePaidDate = new Date().toISOString().slice(0, 10);
+		pastDueMethod = '';
+		pastDueReference = '';
+		pastDueNotes = '';
+		pastDuePaidErrors = {};
+		showPastDuePaidDialog = true;
+	}
+
+	function closePastDuePaidDialog() {
+		pastDuePaidErrors = {};
+		showPastDuePaidDialog = false;
+	}
+
+	const markLeasePastDuePaidMutation = createMutation(() => ({
+		mutationFn: (body: Record<string, unknown>) => payments.markLeasePastDuePaid(leaseId, body),
+		onSuccess: (result) => {
+			showSuccess(
+				result.markedPaidCount === 0
+					? 'No past-due rent charges needed settling.'
+					: `${result.markedPaidCount} past-due ${result.markedPaidCount === 1 ? 'charge' : 'charges'} marked paid.`
+			);
+			closePastDuePaidDialog();
+			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, leaseId] });
+			queryClient.invalidateQueries({ queryKey: ['lease-ledger', leaseId] });
+			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['accounting'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function submitPastDuePaid() {
+		if (!pastDuePaidDate) {
+			pastDuePaidErrors = { paidDate: 'Pick a paid date.' };
+			return;
+		}
+
+		const body: Record<string, unknown> = { paidDate: pastDuePaidDate };
+		if (pastDueMethod.trim()) body.method = pastDueMethod.trim();
+		if (pastDueReference.trim()) body.externalReference = pastDueReference.trim();
+		if (pastDueNotes.trim()) body.notes = pastDueNotes.trim();
+		pastDuePaidErrors = {};
+		markLeasePastDuePaidMutation.mutate(body);
+	}
 
 	// --- Lease agreement PDF (generate + authed blob download) ---
 	// Whether a generated agreement already exists. Status is checked without
@@ -561,7 +626,17 @@
 		const tenantId = String(selectedTenantIds[0] ?? '');
 		form.tenantId = tenantId;
 		const { propertyId: _p, ...rest } = form;
-		const result = parseForm(leaseSchema.omit({ propertyId: true }), { ...rest, tenantId });
+		const result = parseForm(
+			leaseSchema.omit({
+				propertyId: true,
+				rentTrackingStartMode: true,
+				rentTrackingStartDate: true,
+				openingBalanceAmount: true,
+				openingBalanceAsOfDate: true,
+				openingBalanceNote: true,
+			}),
+			{ ...rest, tenantId }
+		);
 		const tenantErrors: Record<string, string> =
 			selectedTenantIds.length === 0 ? { tenantId: 'Select at least one tenant' } : {};
 		if (result.errors || Object.keys(tenantErrors).length > 0) {
@@ -1398,7 +1473,21 @@
 							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold {ledger.balance > 0.005 ? 'text-warning' : 'text-success'}">{formatCurrency(ledger.balance)}</p>
 						</div>
 					</div>
-					<p class="mb-4 text-sm font-medium" data-testid="lease-ledger-balance-line">{balanceLine}</p>
+					<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+						<p class="text-sm font-medium" data-testid="lease-ledger-balance-line">{balanceLine}</p>
+						{#if pastDuePaymentCount > 0}
+							<Button
+								variant="outline"
+								size="sm"
+								class="gap-1.5"
+								onclick={openPastDuePaidDialog}
+								data-testid="lease-ledger-settle-past-due"
+							>
+								<DollarSign class="h-4 w-4" />
+								Settle past due
+							</Button>
+						{/if}
+					</div>
 
 					<!-- Opening balance control (carried-over balance from before Rental Command) -->
 					<div class="mb-4 rounded-md border border-dashed border-border bg-muted/20 p-3" data-testid="lease-opening-balance">
@@ -1619,6 +1708,51 @@
 			<Button variant="outline" onclick={closeOpeningDialog} data-testid="lease-opening-balance-cancel">Cancel</Button>
 			<Button onclick={submitOpeningBalance} disabled={saveOpeningMutation.isPending} data-testid="lease-opening-balance-save">
 				{saveOpeningMutation.isPending ? 'Saving…' : openingBalance ? 'Save changes' : 'Save opening balance'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={showPastDuePaidDialog} onOpenChange={(v) => { if (!v) closePastDuePaidDialog(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Settle past-due rent</Dialog.Title>
+			<Dialog.Description>
+				Mark all currently past-due rent charges on this lease as paid.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="lease-past-due-paid-form">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
+				<DatePicker
+					testid="lease-past-due-paid-date"
+					bind:value={pastDuePaidDate}
+					placeholder="Paid date"
+				/>
+				{#if pastDuePaidErrors.paidDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-past-due-paid-date-error">{pastDuePaidErrors.paidDate}</p>{/if}
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
+				<Input data-testid="lease-past-due-paid-method" bind:value={pastDueMethod} placeholder="Cash, check, ACH" />
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
+				<Input data-testid="lease-past-due-paid-reference" bind:value={pastDueReference} placeholder="Check number or reference" />
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Note</span>
+				<textarea
+					data-testid="lease-past-due-paid-note"
+					bind:value={pastDueNotes}
+					rows="2"
+					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				></textarea>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closePastDuePaidDialog} data-testid="lease-past-due-paid-cancel">Cancel</Button>
+			<Button onclick={submitPastDuePaid} disabled={markLeasePastDuePaidMutation.isPending} data-testid="lease-past-due-paid-save">
+				{markLeasePastDuePaidMutation.isPending ? 'Saving…' : 'Mark paid'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

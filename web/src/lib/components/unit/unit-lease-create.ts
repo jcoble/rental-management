@@ -24,6 +24,9 @@ export type UnitLeaseCreateForm = {
 	rentDueDay: string;
 	rentTrackingStartMode: string;
 	rentTrackingStartDate: string;
+	openingBalanceAmount: string;
+	openingBalanceAsOfDate: string;
+	openingBalanceNote: string;
 	status: string;
 	notes: string;
 };
@@ -50,6 +53,9 @@ export function createUnitLeaseForm(context: UnitLeaseCreateContext): UnitLeaseC
 		rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
+		openingBalanceAmount: '',
+		openingBalanceAsOfDate: '',
+		openingBalanceNote: '',
 		status: 'Draft',
 		notes: '',
 	};

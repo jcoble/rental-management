@@ -538,6 +538,7 @@ public class ScanServiceTests : IDisposable
         req.SecurityDeposit.Should().Be(1450.00m);
         req.LateFeeAmount.Should().Be(75.00m);
         req.RentDueDay.Should().Be(1);
+        req.RentTrackingStartMode.Should().Be(RentTrackingStartMode.ForwardOnly);
         req.Status.Should().Be(LeaseStatus.Active);
         req.Notes.Should().Be("Imported from scanned lease document.");
 
@@ -579,6 +580,29 @@ public class ScanServiceTests : IDisposable
         _leases.LastRequest.Should().NotBeNull();
         _leases.LastRequest!.RentTrackingStartMode.Should().Be(RentTrackingStartMode.CustomCutoffDate);
         _leases.LastRequest.RentTrackingStartDate.Should().Be(new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingLeaseDraft_WithOpeningBalanceOverrides_PassesOpeningBalanceRequest()
+    {
+        const string extractedJson =
+            """{"target_entity_type":{"value":"Lease","confidence":0.95},"tenant_name":{"value":"Marcus Williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-8","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9},"security_deposit":{"value":"1450.00","confidence":0.8},"late_fee":{"value":"75.00","confidence":0.7},"rent_due_day":{"value":"1","confidence":0.8}}""";
+        const string overridesJson =
+            """{"rentTrackingStartMode":"OpeningBalanceOnly","openingBalanceAmount":2900.00,"openingBalanceAsOfDate":"2026-06-30","openingBalanceNote":"Imported current balance"}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 321, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson);
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _leases.LastRequest.Should().NotBeNull();
+        _leases.LastRequest!.RentTrackingStartMode.Should().Be(RentTrackingStartMode.OpeningBalanceOnly);
+        _leases.LastRequest.OpeningBalanceAmount.Should().Be(2900.00m);
+        _leases.LastRequest.OpeningBalanceAsOfDate.Should().Be(new DateTime(2026, 6, 30, 0, 0, 0, DateTimeKind.Utc));
+        _leases.LastRequest.OpeningBalanceNote.Should().Be("Imported current balance");
     }
 
     [Fact]

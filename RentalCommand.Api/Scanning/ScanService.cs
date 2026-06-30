@@ -862,8 +862,11 @@ public sealed class ScanService : IScanService
             SecurityDeposit = fields.SecurityDeposit ?? 0m,
             LateFeeAmount   = fields.LateFee ?? 0m,
             RentDueDay      = fields.RentDueDay is >= 1 and <= 31 ? fields.RentDueDay.Value : 1,
-            RentTrackingStartMode = fields.RentTrackingStartMode ?? RentTrackingStartMode.BackfillFromLeaseStart,
+            RentTrackingStartMode = fields.RentTrackingStartMode ?? RentTrackingStartMode.ForwardOnly,
             RentTrackingStartDate = fields.RentTrackingStartDate,
+            OpeningBalanceAmount = fields.OpeningBalanceAmount,
+            OpeningBalanceAsOfDate = fields.OpeningBalanceAsOfDate,
+            OpeningBalanceNote = fields.OpeningBalanceNote,
             Notes           = "Imported from scanned lease document.",
             // Keep the full scan extraction superset as jsonb extras.
             ExtractedData   = NormalizeExtractedData(draft.ExtractedFields),
@@ -2387,6 +2390,17 @@ public sealed class ScanService : IScanService
             {
                 fields.RentTrackingStartDate = rentTrackingStart;
             }
+            if (TryGetOverrideDecimal(root, out var openingBalanceAmount, "openingBalanceAmount", "opening_balance_amount"))
+                fields.OpeningBalanceAmount = openingBalanceAmount;
+            if (TryGetOverrideString(root, out var openingBalanceAsOfStr, "openingBalanceAsOfDate", "opening_balance_as_of_date") &&
+                DateTime.TryParse(openingBalanceAsOfStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var openingBalanceAsOf))
+            {
+                fields.OpeningBalanceAsOfDate = openingBalanceAsOf;
+            }
+            if (TryGetOverrideString(root, out var openingBalanceNote, "openingBalanceNote", "opening_balance_note"))
+                fields.OpeningBalanceNote = openingBalanceNote;
         }
         catch (Exception ex)
         {
@@ -2816,6 +2830,9 @@ public sealed class ScanService : IScanService
         public int? RentDueDay { get; set; }
         public RentTrackingStartMode? RentTrackingStartMode { get; set; }
         public DateTime? RentTrackingStartDate { get; set; }
+        public decimal? OpeningBalanceAmount { get; set; }
+        public DateTime? OpeningBalanceAsOfDate { get; set; }
+        public string? OpeningBalanceNote { get; set; }
     }
 
     private sealed class ApplicationDraftFields

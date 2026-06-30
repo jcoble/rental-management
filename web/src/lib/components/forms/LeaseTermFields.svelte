@@ -17,7 +17,8 @@
 	const rentTrackingStartOptions = [
 		{ value: 'ForwardOnly', label: 'Start from today' },
 		{ value: 'BackfillFromLeaseStart', label: 'Backfill from lease start' },
-		{ value: 'CustomCutoffDate', label: 'Use cutoff date' }
+		{ value: 'CustomCutoffDate', label: 'Use cutoff date' },
+		{ value: 'OpeningBalanceOnly', label: 'Use opening balance' }
 	] as const;
 
 	function rentTrackingStartLabel(value: string | undefined) {
@@ -43,6 +44,9 @@
 			rentDueDay: string;
 			rentTrackingStartMode?: string;
 			rentTrackingStartDate?: string;
+			openingBalanceAmount?: string;
+			openingBalanceAsOfDate?: string;
+			openingBalanceNote?: string;
 			status: string;
 			notes: string;
 		};
@@ -157,6 +161,30 @@
 					<span class="mb-1 block text-xs font-medium text-muted-foreground">Cutoff date</span>
 					<DatePicker testid={`${testidPrefix}-rent-tracking-date`} bind:value={form.rentTrackingStartDate} placeholder="Cutoff date" min={form.startDate || undefined} />
 					{#if errors.rentTrackingStartDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-rent-tracking-date-error`}>{errors.rentTrackingStartDate}</p>{/if}
+				</div>
+			{/if}
+			{#if form.rentTrackingStartMode === 'OpeningBalanceOnly'}
+				<div class="md:col-span-2 grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-opening-balance-fields`}>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Opening balance</span>
+						<Input data-testid={`${testidPrefix}-opening-balance-amount`} bind:value={form.openingBalanceAmount} placeholder="Optional amount" inputmode="decimal" mask="currency" />
+						{#if errors.openingBalanceAmount}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-opening-balance-amount-error`}>{errors.openingBalanceAmount}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">As of date</span>
+						<DatePicker testid={`${testidPrefix}-opening-balance-date`} bind:value={form.openingBalanceAsOfDate} placeholder="As of date" max={form.startDate || undefined} />
+						{#if errors.openingBalanceAsOfDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-opening-balance-date-error`}>{errors.openingBalanceAsOfDate}</p>{/if}
+					</div>
+					<div class="md:col-span-2">
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Opening note</span>
+						<textarea
+							data-testid={`${testidPrefix}-opening-balance-note`}
+							bind:value={form.openingBalanceNote}
+							rows="2"
+							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+						></textarea>
+						{#if errors.openingBalanceNote}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-opening-balance-note-error`}>{errors.openingBalanceNote}</p>{/if}
+					</div>
 				</div>
 			{/if}
 		</div>
