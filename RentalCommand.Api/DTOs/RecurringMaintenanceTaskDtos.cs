@@ -13,11 +13,18 @@ public class RecurringMaintenanceTaskResponse
     public int? UnitId { get; set; }
     public int? VendorId { get; set; }
     public string? PropertyName { get; set; }
+    public string? UnitNumber { get; set; }
+    public string? VendorName { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? Category { get; set; }
     public RecurrenceInterval RecurrenceInterval { get; set; }
     public DateTime NextDueDate { get; set; }
+    public TimeOnly? ScheduledTime { get; set; }
+    public decimal? EstimatedCost { get; set; }
+    public decimal? MonthlyEstimatedCost { get; set; }
+    public int GeneratedWorkOrderCount { get; set; }
+    public int? LastGeneratedWorkOrderId { get; set; }
     public DateTime? LastGeneratedAtUtc { get; set; }
     public bool IsActive { get; set; }
     public WorkOrderPriority Priority { get; set; }
@@ -35,17 +42,44 @@ public class RecurringMaintenanceTaskResponse
         UnitId = e.UnitId,
         VendorId = e.VendorId,
         PropertyName = e.Property?.Name,
+        UnitNumber = e.Unit?.UnitNumber,
+        VendorName = e.Vendor?.Name,
         Title = e.Title,
         Description = e.Description,
         Category = e.Category,
         RecurrenceInterval = e.RecurrenceInterval,
         NextDueDate = e.NextDueDate,
+        ScheduledTime = e.ScheduledTime,
+        EstimatedCost = e.EstimatedCost,
+        MonthlyEstimatedCost = ToMonthlyEstimate(e.EstimatedCost, e.RecurrenceInterval),
+        GeneratedWorkOrderCount = e.WorkOrders.Count,
+        LastGeneratedWorkOrderId = e.WorkOrders
+            .OrderByDescending(w => w.RequestedAt)
+            .ThenByDescending(w => w.Id)
+            .Select(w => (int?)w.Id)
+            .FirstOrDefault(),
         LastGeneratedAtUtc = e.LastGeneratedAtUtc,
         IsActive = e.IsActive,
         Priority = e.Priority,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
+
+    public static decimal? ToMonthlyEstimate(decimal? estimatedCost, RecurrenceInterval interval)
+    {
+        if (estimatedCost == null)
+            return null;
+
+        return interval switch
+        {
+            RecurrenceInterval.Weekly => estimatedCost.Value * 52m / 12m,
+            RecurrenceInterval.Monthly => estimatedCost.Value,
+            RecurrenceInterval.Quarterly => estimatedCost.Value / 3m,
+            RecurrenceInterval.SemiAnnually => estimatedCost.Value / 6m,
+            RecurrenceInterval.Annually => estimatedCost.Value / 12m,
+            _ => estimatedCost.Value,
+        };
+    }
 }
 
 public class RecurringMaintenanceTaskListResponse
@@ -83,6 +117,11 @@ public class CreateRecurringMaintenanceTaskRequest
     [Required]
     public DateTime NextDueDate { get; set; }
 
+    public TimeOnly? ScheduledTime { get; set; }
+
+    [Range(0, 99999999)]
+    public decimal? EstimatedCost { get; set; }
+
     public bool IsActive { get; set; } = true;
 
     public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
@@ -107,6 +146,11 @@ public class UpdateRecurringMaintenanceTaskRequest
 
     public RecurrenceInterval? RecurrenceInterval { get; set; }
     public DateTime? NextDueDate { get; set; }
+    public TimeOnly? ScheduledTime { get; set; }
+
+    [Range(0, 99999999)]
+    public decimal? EstimatedCost { get; set; }
+
     public bool? IsActive { get; set; }
     public WorkOrderPriority? Priority { get; set; }
 }

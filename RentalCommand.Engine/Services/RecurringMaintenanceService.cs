@@ -103,12 +103,15 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
                 PropertyId = task.PropertyId,
                 UnitId = task.UnitId,
                 VendorId = task.VendorId,
+                RecurringMaintenanceTaskId = task.Id,
                 Title = task.Title,
                 Description = string.IsNullOrWhiteSpace(task.Description) ? task.Title : task.Description,
                 Category = string.IsNullOrWhiteSpace(task.Category) ? "General" : task.Category,
                 Priority = task.Priority,
                 Status = WorkOrderStatus.New,
                 RequestedAt = now,
+                ScheduledFor = ToScheduledUtc(task.NextDueDate, task.ScheduledTime, _businessTimeZone),
+                EstimatedCost = task.EstimatedCost,
                 CreatedBy = "Recurring maintenance",
                 UpdatedAt = now,
             };
@@ -180,4 +183,14 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
         RecurrenceInterval.Annually => date.AddYears(1),
         _ => date.AddMonths(1),
     };
+
+    private static DateTime? ToScheduledUtc(DateTime dueDate, TimeOnly? scheduledTime, TimeZoneInfo businessTimeZone)
+    {
+        if (scheduledTime == null)
+            return null;
+
+        var localDateTime = dueDate.Date.Add(scheduledTime.Value.ToTimeSpan());
+        localDateTime = DateTime.SpecifyKind(localDateTime, DateTimeKind.Unspecified);
+        return TimeZoneInfo.ConvertTimeToUtc(localDateTime, businessTimeZone);
+    }
 }

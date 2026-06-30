@@ -41,7 +41,9 @@ public class RecurringMaintenanceServiceTests : IDisposable
             isActive: true,
             title: "HVAC filter",
             category: "HVAC",
-            priority: WorkOrderPriority.High);
+            priority: WorkOrderPriority.High,
+            scheduledTime: new TimeOnly(14, 30),
+            estimatedCost: 95m);
 
         var sut = BuildService(enable: true);
 
@@ -59,6 +61,14 @@ public class RecurringMaintenanceServiceTests : IDisposable
         wo.Category.Should().Be("HVAC");
         wo.Priority.Should().Be(WorkOrderPriority.High);
         wo.Status.Should().Be(WorkOrderStatus.New);
+        wo.RecurringMaintenanceTaskId.Should().Be(task.Id);
+        wo.EstimatedCost.Should().Be(95m);
+        wo.ScheduledFor.Should().NotBeNull();
+        var localScheduled = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.SpecifyKind(wo.ScheduledFor!.Value, DateTimeKind.Utc),
+            TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
+        localScheduled.Date.Should().Be(dueDate);
+        TimeOnly.FromDateTime(localScheduled).Should().Be(new TimeOnly(14, 30));
 
         // Initial status event written (null → New, System).
         var events = _ctx.Db.WorkOrderStatusEvents.ToList();
@@ -192,6 +202,18 @@ public class RecurringMaintenanceServiceTests : IDisposable
         string title = "Recurring chore",
         string? category = "General",
         WorkOrderPriority priority = WorkOrderPriority.Normal)
+        => SeedTask(propertyId, interval, nextDueDate, isActive, title, category, priority, null, null);
+
+    private RecurringMaintenanceTask SeedTask(
+        int propertyId,
+        RecurrenceInterval interval,
+        DateTime nextDueDate,
+        bool isActive,
+        string title,
+        string? category,
+        WorkOrderPriority priority,
+        TimeOnly? scheduledTime,
+        decimal? estimatedCost)
     {
         var now = DateTime.UtcNow;
         var task = new RecurringMaintenanceTask
@@ -202,6 +224,8 @@ public class RecurringMaintenanceServiceTests : IDisposable
             Category = category,
             RecurrenceInterval = interval,
             NextDueDate = DateTime.SpecifyKind(nextDueDate.Date, DateTimeKind.Utc),
+            ScheduledTime = scheduledTime,
+            EstimatedCost = estimatedCost,
             IsActive = isActive,
             Priority = priority,
             CreatedAt = now,

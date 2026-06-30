@@ -37,6 +37,15 @@ public class RecurringMaintenanceTask
     /// </summary>
     public DateTime NextDueDate { get; set; }
 
+    /// <summary>
+    /// Optional local time of day to schedule the generated work order on <see cref="NextDueDate"/>.
+    /// Null means the generated work order is unscheduled.
+    /// </summary>
+    public TimeOnly? ScheduledTime { get; set; }
+
+    /// <summary>Expected cost copied to each generated work order and used for recurring budget views.</summary>
+    public decimal? EstimatedCost { get; set; }
+
     /// <summary>UTC timestamp of the most recent auto-generation; null until the first run.</summary>
     public DateTime? LastGeneratedAtUtc { get; set; }
 
@@ -56,4 +65,5 @@ public class RecurringMaintenanceTask
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
     public Vendor? Vendor { get; set; }
+    public List<WorkOrder> WorkOrders { get; set; } = [];
 }

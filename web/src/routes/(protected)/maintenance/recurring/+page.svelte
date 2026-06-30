@@ -22,7 +22,7 @@
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { ExternalLink, Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { page } from '$app/state';
@@ -102,6 +102,22 @@
 		return formatDateOnly(value) || '—';
 	}
 
+	function formatTime(value: string | null | undefined): string {
+		if (!value) return 'No time set';
+		const [hourRaw, minuteRaw] = value.split(':');
+		const hour = Number(hourRaw);
+		const minute = Number(minuteRaw);
+		if (!Number.isFinite(hour) || !Number.isFinite(minute)) return value;
+		const suffix = hour >= 12 ? 'PM' : 'AM';
+		const displayHour = hour % 12 || 12;
+		return `${displayHour}:${minute.toString().padStart(2, '0')} ${suffix}`;
+	}
+
+	function formatCurrency(value: number | null | undefined): string {
+		if (value == null) return '—';
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+	}
+
 	const tasks = $derived(tasksQuery.data?.items ?? []);
 	const tasksTotalCount = $derived(tasksQuery.data?.totalCount ?? 0);
 
@@ -115,6 +131,8 @@
 		vendorId: '',
 		recurrenceInterval: 'Monthly',
 		nextDueDate: '',
+		scheduledTime: '',
+		estimatedCost: '',
 		priority: 'Normal',
 		isActive: true,
 	};
@@ -205,6 +223,8 @@
 			vendorId: task.vendorId == null ? '' : String(task.vendorId),
 			recurrenceInterval: task.recurrenceInterval,
 			nextDueDate: task.nextDueDate ? task.nextDueDate.slice(0, 10) : '',
+			scheduledTime: task.scheduledTime ? task.scheduledTime.slice(0, 5) : '',
+			estimatedCost: task.estimatedCost == null ? '' : String(task.estimatedCost),
 			priority: task.priority,
 			isActive: task.isActive,
 		};
@@ -242,6 +262,8 @@
 			vendorId: d.vendorId,
 			recurrenceInterval: d.recurrenceInterval,
 			nextDueDate: d.nextDueDate,
+			scheduledTime: d.scheduledTime ? `${d.scheduledTime}:00` : null,
+			estimatedCost: d.estimatedCost,
 			priority: d.priority,
 			isActive: d.isActive,
 		};
@@ -253,13 +275,15 @@
 		{ key: 'title', title: 'Task', sortable: true, mobileRole: 'title', cell: titleCell },
 		{
 			key: 'property',
-			title: 'Property',
+			title: 'Context',
 			sortable: true,
 			mobileRole: 'subtitle',
-			accessor: (t) => t.propertyName ?? propertyName(t.propertyId),
+			cell: contextCell,
 		},
 		{ key: 'recurrenceInterval', title: 'Schedule', sortable: true, mobileRole: 'meta', cell: scheduleCell },
 		{ key: 'nextDueDate', title: 'Next', sortable: true, mobileRole: 'meta', cell: nextDueCell },
+		{ key: 'budget', title: 'Budget', align: 'right', mobileRole: 'meta', cell: budgetCell },
+		{ key: 'generated', title: 'Work orders', align: 'right', mobileRole: 'meta', cell: generatedCell },
 		{ key: 'priority', title: 'Priority', sortable: true, mobileRole: 'badge', cell: priorityCell },
 		{ key: 'isActive', title: 'Active', sortable: true, align: 'center', mobileRole: 'badge', cell: activeCell },
 		{ key: 'actions', title: '', align: 'right', mobileRole: 'hidden', cell: actionsCell },
@@ -270,12 +294,49 @@
 	<span class="font-medium" data-testid="recurring-task-title">{t.title}</span>
 {/snippet}
 
+{#snippet contextCell(t: RecurringMaintenanceTask)}
+	<div class="min-w-0 text-sm" data-testid="recurring-task-context-{t.id}">
+		<p class="truncate font-medium">{t.propertyName ?? propertyName(t.propertyId)}</p>
+		<p class="truncate text-xs text-muted-foreground">
+			{t.unitNumber ? `Unit ${t.unitNumber}` : 'Whole property'}{t.vendorName ? ` · ${t.vendorName}` : ''}
+		</p>
+	</div>
+{/snippet}
+
 {#snippet scheduleCell(t: RecurringMaintenanceTask)}
-	<span class="text-sm text-muted-foreground">{INTERVAL_PHRASE[t.recurrenceInterval] ?? t.recurrenceInterval}</span>
+	<div class="text-sm" data-testid="recurring-task-schedule-{t.id}">
+		<p>{INTERVAL_PHRASE[t.recurrenceInterval] ?? t.recurrenceInterval}</p>
+		<p class="text-xs text-muted-foreground">{formatTime(t.scheduledTime)}</p>
+	</div>
 {/snippet}
 
 {#snippet nextDueCell(t: RecurringMaintenanceTask)}
 	<span class="text-sm">Next: {formatNextDue(t.nextDueDate)}</span>
+{/snippet}
+
+{#snippet budgetCell(t: RecurringMaintenanceTask)}
+	<div class="text-right text-sm" data-testid="recurring-task-budget-{t.id}">
+		<p class="font-mono tabular-nums">{formatCurrency(t.estimatedCost)}</p>
+		<p class="font-mono text-xs tabular-nums text-muted-foreground">{formatCurrency(t.monthlyEstimatedCost)}/mo</p>
+	</div>
+{/snippet}
+
+{#snippet generatedCell(t: RecurringMaintenanceTask)}
+	<div class="flex justify-end" data-testid="recurring-task-generated-{t.id}">
+		{#if t.lastGeneratedWorkOrderId}
+			<a
+				href="/maintenance/{t.lastGeneratedWorkOrderId}"
+				onclick={(e) => e.stopPropagation()}
+				class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm text-primary underline-offset-4 hover:underline"
+				data-testid="recurring-task-last-work-order-{t.id}"
+			>
+				{t.generatedWorkOrderCount} linked
+				<ExternalLink class="h-3.5 w-3.5" />
+			</a>
+		{:else}
+			<span class="text-sm text-muted-foreground">0 linked</span>
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet priorityCell(t: RecurringMaintenanceTask)}
@@ -466,6 +527,29 @@
 					{#if errors.nextDueDate}<p class="mt-1 text-xs text-destructive" data-testid="recurring-task-next-due-error">{errors.nextDueDate}</p>{/if}
 				</div>
 			</div>
+
+			<!-- Time + budget -->
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<label class="mb-1 block text-sm font-medium" for="rt-time">Scheduled time <span class="text-muted-foreground">(optional)</span></label>
+					<Input id="rt-time" data-testid="recurring-task-scheduled-time-input" type="time" bind:value={form.scheduledTime} />
+				</div>
+				<div>
+					<label class="mb-1 block text-sm font-medium" for="rt-estimated-cost">Expected cost <span class="text-muted-foreground">(optional)</span></label>
+					<Input id="rt-estimated-cost" data-testid="recurring-task-estimated-cost-input" type="text" inputmode="decimal" mask="currency" bind:value={form.estimatedCost} placeholder="0.00" />
+					{#if errors.estimatedCost}<p class="mt-1 text-xs text-destructive" data-testid="recurring-task-estimated-cost-error">{errors.estimatedCost}</p>{/if}
+				</div>
+			</div>
+
+			{#if editingId != null}
+				<div class="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm" data-testid="recurring-task-linked-summary">
+					{#if (tasks.find((t) => t.id === editingId)?.generatedWorkOrderCount ?? 0) > 0}
+						{tasks.find((t) => t.id === editingId)?.generatedWorkOrderCount} generated work order{(tasks.find((t) => t.id === editingId)?.generatedWorkOrderCount ?? 0) === 1 ? '' : 's'} linked to this schedule.
+					{:else}
+						No work orders have been generated from this schedule yet.
+					{/if}
+				</div>
+			{/if}
 
 			<!-- Priority + category -->
 			<div class="grid grid-cols-2 gap-2">
