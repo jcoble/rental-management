@@ -8,6 +8,7 @@ export interface WorkOrderListParams extends ListParams {
 	vendorId?: number;
 	status?: string;
 	priority?: string;
+	openOnly?: boolean;
 }
 
 export interface WorkOrderListResponse {

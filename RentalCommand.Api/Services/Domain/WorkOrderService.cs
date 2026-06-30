@@ -86,6 +86,14 @@ public class WorkOrderService : IWorkOrderService
             q = q.Where(w => w.VendorId == query.VendorId.Value);
         }
 
+        if (query.OpenOnly)
+        {
+            q = q.Where(w =>
+                w.Status != WorkOrderStatus.Completed &&
+                w.Status != WorkOrderStatus.Cancelled &&
+                w.Status != WorkOrderStatus.Archived);
+        }
+
         if (query.Status.HasValue)
         {
             q = q.Where(w => w.Status == query.Status.Value);
@@ -163,6 +171,7 @@ public class WorkOrderService : IWorkOrderService
         PropertyId = propertyId,
         UnitId = unitId,
         VendorId = vendorId,
+        OpenOnly = query is WorkOrderListQuery workOrderQuery && workOrderQuery.OpenOnly,
     };
 
     private sealed record WorkOrderListRow(

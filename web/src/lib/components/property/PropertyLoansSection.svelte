@@ -6,6 +6,7 @@
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -58,11 +59,28 @@
 	let editingLoanId = $state<number | null>(null);
 	let form = $state({ ...emptyLoan });
 	let formErrors = $state<Record<string, string>>({});
+	let loanStep = $state(0);
+	let completedLoanSteps = $state<number[]>([]);
+
+	const loanSteps: FormStepperStep[] = [
+		{ id: 'basics', label: 'Basics', description: 'Lender and balances' },
+		{ id: 'terms', label: 'Terms', description: 'Rate and schedule' },
+		{ id: 'payment', label: 'Payment', description: 'Monthly amounts' },
+		{ id: 'status', label: 'Status', description: 'Escrow and notes' },
+	];
+	const loanStepFields = [
+		['lender', 'originalAmount', 'currentBalance'],
+		['annualInterestRatePct', 'termMonths', 'startDate', 'dayOfMonthDue'],
+		['monthlyPrincipalInterest', 'monthlyEscrow'],
+		['escrowCoversTaxes', 'escrowCoversInsurance', 'status', 'notes'],
+	] as const;
 
 	function openAdd() {
 		editingLoanId = null;
 		form = { ...emptyLoan };
 		formErrors = {};
+		loanStep = 0;
+		completedLoanSteps = [];
 		showForm = true;
 	}
 
@@ -84,6 +102,8 @@
 			notes: l.notes ?? ''
 		};
 		formErrors = {};
+		loanStep = 0;
+		completedLoanSteps = [];
 		showForm = true;
 	}
 
@@ -91,6 +111,8 @@
 		showForm = false;
 		editingLoanId = null;
 		formErrors = {};
+		loanStep = 0;
+		completedLoanSteps = [];
 	}
 
 	function invalidate() {
@@ -132,10 +154,17 @@
 	function submit() {
 		// The escrow-cover flags are booleans the schema passes through; checkbox state lives in `form`.
 		const result = parseForm(loanSchema, form);
-		if (result.errors) {
-			formErrors = result.errors;
+		const errors = result.errors ?? {};
+		if (Object.keys(errors).length > 0) {
+			formErrors = errors;
+			const firstErrorStep = firstLoanErrorStep(errors);
+			if (firstErrorStep >= 0) {
+				loanStep = firstErrorStep;
+				markLoanStepInvalid(firstErrorStep);
+			}
 			return;
 		}
+		if (!result.data) return;
 		formErrors = {};
 		const data = { ...result.data, escrowCoversTaxes: form.escrowCoversTaxes, escrowCoversInsurance: form.escrowCoversInsurance };
 		if (editingLoanId != null) {
@@ -143,6 +172,37 @@
 		} else {
 			createMut.mutate(data);
 		}
+	}
+
+	function loanStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(loanStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+
+	function firstLoanErrorStep(errors: Record<string, string>) {
+		return loanStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+
+	function markLoanStepInvalid(step: number) {
+		completedLoanSteps = completedLoanSteps.filter((completedStep) => completedStep < step);
+	}
+
+	function validateLoanStep(step: number) {
+		const result = parseForm(loanSchema, form);
+		const allErrors = result.errors ?? {};
+		const currentErrors = Object.fromEntries(loanStepErrorFields(step, allErrors));
+		const currentFields = new Set<string>(loanStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(formErrors).filter(([field]) => !currentFields.has(field)));
+		formErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markLoanStepInvalid(step);
+		return isValid;
+	}
+
+	function nextLoanStep() {
+		if (!validateLoanStep(loanStep)) return;
+		if (!completedLoanSteps.includes(loanStep)) completedLoanSteps = [...completedLoanSteps, loanStep];
+		loanStep = Math.min(loanStep + 1, loanSteps.length - 1);
 	}
 
 	const columns: ColumnDef<Loan>[] = [
@@ -264,44 +324,60 @@
 
 <!-- Loan add/edit dialog -->
 <Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
-	<Dialog.Content class="max-w-md">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>{editingLoanId == null ? 'Add Loan' : 'Edit Loan'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="grid max-h-[60vh] gap-3 overflow-y-auto px-1" data-testid="loan-form">
-			<InlineField label="Lender" bind:value={form.lender} editing type="text" error={formErrors.lender} testid="loan-lender" />
-			<div class="grid grid-cols-2 gap-3">
-				<InlineField label="Original amount" bind:value={form.originalAmount} editing type="number" error={formErrors.originalAmount} testid="loan-original-amount" />
-				<InlineField label="Current balance" bind:value={form.currentBalance} editing type="number" placeholder="Defaults to original" error={formErrors.currentBalance} testid="loan-current-balance" />
+		<FormStepper steps={loanSteps} bind:currentStep={loanStep} completedSteps={completedLoanSteps} testid="loan-stepper">
+			<div class="grid gap-3 px-1" data-testid="loan-form">
+				{#if loanStep === 0}
+					<InlineField label="Lender" bind:value={form.lender} editing type="text" error={formErrors.lender} testid="loan-lender" />
+					<div class="grid gap-3 sm:grid-cols-2">
+						<InlineField label="Original amount" bind:value={form.originalAmount} editing type="number" error={formErrors.originalAmount} testid="loan-original-amount" />
+						<InlineField label="Current balance" bind:value={form.currentBalance} editing type="number" placeholder="Defaults to original" error={formErrors.currentBalance} testid="loan-current-balance" />
+					</div>
+				{:else if loanStep === 1}
+					<div class="grid gap-3 sm:grid-cols-2">
+						<InlineField label="Interest rate %" bind:value={form.annualInterestRatePct} editing type="number" error={formErrors.annualInterestRatePct} testid="loan-rate" />
+						<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" maxlength={4} error={formErrors.termMonths} testid="loan-term" />
+					</div>
+					<div class="grid gap-3 sm:grid-cols-2">
+						<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="loan-start-date" />
+						<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" maxlength={2} error={formErrors.dayOfMonthDue} testid="loan-day-due" />
+					</div>
+				{:else if loanStep === 2}
+					<div class="grid gap-3 sm:grid-cols-2">
+						<InlineField label="Monthly P&I" bind:value={form.monthlyPrincipalInterest} editing type="number" error={formErrors.monthlyPrincipalInterest} testid="loan-pi" />
+						<InlineField label="Monthly escrow" bind:value={form.monthlyEscrow} editing type="number" error={formErrors.monthlyEscrow} testid="loan-escrow" />
+					</div>
+				{:else}
+					<div class="space-y-3">
+						<label class="flex items-center gap-2 text-sm">
+							<input type="checkbox" bind:checked={form.escrowCoversTaxes} data-testid="loan-escrow-taxes" />
+							Escrow covers property taxes
+						</label>
+						<label class="flex items-center gap-2 text-sm">
+							<input type="checkbox" bind:checked={form.escrowCoversInsurance} data-testid="loan-escrow-insurance" />
+							Escrow covers insurance
+						</label>
+					</div>
+					<InlineField label="Status" bind:value={form.status} editing type="select" options={statusOptions} testid="loan-status" />
+					<InlineField label="Notes" bind:value={form.notes} editing type="textarea" error={formErrors.notes} testid="loan-notes" />
+				{/if}
 			</div>
-			<div class="grid grid-cols-2 gap-3">
-				<InlineField label="Interest rate %" bind:value={form.annualInterestRatePct} editing type="number" error={formErrors.annualInterestRatePct} testid="loan-rate" />
-				<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" maxlength={4} error={formErrors.termMonths} testid="loan-term" />
-			</div>
-			<div class="grid grid-cols-2 gap-3">
-				<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="loan-start-date" />
-				<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" maxlength={2} error={formErrors.dayOfMonthDue} testid="loan-day-due" />
-			</div>
-			<div class="grid grid-cols-2 gap-3">
-				<InlineField label="Monthly P&I" bind:value={form.monthlyPrincipalInterest} editing type="number" error={formErrors.monthlyPrincipalInterest} testid="loan-pi" />
-				<InlineField label="Monthly escrow" bind:value={form.monthlyEscrow} editing type="number" error={formErrors.monthlyEscrow} testid="loan-escrow" />
-			</div>
-			<label class="flex items-center gap-2 text-sm">
-				<input type="checkbox" bind:checked={form.escrowCoversTaxes} data-testid="loan-escrow-taxes" />
-				Escrow covers property taxes
-			</label>
-			<label class="flex items-center gap-2 text-sm">
-				<input type="checkbox" bind:checked={form.escrowCoversInsurance} data-testid="loan-escrow-insurance" />
-				Escrow covers insurance
-			</label>
-			<InlineField label="Status" bind:value={form.status} editing type="select" options={statusOptions} testid="loan-status" />
-			<InlineField label="Notes" bind:value={form.notes} editing type="textarea" error={formErrors.notes} testid="loan-notes" />
-		</div>
+		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeForm}>Cancel</Button>
-			<Button onclick={submit} disabled={createMut.isPending || updateMut.isPending} data-testid="loan-save-button">
-				{(createMut.isPending || updateMut.isPending) ? 'Saving…' : editingLoanId == null ? 'Add Loan' : 'Save Loan'}
-			</Button>
+			{#if loanStep > 0}
+				<Button variant="outline" onclick={() => (loanStep = Math.max(loanStep - 1, 0))} data-testid="loan-step-back">Back</Button>
+			{/if}
+			{#if loanStep < loanSteps.length - 1}
+				<Button onclick={nextLoanStep} data-testid="loan-step-next">Next</Button>
+			{:else}
+				<Button onclick={submit} disabled={createMut.isPending || updateMut.isPending} data-testid="loan-save-button">
+					{(createMut.isPending || updateMut.isPending) ? 'Saving…' : editingLoanId == null ? 'Add Loan' : 'Save Loan'}
+				</Button>
+			{/if}
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
