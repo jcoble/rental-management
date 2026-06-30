@@ -24,7 +24,7 @@ public class UnitDashboardResponse
     /// <summary>The compact health summary rendered as chips in the page header.</summary>
     public UnitDashboardHeader Header { get; set; } = new();
 
-    /// <summary>The unit's current lease (most-recent Active, else latest), null if never leased.</summary>
+    /// <summary>The unit's current lease (in-force Active/NoticeGiven or pending signature), null when only historical leases remain.</summary>
     public UnitLeaseSummary? CurrentLease { get; set; }
 
     /// <summary>The current lease's tenant, null when there is no current lease.</summary>

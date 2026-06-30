@@ -27,9 +27,13 @@
 	let {
 		dashboard,
 		onScan,
+		tabQuery = 'expenses',
+		ledgerQuery,
 	}: {
 		dashboard: UnitDashboard;
 		onScan: (context?: Partial<ScanContext>) => void;
+		tabQuery?: string;
+		ledgerQuery?: string;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -44,14 +48,26 @@
 	// A selected expense folds its full detail inline (?expense=<id> on the unit URL); otherwise the list shows.
 	const selectedExpense = $derived(Number(page.url.searchParams.get('expense')) || null);
 
+	function unitUrl(params: Record<string, string | number | null | undefined> = {}) {
+		const url = new URL(`/units/${unitId}`, page.url.origin);
+		url.searchParams.set('tab', tabQuery);
+		if (ledgerQuery) url.searchParams.set('ledger', ledgerQuery);
+		for (const [key, value] of Object.entries(params)) {
+			if (value !== null && value !== undefined && value !== '') {
+				url.searchParams.set(key, String(value));
+			}
+		}
+		return `${url.pathname}${url.search}`;
+	}
+
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openExpense(id: number) {
-		goto('/units/' + unitId + '?tab=expenses&expense=' + id, { keepFocus: true, noScroll: true });
+		goto(unitUrl({ expense: id }), { keepFocus: true, noScroll: true });
 	}
 
 	// Clearing the selection drops ?expense= (replaceState — peer of the list, not a new history step).
 	function clearSelection() {
-		goto('/units/' + unitId + '?tab=expenses', { replaceState: true, keepFocus: true, noScroll: true });
+		goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
 	// Unit-relevant expenses: tied to the unit OR to one of its work orders (DB-side correlated filter).
@@ -221,7 +237,7 @@
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="expenses-create">
 			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> Add expense{/if}
 		</Button>
-		<Button variant="outline" class="gap-2" onclick={() => onScan({ type: 'Expense', returnTo: `/units/${unitId}?tab=expenses` })} data-testid="expenses-scan">
+		<Button variant="outline" class="gap-2" onclick={() => onScan({ type: 'Expense', returnTo: unitUrl() })} data-testid="expenses-scan">
 			<ScanLine class="h-4 w-4" /> Scan receipt
 		</Button>
 	</div>

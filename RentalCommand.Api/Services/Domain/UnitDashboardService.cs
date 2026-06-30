@@ -47,19 +47,23 @@ public class UnitDashboardService : IUnitDashboardService
 
         var now = DateTime.UtcNow;
 
-        // The unit's lease ids — one indexed select. Small per unit; reused by the rent aggregate,
-        // the recent-payments list, and the timeline union (kept DB-side as IN (...) subqueries where possible).
-        var leaseIds = await _db.Leases
+        // The unit's lease ids stay as a SQL subquery anywhere they are reused below. Do not materialize
+        // this list in API memory; payment/document filtering must remain DB-side even for long-lived units.
+        var unitLeaseIds = _db.Leases
             .AsNoTracking()
             .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId)
-            .Select(l => l.Id)
-            .ToListAsync(ct);
+            .Select(l => l.Id);
 
-        // (2) Current lease (+ tenant): most-recent Active, else the latest lease of any status.
+        // (2) Current lease (+ tenant): only in-force occupying leases or pending signature leases.
+        // Ended leases stay historical and are surfaced through the lease history table, not the header.
+        var today = now.Date;
         var currentLease = await _db.Leases
             .AsNoTracking()
-            .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId)
-            .OrderByDescending(l => l.Status == LeaseStatus.Active)
+            .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId
+                && ((l.Status == LeaseStatus.Active && l.StartDate <= today && l.EndDate >= today)
+                    || (l.Status == LeaseStatus.NoticeGiven && l.StartDate <= today && (l.MoveOutDate ?? l.EndDate) >= today)
+                    || (l.Status == LeaseStatus.PendingSignature && l.EndDate >= today)))
+            .OrderByDescending(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
             .ThenByDescending(l => l.StartDate)
             .ThenByDescending(l => l.Id)
             .Select(l => new
@@ -122,36 +126,33 @@ public class UnitDashboardService : IUnitDashboardService
         decimal outstanding = 0m;
         bool hasOverdue = false;
         bool hasDueSoon = false;
-        if (leaseIds.Count > 0)
-        {
-            var rent = await _db.Payments
-                .AsNoTracking()
-                .ForCurrentLeaseAttention(now)
-                .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
-                .GroupBy(_ => 1)
-                .Select(g => new
-                {
-                    // Owed = Scheduled/Partial/Late. A Partial only owes its unpaid remainder
-                    // (Amount − AmountPaid); Scheduled/Late owe in full. Mirrors AccountingService so the
-                    // Unit Rent tab reconciles with the Accounting Outstanding KPI and the lease ledger
-                    // Balance instead of over-counting an already-collected partial at its full amount.
-                    Outstanding = g.Sum(p =>
-                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
-                        : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
-                        : 0m),
-                    OverdueCount = g.Count(p =>
-                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                        && (p.Status == PaymentStatus.Late || p.DueDate < now)),
-                    DueSoonCount = g.Count(p =>
-                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial)
-                        && p.DueDate >= now),
-                })
-                .FirstOrDefaultAsync(ct);
+        var rent = await _db.Payments
+            .AsNoTracking()
+            .ForCurrentLeaseAttention(now)
+            .Where(p => p.PortfolioId == portfolioId && unitLeaseIds.Contains(p.LeaseId))
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                // Owed = Scheduled/Partial/Late. A Partial only owes its unpaid remainder
+                // (Amount − AmountPaid); Scheduled/Late owe in full. Mirrors AccountingService so the
+                // Unit Rent tab reconciles with the Accounting Outstanding KPI and the lease ledger
+                // Balance instead of over-counting an already-collected partial at its full amount.
+                Outstanding = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
+                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
+                    : 0m),
+                OverdueCount = g.Count(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
+                DueSoonCount = g.Count(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial)
+                    && p.DueDate >= now),
+            })
+            .FirstOrDefaultAsync(ct);
 
-            outstanding = rent?.Outstanding ?? 0m;
-            hasOverdue = (rent?.OverdueCount ?? 0) > 0;
-            hasDueSoon = (rent?.DueSoonCount ?? 0) > 0;
-        }
+        outstanding = rent?.Outstanding ?? 0m;
+        hasOverdue = (rent?.OverdueCount ?? 0) > 0;
+        hasDueSoon = (rent?.DueSoonCount ?? 0) > 0;
 
         // (4) Counts — open work orders + documents on the unit and its children.
         var openWorkOrderCount = await _db.WorkOrders
@@ -163,7 +164,7 @@ public class UnitDashboardService : IUnitDashboardService
 
         // The unit's document set: files attached to the unit OR any of its children, computed DB-side as
         // a set of (EntityType, EntityId) predicates against subqueries (one query, IN (...) per child type).
-        var docs = await BuildUnitDocumentsQuery(portfolioId, unitId, leaseIds)
+        var docs = await BuildUnitDocumentsQuery(portfolioId, unitId, unitLeaseIds)
             .OrderByDescending(f => f.UploadedAt)
             .Select(f => new UnitDocumentSummary
             {
@@ -177,7 +178,7 @@ public class UnitDashboardService : IUnitDashboardService
             .Take(OverviewTake)
             .ToListAsync(ct);
 
-        var docsCount = await BuildUnitDocumentsQuery(portfolioId, unitId, leaseIds).CountAsync(ct);
+        var docsCount = await BuildUnitDocumentsQuery(portfolioId, unitId, unitLeaseIds).CountAsync(ct);
 
         // (5) Upcoming appointments for the unit.
         var upcomingAppointments = await _db.Appointments
@@ -199,25 +200,23 @@ public class UnitDashboardService : IUnitDashboardService
             .ToListAsync(ct);
 
         // Overview: recent payments (newest by due date) + open work orders (newest requested first).
-        var recentPayments = leaseIds.Count == 0
-            ? new List<UnitPaymentSummary>()
-            : await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
-                .OrderByDescending(p => p.DueDate)
-                .ThenByDescending(p => p.Id)
-                .Take(OverviewTake)
-                .Select(p => new UnitPaymentSummary
-                {
-                    Id = p.Id,
-                    LeaseId = p.LeaseId,
-                    Type = p.PaymentType.ToString(),
-                    Status = p.Status.ToString(),
-                    Amount = p.Amount,
-                    DueDate = p.DueDate,
-                    PaidDate = p.PaidDate,
-                })
-                .ToListAsync(ct);
+        var recentPayments = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && unitLeaseIds.Contains(p.LeaseId))
+            .OrderByDescending(p => p.DueDate)
+            .ThenByDescending(p => p.Id)
+            .Take(OverviewTake)
+            .Select(p => new UnitPaymentSummary
+            {
+                Id = p.Id,
+                LeaseId = p.LeaseId,
+                Type = p.PaymentType.ToString(),
+                Status = p.Status.ToString(),
+                Amount = p.Amount,
+                DueDate = p.DueDate,
+                PaidDate = p.PaidDate,
+            })
+            .ToListAsync(ct);
 
         var openWorkOrders = await _db.WorkOrders
             .AsNoTracking()
@@ -435,10 +434,10 @@ public class UnitDashboardService : IUnitDashboardService
     /// <see cref="IQueryable"/> (EntityType/EntityId predicates against indexed child-id subqueries).
     /// Reused for both the capped Overview list and the header count so the shape stays identical.
     /// </summary>
-    private IQueryable<StoredFile> BuildUnitDocumentsQuery(int portfolioId, int unitId, IReadOnlyList<int> leaseIds)
+    private IQueryable<StoredFile> BuildUnitDocumentsQuery(int portfolioId, int unitId, IQueryable<int> leaseIds)
     {
-        // Child-id subqueries stay in the database (translated to IN (SELECT ...)); the lease-id list is the
-        // only materialized set (small per unit) and is reused across the page.
+        // Child-id subqueries stay in the database (translated to IN (SELECT ...)); no child id list is
+        // materialized in API memory before the stored-file query runs.
         var workOrderIds = _db.WorkOrders.Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId).Select(w => w.Id);
         var inspectionIds = _db.Inspections.Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId).Select(i => i.Id);
         var paymentIds = _db.Payments.Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId)).Select(p => p.Id);
@@ -548,7 +547,7 @@ public class UnitDashboardService : IUnitDashboardService
         UnitLifecycleStage.Applicant => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Lease => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.MoveIn => $"/units/{unitId}?tab=lease&action=confirm-move-in",
-        UnitLifecycleStage.Active => $"/units/{unitId}?tab=rent",
+        UnitLifecycleStage.Active => $"/units/{unitId}?tab=ledger&ledger=rent",
         UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=RenewalOffer",
         UnitLifecycleStage.Renewal => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.MoveOut => $"/units/{unitId}?tab=maintenance",
