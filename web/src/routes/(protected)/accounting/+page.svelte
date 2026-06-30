@@ -13,6 +13,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { units } from '$lib/api/endpoints/units';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
@@ -345,8 +346,16 @@
 	let expenseStep = $state(0);
 	let completedExpenseSteps = $state<number[]>([]);
 	let expenseDeleteTarget = $state<Expense | null>(null);
+	let lastExpenseVendorAutofillId = $state('');
+	let lastExpenseWorkOrderAutofillId = $state('');
 	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
 	let editingReceipt = $state<Record<string, any> | null>(null);
+	const expensePropertyId = $derived(expenseForm.propertyId ? Number(expenseForm.propertyId) : null);
+	const expenseUnitsQuery = createQuery(() => ({
+		queryKey: ['units', portfolioId, 'expense-form', expensePropertyId],
+		queryFn: () => units.list({ propertyId: expensePropertyId ?? undefined, take: 500, sort: 'unitNumber' }),
+		enabled: showExpenseForm && expensePropertyId != null
+	}));
 
 	const expenseSteps: FormStepperStep[] = [
 		{ id: 'source', label: 'Source', description: 'Links and defaults' },
@@ -438,6 +447,8 @@
 		expenseErrors = {};
 		expenseStep = 0;
 		completedExpenseSteps = [];
+		lastExpenseVendorAutofillId = '';
+		lastExpenseWorkOrderAutofillId = '';
 		showExpenseForm = true;
 	}
 	function openEditExpense(e: Expense) {
@@ -474,6 +485,8 @@
 		expenseErrors = {};
 		expenseStep = 0;
 		completedExpenseSteps = [];
+		lastExpenseVendorAutofillId = '';
+		lastExpenseWorkOrderAutofillId = '';
 		showExpenseForm = true;
 	}
 	function vendorAddress(vendor: Vendor) {
@@ -488,38 +501,65 @@
 		(expenseForm as Record<string, string | boolean>)[field] = String(value);
 	}
 	function autofillExpenseFromVendor(vendor: Vendor | undefined) {
-		if (!vendor) return;
+		if (!vendor) return false;
 		fillExpenseTextField('vendorAddress', vendorAddress(vendor));
 		fillExpenseTextField('vendorPhone', vendor.phone);
 		fillExpenseTextField('vendorTaxId', vendor.taxId);
+		return true;
 	}
 	function autofillExpenseFromVendorId(vendorId: string) {
-		if (!vendorId) return;
+		if (!vendorId) return false;
 		const vendor = (vendorsQuery.data || []).find((v) => String(v.id) === vendorId);
-		autofillExpenseFromVendor(vendor);
+		return autofillExpenseFromVendor(vendor);
+	}
+	function dateOnly(value: string | null | undefined) {
+		return value?.slice(0, 10);
 	}
 	function autofillExpenseFromWorkOrder(workOrder: WorkOrder | undefined) {
-		if (!workOrder) return;
+		if (!workOrder) return false;
 		fillExpenseTextField('propertyId', workOrder.propertyId);
 		fillExpenseTextField('unitId', workOrder.unitId);
 		fillExpenseTextField('description', workOrder.title);
 		fillExpenseTextField('amount', workOrder.actualCost ?? workOrder.estimatedCost);
+		fillExpenseTextField('incurredAt', dateOnly(workOrder.completedAt ?? workOrder.scheduledFor ?? workOrder.requestedAt));
 		if (workOrder.vendorId && !expenseForm.vendorId) {
 			expenseForm.vendorId = String(workOrder.vendorId);
-			autofillExpenseFromVendorId(expenseForm.vendorId);
 		}
+		return true;
 	}
 	function autofillExpenseFromWorkOrderId(workOrderId: string) {
-		if (!workOrderId) return;
+		if (!workOrderId) return false;
 		const workOrder = (workOrdersQuery.data || []).find((wo) => String(wo.id) === workOrderId);
-		autofillExpenseFromWorkOrder(workOrder);
+		return autofillExpenseFromWorkOrder(workOrder);
 	}
+	$effect(() => {
+		const vendorId = expenseForm.vendorId;
+		vendorsQuery.data;
+		if (!showExpenseForm || !vendorId) {
+			if (!vendorId) lastExpenseVendorAutofillId = '';
+			return;
+		}
+		if (lastExpenseVendorAutofillId === vendorId) return;
+		if (autofillExpenseFromVendorId(vendorId)) lastExpenseVendorAutofillId = vendorId;
+	});
+	$effect(() => {
+		const workOrderId = expenseForm.workOrderId;
+		workOrdersQuery.data;
+		if (!showExpenseForm || !workOrderId) {
+			if (!workOrderId) lastExpenseWorkOrderAutofillId = '';
+			return;
+		}
+		if (lastExpenseWorkOrderAutofillId === workOrderId) return;
+		if (autofillExpenseFromWorkOrderId(workOrderId)) lastExpenseWorkOrderAutofillId = workOrderId;
+	});
 	function closeExpenseForm() {
 		showExpenseForm = false;
 		editingExpenseId = null;
 		expenseErrors = {};
 		expenseStep = 0;
 		completedExpenseSteps = [];
+		lastExpenseVendorAutofillId = '';
+		lastExpenseWorkOrderAutofillId = '';
 	}
 	function expenseStepErrorFields(step: number, errors: Record<string, string>) {
 		const visibleFields = new Set<string>(expenseStepFields[step] ?? []);
@@ -676,6 +716,9 @@
 	);
 	const selectedVendorLabel = $derived(
 		(vendorsQuery.data || []).find((v) => String(v.id) === expenseForm.vendorId)?.name ?? null
+	);
+	const selectedUnitLabel = $derived(
+		(expenseUnitsQuery.data || []).find((u) => String(u.id) === expenseForm.unitId)?.unitNumber ?? null
 	);
 	const selectedWorkOrderLabel = $derived(
 		(workOrdersQuery.data || []).find((w) => String(w.id) === expenseForm.workOrderId)?.title ?? null
@@ -1455,7 +1498,6 @@
 								value={expenseForm.workOrderId}
 								onValueChange={(value) => {
 									expenseForm.workOrderId = value;
-									autofillExpenseFromWorkOrderId(value);
 								}}
 							>
 								<Select.Trigger class="w-full" data-testid="expense-workorder-input">
@@ -1469,10 +1511,17 @@
 								</Select.Content>
 							</Select.Root>
 						</div>
-						<div class="grid gap-3 sm:grid-cols-2">
+						<div class="grid gap-3 sm:grid-cols-3">
 							<div>
 								<span class="mb-1 block text-xs text-muted-foreground">Property</span>
-								<Select.Root type="single" bind:value={expenseForm.propertyId}>
+								<Select.Root
+									type="single"
+									value={expenseForm.propertyId}
+									onValueChange={(value) => {
+										expenseForm.propertyId = value;
+										expenseForm.unitId = '';
+									}}
+								>
 									<Select.Trigger class="w-full" data-testid="expense-property-input">
 										{selectedPropertyLabel ?? 'No property'}
 									</Select.Trigger>
@@ -1485,13 +1534,30 @@
 								</Select.Root>
 							</div>
 							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Unit</span>
+								<Select.Root type="single" bind:value={expenseForm.unitId} disabled={!expenseForm.propertyId}>
+									<Select.Trigger class="w-full" data-testid="expense-unit-input">
+										{#if !expenseForm.propertyId}
+											Select property first
+										{:else}
+											{selectedUnitLabel ?? 'No unit'}
+										{/if}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label="No unit">No unit</Select.Item>
+										{#each expenseUnitsQuery.data || [] as unit}
+											<Select.Item value={String(unit.id)} label={unit.unitNumber}>{unit.unitNumber}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
 								<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
 								<Select.Root
 									type="single"
 									value={expenseForm.vendorId}
 									onValueChange={(value) => {
 										expenseForm.vendorId = value;
-										autofillExpenseFromVendorId(value);
 									}}
 								>
 									<Select.Trigger class="w-full" data-testid="expense-vendor-input">

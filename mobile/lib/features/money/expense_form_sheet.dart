@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -52,6 +54,9 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
   final _amountCtrl = TextEditingController();
   final _paymentMethodCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
+  final _vendorAddressCtrl = TextEditingController();
+  final _vendorPhoneCtrl = TextEditingController();
+  final _vendorTaxIdCtrl = TextEditingController();
 
   int? _vendorId;
   WorkOrder? _selectedWorkOrder;
@@ -59,6 +64,8 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
   ExpenseStatus _status = ExpenseStatus.paid;
   DateTime _incurredAt = DateTime.now();
   DateTime _paidAt = DateTime.now();
+  bool _incurredDateTouched = false;
+  bool _paidDateTouched = false;
   bool _billable = false;
   bool _saving = false;
   String? _error;
@@ -69,6 +76,9 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
     _amountCtrl.dispose();
     _paymentMethodCtrl.dispose();
     _notesCtrl.dispose();
+    _vendorAddressCtrl.dispose();
+    _vendorPhoneCtrl.dispose();
+    _vendorTaxIdCtrl.dispose();
     super.dispose();
   }
 
@@ -82,8 +92,11 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
     );
     if (picked != null) {
       setState(() {
+        _incurredDateTouched = true;
         _incurredAt = picked;
-        if (_status == ExpenseStatus.paid) _paidAt = picked;
+        if (_status == ExpenseStatus.paid && !_paidDateTouched) {
+          _paidAt = picked;
+        }
       });
     }
   }
@@ -96,7 +109,12 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 1),
     );
-    if (picked != null) setState(() => _paidAt = picked);
+    if (picked != null) {
+      setState(() {
+        _paidDateTouched = true;
+        _paidAt = picked;
+      });
+    }
   }
 
   Vendor? _vendorById(List<Vendor> vendors, int? id) {
@@ -133,17 +151,64 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
     return details.isEmpty ? null : details;
   }
 
+  String _vendorAddress(Vendor vendor) {
+    final region = [
+      vendor.state,
+      vendor.postalCode,
+    ].whereType<String>().where((part) => part.trim().isNotEmpty).join(' ');
+    final cityLine = [
+      vendor.city,
+      region,
+    ].whereType<String>().where((part) => part.trim().isNotEmpty).join(', ');
+    return [
+      vendor.addressLine1,
+      cityLine,
+    ].whereType<String>().where((part) => part.trim().isNotEmpty).join(', ');
+  }
+
+  void _fillBlank(TextEditingController controller, String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return;
+    if (controller.text.trim().isNotEmpty) return;
+    controller.text = trimmed;
+  }
+
+  void _fillVendorReceiptDetails(Vendor? vendor) {
+    if (vendor == null) return;
+    _fillBlank(_vendorAddressCtrl, _vendorAddress(vendor));
+    _fillBlank(_vendorPhoneCtrl, vendor.phone);
+    _fillBlank(_vendorTaxIdCtrl, vendor.taxId);
+  }
+
+  DateTime _dateOnly(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  DateTime _workOrderExpenseDate(WorkOrder workOrder) {
+    return _dateOnly(
+      workOrder.completedAt ?? workOrder.scheduledFor ?? workOrder.requestedAt,
+    );
+  }
+
   String _moneyInput(double amount) {
     return amount == amount.roundToDouble()
         ? amount.toStringAsFixed(0)
         : amount.toStringAsFixed(2);
   }
 
-  void _selectVendor(int? vendorId) {
-    setState(() => _vendorId = vendorId);
+  void _selectVendor(int? vendorId, List<Vendor> vendors) {
+    final vendor = _vendorById(vendors, vendorId);
+    setState(() {
+      _vendorId = vendorId;
+      _fillVendorReceiptDetails(vendor);
+    });
   }
 
-  void _selectWorkOrder(int? workOrderId, List<WorkOrder> workOrders) {
+  void _selectWorkOrder(
+    int? workOrderId,
+    List<WorkOrder> workOrders,
+    List<Vendor> vendors,
+  ) {
     final workOrder = _workOrderById(workOrders, workOrderId);
     setState(() {
       _selectedWorkOrder = workOrder;
@@ -158,11 +223,25 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
         _amountCtrl.text = _moneyInput(cost);
       }
 
-      _vendorId ??= workOrder.vendorId;
+      if (!_incurredDateTouched) {
+        _incurredAt = _workOrderExpenseDate(workOrder);
+        if (_status == ExpenseStatus.paid && !_paidDateTouched) {
+          _paidAt = _incurredAt;
+        }
+      }
+
+      if (_vendorId == null && workOrder.vendorId != null) {
+        _vendorId = workOrder.vendorId;
+        _fillVendorReceiptDetails(_vendorById(vendors, workOrder.vendorId));
+      }
     });
   }
 
-  Widget _workOrderField(AsyncValue<List<WorkOrder>> state) {
+  Widget _workOrderField(
+    AsyncValue<List<WorkOrder>> state,
+    AsyncValue<List<Vendor>> vendorsState,
+  ) {
+    final vendors = vendorsState.asData?.value ?? const <Vendor>[];
     return state.when(
       data: (workOrders) => DropdownButtonFormField<int>(
         key: const Key('expense-work-order-field'),
@@ -179,8 +258,11 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
               child: Text(_workOrderLabel(workOrder)),
             ),
         ],
-        onChanged: (id) =>
-            _selectWorkOrder(id == null || id == 0 ? null : id, workOrders),
+        onChanged: (id) => _selectWorkOrder(
+          id == null || id == 0 ? null : id,
+          workOrders,
+          vendors,
+        ),
       ),
       loading: () => const InputDecorator(
         decoration: InputDecoration(labelText: 'Link work order (optional)'),
@@ -216,7 +298,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
                   DropdownMenuItem(value: vendor.id, child: Text(vendor.name)),
               ],
               onChanged: (id) =>
-                  _selectVendor(id == null || id == 0 ? null : id),
+                  _selectVendor(id == null || id == 0 ? null : id, vendors),
             ),
             if (summary != null) ...[
               const SizedBox(height: 6),
@@ -251,6 +333,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
     try {
       final paymentMethod = _paymentMethodCtrl.text.trim();
       final notes = _notesCtrl.text.trim();
+      final receiptData = _receiptDataJson();
       await ref.read(moneyRepositoryProvider).createExpense({
         'description': _descCtrl.text.trim(),
         'amount': double.tryParse(_amountCtrl.text.trim()) ?? 0,
@@ -267,6 +350,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
         'billableToOwner': _billable,
         if (paymentMethod.isNotEmpty) 'paymentMethod': paymentMethod,
         if (notes.isNotEmpty) 'notes': notes,
+        'receiptData': ?receiptData,
       });
 
       if (mounted) Navigator.of(context).pop(true);
@@ -276,6 +360,19 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  String? _receiptDataJson() {
+    final vendorAddress = _vendorAddressCtrl.text.trim();
+    final vendorPhone = _vendorPhoneCtrl.text.trim();
+    final vendorTaxId = _vendorTaxIdCtrl.text.trim();
+    final vendor = <String, String>{
+      if (vendorAddress.isNotEmpty) 'address': vendorAddress,
+      if (vendorPhone.isNotEmpty) 'phone': vendorPhone,
+      if (vendorTaxId.isNotEmpty) 'taxId': vendorTaxId,
+    };
+    if (vendor.isEmpty) return null;
+    return jsonEncode({'vendor': vendor});
   }
 
   @override
@@ -299,7 +396,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _workOrderField(workOrdersState),
+                _workOrderField(workOrdersState, vendorsState),
                 gap,
                 _vendorField(vendorsState),
                 gap,
@@ -374,6 +471,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
                       _status = v;
                       if (v == ExpenseStatus.paid) {
                         _paidAt = _incurredAt;
+                        _paidDateTouched = false;
                       }
                     });
                   },
@@ -441,6 +539,32 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
                   maxLines: 2,
                   textInputAction: TextInputAction.done,
                   decoration: const InputDecoration(labelText: 'Notes'),
+                ),
+                gap,
+                Text(
+                  'Vendor receipt details',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _vendorAddressCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Vendor address',
+                  ),
+                ),
+                gap,
+                TextFormField(
+                  controller: _vendorPhoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Vendor phone'),
+                ),
+                gap,
+                TextFormField(
+                  controller: _vendorTaxIdCtrl,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(labelText: 'Vendor tax ID'),
                 ),
               ],
             ),
