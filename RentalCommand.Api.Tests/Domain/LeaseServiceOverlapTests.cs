@@ -1,15 +1,11 @@
 using FluentAssertions;
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services;
-using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -25,11 +21,11 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     {
         _sut = new LeaseService(
             _ctx.Db,
-            new NoopDataUpdateService(),
+            Mock.Of<IDataUpdateService>(),
             Mock.Of<IFileStorage>(),
             Mock.Of<ILeaseAgreementPdfGenerator>(),
-            new AuditTrailService(_ctx.Db, new AuditScope()),
-            NullLogger<LeaseService>.Instance);
+            Mock.Of<IAuditTrailService>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -40,9 +36,7 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     public async Task CreateAsync_ActiveLeaseOverlappingOccupyingLease_ThrowsConflict(LeaseStatus existingStatus)
     {
         var (property, unit, tenant) = SeedPropertyUnitTenant();
-        SeedLease(property, unit, tenant, "L-EXISTING", existingStatus,
-            new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            new DateTime(2030, 12, 31, 0, 0, 0, DateTimeKind.Utc));
+        SeedLease(property, unit, tenant, "L-EXISTING", existingStatus, Date(2030, 1, 1), Date(2030, 12, 31));
         var newTenant = SeedTenant("Taylor", "Jones", "taylor.jones@example.local");
 
         var act = async () => await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
@@ -52,8 +46,8 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             TenantId = newTenant.Id,
             LeaseNumber = "L-OVERLAP",
             Status = LeaseStatus.Active,
-            StartDate = new DateTime(2030, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
             MonthlyRent = 1275m,
             SecurityDeposit = 1275m,
             LateFeeAmount = 75m,
@@ -71,9 +65,7 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     public async Task CreateAsync_DraftLeaseOverlappingOccupyingLease_AllowsLeaseWithoutBookingUnit()
     {
         var (property, unit, tenant) = SeedPropertyUnitTenant();
-        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active,
-            new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            new DateTime(2030, 12, 31, 0, 0, 0, DateTimeKind.Utc));
+        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 12, 31));
         var newTenant = SeedTenant("Jordan", "Parker", "jordan.parker@example.local");
 
         var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
@@ -83,8 +75,8 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             TenantId = newTenant.Id,
             LeaseNumber = "L-DRAFT",
             Status = LeaseStatus.Draft,
-            StartDate = new DateTime(2030, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
             MonthlyRent = 1275m,
             SecurityDeposit = 1275m,
             LateFeeAmount = 75m,
@@ -99,9 +91,7 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     public async Task CreateAsync_ActiveLeaseStartingWhenExistingLeaseEnds_AllowsAdjacentTerms()
     {
         var (property, unit, tenant) = SeedPropertyUnitTenant();
-        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active,
-            new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            new DateTime(2030, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 6, 1));
         var newTenant = SeedTenant("Morgan", "Lee", "morgan.lee@example.local");
 
         var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
@@ -111,8 +101,8 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             TenantId = newTenant.Id,
             LeaseNumber = "L-ADJACENT",
             Status = LeaseStatus.Active,
-            StartDate = new DateTime(2030, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
             MonthlyRent = 1275m,
             SecurityDeposit = 1275m,
             LateFeeAmount = 75m,
@@ -127,13 +117,9 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     public async Task UpdateAsync_DraftToActiveWhenDatesOverlapOccupyingLease_ThrowsConflict()
     {
         var (property, unit, tenant) = SeedPropertyUnitTenant();
-        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active,
-            new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            new DateTime(2030, 12, 31, 0, 0, 0, DateTimeKind.Utc));
+        SeedLease(property, unit, tenant, "L-EXISTING", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 12, 31));
         var newTenant = SeedTenant("Avery", "Stone", "avery.stone@example.local");
-        var draft = SeedLease(property, unit, newTenant, "L-DRAFT", LeaseStatus.Draft,
-            new DateTime(2030, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            new DateTime(2031, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var draft = SeedLease(property, unit, newTenant, "L-DRAFT", LeaseStatus.Draft, Date(2030, 6, 1), Date(2031, 1, 1));
 
         var act = async () => await _sut.UpdateAsync(PortfolioId, draft.Id, new UpdateLeaseRequest
         {
@@ -146,9 +132,44 @@ public sealed class LeaseServiceOverlapTests : IDisposable
         _ctx.Db.Leases.Single(l => l.Id == draft.Id).Status.Should().Be(LeaseStatus.Draft);
     }
 
+    [Fact]
+    public async Task UpdateAsync_RejectsActiveLeaseDateEditThatOverlapsAnotherOccupyingLease()
+    {
+        var (property, unit, tenantA) = SeedPropertyUnitTenant();
+        var tenantB = SeedTenant("Blair", "Leaseholder", "blair.leaseholder@example.local");
+        var leaseA = SeedLease(property, unit, tenantA, "QA-2026-A", LeaseStatus.Active, Date(2026, 1, 1), Date(2026, 6, 1));
+        SeedLease(property, unit, tenantB, "QA-2026-B", LeaseStatus.Active, Date(2026, 6, 1), Date(2026, 12, 31));
+
+        var act = async () => await _sut.UpdateAsync(
+            PortfolioId,
+            leaseA.Id,
+            new UpdateLeaseRequest { EndDate = Date(2026, 7, 1) });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("QA-2026-B").And.Contain("overlapping");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_AllowsAdjacentActiveLeaseDateEdit()
+    {
+        var (property, unit, tenantA) = SeedPropertyUnitTenant();
+        var tenantB = SeedTenant("Blair", "Leaseholder", "blair.leaseholder@example.local");
+        var leaseA = SeedLease(property, unit, tenantA, "QA-2026-A", LeaseStatus.Active, Date(2026, 1, 1), Date(2026, 5, 1));
+        SeedLease(property, unit, tenantB, "QA-2026-B", LeaseStatus.Active, Date(2026, 6, 1), Date(2026, 12, 31));
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            leaseA.Id,
+            new UpdateLeaseRequest { EndDate = Date(2026, 6, 1) });
+
+        updated.Should().NotBeNull();
+        updated!.EndDate.Should().Be(Date(2026, 6, 1));
+    }
+
     private (Property property, Unit unit, Tenant tenant) SeedPropertyUnitTenant()
     {
-        var now = DateTime.UtcNow;
+        var now = Date(2026, 1, 1);
         var property = new Property
         {
             PortfolioId = PortfolioId,
@@ -189,7 +210,7 @@ public sealed class LeaseServiceOverlapTests : IDisposable
 
     private Tenant SeedTenant(string firstName, string lastName, string email)
     {
-        var now = DateTime.UtcNow;
+        var now = Date(2026, 1, 1);
         var tenant = new Tenant
         {
             PortfolioId = PortfolioId,
@@ -213,7 +234,6 @@ public sealed class LeaseServiceOverlapTests : IDisposable
         DateTime start,
         DateTime end)
     {
-        var now = DateTime.UtcNow;
         var lease = new Lease
         {
             PortfolioId = PortfolioId,
@@ -228,20 +248,13 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             SecurityDeposit = 1275m,
             LateFeeAmount = 75m,
             RentDueDay = 1,
-            CreatedAt = now,
-            UpdatedAt = now,
+            CreatedAt = start,
+            UpdatedAt = start,
         };
         _ctx.Db.Leases.Add(lease);
         _ctx.Db.SaveChanges();
         return lease;
     }
 
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
-    }
+    private static DateTime Date(int year, int month, int day) => new(year, month, day, 0, 0, 0, DateTimeKind.Utc);
 }
