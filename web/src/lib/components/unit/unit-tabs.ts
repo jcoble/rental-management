@@ -5,6 +5,7 @@ export const UNIT_TABS = [
   "applications",
   "ledger",
   "maintenance",
+  "turnover",
   "documents",
   "timeline",
 ] as const;
@@ -15,6 +16,10 @@ const UNIT_TAB_ALIASES: Record<string, UnitTab> = {
   rent: "ledger",
   payments: "ledger",
   expenses: "ledger",
+  "make-ready": "turnover",
+  makeready: "turnover",
+  "move-out": "turnover",
+  moveout: "turnover",
 };
 
 export function resolveUnitTab(value: string | undefined | null): UnitTab {

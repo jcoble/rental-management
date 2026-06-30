@@ -36,6 +36,9 @@ public class UnitDashboardResponse
     /// <summary>Small, capped lists for the Overview tab (each ~5 rows).</summary>
     public UnitDashboardOverview Overview { get; set; } = new();
 
+    /// <summary>Make-ready / turnover workspace summary, computed server-side from existing unit jobs and receipts.</summary>
+    public UnitTurnoverSummary Turnover { get; set; } = new();
+
     /// <summary>The most recent unit history events (~15), for the persistent timeline rail.</summary>
     public IReadOnlyList<AuditEntryResponse> RecentTimeline { get; set; } = [];
 }
@@ -73,6 +76,47 @@ public class UnitDashboardHeader
 
     /// <summary>Current tenant's display name, null when vacant.</summary>
     public string? CurrentTenantName { get; set; }
+}
+
+/// <summary>
+/// Unit make-ready workspace KPIs. This is intentionally a server projection over today's records rather
+/// than a persisted Turnover entity; it gives the UI a real workspace while preserving historical data until
+/// a later explicit turnover-cycle table is specified.
+/// </summary>
+public class UnitTurnoverSummary
+{
+    /// <summary>Simple operational status for the workspace header.</summary>
+    public string Status { get; set; } = "NotStarted";
+
+    /// <summary>All work orders attached to this unit.</summary>
+    public int TotalTaskCount { get; set; }
+
+    /// <summary>Work orders still requiring action.</summary>
+    public int OpenTaskCount { get; set; }
+
+    /// <summary>Completed work orders attached to this unit.</summary>
+    public int CompletedTaskCount { get; set; }
+
+    /// <summary>Expenses/receipts attached directly to the unit or to its work orders.</summary>
+    public int ReceiptCount { get; set; }
+
+    /// <summary>Sum of work-order estimates, computed in SQL.</summary>
+    public decimal EstimatedCost { get; set; }
+
+    /// <summary>Actual money spent: work-order actuals when entered plus linked expenses/receipts.</summary>
+    public decimal ActualCost { get; set; }
+
+    /// <summary>Earliest work-order request date for this unit's current visible make-ready set.</summary>
+    public DateTime? StartedAt { get; set; }
+
+    /// <summary>Latest scheduled work-order date/window for open tasks, used as the target ready date.</summary>
+    public DateTime? TargetReadyDate { get; set; }
+
+    /// <summary>Latest work-order or receipt activity.</summary>
+    public DateTime? LastActivityAt { get; set; }
+
+    /// <summary>Days from first turnover task to now/done, computed after the SQL aggregate returns.</summary>
+    public int? DaysInTurnover { get; set; }
 }
 
 /// <summary>Compact current-lease projection for the header / overview.</summary>

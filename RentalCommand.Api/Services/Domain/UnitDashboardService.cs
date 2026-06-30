@@ -357,7 +357,82 @@ public class UnitDashboardService : IUnitDashboardService
                 PendingDocs = docs,
                 UpcomingAppointments = upcomingAppointments,
             },
+            Turnover = await BuildTurnoverSummaryAsync(portfolioId, unitId, stage, now, ct),
             RecentTimeline = await GetTimelineAsync(portfolioId, unitId, 0, RecentTimelineTake, ct),
+        };
+    }
+
+    private async Task<UnitTurnoverSummary> BuildTurnoverSummaryAsync(
+        int portfolioId,
+        int unitId,
+        UnitLifecycleStage lifecycleStage,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var workOrderIds = _db.WorkOrders
+            .AsNoTracking()
+            .Where(w => w.PortfolioId == portfolioId && w.UnitId == unitId)
+            .Select(w => w.Id);
+
+        var workOrderAggregate = await _db.WorkOrders
+            .AsNoTracking()
+            .Where(w => w.PortfolioId == portfolioId && w.UnitId == unitId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalTaskCount = g.Count(),
+                OpenTaskCount = g.Count(w =>
+                    w.Status != WorkOrderStatus.Completed
+                    && w.Status != WorkOrderStatus.Cancelled
+                    && w.Status != WorkOrderStatus.Archived),
+                CompletedTaskCount = g.Count(w => w.Status == WorkOrderStatus.Completed),
+                EstimatedCost = g.Sum(w => w.EstimatedCost ?? 0m),
+                WorkOrderActualCost = g.Sum(w => w.ActualCost ?? 0m),
+                StartedAt = g.Min(w => (DateTime?)w.RequestedAt),
+                TargetReadyDate = g.Max(w =>
+                    w.Status != WorkOrderStatus.Completed
+                    && w.Status != WorkOrderStatus.Cancelled
+                    && w.Status != WorkOrderStatus.Archived
+                        ? (w.ScheduledWindowEnd ?? w.ScheduledFor)
+                        : null),
+                LastWorkOrderActivityAt = g.Max(w => (DateTime?)(w.CompletedAt ?? w.UpdatedAt)),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var expenseAggregate = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId
+                && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                ReceiptCount = g.Count(),
+                ReceiptCost = g.Sum(e => e.Amount),
+                LastReceiptAt = g.Max(e => (DateTime?)(e.PaidAt ?? e.IncurredAt)),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var totalTasks = workOrderAggregate?.TotalTaskCount ?? 0;
+        var openTasks = workOrderAggregate?.OpenTaskCount ?? 0;
+        var completedTasks = workOrderAggregate?.CompletedTaskCount ?? 0;
+        var startedAt = workOrderAggregate?.StartedAt;
+        var lastActivityAt = MaxDate(workOrderAggregate?.LastWorkOrderActivityAt, expenseAggregate?.LastReceiptAt);
+
+        return new UnitTurnoverSummary
+        {
+            Status = TurnoverStatus(lifecycleStage, totalTasks, openTasks),
+            TotalTaskCount = totalTasks,
+            OpenTaskCount = openTasks,
+            CompletedTaskCount = completedTasks,
+            ReceiptCount = expenseAggregate?.ReceiptCount ?? 0,
+            EstimatedCost = workOrderAggregate?.EstimatedCost ?? 0m,
+            ActualCost = (workOrderAggregate?.WorkOrderActualCost ?? 0m) + (expenseAggregate?.ReceiptCost ?? 0m),
+            StartedAt = startedAt,
+            TargetReadyDate = workOrderAggregate?.TargetReadyDate,
+            LastActivityAt = lastActivityAt,
+            DaysInTurnover = startedAt is null
+                ? null
+                : Math.Max(0, (int)Math.Ceiling(((openTasks > 0 ? now : lastActivityAt ?? now) - startedAt.Value).TotalDays)),
         };
     }
 
@@ -550,8 +625,40 @@ public class UnitDashboardService : IUnitDashboardService
         UnitLifecycleStage.Active => $"/units/{unitId}?tab=ledger&ledger=rent",
         UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=RenewalOffer",
         UnitLifecycleStage.Renewal => $"/units/{unitId}?tab=lease",
-        UnitLifecycleStage.MoveOut => $"/units/{unitId}?tab=maintenance",
-        UnitLifecycleStage.Turnover => $"/units/{unitId}?tab=maintenance",
+        UnitLifecycleStage.MoveOut => $"/units/{unitId}?tab=turnover",
+        UnitLifecycleStage.Turnover => $"/units/{unitId}?tab=turnover",
         _ => $"/units/{unitId}",
     };
+
+    private static string TurnoverStatus(UnitLifecycleStage lifecycleStage, int totalTasks, int openTasks)
+    {
+        if (openTasks > 0)
+        {
+            return lifecycleStage == UnitLifecycleStage.MoveOut ? "MoveOut" : "InProgress";
+        }
+
+        if (totalTasks > 0)
+        {
+            return "RentReady";
+        }
+
+        return lifecycleStage is UnitLifecycleStage.MoveOut or UnitLifecycleStage.Turnover
+            ? "AwaitingVacancy"
+            : "NotStarted";
+    }
+
+    private static DateTime? MaxDate(DateTime? first, DateTime? second)
+    {
+        if (first is null)
+        {
+            return second;
+        }
+
+        if (second is null)
+        {
+            return first;
+        }
+
+        return first >= second ? first : second;
+    }
 }
