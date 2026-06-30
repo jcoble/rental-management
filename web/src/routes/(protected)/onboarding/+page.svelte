@@ -632,6 +632,44 @@
 		unitRowErrors = unitRowErrors.filter((_, idx) => idx !== i);
 	}
 
+	// Units logic (TSK-602): single-unit property types get one auto-filled unit; multi-unit
+	// types let the user say how many up front and we generate that many rows.
+	const SINGLE_UNIT_TYPES = ['SingleFamily', 'Condo', 'Townhome'];
+	const isSingleUnitProperty = $derived(SINGLE_UNIT_TYPES.includes(propertyForm.type));
+	let unitCount = $state('');
+
+	function unitsAreDefaultEmpty() {
+		return (
+			unitRows.length === 1 &&
+			!unitRows[0].unitNumber &&
+			!unitRows[0].bedrooms &&
+			!unitRows[0].bathrooms &&
+			!unitRows[0].marketRent
+		);
+	}
+	// Single-family (and condo/townhome): the property IS the one unit. Auto-fill it as
+	// "Unit {property name}" with sensible defaults (1 bed / 1 bath / $0) the user can edit.
+	function seedUnitsForType() {
+		if (!unitsAreDefaultEmpty()) return; // never clobber units the user already entered
+		if (isSingleUnitProperty) {
+			unitRows = [
+				{ unitNumber: propertyForm.name.trim() || '1', bedrooms: '1', bathrooms: '1', marketRent: '0' },
+			];
+			unitRowErrors = [{}];
+		}
+	}
+	// Multi-unit: generate N blank rows (numbered 1..N) from the count the user entered.
+	function generateUnitRows() {
+		const n = Math.max(1, Math.min(50, parseInt(unitCount, 10) || 0));
+		unitRows = Array.from({ length: n }, (_, i) => ({
+			unitNumber: String(i + 1),
+			bedrooms: '',
+			bathrooms: '',
+			marketRent: '',
+		}));
+		unitRowErrors = unitRows.map(() => ({}));
+	}
+
 	type SavePropertyVariables = {
 		propertyId: number | null;
 		property: Record<string, unknown>;
@@ -1837,6 +1875,17 @@
 											{/if}
 										</div>
 									{/if}
+									{#if isSingleUnitProperty}
+										<p class="mb-3 text-xs text-muted-foreground" data-testid="onboarding-single-unit-note">Single-family — we filled in the one unit below as <span class="font-medium">Unit {propertyForm.name.trim() || '1'}</span>. Just check the beds, baths, and rent.</p>
+									{:else}
+										<div class="mb-3 flex items-end gap-2" data-testid="onboarding-unit-count">
+											<div>
+												<span class="mb-1 block text-[11px] text-muted-foreground">How many units does this property have?</span>
+												<Input type="text" inputmode="numeric" mask="integer" class="w-28" data-testid="onboarding-unit-count-input" bind:value={unitCount} placeholder="e.g. 4" />
+											</div>
+											<Button variant="outline" size="sm" data-testid="onboarding-unit-count-apply" onclick={generateUnitRows} disabled={!unitCount}>Add that many</Button>
+										</div>
+									{/if}
 									<div class="space-y-3" data-testid="onboarding-units">
 										{#each unitRows as row, i (i)}
 											<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
@@ -2152,7 +2201,7 @@
 								Next <ArrowRight class="h-4 w-4" />
 							</Button>
 						{:else if propertySub === 'details'}
-							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => (propertySub = 'units')}>
+							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { seedUnitsForType(); propertySub = 'units'; }}>
 								Next <ArrowRight class="h-4 w-4" />
 							</Button>
 						{:else}
