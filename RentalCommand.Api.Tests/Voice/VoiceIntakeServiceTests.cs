@@ -21,7 +21,7 @@ public class VoiceIntakeServiceTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     [Fact]
-    public async Task CreateDraftAsync_TranscriptClassifiesWorkOrder_CreatesReviewingDraft()
+    public async Task CreateDraftAsync_NonExpenseIntent_CreatesAmbiguousExpenseDraft()
     {
         var now = DateTime.UtcNow;
         _ctx.Db.Properties.Add(new Property
@@ -65,13 +65,17 @@ public class VoiceIntakeServiceTests : IDisposable
             ct: CancellationToken.None);
 
         draft.Status.Should().Be("Reviewing");
-        draft.TargetEntityType.Should().Be("WorkOrder");
+        draft.TargetEntityType.Should().Be("Expense");
         draft.FilePath.Should().StartWith("voice://");
         draft.ExtractedFields.Should().NotBeNullOrWhiteSpace();
 
         using var json = JsonDocument.Parse(draft.ExtractedFields!);
         json.RootElement.GetProperty("transcript").GetProperty("value").GetString()
             .Should().Contain("Unit 3");
+        json.RootElement.GetProperty("voice_intent").GetProperty("value").GetString()
+            .Should().Be("WorkOrder");
+        json.RootElement.GetProperty("voice_ambiguous").GetProperty("value").GetString()
+            .Should().Be("true");
         json.RootElement.GetProperty("title").GetProperty("value").GetString()
             .Should().Be("Ceiling leak");
         json.RootElement.GetProperty("priority").GetProperty("value").GetString()
