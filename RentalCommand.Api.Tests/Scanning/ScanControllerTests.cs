@@ -8,6 +8,7 @@ using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -137,6 +138,144 @@ public class ScanControllerTests : IDisposable
             files.Verify(f => f.DownloadAsync("uploads/scan-51.jpg", It.IsAny<CancellationToken>()), Times.Once);
             files.Verify(f => f.DownloadAsync("thumbs/scan-51.jpg", It.IsAny<CancellationToken>()), Times.Never);
         }
+    }
+
+    [Fact]
+    public async Task ListPage_IncludesCreatedUnitId_ForUnitTiedConfirmedRecords()
+    {
+        var now = DateTime.UtcNow;
+        _db.Portfolios.Add(new Portfolio
+        {
+            Id = 42,
+            Name = "Portfolio 42",
+            ManagementCompanyName = "Test Co",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Properties.Add(new Property
+        {
+            Id = 10,
+            PortfolioId = 42,
+            Name = "Test Property",
+            AddressLine1 = "1 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 11,
+            PropertyId = 10,
+            UnitNumber = "A",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Tenants.Add(new Tenant
+        {
+            Id = 12,
+            PortfolioId = 42,
+            FirstName = "Test",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Leases.Add(new Lease
+        {
+            Id = 13,
+            PortfolioId = 42,
+            PropertyId = 10,
+            UnitId = 11,
+            TenantId = 12,
+            LeaseNumber = "L-13",
+            Status = LeaseStatus.Active,
+            StartDate = now.Date,
+            EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Payments.Add(new Payment
+        {
+            Id = 14,
+            PortfolioId = 42,
+            LeaseId = 13,
+            Amount = 1200m,
+            DueDate = now.Date,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.RentalApplications.Add(new RentalApplication
+        {
+            Id = 15,
+            PortfolioId = 42,
+            PropertyId = 10,
+            UnitId = 11,
+            FirstName = "Applicant",
+            LastName = "One",
+            CreatedAt = now,
+            UpdatedAt = now,
+            SubmittedAtUtc = now,
+        });
+        _db.ScanDrafts.AddRange(
+            new ScanDraft
+            {
+                Id = 21,
+                PortfolioId = 42,
+                TargetEntityType = "Payment",
+                Status = "Confirmed",
+                FilePath = "uploads/payment.jpg",
+                CreatedAt = now,
+            },
+            new ScanDraft
+            {
+                Id = 22,
+                PortfolioId = 42,
+                TargetEntityType = "Application",
+                Status = "Confirmed",
+                FilePath = "uploads/application.jpg",
+                CreatedAt = now.AddSeconds(1),
+            });
+        _db.StoredFiles.AddRange(
+            new StoredFile
+            {
+                PortfolioId = 42,
+                FileName = "payment.jpg",
+                FilePath = "uploads/payment.jpg",
+                ContentType = "image/jpeg",
+                FileSize = 1,
+                EntityType = "Payment",
+                EntityId = 14,
+            },
+            new StoredFile
+            {
+                PortfolioId = 42,
+                FileName = "application.jpg",
+                FilePath = "uploads/application.jpg",
+                ContentType = "image/jpeg",
+                FileSize = 1,
+                EntityType = "Application",
+                EntityId = 15,
+            });
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController(Mock.Of<IScanService>());
+
+        var result = await controller.ListPage(new ListQuery { Skip = 0, Take = 20 }, "Confirmed", CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var body = ok.Value.Should().BeOfType<ScanDraftListResponse>().Subject;
+        body.Items.Should().HaveCount(2);
+        body.Items.Should().Contain(i =>
+            i.CreatedEntityType == "Payment" &&
+            i.CreatedEntityId == 14 &&
+            i.CreatedUnitId == 11);
+        body.Items.Should().Contain(i =>
+            i.CreatedEntityType == "Application" &&
+            i.CreatedEntityId == 15 &&
+            i.CreatedUnitId == 11);
     }
 
     private ScanController CreateController(IScanService scan, IFileStorage? files = null)
