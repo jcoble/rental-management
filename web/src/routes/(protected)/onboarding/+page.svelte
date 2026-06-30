@@ -169,23 +169,14 @@
 		queryFn: () => notifications.getSettings(),
 	}));
 
-	// Onboarding is for LIVE accounts only. A Sandbox account is pre-seeded demo data — the user
-	// should "Go Live" first (which wipes the demo data), so we bounce them to the dashboard.
+	// Sandbox/example-data state still matters for copy and progress framing, but it must not block
+	// re-entering Guided Setup. Users need to test the setup/import flow before going live.
 	const sandboxQuery = createQuery(() => ({
 		queryKey: ['sandbox-state', portfolioId],
 		enabled: portfolioId > 0,
 		queryFn: () => portfolios.sandboxState(),
 		staleTime: 60_000,
 	}));
-	let redirectedFromSandbox = $state(false);
-	$effect(() => {
-		if (redirectedFromSandbox) return;
-		if (sandboxQuery.data?.isSandbox === true) {
-			redirectedFromSandbox = true;
-			showError('Setup runs on a live account. Go live first to set up your real portfolio.');
-			goto('/');
-		}
-	});
 
 	const hasExistingOwners = $derived((ownersQuery.data?.length ?? 0) > 0);
 	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
@@ -230,7 +221,6 @@
 	);
 	$effect(() => {
 		if (autoAdvanced || finished || !detectionReady) return;
-		if (sandboxQuery.data?.isSandbox === true) return;
 		autoAdvanced = true;
 
 		fromParam = page.url.searchParams.get('from');

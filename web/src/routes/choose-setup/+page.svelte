@@ -95,7 +95,7 @@
 					Jump into a fully loaded demo portfolio — properties, tenants, leases, payments and work
 					orders — so you can try everything risk-free.
 					<span class="font-medium text-foreground">
-						It's all fake sample data; nothing sends real emails or texts, or charges any cards.
+						It's fake sample data for exploring the app. Configured email and text providers can still send for testing.
 					</span>
 				</p>
 				<span

@@ -55,7 +55,6 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         //   1. Transport == "Smtp" AND SMTP configured (host+user+pass) → send via SMTP (e.g. Zoho).
         //   2. else SendGrid configured                                 → send via SendGrid.
         //   3. else                                                     → terminal suppression, no retry.
-        // The upstream sandbox suppression lives in OutboxDispatchWorker and is intentionally untouched.
         var smtp = _cfg.Smtp;
         if (_cfg.Email.UseSmtp && smtp.Enabled)
         {

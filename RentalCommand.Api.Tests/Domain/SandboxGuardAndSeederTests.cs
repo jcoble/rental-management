@@ -15,8 +15,8 @@ namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
 /// Sandbox guard + parameterized seeder coverage:
-///   * <see cref="SandboxGuard"/> — the single check the outbox dispatch worker (and Stripe/e-sign)
-///     key on to suppress real outbound: true only for a sandbox portfolio; false for live/unknown/null.
+///   * <see cref="SandboxGuard"/> — the Stripe money-moving guard: true only for a sandbox portfolio;
+///     false for live/unknown/null.
 ///   * <see cref="DemoDataSeeder.SeedPortfolioAsync"/> — seeds an ARBITRARY portfolio id and never
 ///     touches the sandbox flag, so the existing dev/e2e portfolio stays Live.
 ///   * Stripe checkout is suppressed (NotEnabled, no Stripe call) while a portfolio is sandbox.
@@ -28,7 +28,7 @@ public class SandboxGuardAndSeederTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     // -----------------------------------------------------------------------
-    // SandboxGuard (the outbound choke-point predicate)
+    // SandboxGuard (the Stripe money-moving predicate)
 
     [Fact]
     public async Task SandboxGuard_True_WhenPortfolioIsSandbox()

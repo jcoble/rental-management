@@ -2,7 +2,6 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -64,7 +63,6 @@ public class OutboxDispatchWorker : EngineWorkerBase
         var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
         var pushSender = scopedProvider.GetRequiredService<IPushSender>();
-        var sandboxGuard = scopedProvider.GetRequiredService<ISandboxGuard>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
 
         // Load all candidates (unsent, within retry budget) — oldest-first.
@@ -95,47 +93,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 continue;
             }
 
-            // Sandbox redirect: most messages scoped to a Sandbox portfolio must not reach a real
-            // tenant/vendor. Rather than silently dropping them (which makes demo features look
-            // broken), we redirect them to the portfolio owner's own inbox/phone, tagged [Sandbox].
-            // Lease e-sign signing links are an explicit exception: the lease workflow resolves the
-            // signer from the tenant tied to the lease, and users test that flow by putting their
-            // reachable address on that tenant. Card charges are suppressed elsewhere
-            // (StripePaymentService) because those cannot be safely redirected.
-            //
-            // Push is exempt: a push message targets the PORTFOLIO OWNER's own registered devices
-            // (resolved from DeviceTokens by PortfolioId), never a third party, so there is nothing
-            // to redirect — a sandbox landlord still gets their own push and can exercise the flow.
             var isPush = string.Equals(message.MessageType?.Trim(), "push", StringComparison.OrdinalIgnoreCase);
-            if (!isPush && await sandboxGuard.IsSandboxAsync(message.PortfolioId, cancellationToken))
-            {
-                if (AllowsOriginalRecipientInSandbox(message))
-                {
-                    logger.LogInformation(
-                        "[sandbox original recipient] OutboxMessage {MessageId} ({MessageType}) for sandbox portfolio {PortfolioId} kept original recipient.",
-                        message.Id, message.MessageType, message.PortfolioId);
-                }
-                else
-                {
-                    var ownerContact = await ResolveSandboxRedirectTargetAsync(db, message, cancellationToken);
-                    if (ownerContact is null)
-                    {
-                        logger.LogInformation(
-                            "[suppressed — sandbox, no owner contact] OutboxMessage {MessageId} ({MessageType}) for sandbox portfolio {PortfolioId} — not sent.",
-                            message.Id, message.MessageType, message.PortfolioId);
-                        message.SentAt = DateTime.UtcNow;
-                        message.FailedAt = null;
-                        message.Error = "Sandbox delivery suppressed because no portfolio owner contact is configured.";
-                        await db.SaveChangesAsync(CancellationToken.None);
-                        continue;
-                    }
-
-                    message.Payload = RewritePayloadForSandbox(message, ownerContact);
-                    logger.LogInformation(
-                        "[sandbox redirect] OutboxMessage {MessageId} ({MessageType}) for sandbox portfolio {PortfolioId} redirected to portfolio owner.",
-                        message.Id, message.MessageType, message.PortfolioId);
-                }
-            }
 
             try
             {
@@ -261,116 +219,6 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
         return false;
     }
-
-    /// <summary>
-    /// Resolves the portfolio owner's contact (email/phone) for a sandbox redirect. Prefer a user
-    /// linked to an <see cref="OwnerEntity"/> because a real landlord can also have a tenant portal
-    /// link; fall back to the original non-tenant owner/admin account. Returns null when no usable
-    /// address exists for the requested channel — the caller then fail-closes (suppresses) rather than
-    /// risk reaching the original recipient.
-    /// </summary>
-    private static async Task<SandboxContact?> ResolveSandboxRedirectTargetAsync(
-        RentalCommandDbContext db, OutboxMessage message, CancellationToken ct)
-    {
-        if (message.PortfolioId is not int portfolioId || portfolioId <= 0)
-        {
-            return null;
-        }
-
-        var type = message.MessageType?.Trim().ToLowerInvariant();
-        if (type == "sms")
-        {
-            var smsOwner = await db.Users
-                .Where(u => u.PortfolioId == portfolioId
-                    && (u.OwnerEntityId != null || u.TenantId == null)
-                    && u.PhoneNumber != null
-                    && u.PhoneNumber != string.Empty)
-                .OrderByDescending(u => u.OwnerEntityId != null)
-                .ThenBy(u => u.Id)
-                .Select(u => new { u.PhoneNumber })
-                .FirstOrDefaultAsync(ct);
-            if (smsOwner is null)
-            {
-                return null;
-            }
-
-            return string.IsNullOrWhiteSpace(smsOwner.PhoneNumber) ? null : new SandboxContact(null, smsOwner.PhoneNumber);
-        }
-
-        // email (default)
-        var emailOwner = await db.Users
-            .Where(u => u.PortfolioId == portfolioId
-                && (u.OwnerEntityId != null || u.TenantId == null)
-                && u.Email != null
-                && u.Email != string.Empty)
-            .OrderByDescending(u => u.OwnerEntityId != null)
-            .ThenBy(u => u.Id)
-            .Select(u => new { u.Email })
-            .FirstOrDefaultAsync(ct);
-        if (emailOwner is null)
-        {
-            return null;
-        }
-
-        return string.IsNullOrWhiteSpace(emailOwner.Email) ? null : new SandboxContact(emailOwner.Email, null);
-    }
-
-    private static bool AllowsOriginalRecipientInSandbox(OutboxMessage message)
-    {
-        if (!string.Equals(message.MessageType?.Trim(), "email", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        using var doc = JsonDocument.Parse(
-            string.IsNullOrWhiteSpace(message.Payload) ? "{}" : message.Payload);
-        var root = doc.RootElement;
-        return string.Equals(
-            GetString(root, "source"),
-            OutboxPayloadSources.LeaseEsignSigningLink,
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Rewrites an outbox payload so its recipient is the portfolio owner (sandbox redirect): the
-    /// subject is tagged <c>[Sandbox]</c> and the original intended recipient is noted in the body,
-    /// so the landlord can exercise the real flow without anything reaching a third party.
-    /// </summary>
-    private static string RewritePayloadForSandbox(OutboxMessage message, SandboxContact owner)
-    {
-        using var doc = JsonDocument.Parse(
-            string.IsNullOrWhiteSpace(message.Payload) ? "{}" : message.Payload);
-        var root = doc.RootElement;
-
-        var type = message.MessageType?.Trim().ToLowerInvariant();
-        if (type == "sms")
-        {
-            var originalTo = GetString(root, "to") ?? GetString(root, "toPhoneNumber");
-            var body = GetString(root, "message") ?? GetString(root, "body") ?? string.Empty;
-            var redirected = $"[Sandbox] (intended for {originalTo ?? "tenant"})\n{body}";
-            return JsonSerializer.Serialize(new { to = owner.Phone, message = redirected });
-        }
-
-        var originalEmail = GetString(root, "to") ?? GetString(root, "toEmail");
-        var subject = GetString(root, "subject") ?? string.Empty;
-        var emailBody = GetString(root, "body") ?? GetString(root, "message") ?? string.Empty;
-        var htmlBody = GetString(root, "htmlBody");
-        var taggedSubject = subject.StartsWith("[Sandbox]", StringComparison.OrdinalIgnoreCase)
-            ? subject
-            : $"[Sandbox] {subject}";
-        var sandboxNote =
-            $"[Sandbox mode] This message was intended for {originalEmail ?? "the tenant"} but was redirected to you so you can try the flow safely.";
-        var redirectedBody = $"{sandboxNote}\n\n{emailBody}";
-        // Prefix the same note onto the HTML alternative when present, so the rich part is redirected
-        // too (rather than the original HTML — which names the real recipient — overriding plaintext).
-        var redirectedHtml = string.IsNullOrWhiteSpace(htmlBody)
-            ? null
-            : $"<p>{System.Net.WebUtility.HtmlEncode(sandboxNote)}</p>{htmlBody}";
-        return JsonSerializer.Serialize(new { to = owner.Email, subject = taggedSubject, body = redirectedBody, htmlBody = redirectedHtml });
-    }
-
-    /// <summary>Resolved sandbox-redirect contact: exactly one of email/phone is set per channel.</summary>
-    private sealed record SandboxContact(string? Email, string? Phone);
 
     /// <summary>
     /// Fans a single <c>push</c> outbox message out to every device token registered for the
