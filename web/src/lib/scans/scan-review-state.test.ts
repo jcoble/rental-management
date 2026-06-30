@@ -42,4 +42,13 @@ describe('scan review terminal state', () => {
 		assert.equal(createdRecordHref(null, 48), '/accounting');
 		assert.equal(createdRecordHref('Application', null), '/accounting');
 	});
+
+	it('links unit-tied confirmed scans to the unit command center tab', () => {
+		assert.equal(createdRecordHref('Application', 123, 9), '/units/9?tab=applications&app=123');
+		assert.equal(createdRecordHref('RentalApplication', 123, 9), '/units/9?tab=applications&app=123');
+		assert.equal(createdRecordHref('Payment', 45, 9), '/units/9?tab=rent&payment=45');
+		assert.equal(createdRecordHref('WorkOrder', 46, 9), '/units/9?tab=maintenance&wo=46');
+		assert.equal(createdRecordHref('Lease', 47, 9), '/units/9?tab=lease&lease=47');
+		assert.equal(createdRecordHref('Expense', 48, 9), '/units/9?tab=expenses&expense=48');
+	});
 });

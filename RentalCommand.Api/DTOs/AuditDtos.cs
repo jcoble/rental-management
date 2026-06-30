@@ -64,7 +64,8 @@ public class AuditEntryResponse
         AuditLog e,
         AuditDescriber describer,
         AuditDiffBuilder? diff = null,
-        IReadOnlyDictionary<int, string>? userNames = null) => new()
+        IReadOnlyDictionary<int, string>? userNames = null,
+        int? unitId = null) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
@@ -74,7 +75,7 @@ public class AuditEntryResponse
         EntityId = e.EntityId,
         Actor = ResolveActor(e, userNames),
         Description = describer.Describe(e),
-        DetailHref = BuildDetailHref(e.EntityType, e.EntityId),
+        DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
         Timestamp = e.Timestamp,
         Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
     };
@@ -109,18 +110,23 @@ public class AuditEntryResponse
     }
 
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
-    internal static string? BuildDetailHref(string entityType, int entityId) => entityType switch
+    internal static string? BuildDetailHref(string entityType, int entityId, int? unitId = null) => entityType switch
     {
+        "Payment" when unitId is > 0 => $"/units/{unitId}?tab=rent&payment={entityId}",
         "Payment" => $"/accounting/payments/{entityId}",
+        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=expenses&expense={entityId}",
         "Expense" => $"/accounting/expenses/{entityId}",
+        "Lease" when unitId is > 0 => $"/units/{unitId}?tab=lease&lease={entityId}",
         "Lease" => $"/leases/{entityId}",
         "Tenant" => $"/tenants/{entityId}",
         "Property" => $"/properties/{entityId}",
+        "WorkOrder" when unitId is > 0 => $"/units/{unitId}?tab=maintenance&wo={entityId}",
         "WorkOrder" => $"/maintenance/{entityId}",
         "Vendor" => $"/vendors/{entityId}",
         "OwnerEntity" => "/owners",
         "Appointment" => $"/appointments/{entityId}",
         "Inspection" => $"/maintenance/inspections/{entityId}",
+        "RentalApplication" when unitId is > 0 => $"/units/{unitId}?tab=applications&app={entityId}",
         "RentalApplication" => $"/applications/{entityId}",
         _ => null,
     };
