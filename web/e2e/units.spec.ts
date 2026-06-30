@@ -3,7 +3,7 @@
  *
  * Covers spec section 13 acceptance criteria #1 at the UI level: the /units list renders,
  * opening a unit shows the header (health chips), the derived clickable lifecycle stepper,
- * the seven work tabs (and a tab switch works), the persistent timeline rail, and that
+ * the unit work tabs (and a tab switch works), the activity flyout, and that
  * domain work is INLINE in the tab (an inline create form reveals — no drawer/modal).
  *
  * NOTE: this file was authored by the build agent but NOT executed — running it needs the
@@ -31,7 +31,7 @@ test.describe('Unit Command Center', () => {
 		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 15_000 });
 	});
 
-	test('unit page shows header, lifecycle rail, tabs, and timeline rail', async ({ page }) => {
+	test('unit page shows header, lifecycle rail, tabs, and activity flyout', async ({ page }) => {
 		await login(page);
 
 		// Enter a unit via the list (avoids hard-coding an id).
@@ -51,17 +51,23 @@ test.describe('Unit Command Center', () => {
 		await expect(rail).toBeVisible();
 		await expect(rail).toHaveAttribute('data-stage', /\w+/);
 
-		// The seven work tabs render; the Overview tab is the default.
+		// The unit work tabs render; the Overview tab is the default.
 		await expect(page.getByTestId('unit-tabs')).toBeVisible();
 		await expect(page.getByTestId('unit-overview-tab')).toBeVisible();
 
-		// Persistent timeline rail is present alongside the tabs.
+		// Recent activity is available from the compact flyout, keeping the main tab layout wide.
+		await expect(page.getByTestId('unit-activity-open')).toBeVisible();
+		await page.getByTestId('unit-activity-open').click();
+		await expect(page.getByTestId('unit-activity-flyout')).toBeVisible();
 		await expect(page.getByTestId('unit-timeline-rail')).toBeVisible();
+		await page.getByTestId('unit-activity-close').click();
+		await expect(page.getByTestId('unit-activity-flyout')).toBeHidden();
 
-		// Switching tabs swaps the panel (Overview → Rent).
-		await page.getByTestId('tab-rent').click();
+		// Switching tabs swaps the panel (Overview → Ledger → tenant account).
+		await page.getByTestId('tab-ledger').click();
+		await expect(page.getByTestId('unit-ledger-tab')).toBeVisible({ timeout: 10_000 });
 		await expect(page.getByTestId('unit-rent-tab')).toBeVisible({ timeout: 10_000 });
-		await expect(page).toHaveURL(/tab=rent/);
+		await expect(page).toHaveURL(/tab=ledger/);
 	});
 
 	test('deep link with ?tab= opens the requested tab', async ({ page }) => {
@@ -87,13 +93,14 @@ test.describe('Unit Command Center', () => {
 		await firstRow.click();
 		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 15_000 });
 
-		// The lifecycle stepper is clickable: clicking the Active stage jumps to the Rent tab.
+		// The lifecycle stepper is clickable: clicking the Active stage jumps to the Ledger tab.
 		await page.getByTestId('lifecycle-stage-Active').click();
+		await expect(page.getByTestId('unit-ledger-tab')).toBeVisible({ timeout: 10_000 });
 		await expect(page.getByTestId('unit-rent-tab')).toBeVisible({ timeout: 10_000 });
-		await expect(page).toHaveURL(/tab=rent/);
+		await expect(page).toHaveURL(/tab=ledger/);
 
-		// Open the Expenses tab and reveal the INLINE add-expense form on the page (not a drawer/modal).
-		await page.getByTestId('tab-expenses').click();
+		// Open the operating-costs ledger and reveal the INLINE add-expense form on the page (not a drawer/modal).
+		await page.getByTestId('ledger-tab-expenses').click();
 		await expect(page.getByTestId('unit-expenses-tab')).toBeVisible({ timeout: 10_000 });
 		await page.getByTestId('expenses-create').click();
 		await expect(page.getByTestId('expenses-create-form')).toBeVisible();

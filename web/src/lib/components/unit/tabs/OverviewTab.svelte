@@ -82,7 +82,7 @@
 					</li>
 				{/each}
 			</ul>
-			<button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => onOpenTab('rent')}>Open rent</button>
+			<button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => onOpenTab('ledger')}>Open ledger</button>
 		{/if}
 	</DetailCard>
 

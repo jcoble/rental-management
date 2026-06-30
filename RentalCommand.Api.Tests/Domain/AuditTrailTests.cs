@@ -385,7 +385,7 @@ public sealed class AuditTrailTests : IDisposable
         var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
 
         page.Should().ContainSingle();
-        page[0].DetailHref.Should().Be($"/units/{unit.Id}?tab=rent&payment={payment.Id}");
+        page[0].DetailHref.Should().Be($"/units/{unit.Id}?tab=ledger&ledger=rent&payment={payment.Id}");
     }
 
     [Theory]

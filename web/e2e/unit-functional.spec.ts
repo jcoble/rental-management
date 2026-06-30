@@ -42,9 +42,9 @@ function asMoney(value: number): string {
 
 test.describe('Unit Command Center — functional', () => {
 	// ─────────────────────────────────────────────────────────────────────────
-	// All seven tabs render their expected panel for a leased unit.
+	// All unit work tabs render their expected panel for a leased unit.
 	// ─────────────────────────────────────────────────────────────────────────
-	test('all seven tabs render for a leased unit', async ({ page, request }) => {
+	test('all unit tabs render for a leased unit', async ({ page, request }) => {
 		const token = await apiToken(request);
 		const { unit } = await findLeasedUnit(request, token);
 		await login(page);
@@ -52,10 +52,9 @@ test.describe('Unit Command Center — functional', () => {
 		const tabs: Array<[string, string, string]> = [
 			['overview', 'tab-overview', 'unit-overview-tab'],
 			['lease', 'tab-lease', 'unit-lease-tab'],
-			['rent', 'tab-rent', 'unit-rent-tab'],
+			['ledger', 'tab-ledger', 'unit-ledger-tab'],
 			['maintenance', 'tab-maintenance', 'unit-maintenance-tab'],
 			['documents', 'tab-documents', 'unit-documents-tab'],
-			['expenses', 'tab-expenses', 'unit-expenses-tab'],
 			['timeline', 'tab-timeline', 'unit-timeline-tab'],
 		];
 
@@ -76,7 +75,7 @@ test.describe('Unit Command Center — functional', () => {
 			const { unit, currentLease } = await findLeasedUnit(request, token);
 			const leaseId = currentLease!.id;
 			await login(page);
-			await openUnitTab(page, unit.id, 'rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
 
 			// A distinctive sub-$1000 amount (no thousands comma) so we can match the rendered
 			// currency string exactly AND find this one payment back via the API.
@@ -122,7 +121,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
 
 			await page.getByTestId('rent-post-payment').click();
 			await expect(page.getByTestId('rent-create-form')).toBeVisible();
@@ -138,7 +137,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
 
 			await page.getByTestId('rent-post-payment').click();
 			await page.getByTestId('rent-amount-input').fill('0');
@@ -170,7 +169,7 @@ test.describe('Unit Command Center — functional', () => {
 			expect(createRes.ok(), `seed payment failed: ${createRes.status()}`).toBeTruthy();
 			const seeded = (await createRes.json()) as { id: number };
 
-			await openUnitTab(page, unit.id, 'rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
 
 			const card = page.getByTestId(`rent-payment-${seeded.id}`);
 			await expect(card).toBeVisible({ timeout: 10_000 });
@@ -285,7 +284,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
 
 			const desc = unique('CC Dishwasher repair');
 			const amount = (320 + (Date.now() % 80)).toFixed(2);
@@ -330,7 +329,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
 
 			await page.getByTestId('expenses-create').click();
 			await expect(page.getByTestId('expenses-create-form')).toBeVisible();
@@ -351,7 +350,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
 
 			await page.getByTestId('expenses-scan').click();
 			await expect(page.getByTestId('scan-page')).toBeVisible({ timeout: 10_000 });
@@ -362,7 +361,7 @@ test.describe('Unit Command Center — functional', () => {
 			expect(url.searchParams.get('type')).toBe('Expense');
 			expect(url.searchParams.get('propertyId')).toBe(String(unit.propertyId));
 			expect(url.searchParams.get('unitId')).toBe(String(unit.id));
-			expect(url.searchParams.get('returnTo')).toBe(`/units/${unit.id}?tab=expenses`);
+			expect(url.searchParams.get('returnTo')).toBe(`/units/${unit.id}?tab=ledger&ledger=expenses`);
 		});
 
 		test('edits an expense amount + category on the card', async ({ page, request }) => {
@@ -388,7 +387,7 @@ test.describe('Unit Command Center — functional', () => {
 			expect(createRes.ok(), `seed expense failed: ${createRes.status()}`).toBeTruthy();
 			const seeded = (await createRes.json()) as { id: number };
 
-			await openUnitTab(page, unit.id, 'expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
 
 			const card = page.getByTestId(`expense-${seeded.id}`);
 			await expect(card).toBeVisible({ timeout: 10_000 });

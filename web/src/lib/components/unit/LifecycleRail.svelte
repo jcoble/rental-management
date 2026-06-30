@@ -22,7 +22,7 @@
 		{ key: 'Applicant', label: 'Applicant', tab: 'overview' },
 		{ key: 'Lease', label: 'Lease', tab: 'lease' },
 		{ key: 'MoveIn', label: 'Move-In', tab: 'lease' },
-		{ key: 'Active', label: 'Active', tab: 'rent' },
+		{ key: 'Active', label: 'Active', tab: 'ledger' },
 		{ key: 'Renewal', label: 'Renewal', tab: 'lease' },
 		{ key: 'MoveOut', label: 'Move-Out', tab: 'maintenance' },
 		{ key: 'Turnover', label: 'Turnover', tab: 'maintenance' },
