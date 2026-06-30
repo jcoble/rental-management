@@ -319,6 +319,75 @@ public sealed class AuditTrailTests : IDisposable
         page.Single(p => p.EntityId == 73).Actor.Should().Be("system");
     }
 
+    [Fact]
+    public async Task Query_Routes_Unit_Tied_Payment_DetailHref_To_Unit_CommandCenter()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Duplex",
+            AddressLine1 = "1 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "1A",
+            MarketRent = 1_200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Maria",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-1A",
+            Status = LeaseStatus.Active,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1_200m,
+            SecurityDeposit = 1_200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var payment = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1_200m,
+            DueDate = now.Date,
+            PaidDate = now.Date,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        _db.AddRange(property, unit, tenant, lease, payment);
+        await _db.SaveChangesAsync();
+
+        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder());
+        var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
+
+        page.Should().ContainSingle();
+        page[0].DetailHref.Should().Be($"/units/{unit.Id}?tab=rent&payment={payment.Id}");
+    }
+
     [Theory]
     [InlineData("Payment", AuditLogOperation.Created, "Recorded a payment")]
     [InlineData("Lease", AuditLogOperation.Updated, "Updated lease")]

@@ -12,6 +12,7 @@ export interface BriefingBullet {
 	severity: 'info' | 'warning' | 'critical';
 	entityType?: string | null;
 	entityId?: number | null;
+	unitId?: number | null;
 }
 
 export interface BriefingResponse {
