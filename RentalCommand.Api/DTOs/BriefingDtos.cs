@@ -6,7 +6,8 @@ public record BriefingBullet(
     string Category,   // "RentDue" | "RentLate" | "Maintenance" | "Appointment" | "LeaseExpiring" | "Inspection"
     string Severity,   // "info" | "warning" | "critical"
     string? EntityType,
-    int? EntityId);
+    int? EntityId,
+    int? UnitId = null);
 
 public class BriefingResponse
 {

@@ -113,6 +113,12 @@ public class CreatePropertyRequest
     [Range(1, int.MaxValue)]
     public int? OwnerEntityId { get; set; }
 
+    /// <summary>
+    /// Explicitly leave the property without an owner. Without this flag, create falls back to the
+    /// portfolio's primary owner when no owner is supplied.
+    /// </summary>
+    public bool ClearOwnerEntity { get; set; }
+
     [Required]
     [MaxLength(200)]
     public string Name { get; set; } = string.Empty;
@@ -170,6 +176,12 @@ public class UpdatePropertyRequest
 
     [Range(1, int.MaxValue)]
     public int? OwnerEntityId { get; set; }
+
+    /// <summary>
+    /// Explicitly clears the owner entity on update. Nullable owner ids alone cannot distinguish
+    /// "field omitted" from "user chose No owner assigned" in a partial PATCH payload.
+    /// </summary>
+    public bool ClearOwnerEntity { get; set; }
 
     [MaxLength(200)]
     public string? Name { get; set; }

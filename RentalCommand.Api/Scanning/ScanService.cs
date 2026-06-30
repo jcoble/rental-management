@@ -486,7 +486,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, expense.Id, null, "Expense");
+        return new ScanConfirmResult(true, expense.Id, null, "Expense", expense.UnitId);
     }
 
     private async Task<int?> FindOrCreateVendorForScannedExpenseAsync(
@@ -652,7 +652,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, payment.Id, null, "Payment");
+        return new ScanConfirmResult(true, payment.Id, null, "Payment", payment.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -755,7 +755,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder");
+        return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder", workOrder.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -917,7 +917,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, lease.Id, null, "Lease");
+        return new ScanConfirmResult(true, lease.Id, null, "Lease", lease.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -1035,7 +1035,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, application.Id, null, "Application");
+        return new ScanConfirmResult(true, application.Id, null, "Application", application.UnitId);
     }
 
     // -------------------------------------------------------------------------

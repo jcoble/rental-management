@@ -33,8 +33,9 @@ test.describe('Properties', () => {
 	test('validates required fields before creating', async ({ page }) => {
 		await page.getByTestId('property-create-button').click();
 		await expect(page.getByTestId('property-form')).toBeVisible();
-		// Submit empty -> inline Zod errors, dialog stays open.
-		await page.getByTestId('property-form-save').click();
+		await expect(page.getByTestId('property-form-save')).toHaveCount(0);
+		// Next validates the current card; Save is not available until the final card.
+		await page.getByTestId('property-step-next').click();
 		await expect(page.getByTestId('property-name-error')).toBeVisible();
 		await expect(page.getByTestId('property-form')).toBeVisible();
 	});
@@ -43,6 +44,9 @@ test.describe('Properties', () => {
 		const name = unique('E2E Property');
 		await page.getByTestId('property-create-button').click();
 		await page.getByTestId('property-name-input').fill(name);
+		await page.getByTestId('property-step-next').click();
+		await expect(page.getByTestId('property-address-input')).toBeVisible();
+
 		await page.getByTestId('property-address-input').fill('123 Test Street');
 		await page.getByTestId('property-city-input').fill('Austin');
 		// State is a searchable StateSelect combobox that live-filters its option list on every
@@ -63,7 +67,10 @@ test.describe('Properties', () => {
 		// The combobox's floating listbox unmounts after selection; wait for it to leave the DOM so
 		// the dialog footer has settled before submitting.
 		await expect(page.getByRole('listbox')).toHaveCount(0);
-		await page.getByTestId('property-zip-input').fill('78701');
+		await page.getByTestId('property-postal-input').fill('78701');
+		await page.getByTestId('property-step-next').click();
+		await expect(page.getByTestId('property-status-input')).toBeVisible();
+
 		const saveButton = page.getByTestId('property-form-save');
 		await expect(saveButton).toBeEnabled();
 		await saveButton.click();

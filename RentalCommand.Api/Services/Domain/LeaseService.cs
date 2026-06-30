@@ -919,12 +919,12 @@ public class LeaseService : ILeaseService
         // 2. Date range: clean 400 before the DB CHECK constraint would 500.
         EnsureValidDateRange(newStartUtc, newEndUtc);
 
-        // 3. Double-booking: when this edit ACTIVATES the lease (a genuine new occupation of the unit —
-        //    Draft/Pending/terminal → Active/NoticeGiven), reject if another occupying lease already holds
-        //    the unit over an overlapping range. Editing an already-occupying lease (e.g. a rent change on
-        //    an Active lease) does NOT re-run the check, so it never trips on pre-existing data; the
-        //    excluded-self clause also keeps a no-op safe.
-        if (OccupiesUnit(newStatus) && !OccupiesUnit(prevStatus))
+        // 3. Double-booking: when this edit makes the lease occupy the unit, or changes the date range of
+        //    a lease already occupying the unit, reject if another occupying lease holds an overlapping
+        //    range. A rent-only edit on an already-occupying lease does not re-run the check, so legacy
+        //    overlapping data is not blocked unless the user changes the occupancy dates/status.
+        var dateRangeChanged = newStartUtc != entity.StartDate || newEndUtc != entity.EndDate;
+        if (OccupiesUnit(newStatus) && (!OccupiesUnit(prevStatus) || dateRangeChanged))
         {
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, entity.UnitId, entity.Id, newStartUtc, newEndUtc, ct);
         }

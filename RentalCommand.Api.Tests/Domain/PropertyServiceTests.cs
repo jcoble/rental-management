@@ -56,6 +56,121 @@ public class PropertyServiceTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData(PropertyType.SingleFamily)]
+    [InlineData(PropertyType.Condo)]
+    [InlineData(PropertyType.Townhome)]
+    public async Task CreateAsync_CreatesCanonicalUnitForPropertyUnitTypes(PropertyType propertyType)
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("293 Mallard Point Dr", propertyType));
+
+        created.Should().NotBeNull();
+        created!.UnitCount.Should().Be(1);
+
+        var unit = _ctx.Db.Units.Single(u => u.PropertyId == created.Id);
+        unit.UnitNumber.Should().Be("293 Mallard Point Dr");
+        unit.Status.Should().Be(UnitStatus.Vacant);
+        unit.MarketRent.Should().Be(0m);
+    }
+
+    [Theory]
+    [InlineData(PropertyType.MultiFamily)]
+    [InlineData(PropertyType.MixedUse)]
+    [InlineData(PropertyType.Commercial)]
+    public async Task CreateAsync_DoesNotCreateCanonicalUnitForUnitizedPropertyTypes(PropertyType propertyType)
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Westview Four-Plex", propertyType));
+
+        created.Should().NotBeNull();
+        created!.UnitCount.Should().Be(0);
+        _ctx.Db.Units.Where(u => u.PropertyId == created.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_CreatesCanonicalUnitWhenPropertyUnitTypeHasNoUnits()
+    {
+        var property = SeedProperty("Standalone Home", PropertyType.MultiFamily);
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            property.Id,
+            new UpdatePropertyRequest { PropertyType = PropertyType.SingleFamily });
+
+        updated.Should().NotBeNull();
+        updated!.UnitCount.Should().Be(1);
+        _ctx.Db.Units.Single(u => u.PropertyId == property.Id).UnitNumber.Should().Be("Standalone Home");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RenamesExistingCanonicalUnitWhenPropertyNameChanges()
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Old Home Name", PropertyType.SingleFamily));
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            created!.Id,
+            new UpdatePropertyRequest { Name = "New Home Name" });
+
+        updated.Should().NotBeNull();
+        updated!.UnitCount.Should().Be(1);
+        _ctx.Db.Units.Single(u => u.PropertyId == created.Id).UnitNumber.Should().Be("New Home Name");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DoesNotRenameManuallyNamedSingleUnit()
+    {
+        var property = SeedProperty("Standalone Home", PropertyType.SingleFamily);
+        _ctx.Db.Units.Add(new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "Detached Garage Apartment",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            property.Id,
+            new UpdatePropertyRequest { Name = "Renamed Home" });
+
+        updated.Should().NotBeNull();
+        _ctx.Db.Units.Single(u => u.PropertyId == property.Id)
+            .UnitNumber.Should().Be("Detached Garage Apartment");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ClearOwnerEntity_AllowsAssignedOwnerToBeDeleted()
+    {
+        var now = DateTime.UtcNow;
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Owner To Clear",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.OwnerEntities.Add(owner);
+        _ctx.Db.SaveChanges();
+
+        var property = SeedProperty("Owner Linked Property", PropertyType.MultiFamily);
+        property.OwnerEntityId = owner.Id;
+        _ctx.Db.SaveChanges();
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            property.Id,
+            new UpdatePropertyRequest { ClearOwnerEntity = true });
+
+        updated.Should().NotBeNull();
+        updated!.OwnerEntityId.Should().BeNull();
+        _ctx.Db.Properties.Single(p => p.Id == property.Id).OwnerEntityId.Should().BeNull();
+
+        var ownerService = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        (await ownerService.DeleteAsync(PortfolioId, owner.Id)).Should().BeTrue();
+    }
+
     [Fact]
     public async Task DeleteAsync_ThrowsWhenPropertyStillHasLiveUnits()
     {
@@ -85,6 +200,79 @@ public class PropertyServiceTests : IDisposable
         ex.Which.Message.Should().Contain("active lease");
         (await _sut.GetAsync(PortfolioId, property.Id))
             .Should().NotBeNull("a property with an occupying lease must not be deleted");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasWorkOrderHistory()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        _ctx.Db.WorkOrders.Add(new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            Title = "Patch drywall",
+            Description = "Repair hallway drywall",
+            RequestedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("work order");
+        ex.Which.Message.Should().Contain("history");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasExpenseHistory()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        _ctx.Db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            Description = "Paint",
+            Amount = 125m,
+            IncurredAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("expense");
+        ex.Which.Message.Should().Contain("history");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasApplicationHistory()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        _ctx.Db.RentalApplications.Add(new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            FirstName = "Applied",
+            LastName = "Tenant",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("application");
+        ex.Which.Message.Should().Contain("history");
     }
 
     [Fact]
@@ -125,6 +313,37 @@ public class PropertyServiceTests : IDisposable
         _ctx.Db.SaveChanges();
         return property;
     }
+
+    private Property SeedProperty(string name, PropertyType type)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            PropertyType = type,
+            AddressLine1 = $"{name} Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private static CreatePropertyRequest NewProperty(string name, PropertyType type) => new()
+    {
+        Name = name,
+        PropertyType = type,
+        Status = PropertyStatus.Active,
+        AddressLine1 = "293 Mallard Point Dr",
+        City = "Columbus",
+        State = "OH",
+        PostalCode = "43215",
+    };
 
     private void SeedOccupyingLease(Property property, Unit unit, LeaseStatus status)
     {
