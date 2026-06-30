@@ -59,6 +59,13 @@ describe('voiceDraftErrorMessage', () => {
 		assert.match(voiceDraftErrorMessage({ status: 400, message: 'A transcript is required.' }), /Couldn't hear that/);
 	});
 
+	it('turns a transcription setup failure into unavailable guidance', () => {
+		assert.match(
+			voiceDraftErrorMessage({ status: 503, message: 'Voice transcription is not configured.' }),
+			/Voice transcription isn't configured/
+		);
+	});
+
 	it('surfaces the error message for non-400 failures', () => {
 		const err = Object.assign(new Error('The server hit an error.'), { status: 500 });
 		assert.equal(voiceDraftErrorMessage(err), 'The server hit an error.');

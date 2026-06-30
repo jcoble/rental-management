@@ -75,6 +75,9 @@ export function voiceDraftErrorMessage(err: unknown): string {
 	if (status === 400) {
 		return "Couldn't hear that — try again. Speak a little longer and closer to the mic.";
 	}
+	if (status === 503) {
+		return "Voice transcription isn't configured yet. Set up the voice provider, then try again.";
+	}
 	if (err instanceof Error && err.message) return err.message;
 	return 'Voice capture failed';
 }
