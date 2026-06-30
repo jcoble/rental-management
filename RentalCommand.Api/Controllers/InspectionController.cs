@@ -41,6 +41,42 @@ public class InspectionController : ManagementControllerBase
         return Ok(templates);
     }
 
+    [HttpGet("templates/{templateId:int}")]
+    [ProducesResponseType(typeof(InspectionTemplateResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<InspectionTemplateResponse>> Template(int templateId, CancellationToken ct)
+    {
+        var template = await _service.GetTemplateAsync(GetPortfolioId(), templateId, ct);
+        return template == null ? NotFound(new { error = "Inspection checklist template not found" }) : Ok(template);
+    }
+
+    [HttpPost("templates")]
+    [ProducesResponseType(typeof(InspectionTemplateResponse), StatusCodes.Status201Created)]
+    public async Task<ActionResult<InspectionTemplateResponse>> CreateTemplate([FromBody] CreateInspectionTemplateRequest request, CancellationToken ct)
+    {
+        var created = await _service.CreateTemplateAsync(GetPortfolioId(), request, ct);
+        return CreatedAtAction(nameof(Template), new { templateId = created.Id }, created);
+    }
+
+    [HttpPatch("templates/{templateId:int}")]
+    [ProducesResponseType(typeof(InspectionTemplateResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<InspectionTemplateResponse>> UpdateTemplate(
+        int templateId, [FromBody] UpdateInspectionTemplateRequest request, CancellationToken ct)
+    {
+        var updated = await _service.UpdateTemplateAsync(GetPortfolioId(), templateId, request, ct);
+        return updated == null ? NotFound(new { error = "Inspection checklist template not found" }) : Ok(updated);
+    }
+
+    [HttpDelete("templates/{templateId:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteTemplate(int templateId, CancellationToken ct)
+    {
+        var deleted = await _service.DeleteTemplateAsync(GetPortfolioId(), templateId, ct);
+        return deleted ? NoContent() : NotFound(new { error = "Inspection checklist template not found" });
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(InspectionDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

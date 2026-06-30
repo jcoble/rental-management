@@ -31,6 +31,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -349,12 +350,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="leases-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Leases</h1>
-			<p class="text-sm text-muted-foreground">Lease lifecycle, rent terms, and status updates.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={5}
+		tone="amber"
+		eyebrow="Rentals"
+		title="Leases"
+		description="Lease lifecycle, rent terms, and status updates."
+		data-testid="leases-header"
+	/>
 
 	<DataGrid
 		data={list}

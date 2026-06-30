@@ -1031,6 +1031,17 @@ export interface InspectionTemplateItem {
 	sortOrder: number;
 }
 
+export interface InspectionTemplateItemInput {
+	area: string;
+	label: string;
+}
+
+export interface InspectionTemplateInput {
+	name: string;
+	inspectionType: InspectionType;
+	items: InspectionTemplateItemInput[];
+}
+
 export interface InspectionTemplate {
 	/** Built-in templates have NEGATIVE ids (e.g. -1, -2). Pass them back to create as-is. */
 	id: number;

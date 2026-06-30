@@ -18,6 +18,7 @@
 	import { AlertTriangle, Info, Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -310,14 +311,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="deposits-page">
-	<div class="mb-4 flex items-center justify-between">
-		<div>
-			<h1 class="text-2xl font-bold">Security Deposits</h1>
-			<p class="text-sm text-muted-foreground">
-				Money held <span class="font-medium text-foreground">in trust</span> per lease — separate from rental income. Track held deposits, deductions, and returns for each lease.
-			</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={1}
+		tone="mint"
+		eyebrow="Money"
+		title="Security Deposits"
+		description="Money held in trust per lease, separate from rental income. Track held deposits, deductions, and returns."
+		data-testid="deposits-header"
+	/>
 
 	<!-- Explainer so this page doesn't read like a duplicate of Payments: a deposit is the tenant's
 	     money you're safekeeping, not income you've earned. -->

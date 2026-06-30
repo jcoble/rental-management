@@ -208,7 +208,7 @@
 	{:else if dashboardQuery.data}
 		{@const data = dashboardQuery.data as Dashboard}
 		<Card.Root
-			class="m3-dashboard-hero m3-surface-pattern m3-surface-pattern--portfolio m3-motion-enter relative mb-6 overflow-hidden border-primary/30 p-0"
+			class="m3-dashboard-hero m3-dashboard-art m3-dashboard-art--portfolio m3-surface-art m3-surface-art--hero m3-art-09 m3-motion-enter relative mb-6 overflow-hidden p-0"
 			style="--m3-motion-index: 0"
 			data-testid="dashboard-hero"
 		>
@@ -267,7 +267,7 @@
 		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
 		     the AI voice (what the computer is saying) and the action list (what to do today). -->
 		<Card.Root
-			class="m3-surface-pattern m3-surface-pattern--briefing m3-motion-enter relative mb-6 gap-0 overflow-hidden border-primary/30 py-0"
+			class="m3-dashboard-art m3-dashboard-art--briefing m3-surface-art m3-surface-art--hero m3-art-04 m3-motion-enter relative mb-6 gap-0 overflow-hidden py-0"
 			style="--m3-motion-index: 1"
 			data-testid="dashboard-todays-briefing"
 		>

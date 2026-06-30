@@ -4,6 +4,7 @@
 
 	type Density = 'compact' | 'comfortable';
 	type Scale = 'page' | 'hero';
+	type Tone = 'primary' | 'mint' | 'sky' | 'amber' | 'rose' | 'violet' | 'coral';
 
 	let {
 		eyebrow = '',
@@ -13,6 +14,7 @@
 		scale = 'page',
 		band = false,
 		art = 9,
+		tone = 'primary',
 		actions,
 		meta,
 		class: className = '',
@@ -32,6 +34,7 @@
 		scale?: Scale;
 		band?: boolean;
 		art?: number;
+		tone?: Tone;
 		actions?: Snippet;
 		meta?: Snippet;
 		class?: string;
@@ -45,12 +48,15 @@
 	} & HTMLAttributes<HTMLElement> = $props();
 
 	const artClass = $derived(
-		band ? `is-band m3-surface-art m3-surface-art--band m3-art-${String(art).padStart(2, '0')}` : ''
+		band
+			? `is-band tone-${tone} m3-surface-art m3-surface-art--band m3-art-${String(art).padStart(2, '0')}`
+			: ''
 	);
 </script>
 
 <section
 	class="m3-page-header {density} scale-{scale} {artClass} {className}"
+	class:has-actions={Boolean(actions)}
 	data-testid={dataTestId}
 	{...rest}
 >
@@ -83,10 +89,58 @@
 	}
 	.is-band {
 		border: 1px solid
-			color-mix(in srgb, var(--m3c-outline-variant) var(--m3-card-border-strength), transparent);
+			color-mix(
+				in srgb,
+				var(--m3-page-header-border, var(--m3c-outline-variant))
+					var(--m3-page-header-border-strength, 42%),
+				transparent
+			);
 		border-radius: var(--m3-shape-extra-large);
-		background: var(--m3c-surface-container-low);
+		background:
+			linear-gradient(
+				135deg,
+				color-mix(in srgb, var(--m3c-surface-container-lowest) 20%, transparent),
+				transparent 70%
+			),
+			var(--m3-page-header-bg, var(--m3c-surface-container-low));
 		padding: clamp(1rem, 2.4vw, 1.6rem) clamp(1.25rem, 3vw, 2rem);
+		box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+		--m3-art-scrim-from: color-mix(
+			in srgb,
+			var(--m3-page-header-bg, var(--m3c-surface-container-low)) 84%,
+			var(--m3-page-header-tint, var(--m3c-primary-container))
+		);
+	}
+	.tone-primary,
+	.tone-violet {
+		--m3-page-header-bg: var(--m3c-surface-violet, var(--m3c-surface-container-low));
+		--m3-page-header-tint: var(--m3c-primary-container);
+		--m3-page-header-border: var(--m3c-primary);
+	}
+	.tone-mint {
+		--m3-page-header-bg: var(--m3c-surface-mint, var(--m3c-surface-container-low));
+		--m3-page-header-tint: var(--m3c-success-container);
+		--m3-page-header-border: var(--success);
+	}
+	.tone-sky {
+		--m3-page-header-bg: var(--m3c-surface-sky, var(--m3c-surface-container-low));
+		--m3-page-header-tint: var(--m3c-info-container);
+		--m3-page-header-border: var(--info);
+	}
+	.tone-amber {
+		--m3-page-header-bg: var(--m3c-surface-amber, var(--m3c-surface-container-low));
+		--m3-page-header-tint: var(--m3c-warning-container);
+		--m3-page-header-border: var(--warning);
+	}
+	.tone-rose {
+		--m3-page-header-bg: var(--m3c-surface-rose, var(--m3c-surface-container-low));
+		--m3-page-header-tint: var(--m3c-error-container);
+		--m3-page-header-border: var(--destructive);
+	}
+	.tone-coral {
+		--m3-page-header-bg: var(--m3c-surface-coral, var(--m3c-surface-container-low));
+		--m3-page-header-tint: var(--m3c-coral-container);
+		--m3-page-header-border: var(--accent-coral);
 	}
 	.compact {
 		display: grid;
@@ -118,14 +172,14 @@
 	}
 	.m3-page-header__title {
 		margin: 8px 0 0;
-		max-width: 48rem;
+		max-width: min(48rem, 100%);
 		color: var(--foreground, var(--m3c-on-surface));
 		font: var(--m3-type-headline-large, 600 2rem / 2.5rem var(--m3-font));
 		letter-spacing: 0;
 	}
 	.m3-page-header__description {
 		margin: 8px 0 0;
-		max-width: 42rem;
+		max-width: min(42rem, 100%);
 		color: var(--muted-foreground, var(--m3c-on-surface-variant));
 		font: var(--m3-type-body-large, 400 1rem / 1.5rem var(--m3-font));
 		letter-spacing: 0;
@@ -145,18 +199,18 @@
 		}
 	}
 	@media (min-width: 768px) {
-		.m3-page-header:has(.m3-page-header__actions > *) {
+		.has-actions {
 			grid-template-columns: minmax(0, 1fr) auto;
 			align-items: end;
 			column-gap: 24px;
 		}
-		.m3-page-header:has(.m3-page-header__actions > *) .m3-page-header__meta {
+		.has-actions .m3-page-header__meta {
 			grid-column: 1 / -1;
 		}
-		.m3-page-header:has(.m3-page-header__actions > *) .m3-page-header__copy {
+		.has-actions .m3-page-header__copy {
 			grid-column: 1;
 		}
-		.m3-page-header:has(.m3-page-header__actions > *) .m3-page-header__actions {
+		.has-actions .m3-page-header__actions {
 			grid-column: 2;
 			grid-row: 2;
 			justify-content: flex-end;

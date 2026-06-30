@@ -307,6 +307,7 @@
 		class="mb-4"
 		band
 		art={2}
+		tone="sky"
 		eyebrow="Portfolio"
 		title="Properties"
 		description="Portfolio, units, and occupancy setup."

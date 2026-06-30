@@ -25,6 +25,7 @@
 		readUnitListingLinkContext,
 		type UnitListingLinkContext,
 	} from '$lib/applications/application-link';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const PAGE_SIZE = 20;
 
@@ -193,12 +194,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="applications-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Applications</h1>
-			<p class="text-sm text-muted-foreground">Prospective tenants who applied through your link.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={8}
+		tone="rose"
+		eyebrow="Rentals"
+		title="Applications"
+		description="Prospective tenants who applied through your link."
+		data-testid="applications-header"
+	/>
 
 	<DataGrid
 		data={list}

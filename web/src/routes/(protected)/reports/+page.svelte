@@ -31,6 +31,7 @@
 		ChevronRight,
 		Lightbulb
 	} from '@lucide/svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const catalogQuery = createQuery(() => ({
 		queryKey: ['reports-catalog'],
@@ -120,12 +121,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="reports-page">
-	<div class="mb-5">
-		<h1 class="text-2xl font-bold">Reports</h1>
-		<p class="text-sm text-muted-foreground">
-			Every report on your portfolio — pick one, set the dates and properties, then export or print.
-		</p>
-	</div>
+	<PageHeader
+		class="mb-5"
+		band
+		art={7}
+		tone="amber"
+		eyebrow="Money"
+		title="Reports"
+		description="Pick a report, set the dates and properties, then export or print."
+		data-testid="reports-header"
+	/>
 
 	{#if catalogQuery.isLoading}
 		<div class="space-y-6">
