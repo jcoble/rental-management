@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -35,7 +36,7 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     [Fact]
-    public async Task CreateAsync_ActivePastStartLease_CreatesRentChargesThroughToday()
+    public async Task CreateAsync_ActivePastStartLease_BackfillCreatesRentChargesThroughToday()
     {
         var today = DateTime.UtcNow.Date;
         var start = FirstOfMonth(today).AddMonths(-2);
@@ -54,6 +55,7 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             SecurityDeposit = 1275m,
             LateFeeAmount = 75m,
             RentDueDay = 1,
+            RentTrackingStartMode = RentTrackingStartMode.BackfillFromLeaseStart,
         });
 
         result.Should().NotBeNull();
@@ -72,6 +74,40 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             p.PaymentType == PaymentType.Rent
             && p.Status == PaymentStatus.Scheduled
             && p.Amount == 1275m);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ActivePastStartLease_DefaultCreatesCurrentDueChargeWithoutHistory()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = FirstOfMonth(today).AddMonths(-2);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-DEFAULT-FWD-001",
+            Status = LeaseStatus.Active,
+            StartDate = start,
+            EndDate = FirstOfMonth(today).AddMonths(10),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = today.Day,
+        });
+
+        result.Should().NotBeNull();
+        var payments = await _ctx.Db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == result!.Id)
+            .OrderBy(p => p.PeriodKey)
+            .ToListAsync();
+
+        payments.Should().ContainSingle();
+        payments[0].PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+        payments[0].DueDate.Should().Be(today);
     }
 
     [Fact]
@@ -308,7 +344,83 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateAsync_ActivatingPastStartLease_CreatesRentChargesThroughToday()
+    public async Task CreateAsync_OpeningBalanceMode_CreatesOpeningBalanceAndCurrentChargeOnly()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = FirstOfMonth(today).AddMonths(-4);
+        var asOfDate = today.AddDays(-1);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-OPENING-001",
+            Status = LeaseStatus.Active,
+            StartDate = start,
+            EndDate = FirstOfMonth(today).AddMonths(10),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = today.Day,
+            RentTrackingStartMode = RentTrackingStartMode.OpeningBalanceOnly,
+            OpeningBalanceAmount = 2400m,
+            OpeningBalanceAsOfDate = asOfDate,
+            OpeningBalanceNote = "Prior system balance",
+        });
+
+        result.Should().NotBeNull();
+
+        var payments = await _ctx.Db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == result!.Id)
+            .OrderBy(p => p.PeriodKey)
+            .ToListAsync();
+        payments.Should().ContainSingle();
+        payments[0].PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+
+        var opening = await _ctx.Db.OpeningBalances
+            .AsNoTracking()
+            .SingleAsync(o => o.LeaseId == result!.Id);
+        opening.Amount.Should().Be(2400m);
+        opening.AsOfDate.Should().Be(asOfDate);
+        opening.Note.Should().Be("Prior system balance");
+
+        var lease = await _ctx.Db.Leases.AsNoTracking().SingleAsync(l => l.Id == result!.Id);
+        lease.RentTrackingStartDate.Should().Be(today);
+    }
+
+    [Fact]
+    public async Task CreateAsync_OpeningBalanceFieldsWithoutOpeningMode_Throws()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var act = () => _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-OPENING-INVALID-001",
+            Status = LeaseStatus.Active,
+            StartDate = today,
+            EndDate = today.AddMonths(12),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = today.Day,
+            RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
+            OpeningBalanceAmount = 2400m,
+            OpeningBalanceAsOfDate = today,
+        });
+
+        await act.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("Opening balance fields can only be used with the opening balance rent tracking option.");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ActivatingPastStartLease_BackfillCreatesRentChargesThroughToday()
     {
         var today = DateTime.UtcNow.Date;
         var start = FirstOfMonth(today).AddMonths(-2);
@@ -318,6 +430,7 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
         var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
         {
             Status = LeaseStatus.Active,
+            RentTrackingStartMode = RentTrackingStartMode.BackfillFromLeaseStart,
         });
 
         result.Should().NotBeNull();
@@ -440,6 +553,31 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
         {
             Status = LeaseStatus.Active,
             RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
+        });
+
+        result.Should().NotBeNull();
+        var payments = await _ctx.Db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == lease.Id)
+            .OrderBy(p => p.PeriodKey)
+            .ToListAsync();
+
+        payments.Should().ContainSingle();
+        payments[0].PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+        payments[0].DueDate.Should().Be(today);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ActivatingPastStartLease_DefaultCreatesCurrentDueChargeWithoutHistory()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = FirstOfMonth(today).AddMonths(-2);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        var lease = SeedLease(property, unit, tenant, LeaseStatus.Draft, start, today.Day);
+
+        var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.Active,
         });
 
         result.Should().NotBeNull();

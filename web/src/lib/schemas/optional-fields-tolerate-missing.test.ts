@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { expenseSchema, leaseSchema, parseForm } from './index.ts';
+import { expenseSchema, leaseRentTrackingErrors, leaseSchema, parseForm } from './index.ts';
 
 test('a schema tolerates a form missing its optional/extra keys (expenses repro)', () => {
 	// The expense DETAIL form: omits workOrderId + the scan/receipt fields.
@@ -56,6 +56,35 @@ test('leases submit validates rest against leaseSchema.omit({propertyId}) — no
 	};
 	const r = parseForm(leaseSchema.omit({ propertyId: true }), rest);
 	assert.equal(r.errors, null, `unexpected errors: ${JSON.stringify(r.errors)}`);
+});
+
+test('leases default rent tracking to forward-only and validate opening-balance dates', () => {
+	const r = parseForm(leaseSchema, {
+		leaseNumber: 'L-1',
+		propertyId: '1',
+		unitId: '1',
+		tenantId: '1',
+		startDate: '2026-01-01',
+		endDate: '2026-12-31',
+		monthlyRent: '1000',
+		securityDeposit: '1000',
+		lateFeeAmount: '50',
+		rentDueDay: '1',
+		status: 'Active',
+		notes: ''
+	});
+	assert.equal(r.errors, null, `unexpected errors: ${JSON.stringify(r.errors)}`);
+	assert.equal(r.data?.rentTrackingStartMode, 'ForwardOnly');
+
+	assert.deepEqual(
+		leaseRentTrackingErrors({
+			status: 'Active',
+			rentTrackingStartMode: 'OpeningBalanceOnly',
+			openingBalanceAmount: '1500',
+			openingBalanceAsOfDate: ''
+		}),
+		{ openingBalanceAsOfDate: 'As-of date is required' }
+	);
 });
 
 test('required fields still error when absent (hardening is optional-only)', () => {
