@@ -42,7 +42,7 @@ export interface Portfolio {
 	timeZone: string;
 	status: PortfolioStatus;
 	settings?: string;
-	/** Account-wide sandbox/live state. True = seeded demo sandbox (real outbound suppressed). */
+		/** Account-wide sandbox/live state. True = seeded example data. */
 	isSandbox?: boolean;
 	propertyCount?: number;
 	unitCount?: number;

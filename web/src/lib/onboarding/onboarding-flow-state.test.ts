@@ -100,6 +100,17 @@ describe('onboarding flow state', () => {
 		assert.match(source, /openImportCenterFromFinished\(\)/);
 	});
 
+	it('does not bounce example-data accounts away from guided setup', () => {
+		const source = readFileSync(
+			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.doesNotMatch(source, /redirectedFromSandbox/);
+		assert.doesNotMatch(source, /Setup runs on a live account/);
+		assert.doesNotMatch(source, /sandboxQuery\.data\?\.isSandbox === true\) return/);
+	});
+
 	it('keeps import phase help controls outside the phase button', () => {
 		const source = readFileSync(
 			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),

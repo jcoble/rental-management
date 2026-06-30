@@ -14,10 +14,9 @@ using RentalCommand.Engine.Workers;
 namespace RentalCommand.Engine.Tests.Notifications;
 
 /// <summary>
-/// Sandbox notification behaviour: generic messages scoped to a Sandbox portfolio are redirected to
-/// the portfolio owner's own inbox, tagged <c>[Sandbox]</c>. Lease e-sign signing links are a typed
-/// exception and stay addressed to the lease signer. A Live portfolio sends to the original recipient
-/// unchanged.
+/// Sandbox notification behaviour: configured local/dev providers still receive the original outbox
+/// recipient. The sandbox flag labels seeded example data and drives the go-live wipe; it must not be a
+/// blanket email/SMS kill switch that prevents auth, e-signature, or tenant-message flow testing.
 /// </summary>
 public sealed class OutboxSandboxRedirectTests : IDisposable
 {
@@ -41,7 +40,6 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         // The outbox worker now also resolves IPushSender; a no-op suppressor keeps these
         // email/SMS-focused tests unaffected (no device tokens are seeded here anyway).
         services.AddSingleton<IPushSender>(new NoOpPushSender());
-        services.AddScoped<ISandboxGuard, SandboxGuard>();
         _provider = services.BuildServiceProvider();
 
         using var scope = _provider.CreateScope();
@@ -52,14 +50,11 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         db.Portfolios.Add(NewPortfolio(1, isSandbox: true));
         db.Portfolios.Add(NewPortfolio(2, isSandbox: false));
 
-        // A real tenant for the sandbox portfolio so the tenant-portal user FK resolves.
+        // A real tenant for the sandbox portfolio; messages addressed to this tenant must stay addressed
+        // to this tenant when the provider is configured.
         db.Tenants.Add(new Tenant { Id = 99, PortfolioId = 1, FirstName = "Tee", LastName = "Nant", Email = "real-tenant@example.com" });
         db.SaveChanges();
 
-        // Landlord/owner account (PortfolioId set, no TenantId) plus a tenant-portal account that must
-        // NOT be picked as the redirect target.
-        // Tenant-portal user has a LOWER id than the owner: only the TenantId==null filter (not id
-        // ordering) keeps it from being chosen as the redirect target.
         db.Users.Add(new ApplicationUser { Id = 9, Email = "tenant-portal@example.com", PortfolioId = 1, TenantId = 99, UserName = "tenant-portal@example.com" });
         db.Users.Add(new ApplicationUser { Id = 10, Email = "owner@landlord.test", PortfolioId = 1, UserName = "owner@landlord.test" });
         db.Users.Add(new ApplicationUser { Id = 20, Email = "live-owner@landlord.test", PortfolioId = 2, UserName = "live-owner@landlord.test" });
@@ -73,52 +68,30 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
     }
 
     [Fact]
-    public async Task Sandbox_email_is_redirected_to_portfolio_owner_and_tagged()
+    public async Task Sandbox_email_goes_to_original_recipient_when_provider_is_configured()
     {
         await SeedEmail(portfolioId: 1, to: "real-tenant@example.com", subject: "Please sign your lease");
         await RunCycle();
 
         _channel.Emails.Should().HaveCount(1);
         var (to, subject, body, _) = _channel.Emails[0];
-        to.Should().Be("owner@landlord.test");
-        subject.Should().StartWith("[Sandbox]");
-        body.Should().Contain("real-tenant@example.com");
+        to.Should().Be("real-tenant@example.com");
+        subject.Should().Be("Please sign your lease");
+        body.Should().NotContain("[Sandbox");
+        body.Should().NotContain("intended for");
     }
 
     [Fact]
-    public async Task Sandbox_email_prefers_self_owner_user_even_when_that_user_has_tenant_link()
+    public async Task Sandbox_sms_goes_to_original_recipient_with_portfolio_context()
     {
-        using (var scope = _provider.CreateScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            db.OwnerEntities.Add(new OwnerEntity
-            {
-                Id = 77,
-                PortfolioId = 1,
-                Name = "Real Owner",
-                Email = "real-owner@example.com",
-                IsPrimary = true,
-            });
-            db.Users.Add(new ApplicationUser
-            {
-                Id = 88,
-                Email = "real-owner@example.com",
-                PortfolioId = 1,
-                TenantId = 99,
-                OwnerEntityId = 77,
-                UserName = "real-owner@example.com",
-            });
-            await db.SaveChangesAsync();
-        }
-
-        await SeedEmail(portfolioId: 1, to: "real-tenant@example.com", subject: "Please sign your lease");
+        await SeedSms(portfolioId: 1, to: "+15551231234", message: "Your lease is ready.");
         await RunCycle();
 
-        _channel.Emails.Should().HaveCount(1);
-        var (to, subject, body, _) = _channel.Emails[0];
-        to.Should().Be("real-owner@example.com");
-        subject.Should().StartWith("[Sandbox]");
-        body.Should().Contain("real-tenant@example.com");
+        _channel.SmsMessages.Should().HaveCount(1);
+        var (to, message, portfolioId) = _channel.SmsMessages[0];
+        to.Should().Be("+15551231234");
+        message.Should().Be("Your lease is ready.");
+        portfolioId.Should().Be(1);
     }
 
     [Fact]
@@ -131,6 +104,7 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         var (to, subject, body, _) = _channel.Emails[0];
         to.Should().Be("real-tenant@example.com");
         subject.Should().Be("Please sign: Lease L-2026-7");
+        body.Should().NotContain("[Sandbox");
         body.Should().NotContain("intended for real-tenant@example.com");
     }
 
@@ -199,6 +173,20 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         await db.SaveChangesAsync();
     }
 
+    private async Task SeedSms(int portfolioId, string to, string message)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        db.OutboxMessages.Add(new OutboxMessage
+        {
+            PortfolioId = portfolioId,
+            MessageType = "sms",
+            Payload = System.Text.Json.JsonSerializer.Serialize(new { to, message }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task RunCycle()
     {
         var worker = new TestableOutboxWorker(_provider);
@@ -237,7 +225,7 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
     private sealed class CapturingNotificationChannel : INotificationChannel
     {
         public List<(string To, string Subject, string Body, string? HtmlBody)> Emails { get; } = new();
-        public List<(string To, string Message)> SmsMessages { get; } = new();
+        public List<(string To, string Message, int? PortfolioId)> SmsMessages { get; } = new();
         private string? _emailSuppressionReason;
 
         public void SuppressEmailWith(string reason)
@@ -258,7 +246,7 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
 
         public Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default)
         {
-            SmsMessages.Add((toPhoneNumber, message));
+            SmsMessages.Add((toPhoneNumber, message, portfolioId));
             return Task.CompletedTask;
         }
     }

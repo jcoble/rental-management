@@ -67,9 +67,6 @@ builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>
 // when no Push:* credential is configured — the outbox worker still marks push messages sent.
 builder.Services.Configure<PushConfig>(builder.Configuration.GetSection(PushConfig.SectionName));
 builder.Services.AddSingleton<IPushSender, FcmPushSender>();
-// Sandbox guard: the outbox worker uses it to HARD-suppress any send scoped to a sandbox portfolio.
-builder.Services.AddScoped<ISandboxGuard, SandboxGuard>();
-
 // Scan pipeline: config, LLM provider, file storage, no-op data-update, worker.
 builder.Services.Configure<AssistantConfig>(builder.Configuration.GetSection(AssistantConfig.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
