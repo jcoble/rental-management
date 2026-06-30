@@ -15,6 +15,16 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
     private readonly IAudioTranscriptionService _transcriber;
     private readonly IFileStorage _storage;
     private readonly ILogger<VoiceIntakeService> _logger;
+    private static readonly char[] TranscriptSeparators =
+    [
+        ' ', '\t', '\r', '\n', '.', ',', ';', ':', '!', '?', '"', '\'', '(', ')', '[', ']', '{', '}', '/', '\\', '|'
+    ];
+
+    private static readonly HashSet<string> LowInformationWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "uh", "um", "umm", "hmm", "hm", "ah", "er", "like", "maybe", "left", "right",
+        "ok", "okay", "yeah", "yep", "nope", "yes", "no", "test", "testing", "hello"
+    };
 
     public VoiceIntakeService(
         RentalCommandDbContext db,
@@ -47,6 +57,12 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         if (string.IsNullOrWhiteSpace(transcript))
         {
             throw new ArgumentException("A transcript or non-empty transcribable audio is required.");
+        }
+
+        if (!LooksLikeUsableInitialTranscript(transcript))
+        {
+            throw new ArgumentException(
+                "Record a clearer voice note with what happened, where it happened, and any amount or date you know.");
         }
 
         var filePath = $"voice://{Guid.NewGuid():N}";
@@ -174,6 +190,20 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         }
 
         return null;
+    }
+
+    private static bool LooksLikeUsableInitialTranscript(string transcript)
+    {
+        if (transcript.Count(char.IsLetterOrDigit) < 6)
+        {
+            return false;
+        }
+
+        var meaningfulWords = transcript
+            .Split(TranscriptSeparators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Count(word => word.Length >= 2 && !LowInformationWords.Contains(word));
+
+        return meaningfulWords >= 2;
     }
 
     /// <summary>

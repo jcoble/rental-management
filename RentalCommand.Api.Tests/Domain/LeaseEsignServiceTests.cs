@@ -433,6 +433,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
         queue!.Items.Should().ContainSingle();
         queue.Items[0].Status.Should().Be("DeliveryDisabled");
         queue.Items[0].SigningUrl.Should().Be("https://localhost:5667/sign/signer-token-123");
+        queue.Items[0].TenantId.Should().Be(lease.TenantId);
     }
 
     [Fact]
@@ -607,11 +608,59 @@ public sealed class LeaseEsignServiceTests : IDisposable
             "tenant-on-lease@example.com",
             "tenant-on-lease@example.com",
             "tenant-on-lease@example.com");
+        queue.Items.Select(i => i.TenantId).Should().Equal(lease.TenantId, lease.TenantId, lease.TenantId);
         queue.Items.Select(i => i.Status).Should().Equal("Failed", "DeliveryDisabled", "Sent");
         queue.Items.Select(i => i.StatusAt).Should().Equal(now.AddMinutes(-2), now.AddMinutes(-5), now.AddMinutes(-9));
         queue.Items[0].Error.Should().Be("SMTP rejected the message.");
         queue.Items[1].Error.Should().Be("Email delivery is not configured for this environment.");
     }
+
+    [Fact]
+    public async Task GetSignatureQueue_LeaseWithNoEnvelope_ReturnsLeaseSigningEmailsWithoutFilteringBySignatureRequest()
+    {
+        // A lease that was never sent for signature has EsignEnvelopeId == null, so there is no
+        // "current" signature-request id to scope by. The queue must still return that lease's signing
+        // emails (all of them, any signatureRequestId) and must not throw. This is the public contract
+        // behind BUG-2, where the Postgres path returned HTTP 500 on the null signature-request id.
+        // (SQLite here exercises the LINQ branch; the raw-SQL Postgres reproduction lives in
+        // RentalCommand.IntegrationTests/LeaseSignatureQueueNullEnvelopeTests.)
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "tenant-on-lease@example.com");
+        lease.EsignEnvelopeId.Should().BeNull("the lease was never sent for e-signature");
+        var otherLease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "other-tenant@example.com");
+        var now = new DateTime(2026, 6, 28, 14, 0, 0, DateTimeKind.Utc);
+
+        _db.OutboxMessages.AddRange(
+            SigningLinkMessage(lease.Id, signatureRequestId: 111, recipient: "tenant-on-lease@example.com", createdAt: now.AddMinutes(-2), sentAt: now.AddMinutes(-1)),
+            SigningLinkMessage(lease.Id, signatureRequestId: 222, recipient: "tenant-on-lease@example.com", createdAt: now.AddMinutes(-6), sentAt: now.AddMinutes(-5)),
+            SigningLinkMessage(otherLease.Id, signatureRequestId: 333, recipient: "other-tenant@example.com", createdAt: now, sentAt: now));
+        await _db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeEsignProvider { Configured = false });
+
+        var queue = await sut.GetSignatureQueueAsync(PortfolioId, lease.Id);
+
+        queue.Should().NotBeNull();
+        queue!.LeaseId.Should().Be(lease.Id);
+        queue.Items.Should().HaveCount(2, "both of the lease's signing emails return regardless of signatureRequestId");
+        queue.Items.Select(i => i.RecipientEmail).Should().OnlyContain(e => e == "tenant-on-lease@example.com");
+    }
+
+    private OutboxMessage SigningLinkMessage(int leaseId, int signatureRequestId, string recipient, DateTime createdAt, DateTime sentAt)
+        => new()
+        {
+            PortfolioId = PortfolioId,
+            MessageType = "email",
+            Payload = JsonSerializer.Serialize(new
+            {
+                source = OutboxPayloadSources.LeaseEsignSigningLink,
+                signatureRequestId,
+                leaseId,
+                to = recipient,
+                subject = "Lease L-2026-7",
+            }),
+            CreatedAt = createdAt,
+            SentAt = sentAt,
+        };
 
     private LeaseEsignService CreateService(IEsignProvider provider)
     {

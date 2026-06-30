@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -61,6 +62,47 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
                 // portfolio-wide (no per-tenant/type scoping).
                 var result = await _notices.GenerateAsync(portfolioId, ct: ct);
                 created += result.CreatedCount;
+
+                // Auto-send: for each freshly-created draft whose type is set to AutoSend AND has an
+                // active template, approve+send it now. Gated by NotifyTenants. Load the portfolio's
+                // settings + active-template types once (DB-side) — no per-draft queries.
+                if (cfg.NotifyTenants && result.Drafts.Count > 0)
+                {
+                    var settings = await _db.NotificationSettings
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(s => s.PortfolioId == portfolioId, ct);
+
+                    var templatedTypes = await _db.NoticeTemplates
+                        .AsNoTracking()
+                        .Where(t => t.PortfolioId == portfolioId && t.IsActive)
+                        .Select(t => t.NoticeType)
+                        .ToListAsync(ct);
+                    var templated = templatedTypes.ToHashSet();
+
+                    foreach (var draft in result.Drafts)
+                    {
+                        if (draft.Status != "Draft") continue;
+                        if (!AutoSendEnabled(settings, draft.NoticeType)) continue;
+                        if (!templated.Contains(draft.NoticeType)) continue;
+
+                        var channels = ChannelsFor(cfg, draft.NoticeType);
+                        if (channels.Count == 0) continue;
+
+                        try
+                        {
+                            await _notices.ApproveAsync(
+                                portfolioId,
+                                draft.Id,
+                                new RentalCommand.Api.DTOs.ApproveNoticeDraftRequest { Channels = channels },
+                                ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            // A blocked/failed auto-send leaves the draft for manual review.
+                            _logger.LogWarning(ex, "Auto-send failed for draft {DraftId} ({Type}); left as draft.", draft.Id, draft.NoticeType);
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -74,5 +116,31 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
                 created, portfolioIds.Count);
 
         return created;
+    }
+
+    private static bool AutoSendEnabled(Core.Entities.NotificationSettings? s, string noticeType) => s != null && noticeType switch
+    {
+        "RentReminder" => s.AutoSendRentReminder,
+        "LateRentNotice" => s.AutoSendLateRent,
+        "RenewalOffer" => s.LeaseEndAutoAction == LeaseEndAutoAction.Renewal,
+        "MonthToMonthConversion" => s.LeaseEndAutoAction == LeaseEndAutoAction.MonthToMonth,
+        "MoveOutReminder" => s.LeaseEndAutoAction == LeaseEndAutoAction.NonRenewal,
+        _ => false,
+    };
+
+    private static List<string> ChannelsFor(NotificationsConfig cfg, string noticeType)
+    {
+        var category = noticeType switch
+        {
+            "RentReminder" => Core.Enums.NotificationType.RentCharge,
+            "LateRentNotice" => Core.Enums.NotificationType.LateFee,
+            _ => Core.Enums.NotificationType.LeaseExpiry, // renewal / month-to-month / move-out
+        };
+        var pref = cfg.ResolveChannels(category);
+        var channels = new List<string>();
+        if (pref.EnableInApp) channels.Add("Portal");
+        if (pref.EnableEmail) channels.Add("Email");
+        if (pref.EnableSms) channels.Add("Sms");
+        return channels;
     }
 }

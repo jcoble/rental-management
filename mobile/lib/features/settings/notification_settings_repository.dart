@@ -91,6 +91,9 @@ class NotificationSettings {
     required this.enableLateFees,
     required this.enableLeaseExpiryReminders,
     required this.notifyTenants,
+    required this.autoSendRentReminder,
+    required this.autoSendLateRent,
+    required this.leaseEndAutoAction,
     required this.rentChargeLeadDays,
     required this.lateFeeGraceDays,
     required this.leaseExpiryReminderDays,
@@ -110,6 +113,14 @@ class NotificationSettings {
   final bool enableLateFees;
   final bool enableLeaseExpiryReminders;
   final bool notifyTenants;
+
+  // Recurring-notice send mode: true = auto-send, false = ask first (draft).
+  final bool autoSendRentReminder;
+  final bool autoSendLateRent;
+
+  // What happens automatically when a lease is ending. One of:
+  // Draft (just draft it), Renewal, MonthToMonth, NonRenewal.
+  final String leaseEndAutoAction;
 
   final int rentChargeLeadDays;
   final int lateFeeGraceDays;
@@ -140,6 +151,9 @@ class NotificationSettings {
     bool? enableLateFees,
     bool? enableLeaseExpiryReminders,
     bool? notifyTenants,
+    bool? autoSendRentReminder,
+    bool? autoSendLateRent,
+    String? leaseEndAutoAction,
     int? rentChargeLeadDays,
     int? lateFeeGraceDays,
     int? leaseExpiryReminderDays,
@@ -156,6 +170,9 @@ class NotificationSettings {
       enableLeaseExpiryReminders:
           enableLeaseExpiryReminders ?? this.enableLeaseExpiryReminders,
       notifyTenants: notifyTenants ?? this.notifyTenants,
+      autoSendRentReminder: autoSendRentReminder ?? this.autoSendRentReminder,
+      autoSendLateRent: autoSendLateRent ?? this.autoSendLateRent,
+      leaseEndAutoAction: leaseEndAutoAction ?? this.leaseEndAutoAction,
       rentChargeLeadDays: rentChargeLeadDays ?? this.rentChargeLeadDays,
       lateFeeGraceDays: lateFeeGraceDays ?? this.lateFeeGraceDays,
       leaseExpiryReminderDays:
@@ -205,6 +222,9 @@ class NotificationSettings {
       enableLeaseExpiryReminders:
           json['enableLeaseExpiryReminders'] as bool? ?? false,
       notifyTenants: json['notifyTenants'] as bool? ?? false,
+      autoSendRentReminder: json['autoSendRentReminder'] as bool? ?? false,
+      autoSendLateRent: json['autoSendLateRent'] as bool? ?? false,
+      leaseEndAutoAction: json['leaseEndAutoAction'] as String? ?? 'Draft',
       rentChargeLeadDays: (json['rentChargeLeadDays'] as num?)?.toInt() ?? 0,
       lateFeeGraceDays: (json['lateFeeGraceDays'] as num?)?.toInt() ?? 0,
       leaseExpiryReminderDays:
@@ -234,6 +254,9 @@ class NotificationSettings {
         'enableLateFees': enableLateFees,
         'enableLeaseExpiryReminders': enableLeaseExpiryReminders,
         'notifyTenants': notifyTenants,
+        'autoSendRentReminder': autoSendRentReminder,
+        'autoSendLateRent': autoSendLateRent,
+        'leaseEndAutoAction': leaseEndAutoAction,
         'rentChargeLeadDays': rentChargeLeadDays,
         'lateFeeGraceDays': lateFeeGraceDays,
         'leaseExpiryReminderDays': leaseExpiryReminderDays,

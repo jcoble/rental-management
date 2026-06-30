@@ -51,6 +51,10 @@ public class VoiceController : ManagementControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+        catch (VoiceTranscriptionUnavailableException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
+        }
     }
 
     /// <summary>
@@ -95,6 +99,10 @@ public class VoiceController : ManagementControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (VoiceTranscriptionUnavailableException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
         }
     }
 }

@@ -173,6 +173,41 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_CompletesFutureScheduledWorkOrder_StampsCompletedAt_WithoutThrowing()
+    {
+        // A work order scheduled for the future must still one-click Complete (the vendor came early, or
+        // the visit is later today). The status→Completed transition auto-stamps CompletedAt = now, which
+        // is EXEMPT from the "before scheduled visit" guard — only a user-typed CompletedAt is range-checked.
+        // Regression for BUG-1 (future-scheduled WO previously 400'd with a date the user never entered).
+        var property = SeedProperty("Hawthorn Way");
+        var futureVisit = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            Title = "Fix porch light",
+            Description = "Light out by the front door",
+            Status = WorkOrderStatus.New,
+            ScheduledFor = futureVisit,
+        });
+
+        var before = DateTime.UtcNow;
+        var updated = await _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        {
+            Status = WorkOrderStatus.Completed,
+        });
+
+        updated.Should().NotBeNull("completing a future-scheduled work order must not throw");
+        updated!.Status.Should().Be(WorkOrderStatus.Completed);
+
+        var entity = await _db.WorkOrders.AsNoTracking().FirstAsync(w => w.Id == created.Id);
+        entity.Status.Should().Be(WorkOrderStatus.Completed);
+        entity.CompletedAt.Should().NotBeNull("the status→Completed transition auto-stamps the completion time");
+        entity.CompletedAt!.Value.Should().BeOnOrAfter(before);
+        entity.CompletedAt!.Value.Should().BeBefore(
+            futureVisit.UtcDateTime, "the WO was completed early, before its future scheduled visit");
+    }
+
+    [Fact]
     public async Task UpdateAsync_NullCostsAndTiming_LeaveExistingValuesUnchanged()
     {
         var property = SeedProperty("Cedar Ave");
@@ -221,6 +256,54 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         detail!.PropertyName.Should().Be("Oak Terrace");
         detail.VendorName.Should().Be("Ace Plumbing");
         detail.TenantName.Should().Be("Maria Tenant");
+    }
+
+    [Fact]
+    public async Task GetAsync_HasActiveDispatch_TrueOnlyWithAnOpenDispatch_NotMereVendorAssignment()
+    {
+        // The detail page's "vendor has the job … closes on DONE" banner is driven by HasActiveDispatch,
+        // which must reflect a REAL open VendorDispatch — not a mere vendor assignment. Regression for BUG-2.
+        var property = SeedProperty("Magnolia Bend");
+        var vendor = SeedVendor("Rapid HVAC");
+
+        // (a) Vendor assigned but NO dispatch ever sent → false (the BUG-2 case).
+        var assignedOnly = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            Title = "AC not cooling",
+            Description = "Upstairs warm",
+            Status = WorkOrderStatus.New,
+        });
+
+        // (b) Vendor assigned AND an OPEN (Dispatched) dispatch exists → true.
+        var dispatched = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            Title = "Furnace dead",
+            Description = "No heat",
+            Status = WorkOrderStatus.New,
+        });
+        SeedDispatch(dispatched!.Id, vendor.Id, VendorDispatchStatus.Dispatched);
+
+        // (c) A CLOSED (Completed) dispatch is not "open" → false.
+        var closed = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            Title = "Old job",
+            Description = "Already done",
+            Status = WorkOrderStatus.InProgress,
+        });
+        SeedDispatch(closed!.Id, vendor.Id, VendorDispatchStatus.Completed);
+
+        (await _workOrders.GetAsync(PortfolioId, assignedOnly!.Id))!.HasActiveDispatch
+            .Should().BeFalse("assigning a vendor without dispatching must not claim the job was sent");
+        (await _workOrders.GetAsync(PortfolioId, dispatched.Id))!.HasActiveDispatch
+            .Should().BeTrue("an open dispatch means the job really is out with the vendor");
+        (await _workOrders.GetAsync(PortfolioId, closed.Id))!.HasActiveDispatch
+            .Should().BeFalse("a completed dispatch is no longer awaiting a DONE reply");
     }
 
     [Fact]
@@ -310,6 +393,21 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         _db.Vendors.Add(vendor);
         _db.SaveChanges();
         return vendor;
+    }
+
+    private VendorDispatch SeedDispatch(int workOrderId, int vendorId, VendorDispatchStatus status)
+    {
+        var dispatch = new VendorDispatch
+        {
+            PortfolioId = PortfolioId,
+            WorkOrderId = workOrderId,
+            VendorId = vendorId,
+            Status = status,
+            DispatchedAtUtc = DateTime.UtcNow,
+        };
+        _db.VendorDispatches.Add(dispatch);
+        _db.SaveChanges();
+        return dispatch;
     }
 
     private Tenant SeedTenant(string first, string last)

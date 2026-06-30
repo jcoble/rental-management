@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'unit_navigation.dart';
 import 'units_repository.dart';
 
@@ -56,7 +57,7 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
     final unitsAsync = ref.watch(unitHealthPageProvider(args));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Units')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Units')),
       body: Column(
         children: [
           Padding(

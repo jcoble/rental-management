@@ -15,7 +15,7 @@ public sealed record ScanDraftResponse(
     string FileUrl, IReadOnlyList<ScanFieldDto> Fields,
     string? ModelId, int? TokensUsed, decimal? CostUsd, string? FailureReason,
     DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt,
-    string? CreatedEntityType = null, int? CreatedEntityId = null,
+    string? CreatedEntityType = null, int? CreatedEntityId = null, int? CreatedUnitId = null,
     // Conversational-voice ("Tell me") slot state. Populated only via
     // WithVoiceSlots() for the voice endpoints; left at complete/empty defaults
     // for scanned documents (which the scan review screen never reads).
@@ -40,7 +40,8 @@ public sealed record ScanDraftResponse(
     public static ScanDraftResponse FromEntity(
         ScanDraft d,
         string? createdEntityType = null,
-        int? createdEntityId = null)
+        int? createdEntityId = null,
+        int? createdUnitId = null)
     {
         var fields = ParseFields(d.ExtractedFields);
         var fileUrl = $"/api/v1/scans/{d.Id}/file";
@@ -50,7 +51,7 @@ public sealed record ScanDraftResponse(
             fileUrl, fields,
             d.ModelId, d.TokensUsed, d.CostUsd, d.FailureReason,
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
-            createdEntityType, createdEntityId);
+            createdEntityType, createdEntityId, createdUnitId);
     }
 
     /// <summary>

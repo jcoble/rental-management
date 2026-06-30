@@ -6,6 +6,7 @@ import {
 	hasNoticeMoveOutDate,
 	LEASE_DETAIL_TABS,
 	leaseStatusOptionsForCurrentStatus,
+	quickLeaseStatusActionsForStatus,
 	resolveLeaseDetailTab,
 	scannedLeaseDocumentLinkLabel,
 	tabForLeaseEdit,
@@ -91,6 +92,19 @@ describe('lease detail lifecycle actions', () => {
 			'Terminated',
 		]);
 	});
+
+	it('offers quick status actions only for supported Active, Expired, and Terminated transitions', () => {
+		const targets = (status: string | null) =>
+			quickLeaseStatusActionsForStatus(status).map((action) => action.targetStatus);
+
+		assert.deepEqual(targets('Draft'), ['Active']);
+		assert.deepEqual(targets('PendingSignature'), ['Active']);
+		assert.deepEqual(targets('Active'), ['Expired', 'Terminated']);
+		assert.deepEqual(targets('NoticeGiven'), ['Active', 'Expired', 'Terminated']);
+		assert.deepEqual(targets('Expired'), []);
+		assert.deepEqual(targets('Terminated'), []);
+		assert.deepEqual(targets(null), []);
+	});
 });
 
 describe('lease detail hero CTA', () => {
@@ -104,5 +118,38 @@ describe('lease detail hero CTA', () => {
 
 		assert.match(pageSource, /data-testid="lease-hero-cta"[\s\S]*onclick=\{\(\) => setTab\('ledger'\)\}/);
 		assert.doesNotMatch(pageSource, /data-testid="lease-hero-cta"[\s\S]*onclick=\{\(\) => activeTab = 'ledger'\}/);
+	});
+});
+
+describe('lease detail status mutation invalidation', () => {
+	it('refreshes lease, unit, dashboard, and lease-list caches after lifecycle status changes', () => {
+		const pageSource = readFileSync(
+			new URL('../components/records/LeaseDetail.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(pageSource, /queryKey:\s*\['lease',\s*leaseId\]/);
+		assert.match(pageSource, /queryKey:\s*\['leases',\s*portfolioId\]/);
+		assert.match(pageSource, /queryKey:\s*\['unit-dashboard',\s*unitId\]/);
+		assert.match(pageSource, /queryKey:\s*\['unit-leases',\s*portfolioId,\s*unitId\]/);
+		assert.match(pageSource, /queryKey:\s*\['dashboard',\s*portfolioId\]/);
+	});
+});
+
+describe('lease agreement original source document', () => {
+	it('shows the uploaded source lease in Agreement & Signing without using generated document actions', () => {
+		const pageSource = readFileSync(
+			new URL('../components/records/LeaseDetail.svelte', import.meta.url),
+			'utf8'
+		);
+		const sourceDocumentCard = pageSource.match(
+			/<DetailCard title="Original source lease agreement"[\s\S]*?<\/DetailCard>/
+		)?.[0];
+
+		assert.ok(sourceDocumentCard, 'expected an Agreement tab card for the original source lease');
+		assert.match(sourceDocumentCard, /testid="lease-original-source-document-card"/);
+		assert.match(sourceDocumentCard, /legal record/);
+		assert.match(sourceDocumentCard, /href="\/lease-file\/\{lease\.id\}"/);
+		assert.doesNotMatch(sourceDocumentCard, /generateDocMutation|downloadDocument|downloadSignedDocument/);
 	});
 });

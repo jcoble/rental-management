@@ -9,20 +9,32 @@ import 'notices_repository.dart';
 /// labels and a one-line description of what each does.
 const _noticeTypeChoices = <({String type, String label, String hint, IconData icon})>[
   (
+    type: 'RentReminder',
+    label: 'Rent reminder (coming due)',
+    hint: 'Friendly heads-up that rent is coming due.',
+    icon: Icons.event_available_outlined,
+  ),
+  (
     type: 'RenewalOffer',
     label: 'Lease renewal offer',
     hint: 'Offer to extend the lease for another term.',
     icon: Icons.event_repeat_outlined,
   ),
   (
+    type: 'MonthToMonthConversion',
+    label: 'Convert to month-to-month',
+    hint: 'Offer to continue month-to-month after the lease ends.',
+    icon: Icons.sync_alt_outlined,
+  ),
+  (
     type: 'MoveOutReminder',
-    label: 'Move-out reminder',
-    hint: 'Coordinate keys, inspection, and deposit return.',
+    label: 'Lease expiration / move-out',
+    hint: 'Let them know the lease is ending and coordinate move-out.',
     icon: Icons.logout_outlined,
   ),
   (
     type: 'LateRentNotice',
-    label: 'Late-rent notice',
+    label: 'Late rent / late fee',
     hint: 'Remind the tenant about an overdue balance.',
     icon: Icons.warning_amber_outlined,
   ),
@@ -102,9 +114,12 @@ Future<void> showCreateTenantNoticeFlow(
   if (!context.mounted) return;
 
   if (drafts.isEmpty) {
-    final why = choice == 'LateRentNotice'
-        ? 'No overdue payment to base a late-rent notice on.'
-        : 'There is already an open draft of this notice for this tenant.';
+    final why = switch (choice) {
+      'LateRentNotice' => 'No overdue payment to base a late-rent notice on.',
+      'RentReminder' || 'MonthToMonthConversion' =>
+        'This tenant needs an active lease to create that notice.',
+      _ => 'There is already an open draft of this notice for this tenant.',
+    };
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(why)));
@@ -136,11 +151,34 @@ class _ReviewNoticeSheet extends ConsumerStatefulWidget {
 }
 
 class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
+  final Map<int, TextEditingController> _subjectCtrls = {};
+  final Map<int, TextEditingController> _bodyCtrls = {};
+
   bool _portal = true;
   bool _email = true;
   bool _sms = true;
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final d in widget.drafts) {
+      _subjectCtrls[d.id] = TextEditingController(text: d.subject);
+      _bodyCtrls[d.id] = TextEditingController(text: d.body);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _subjectCtrls.values) {
+      c.dispose();
+    }
+    for (final c in _bodyCtrls.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
 
   List<String> get _channels => [
         if (_portal) 'Portal',
@@ -158,6 +196,11 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       for (final d in widget.drafts) {
+        final subject = _subjectCtrls[d.id]?.text.trim() ?? d.subject;
+        final body = _bodyCtrls[d.id]?.text.trim() ?? d.body;
+        if (subject != d.subject || body != d.body) {
+          await ref.read(noticesRepositoryProvider).update(d.id, subject: subject, body: body);
+        }
         await ref.read(noticesRepositoryProvider).approve(d.id, channels);
       }
       // Refresh the standalone notices queue if it's listening.
@@ -226,17 +269,21 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        d.subject,
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                      TextField(
+                        controller: _subjectCtrls[d.id],
+                        decoration: const InputDecoration(
+                          labelText: 'Subject',
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        d.body,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant,
-                          height: 1.4,
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _bodyCtrls[d.id],
+                        minLines: 4,
+                        maxLines: 10,
+                        decoration: const InputDecoration(
+                          labelText: 'Message',
+                          border: OutlineInputBorder(),
                         ),
                       ),
                     ],
@@ -299,6 +346,78 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Public test harness that renders the editable Subject + Body fields used
+/// inside [_ReviewNoticeSheet], without requiring a Riverpod/network stack.
+/// Import from widget tests only.
+@visibleForTesting
+class ReviewNoticeSheetTestHarness extends StatefulWidget {
+  const ReviewNoticeSheetTestHarness({
+    super.key,
+    required this.subject,
+    required this.body,
+  });
+
+  final String subject;
+  final String body;
+
+  @override
+  State<ReviewNoticeSheetTestHarness> createState() =>
+      _ReviewNoticeSheetTestHarnessState();
+}
+
+class _ReviewNoticeSheetTestHarnessState
+    extends State<ReviewNoticeSheetTestHarness> {
+  late final TextEditingController _subjectCtrl;
+  late final TextEditingController _bodyCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _subjectCtrl = TextEditingController(text: widget.subject);
+    _bodyCtrl = TextEditingController(text: widget.body);
+  }
+
+  @override
+  void dispose() {
+    _subjectCtrl.dispose();
+    _bodyCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _subjectCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Subject',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _bodyCtrl,
+          minLines: 4,
+          maxLines: 10,
+          decoration: const InputDecoration(
+            labelText: 'Message',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: () {},
+          icon: const Icon(Icons.send_outlined),
+          label: const Text('Send notice'),
+        ),
+      ],
     );
   }
 }

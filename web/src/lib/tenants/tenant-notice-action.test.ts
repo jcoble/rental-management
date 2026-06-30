@@ -19,7 +19,6 @@ describe('tenant notice deep-link action', () => {
 	});
 
 	test('ignores unsupported notice types and unrelated actions', () => {
-		assert.deepEqual(readTenantNoticeAction(new URLSearchParams('action=create-notice&noticeType=LateRentNotice')), {});
 		assert.equal(readTenantNoticeAction(new URLSearchParams('noticeType=RenewalOffer')), null);
 		assert.equal(readTenantNoticeAction(new URLSearchParams('action=edit&noticeType=RenewalOffer')), null);
 	});
@@ -33,6 +32,25 @@ describe('tenant notice deep-link action', () => {
 		assert.notEqual(
 			tenantNoticeActionKey(7, { noticeType: 'RenewalOffer' }),
 			tenantNoticeActionKey(8, { noticeType: 'RenewalOffer' })
+		);
+	});
+
+	test('reads a LateRentNotice action from URL params', () => {
+		assert.deepEqual(
+			readTenantNoticeAction(new URLSearchParams('action=create-notice&noticeType=LateRentNotice')),
+			{ noticeType: 'LateRentNotice' }
+		);
+	});
+
+	test('recognizes the two new forceable notice types', () => {
+		assert.deepEqual(
+			readTenantNoticeAction(new URLSearchParams('action=create-notice&noticeType=RentReminder')),
+			{ noticeType: 'RentReminder' }
+		);
+
+		assert.deepEqual(
+			readTenantNoticeAction(new URLSearchParams('action=create-notice&noticeType=MonthToMonthConversion')),
+			{ noticeType: 'MonthToMonthConversion' }
 		);
 	});
 

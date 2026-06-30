@@ -14,6 +14,8 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
@@ -24,12 +26,14 @@
 		getLeaseStatusOptions,
 		getLeasesEmptyStateCopy,
 	} from '$lib/leases/lease-list-state';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import { readLeaseCreatePrefill } from '$lib/leases/lease-create-prefill';
 	import { Plus, FileText } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -77,8 +81,12 @@
 		queryKey: ['properties', portfolioId],
 		queryFn: () => properties.list(portfolioId, { take: 200 }),
 	}));
-	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
+	const availableTenantsQuery = createQuery(() => ({
+		queryKey: ['tenants', portfolioId, 'lease-create', 'available-for-lease'],
+		queryFn: () => tenants.listPage(portfolioId, { take: 200, sort: 'name', availableForLease: true }),
+	}));
+	const editTenantsQuery = createQuery(() => ({
+		queryKey: ['tenants', portfolioId, 'lease-edit'],
 		queryFn: () => tenants.list(portfolioId, { take: 200 }),
 	}));
 
@@ -90,7 +98,7 @@
 	}));
 
 	const empty = {
-		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '',
+		leaseNumber: defaultLeaseNumber(), propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly', rentTrackingStartDate: '',
 		status: 'Draft', notes: '',
@@ -99,8 +107,27 @@
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
+	let leaseStep = $state(0);
+	let completedLeaseSteps = $state<number[]>([]);
 	let deleteTarget = $state<Lease | null>(null);
 	let appliedCreatePrefillKey = $state('');
+
+	const leaseSteps: FormStepperStep[] = [
+		{ id: 'location', label: 'Location', description: 'Property and unit' },
+		{ id: 'tenants', label: 'Tenants', description: 'Lease parties' },
+		{ id: 'identity', label: 'Lease #', description: 'Reference' },
+		{ id: 'dates', label: 'Dates', description: 'Start and end' },
+		{ id: 'money', label: 'Money', description: 'Rent and deposit' },
+		{ id: 'status', label: 'Status', description: 'Tracking and notes' },
+	];
+	const leaseStepFields = [
+		['propertyId', 'unitId'],
+		['tenantId'],
+		['leaseNumber'],
+		['startDate', 'endDate'],
+		['monthlyRent', 'securityDeposit', 'lateFeeAmount', 'rentDueDay'],
+		['status', 'rentTrackingStartMode', 'rentTrackingStartDate', 'notes'],
+	] as const;
 
 	function clearLeaseError(field: string) {
 		const next = clearFieldError(formErrors, field);
@@ -205,6 +232,8 @@
 		form = { ...empty, tenantId: defaults.tenantId ?? '', tenantIds };
 		formPropertyId = '';
 		formErrors = {};
+		leaseStep = 0;
+		completedLeaseSteps = [];
 		showForm = true;
 	}
 	function openEdit(l: Lease) {
@@ -238,36 +267,91 @@
 		};
 		formPropertyId = String(l.propertyId);
 		formErrors = {};
+		leaseStep = 0;
+		completedLeaseSteps = [];
 		showForm = true;
 	}
 	function closeForm() {
 		showForm = false;
 		editingId = null;
 		formErrors = {};
+		leaseStep = 0;
+		completedLeaseSteps = [];
+	}
+
+	function selectedLeaseTenantIds() {
+		return form.tenantIds
+			.map((id) => Number(id))
+			.filter((id) => Number.isInteger(id) && id > 0);
+	}
+
+	function leaseValidationState() {
+		const selectedTenantIds = selectedLeaseTenantIds();
+		const tenantId = String(selectedTenantIds[0] ?? '');
+		const validationInput = { ...form, tenantId };
+		const result = parseForm(leaseSchema, validationInput);
+		const rentTrackingErrors = leaseRentTrackingErrors(validationInput);
+		const tenantErrors: Record<string, string> =
+			selectedTenantIds.length === 0 ? { tenantId: 'Select at least one tenant' } : {};
+		return {
+			data: result.data,
+			errors: { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantErrors },
+			selectedTenantIds,
+		};
+	}
+
+	function leaseStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(leaseStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+
+	function firstLeaseErrorStep(errors: Record<string, string>) {
+		return leaseStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+
+	function markLeaseStepInvalid(step: number) {
+		completedLeaseSteps = completedLeaseSteps.filter((completedStep) => completedStep < step);
+	}
+
+	function validateLeaseStep(step: number) {
+		const { errors } = leaseValidationState();
+		const currentErrors = Object.fromEntries(leaseStepErrorFields(step, errors));
+		const currentFields = new Set<string>(leaseStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(formErrors).filter(([field]) => !currentFields.has(field)));
+		formErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markLeaseStepInvalid(step);
+		return isValid;
+	}
+
+	function nextLeaseStep() {
+		if (!validateLeaseStep(leaseStep)) return;
+		if (completedLeaseSteps.includes(leaseStep)) {
+			leaseStep = Math.min(leaseStep + 1, leaseSteps.length - 1);
+			return;
+		}
+		completedLeaseSteps = [...completedLeaseSteps, leaseStep];
+		window.setTimeout(() => {
+			leaseStep = Math.min(leaseStep + 1, leaseSteps.length - 1);
+		}, 260);
 	}
 
 	function submit() {
-		// Validate AND send the FULL form. leaseSchema requires propertyId and the server's
-		// CreateLeaseRequest has [Required][Range(1,..)] PropertyId. The old code destructured
-		// propertyId OUT before parseForm, so validation always failed on the missing field —
-		// Save silently no-op'd (no request, no surfaced error). Keep propertyId in the payload.
-		const selectedTenantIds = form.tenantIds
-			.map((id) => Number(id))
-			.filter((id) => Number.isInteger(id) && id > 0);
-		const tenantId = String(selectedTenantIds[0] ?? '');
-		form.tenantId = tenantId;
-		const result = parseForm(leaseSchema, { ...form, tenantId });
-		const rentTrackingErrors = leaseRentTrackingErrors(form);
-		const tenantErrors: Record<string, string> =
-			selectedTenantIds.length === 0 ? { tenantId: 'Select at least one tenant' } : {};
-		if (result.errors || Object.keys(rentTrackingErrors).length > 0 || Object.keys(tenantErrors).length > 0) {
-			formErrors = { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantErrors };
+		const { data, errors, selectedTenantIds } = leaseValidationState();
+		if (Object.keys(errors).length > 0) {
+			formErrors = errors;
+			const firstErrorStep = firstLeaseErrorStep(errors);
+			if (firstErrorStep >= 0) {
+				leaseStep = firstErrorStep;
+				markLeaseStepInvalid(firstErrorStep);
+			}
 			return;
 		}
+		if (!data) return;
 		formErrors = {};
 		saveMutation.mutate({
 			id: editingId,
-			data: { portfolioId, ...result.data, tenantId: selectedTenantIds[0], tenantIds: selectedTenantIds },
+			data: { portfolioId, ...data, tenantId: selectedTenantIds[0], tenantIds: selectedTenantIds },
 		});
 	}
 
@@ -287,6 +371,12 @@
 		unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)
 			? `Unit ${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.unitNumber} (${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.status})`
 			: ''
+	);
+	const leaseTenantOptions = $derived(
+		editingId === null ? (availableTenantsQuery.data?.items ?? []) : (editTenantsQuery.data ?? [])
+	);
+	const leaseTenantOptionsLoading = $derived(
+		editingId === null ? availableTenantsQuery.isLoading : editTenantsQuery.isLoading
 	);
 	// DataGrid column definitions
 	const columns: ColumnDef<Lease>[] = [
@@ -348,12 +438,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="leases-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Leases</h1>
-			<p class="text-sm text-muted-foreground">Lease lifecycle, rent terms, and status updates.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={5}
+		tone="amber"
+		eyebrow="Rentals"
+		title="Leases"
+		description="Lease lifecycle, rent terms, and status updates."
+		data-testid="leases-header"
+	/>
 
 	<DataGrid
 		data={list}
@@ -405,58 +499,81 @@
 	open={showForm}
 	onOpenChange={(v) => { if (!v) closeForm(); }}
 >
-	<Dialog.Content class="max-w-2xl">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="space-y-3" data-testid="lease-form">
-			<!-- Property / unit / tenant pickers stay in the page; the term fields come from the shared component. -->
-			<div class="grid gap-3 md:grid-cols-2">
-				<div>
-					<Select.Root type="single" bind:value={form.propertyId}>
-						<Select.Trigger class="w-full" data-testid="lease-property-input">
-							{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="Select property">Select property</Select.Item>
-							{#each propertiesQuery.data || [] as property}
-								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-					{#if formErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="lease-property-error">{formErrors.propertyId}</p>{/if}
-				</div>
-				<div>
-					<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
-						<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
-							{selectedUnitLabel ? selectedUnitLabel : 'Select unit'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="Select unit">Select unit</Select.Item>
-							{#each unitsForPropertyQuery.data || [] as unit}
-								<Select.Item value={String(unit.id)} label="Unit {unit.unitNumber} ({unit.status})">Unit {unit.unitNumber} ({unit.status})</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-					{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
-				</div>
-				<div class="md:col-span-2">
+		<FormStepper steps={leaseSteps} bind:currentStep={leaseStep} completedSteps={completedLeaseSteps} testid="lease-stepper">
+			<div class="space-y-4" data-testid="lease-form">
+				{#if leaseStep === 0}
+					<div class="grid gap-3 md:grid-cols-2">
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
+							<Select.Root type="single" bind:value={form.propertyId}>
+								<Select.Trigger class="w-full" data-testid="lease-property-input">
+									{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="" label="Select property">Select property</Select.Item>
+									{#each propertiesQuery.data || [] as property}
+										<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
+							{#if formErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="lease-property-error">{formErrors.propertyId}</p>{/if}
+						</div>
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Unit</span>
+							<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
+								<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
+									{selectedUnitLabel ? selectedUnitLabel : 'Select unit'}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="" label="Select unit">Select unit</Select.Item>
+									{#each unitsForPropertyQuery.data || [] as unit}
+										<Select.Item value={String(unit.id)} label="Unit {unit.unitNumber} ({unit.status})">Unit {unit.unitNumber} ({unit.status})</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
+							{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
+						</div>
+					</div>
+				{:else if leaseStep === 1}
 					<TenantMultiSelect
 						label="Tenants"
-						tenants={tenantsQuery.data || []}
+						tenants={leaseTenantOptions}
 						bind:selectedIds={form.tenantIds}
 						error={formErrors.tenantId}
+						disabled={leaseTenantOptionsLoading}
 						testid="lease-tenants-input"
 					/>
-				</div>
+				{:else if leaseStep === 2}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="identity" />
+				{:else if leaseStep === 3}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="dates" />
+				{:else if leaseStep === 4}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="money" />
+				{:else}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="status" />
+				{/if}
 			</div>
-			<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} />
-		</div>
+		</FormStepper>
 		<Dialog.Footer>
 			<Button data-testid="lease-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
-			<Button data-testid="lease-form-save" onclick={submit} disabled={saveMutation.isPending}>
-				{saveMutation.isPending ? 'Saving…' : 'Save lease'}
-			</Button>
+			{#if leaseStep > 0}
+				<Button data-testid="lease-step-back" variant="outline" onclick={() => (leaseStep = Math.max(leaseStep - 1, 0))}>Back</Button>
+				{/if}
+				{#if leaseStep < leaseSteps.length - 1}
+					<StepperNextButton
+						testid="lease-step-next"
+						onclick={nextLeaseStep}
+						complete={completedLeaseSteps.includes(leaseStep)}
+					/>
+				{:else}
+				<Button data-testid="lease-form-save" onclick={submit} disabled={saveMutation.isPending}>
+					{saveMutation.isPending ? 'Saving…' : 'Save lease'}
+				</Button>
+			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

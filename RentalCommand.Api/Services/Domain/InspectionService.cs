@@ -12,7 +12,9 @@ namespace RentalCommand.Api.Services.Domain;
 public class InspectionService : IInspectionService
 {
     private const string EntityType = "Inspection";
+    private const string TemplateEntityType = "InspectionTemplate";
     private const string WorkOrderEntityType = "WorkOrder";
+    private const int MaxTemplateItems = 100;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -103,12 +105,94 @@ public class InspectionService : IInspectionService
 
         var custom = await _db.InspectionTemplates
             .AsNoTracking()
-            .Include(t => t.Items)
+            .Include(t => t.Items.OrderBy(i => i.SortOrder).ThenBy(i => i.Id))
             .Where(t => t.PortfolioId == portfolioId)
+            .OrderBy(t => t.Name)
+            .ThenBy(t => t.Id)
             .ToListAsync(ct);
 
         result.AddRange(custom.Select(InspectionTemplateResponse.FromEntity));
         return result;
+    }
+
+    public async Task<InspectionTemplateResponse?> GetTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
+    {
+        if (InspectionTemplateCatalog.IsBuiltInId(templateId))
+        {
+            var builtIn = InspectionTemplateCatalog.FindBuiltIn(templateId);
+            return builtIn == null ? null : InspectionTemplateResponse.FromEntity(builtIn);
+        }
+
+        var custom = await LoadCustomTemplateAsync(portfolioId, templateId, ct);
+        return custom == null ? null : InspectionTemplateResponse.FromEntity(custom);
+    }
+
+    public async Task<InspectionTemplateResponse> CreateTemplateAsync(int portfolioId, CreateInspectionTemplateRequest request, CancellationToken ct = default)
+    {
+        var normalized = NormalizeTemplateRequest(request.Name, request.InspectionType, request.Items);
+        var entity = new InspectionTemplate
+        {
+            PortfolioId = portfolioId,
+            Name = normalized.Name,
+            InspectionType = normalized.InspectionType,
+            IsBuiltIn = false,
+        };
+
+        AddTemplateItems(entity, normalized.Items);
+
+        _db.InspectionTemplates.Add(entity);
+        await _db.SaveChangesAsync(ct);
+
+        var response = InspectionTemplateResponse.FromEntity(entity);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, TemplateEntityType, entity.Id, response, ct);
+        return response;
+    }
+
+    public async Task<InspectionTemplateResponse?> UpdateTemplateAsync(int portfolioId, int templateId, UpdateInspectionTemplateRequest request, CancellationToken ct = default)
+    {
+        ThrowIfBuiltInTemplateMutation(templateId);
+
+        var entity = await _db.InspectionTemplates
+            .FirstOrDefaultAsync(t => t.Id == templateId && t.PortfolioId == portfolioId, ct);
+        if (entity == null)
+        {
+            return null;
+        }
+
+        var normalized = NormalizeTemplateRequest(request.Name, request.InspectionType, request.Items);
+        entity.Name = normalized.Name;
+        entity.InspectionType = normalized.InspectionType;
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        await _db.InspectionTemplateItems
+            .Where(i => i.TemplateId == templateId)
+            .ExecuteDeleteAsync(ct);
+        AddTemplateItems(entity, normalized.Items);
+
+        await _db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
+        var response = InspectionTemplateResponse.FromEntity(entity);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, TemplateEntityType, entity.Id, response, ct);
+        return response;
+    }
+
+    public async Task<bool> DeleteTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
+    {
+        ThrowIfBuiltInTemplateMutation(templateId);
+
+        var entity = await _db.InspectionTemplates
+            .FirstOrDefaultAsync(t => t.Id == templateId && t.PortfolioId == portfolioId, ct);
+        if (entity == null)
+        {
+            return false;
+        }
+
+        _db.InspectionTemplates.Remove(entity);
+        await _db.SaveChangesAsync(ct);
+
+        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, TemplateEntityType, templateId, ct);
+        return true;
     }
 
     public async Task<InspectionDetailResponse?> CreateAsync(int portfolioId, CreateInspectionRequest request, CancellationToken ct = default)
@@ -253,13 +337,18 @@ public class InspectionService : IInspectionService
 
     public async Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default)
     {
-        var item = await _db.InspectionItems
-            .FirstOrDefaultAsync(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId, ct);
-        if (item == null)
+        var target = await _db.InspectionItems
+            .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .Select(it => new { Item = it, InspectionStatus = it.Inspection!.Status })
+            .FirstOrDefaultAsync(ct);
+        if (target == null)
         {
             return null;
         }
 
+        EnsureChecklistItemEditable(target.InspectionStatus);
+
+        var item = target.Item;
         if (request.Result.HasValue) item.Result = request.Result.Value;
         if (request.Note != null) item.Note = request.Note;
 
@@ -271,9 +360,11 @@ public class InspectionService : IInspectionService
 
     public async Task<InspectionItemResponse?> AttachItemPhotoAsync(int portfolioId, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default)
     {
-        var item = await _db.InspectionItems
-            .FirstOrDefaultAsync(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId, ct);
-        if (item == null)
+        var target = await _db.InspectionItems
+            .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .Select(it => new { Item = it, InspectionStatus = it.Inspection!.Status })
+            .FirstOrDefaultAsync(ct);
+        if (target == null)
         {
             return null;
         }
@@ -286,6 +377,9 @@ public class InspectionService : IInspectionService
             return null;
         }
 
+        EnsureChecklistItemEditable(target.InspectionStatus);
+
+        var item = target.Item;
         item.PhotoStoredFileId = storedFileId;
         await TouchInspectionAsync(inspectionId, portfolioId, ct);
         await _db.SaveChangesAsync(ct);
@@ -537,6 +631,95 @@ public class InspectionService : IInspectionService
     /// Returns the (Area, Label, SortOrder) tuples for a built-in (negative id) or in-portfolio custom
     /// template. Returns null when the id is not a known built-in nor a custom template in this portfolio.
     /// </summary>
+    private async Task<InspectionTemplate?> LoadCustomTemplateAsync(int portfolioId, int templateId, CancellationToken ct)
+    {
+        return await _db.InspectionTemplates
+            .AsNoTracking()
+            .Include(t => t.Items.OrderBy(i => i.SortOrder).ThenBy(i => i.Id))
+            .Where(t => t.Id == templateId && t.PortfolioId == portfolioId)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private static (string Name, InspectionType InspectionType, List<(string Area, string Label)> Items) NormalizeTemplateRequest(
+        string name,
+        InspectionType inspectionType,
+        IReadOnlyList<UpsertInspectionTemplateItemRequest>? items)
+    {
+        var normalizedName = (name ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            throw new DomainValidationException("Checklist name is required.");
+        }
+        if (normalizedName.Length > 200)
+        {
+            throw new DomainValidationException("Checklist name must be 200 characters or fewer.");
+        }
+
+        if (items == null || items.Count == 0)
+        {
+            throw new DomainValidationException("Add at least one checklist question.");
+        }
+        if (items.Count > MaxTemplateItems)
+        {
+            throw new DomainValidationException($"A checklist can have at most {MaxTemplateItems} questions.");
+        }
+
+        var normalizedItems = new List<(string Area, string Label)>();
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var area = (item.Area ?? string.Empty).Trim();
+            var label = (item.Label ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(area))
+            {
+                throw new DomainValidationException($"Question {i + 1} needs an area or room.");
+            }
+            if (area.Length > 120)
+            {
+                throw new DomainValidationException($"Question {i + 1} area must be 120 characters or fewer.");
+            }
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                throw new DomainValidationException($"Question {i + 1} needs a checklist item.");
+            }
+            if (label.Length > 300)
+            {
+                throw new DomainValidationException($"Question {i + 1} item must be 300 characters or fewer.");
+            }
+
+            normalizedItems.Add((area, label));
+        }
+
+        return (normalizedName, inspectionType, normalizedItems);
+    }
+
+    private static void AddTemplateItems(InspectionTemplate template, IReadOnlyList<(string Area, string Label)> items)
+    {
+        template.Items.Clear();
+        for (var i = 0; i < items.Count; i++)
+        {
+            template.Items.Add(new InspectionTemplateItem
+            {
+                TemplateId = template.Id,
+                Template = template,
+                Area = items[i].Area,
+                Label = items[i].Label,
+                SortOrder = i,
+            });
+        }
+    }
+
+    private static void ThrowIfBuiltInTemplateMutation(int templateId)
+    {
+        if (!InspectionTemplateCatalog.IsBuiltInId(templateId))
+        {
+            return;
+        }
+
+        throw new DomainValidationException("Built-in checklists are read-only. Copy one to a custom checklist before editing.");
+    }
+
     private async Task<List<(string, string, int)>?> ResolveTemplateItemsAsync(int portfolioId, int templateId, CancellationToken ct)
     {
         if (InspectionTemplateCatalog.IsBuiltInId(templateId))
@@ -552,19 +735,31 @@ public class InspectionService : IInspectionService
                 .ToList();
         }
 
-        var custom = await _db.InspectionTemplates
+        var customExists = await _db.InspectionTemplates
             .AsNoTracking()
-            .Include(t => t.Items)
-            .FirstOrDefaultAsync(t => t.Id == templateId && t.PortfolioId == portfolioId, ct);
-        if (custom == null)
+            .AnyAsync(t => t.Id == templateId && t.PortfolioId == portfolioId, ct);
+        if (!customExists)
         {
             return null;
         }
 
-        return custom.Items
+        return await _db.InspectionTemplateItems
+            .AsNoTracking()
+            .Where(i => i.TemplateId == templateId)
             .OrderBy(i => i.SortOrder)
-            .Select(i => (i.Area, i.Label, i.SortOrder))
-            .ToList();
+            .ThenBy(i => i.Id)
+            .Select(i => new ValueTuple<string, string, int>(i.Area, i.Label, i.SortOrder))
+            .ToListAsync(ct);
+    }
+
+    private static void EnsureChecklistItemEditable(InspectionStatus inspectionStatus)
+    {
+        if (inspectionStatus == InspectionStatus.Completed)
+        {
+            throw new DomainValidationException(
+                "This completed inspection is read-only. Reopen or schedule a new inspection before changing checklist items.",
+                statusCode: 409);
+        }
     }
 
     private async Task TouchInspectionAsync(int inspectionId, int portfolioId, CancellationToken ct)

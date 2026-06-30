@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -17,11 +18,19 @@ public class TenantService : ITenantService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly ITenantPortalProvisioningService _portalProvisioning;
+    private readonly ILogger<TenantService> _logger;
 
-    public TenantService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public TenantService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        ITenantPortalProvisioningService portalProvisioning,
+        ILogger<TenantService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _portalProvisioning = portalProvisioning;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
@@ -75,7 +84,7 @@ public class TenantService : ITenantService
             "lastname" => query.SortDescending ? q.OrderByDescending(t => t.LastName) : q.OrderBy(t => t.LastName),
             "email" => query.SortDescending ? q.OrderByDescending(t => t.Email) : q.OrderBy(t => t.Email),
             "phone" => query.SortDescending ? q.OrderByDescending(t => t.Phone) : q.OrderBy(t => t.Phone),
-            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => t.Leases.Count(l => l.Status == LeaseStatus.Active)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => t.Leases.Count(l => l.Status == LeaseStatus.Active)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
+            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
             "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
@@ -83,15 +92,18 @@ public class TenantService : ITenantService
 
         var totalCount = await q.CountAsync(ct);
 
-        // Project the active-lease count as a correlated subquery in the SAME page query (EF-translated),
-        // so the count comes back per-row from Postgres — never load-then-count in C#.
+        // Project the occupying-lease count (Active + NoticeGiven — a lease in notice is still in force
+        // and occupies its unit, treated as the current lease elsewhere) as a correlated subquery in the
+        // SAME page query (EF-translated), so the count comes back per-row from Postgres — never
+        // load-then-count in C#. This is the same occupancy signal the delete guard uses, so the UI can
+        // disable delete for a tenant who still occupies a unit (including a notice-given-only tenant).
         var rows = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active),
+                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
             })
             .ToListAsync(ct);
 
@@ -172,7 +184,14 @@ public class TenantService : ITenantService
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active),
+                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
+                // Portal-login state: existence + lockout of the Identity user linked to this tenant,
+                // fetched DB-side as correlated subqueries in the SAME query (no follow-up round trip).
+                HasPortalUser = _db.Users.Any(u => u.TenantId == t.Id && u.PortfolioId == portfolioId),
+                PortalLockoutEnd = _db.Users
+                    .Where(u => u.TenantId == t.Id && u.PortfolioId == portfolioId)
+                    .Select(u => u.LockoutEnd)
+                    .FirstOrDefault(),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -183,6 +202,10 @@ public class TenantService : ITenantService
 
         var response = TenantResponse.FromEntity(row.Entity);
         response.ActiveLeaseCount = row.ActiveLeaseCount;
+        // Classify the single fetched row (no cross-row work): no user → none; locked-off → disabled.
+        response.PortalAccess = !row.HasPortalUser
+            ? "none"
+            : TenantPortalProvisioningService.IsPortalDisabled(row.PortalLockoutEnd) ? "disabled" : "active";
         return response;
     }
 
@@ -206,9 +229,33 @@ public class TenantService : ITenantService
         _db.Tenants.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        // A tenant is a first-class portal user: provision their Identity login the moment they're
+        // created. Silent — no email goes out here (staff send the invite on demand). Best-effort: a
+        // tenant with no email yet is a normal no-op (NoEmail), and a provisioning hiccup must never
+        // fail tenant creation.
+        await TryProvisionPortalAccessAsync(entity.Id, portfolioId, ct);
+
         var response = TenantResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+    }
+
+    /// <summary>
+    /// Best-effort: ensure a freshly created tenant has a portal login. A failure is logged and
+    /// swallowed so it can never fail the tenant creation that already succeeded.
+    /// </summary>
+    private async Task TryProvisionPortalAccessAsync(int tenantId, int portfolioId, CancellationToken ct)
+    {
+        try
+        {
+            await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to provision portal access for new tenant {TenantId} in portfolio {PortfolioId}; tenant creation still succeeds.",
+                tenantId, portfolioId);
+        }
     }
 
     public async Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
@@ -245,16 +292,18 @@ public class TenantService : ITenantService
             return false;
         }
 
-        // Block the soft-delete while the tenant still holds an Active lease. Otherwise the lease keeps
-        // occupying its unit but 404s in the UI — Include(Tenant) inner-joins through the tenant's
-        // soft-delete query filter, so the orphaned lease becomes invisible yet stays Active. Same
-        // ActiveLeaseCount predicate the read model uses; evaluated SQL-side as an EXISTS (the global
-        // query filter already excludes soft-deleted leases).
-        var hasActiveLease = await _db.Leases
+        // Block the soft-delete while the tenant still occupies a unit. A lease in Active OR NoticeGiven
+        // is still in force and occupying — a notice-given lease is treated as the current lease
+        // everywhere else (unit health badge, "Move-Out" stage). Otherwise the lease keeps occupying its
+        // unit but 404s in the UI — Include(Tenant) inner-joins through the tenant's soft-delete query
+        // filter, so the orphaned lease becomes invisible yet stays in force. Same occupancy predicate
+        // the read model's ActiveLeaseCount uses; evaluated SQL-side as an EXISTS (the global query
+        // filter already excludes soft-deleted leases).
+        var hasOccupyingLease = await _db.Leases
             .AnyAsync(l => l.TenantId == id
                 && l.PortfolioId == portfolioId
-                && l.Status == LeaseStatus.Active, ct);
-        if (hasActiveLease)
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven), ct);
+        if (hasOccupyingLease)
         {
             throw new DomainValidationException(
                 "This tenant has an active lease; end or reassign it first.");

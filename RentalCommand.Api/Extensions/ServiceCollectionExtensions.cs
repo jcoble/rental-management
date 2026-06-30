@@ -102,6 +102,7 @@ public static class ServiceCollectionExtensions
         // the Engine outbox path; the API uses it for the synchronous "send test SMS" verify endpoint.
         services.AddSmsProviders();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
+        services.AddScoped<INoticeTemplateService, NoticeTemplateService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();
@@ -161,8 +162,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDeviceService, DeviceService>();
 
         // --- sandbox mode (graduate-once → wipe demo) ---
-        // Guard short-circuits real outbound (Stripe/e-sign here; SMS/email in the Engine outbox worker)
-        // while a portfolio is in Sandbox. SandboxService owns the one-way go-live wipe.
+        // Guard short-circuits money-moving Stripe operations while a portfolio is in Sandbox.
+        // SandboxService owns the one-way go-live wipe.
         services.AddScoped<RentalCommand.Core.Interfaces.ISandboxGuard, RentalCommand.Data.SandboxGuard>();
         services.AddScoped<ISandboxService, SandboxService>();
 

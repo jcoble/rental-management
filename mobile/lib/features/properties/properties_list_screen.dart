@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'property_form_sheet.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
@@ -64,7 +65,7 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Properties')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Properties')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'properties-fab',
         onPressed: () => _showAddSheet(context),

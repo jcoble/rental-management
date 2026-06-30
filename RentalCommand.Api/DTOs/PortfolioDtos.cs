@@ -16,7 +16,7 @@ public class PortfolioResponse
     public string Currency { get; set; } = "USD";
     public string? Settings { get; set; }
 
-    /// <summary>Account-wide sandbox/live state. True = seeded demo sandbox (real outbound suppressed).</summary>
+    /// <summary>Account-wide sandbox/live state. True = seeded example data.</summary>
     public bool IsSandbox { get; set; }
 
     public DateTime CreatedAt { get; set; }
@@ -50,7 +50,7 @@ public class SandboxStateResponse
 {
     public int PortfolioId { get; set; }
 
-    /// <summary>True while the account is a seeded demo sandbox (all real outbound is suppressed).</summary>
+    /// <summary>True while the account is using seeded example data.</summary>
     public bool IsSandbox { get; set; }
 
     /// <summary>When the sandbox demo data was seeded; null once graduated to Live.</summary>
@@ -61,6 +61,25 @@ public class SandboxStateResponse
     /// web/mobile clients route the user to the onboarding choice gate instead of the dashboard.
     /// </summary>
     public bool OnboardingChoicePending { get; set; }
+}
+
+/// <summary>
+/// Small, server-shaped facts used by the web and mobile getting-started checklist. These are
+/// deliberately counts/booleans so clients never download list payloads just to aggregate them.
+/// </summary>
+public class GettingStartedSignalsResponse
+{
+    public int PortfolioId { get; set; }
+    public bool PortfolioNamed { get; set; }
+    public int OwnerCount { get; set; }
+    public int PropertyCount { get; set; }
+    public int UnitCount { get; set; }
+    public int TenantCount { get; set; }
+    public int LeaseCount { get; set; }
+    public bool HasNotificationEmail { get; set; }
+    public bool HasTexting { get; set; }
+    public bool HasAutomations { get; set; }
+    public bool IsSandbox { get; set; }
 }
 
 /// <summary>

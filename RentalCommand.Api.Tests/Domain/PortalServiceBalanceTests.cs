@@ -58,6 +58,36 @@ public class PortalServiceBalanceTests : IDisposable
         balanceQueries[0].Should().Contain("COUNT");
     }
 
+    [Fact]
+    public async Task GetBalanceAsync_CountsPastDueFailedPaymentAsOutstandingAndOverdue()
+    {
+        // A Failed charge collected nothing, so its full Amount is still owed — and once it is past
+        // due it is overdue too (Outstanding + Overdue + overdueCount). This matches the payments UI,
+        // which marks Failed as "still owed" and keeps it payable. A separate Paid payment is all that
+        // lands in Collected; the failed amount is not double-counted there.
+        var tenant = SeedTenant("Marcus", "Williams");
+        var lease = SeedLease(tenant);
+        var todayUtc = DateTime.UtcNow.Date;
+
+        SeedPayment(lease, PaymentStatus.Failed, 1050m, todayUtc.AddDays(-1));
+        SeedPayment(lease, PaymentStatus.Paid, 1050m, todayUtc.AddDays(-30));
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+
+        var result = await _sut.GetBalanceAsync(PortfolioId, tenant.Id);
+
+        result.Collected.Should().Be(1050m);
+        result.Outstanding.Should().Be(1050m);
+        result.Overdue.Should().Be(1050m);
+        result.OverdueCount.Should().Be(1);
+
+        var balanceQueries = _commands
+            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        balanceQueries.Should().ContainSingle("portal balance should remain one DB-side aggregate query");
+    }
+
     private Tenant SeedTenant(string firstName, string lastName)
     {
         var now = DateTime.UtcNow;

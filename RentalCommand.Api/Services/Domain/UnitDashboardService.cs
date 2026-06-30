@@ -115,6 +115,10 @@ public class UnitDashboardService : IUnitDashboardService
 
         // (3) Rent state — a single grouped conditional SUM over the unit's payments (no materialization).
         // Outstanding = still-owed rows (Scheduled/Partial/Late). Overdue flags whether any owed row is past due.
+        // Scoped to the unit's CURRENT lease (Active in-term / NoticeGiven) via ForCurrentLeaseAttention,
+        // mirroring AccountingService's receivables query — so leftover Scheduled/Late charges on a prior,
+        // ended lease don't over-count the unit's Outstanding (or flip its rent state to Overdue), keeping
+        // the Unit header reconciled with the Accounting Outstanding/Overdue KPIs.
         decimal outstanding = 0m;
         bool hasOverdue = false;
         bool hasDueSoon = false;
@@ -122,13 +126,19 @@ public class UnitDashboardService : IUnitDashboardService
         {
             var rent = await _db.Payments
                 .AsNoTracking()
+                .ForCurrentLeaseAttention(now)
                 .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
                 .GroupBy(_ => 1)
                 .Select(g => new
                 {
+                    // Owed = Scheduled/Partial/Late. A Partial only owes its unpaid remainder
+                    // (Amount − AmountPaid); Scheduled/Late owe in full. Mirrors AccountingService so the
+                    // Unit Rent tab reconciles with the Accounting Outstanding KPI and the lease ledger
+                    // Balance instead of over-counting an already-collected partial at its full amount.
                     Outstanding = g.Sum(p =>
-                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                            ? p.Amount : 0m),
+                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
+                        : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
+                        : 0m),
                     OverdueCount = g.Count(p =>
                         (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
                         && (p.Status == PaymentStatus.Late || p.DueDate < now)),
@@ -416,7 +426,7 @@ public class UnitDashboardService : IUnitDashboardService
         var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
 
         return rows
-            .Select(a => AuditEntryResponse.FromEntity(a, _auditDescriber, _auditDiff, userNames))
+            .Select(a => AuditEntryResponse.FromEntity(a, _auditDescriber, _auditDiff, userNames, unitId))
             .ToList();
     }
 

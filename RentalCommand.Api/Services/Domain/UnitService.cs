@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -271,6 +272,17 @@ public class UnitService : IUnitService
             return null;
         }
 
+        // Reject a duplicate unit number up front with a clear, field-specific message instead of letting
+        // it hit the (PropertyId, UnitNumber) unique index and surface as the generic "conflicts with
+        // existing data" 409. Only LIVE units collide (the global query filter excludes soft-deleted
+        // rows); evaluated SQL-side as an EXISTS.
+        if (await _db.Units.AnyAsync(u => u.PropertyId == request.PropertyId && u.UnitNumber == request.UnitNumber, ct))
+        {
+            throw new DomainValidationException(
+                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
+                StatusCodes.Status409Conflict);
+        }
+
         var now = DateTime.UtcNow;
         var entity = new Unit
         {
@@ -311,6 +323,22 @@ public class UnitService : IUnitService
         if (entity == null)
         {
             return null;
+        }
+
+        // Same duplicate-number guard as create, scoped to a rename: only check when the number is
+        // actually changing, and exclude this unit's own row. Keeps the clear 409 message instead of the
+        // opaque unique-index conflict. Only LIVE units collide (the global query filter excludes
+        // soft-deleted rows).
+        if (request.UnitNumber is not null
+            && !string.Equals(request.UnitNumber, entity.UnitNumber, StringComparison.Ordinal)
+            && await _db.Units.AnyAsync(u =>
+                u.PropertyId == entity.PropertyId
+                && u.UnitNumber == request.UnitNumber
+                && u.Id != entity.Id, ct))
+        {
+            throw new DomainValidationException(
+                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
+                StatusCodes.Status409Conflict);
         }
 
         var oldValues = new Dictionary<string, object?>();
@@ -393,6 +421,8 @@ public class UnitService : IUnitService
             return false;
         }
 
+        await EnsureUnitHasNoHistoryAsync(portfolioId, id, ct);
+
         entity.DeletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
@@ -407,6 +437,91 @@ public class UnitService : IUnitService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    private async Task EnsureUnitHasNoHistoryAsync(int portfolioId, int unitId, CancellationToken ct)
+    {
+        if (await _db.Leases
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(l => l.PortfolioId == portfolioId && l.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has lease history. Archive or end the lease history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.WorkOrders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(w => w.PortfolioId == portfolioId && w.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has work order history. Archive the work order history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.Appointments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has appointment history. Archive the appointment history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.Inspections
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(i => i.PortfolioId == portfolioId && i.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has inspection history. Archive the inspection history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.Expenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has expense history. Archive the expense history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.RentalApplications
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has application history. Archive the applications instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.RecurringExpenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.StoredFiles
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(f => f.PortfolioId == portfolioId
+                && f.EntityType == EntityType
+                && f.EntityId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has document history. Archive the documents instead of deleting the unit.",
+                statusCode: 409);
+        }
     }
 
     private static string Snapshot(Unit entity) => Serialize(new Dictionary<string, object?>

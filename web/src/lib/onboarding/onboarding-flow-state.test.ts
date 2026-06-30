@@ -89,4 +89,39 @@ describe('onboarding flow state', () => {
 		assert.match(source, /openOptionalStepFromFinished\('notifications'\)/);
 		assert.match(source, /autoAdvanced && !finished && currentStep/);
 	});
+
+	it('keeps the guided import center reachable from the finished screen', () => {
+		const source = readFileSync(
+			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /data-testid="onboarding-return-import"/);
+		assert.match(source, /openImportCenterFromFinished\(\)/);
+	});
+
+	it('does not bounce example-data accounts away from guided setup', () => {
+		const source = readFileSync(
+			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.doesNotMatch(source, /redirectedFromSandbox/);
+		assert.doesNotMatch(source, /Setup runs on a live account/);
+		assert.doesNotMatch(source, /sandboxQuery\.data\?\.isSandbox === true\) return/);
+	});
+
+	it('keeps import phase help controls outside the phase button', () => {
+		const source = readFileSync(
+			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
+			'utf8'
+		);
+		const phaseButton = source.indexOf('data-testid="onboarding-import-phase-{phase.key}"');
+		const phaseButtonClose = source.indexOf('</button>', phaseButton);
+		const phaseHelp = source.indexOf('testid="onboarding-help-{phase.key}"');
+
+		assert.ok(phaseButton > -1, 'phase button should exist');
+		assert.ok(phaseButtonClose > phaseButton, 'phase button should close after opening');
+		assert.ok(phaseHelp > phaseButtonClose, 'help popover trigger must not be nested in the phase button');
+	});
 });

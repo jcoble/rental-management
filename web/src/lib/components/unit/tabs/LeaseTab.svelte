@@ -8,6 +8,8 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseDetail from '$lib/components/records/LeaseDetail.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -15,6 +17,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseRentTrackingErrors, leaseSchema, parseForm } from '$lib/schemas';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import { LEASE_STATUSES } from '$lib/leases/lease-list-state';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -45,6 +48,8 @@
 	let tenantForm = $state<SimpleTenantForm>(createSimpleTenantForm());
 	let formErrors = $state<Record<string, string>>({});
 	let tenantErrors = $state<Record<string, string>>({});
+	let createLeaseStep = $state(0);
+	let completedCreateLeaseSteps = $state<number[]>([]);
 
 	const tenantsQuery = createQuery(() => ({
 		queryKey: ['tenants', portfolioId, 'unit-lease-create', 'available-for-lease'],
@@ -64,6 +69,21 @@
 	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
 	const unitLeases = $derived(unitLeasesQuery.data?.items ?? []);
 	const availableTenants = $derived(tenantsQuery.data?.items ?? []);
+
+	const createLeaseSteps: FormStepperStep[] = [
+		{ id: 'tenants', label: 'Tenants', description: 'Existing or new' },
+		{ id: 'identity', label: 'Lease #', description: 'Reference' },
+		{ id: 'dates', label: 'Dates', description: 'Start and end' },
+		{ id: 'money', label: 'Money', description: 'Rent and deposit' },
+		{ id: 'status', label: 'Status', description: 'Tracking' },
+	];
+	const createLeaseStepFields = [
+		['tenantId', 'tenant.firstName', 'tenant.lastName', 'tenant.email', 'tenant.phone'],
+		['leaseNumber'],
+		['startDate', 'endDate'],
+		['monthlyRent', 'securityDeposit', 'lateFeeAmount', 'rentDueDay'],
+		['status', 'rentTrackingStartMode', 'rentTrackingStartDate', 'notes'],
+	] as const;
 
 	// Which lease to show: an explicit ?lease=<id> (e.g. a prior lease) wins, otherwise the
 	// unit's current lease. Inner lease tabs live in LeaseDetail's local state, so they never
@@ -120,7 +140,7 @@
 
 	function createBlankLeaseForm(): UnitLeaseCreateForm {
 		return {
-			leaseNumber: '',
+			leaseNumber: defaultLeaseNumber(),
 			propertyId: '',
 			unitId: '',
 			tenantId: '',
@@ -209,6 +229,8 @@
 		tenantMode = 'existing';
 		formErrors = {};
 		tenantErrors = {};
+		createLeaseStep = 0;
+		completedCreateLeaseSteps = [];
 	}
 
 	function openCreateLease() {
@@ -220,6 +242,8 @@
 		showCreateLease = false;
 		formErrors = {};
 		tenantErrors = {};
+		createLeaseStep = 0;
+		completedCreateLeaseSteps = [];
 	}
 
 	const createLeaseMutation = createMutation(() => ({
@@ -257,12 +281,16 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	function submitCreateLease() {
-		const tenantValidationErrors =
-			tenantMode === 'new' ? validateSimpleTenantForm(tenantForm) : {};
-		const selectedTenantIds = form.tenantIds
+	function selectedCreateLeaseTenantIds() {
+		return form.tenantIds
 			.map((id) => Number(id))
 			.filter((id) => Number.isInteger(id) && id > 0);
+	}
+
+	function createLeaseValidationState() {
+		const tenantValidationErrors =
+			tenantMode === 'new' ? validateSimpleTenantForm(tenantForm) : {};
+		const selectedTenantIds = selectedCreateLeaseTenantIds();
 		const leaseInput = {
 			...form,
 			propertyId: String(dashboard.unit.propertyId),
@@ -275,22 +303,98 @@
 			tenantMode === 'existing' && selectedTenantIds.length === 0
 				? { tenantId: 'Select at least one tenant' }
 				: {};
-		if (
-			result.errors ||
-			Object.keys(rentTrackingErrors).length > 0 ||
-			Object.keys(tenantSelectionErrors).length > 0 ||
-			Object.keys(tenantValidationErrors).length > 0
-		) {
-			const nextFormErrors = { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantSelectionErrors };
-			if (tenantMode === 'new') delete nextFormErrors.tenantId;
-			formErrors = nextFormErrors;
-			tenantErrors = tenantValidationErrors;
+		const nextFormErrors = { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantSelectionErrors };
+		if (tenantMode === 'new') delete nextFormErrors.tenantId;
+		return {
+			data: result.data,
+			formErrors: nextFormErrors,
+			tenantErrors: tenantValidationErrors,
+			selectedTenantIds,
+		};
+	}
+
+	function createLeaseStepErrorFields(
+		step: number,
+		errors: Record<string, string>,
+		simpleTenantErrors: Record<string, string>
+	) {
+		const visibleFields = new Set<string>(createLeaseStepFields[step] ?? []);
+		const formEntries = Object.entries(errors).filter(([field]) => visibleFields.has(field));
+		const tenantEntries = Object.entries(simpleTenantErrors).map(([field, message]) => [`tenant.${field}`, message] as const)
+			.filter(([field]) => visibleFields.has(field));
+		return [...formEntries, ...tenantEntries];
+	}
+
+	function firstCreateLeaseErrorStep(
+		errors: Record<string, string>,
+		simpleTenantErrors: Record<string, string>
+	) {
+		return createLeaseStepFields.findIndex((fields) => fields.some((field) => {
+			if (errors[field]) return true;
+			if (field.startsWith('tenant.')) return Boolean(simpleTenantErrors[field.replace('tenant.', '')]);
+			return false;
+		}));
+	}
+
+	function markCreateLeaseStepInvalid(step: number) {
+		completedCreateLeaseSteps = completedCreateLeaseSteps.filter((completedStep) => completedStep < step);
+	}
+
+	function validateCreateLeaseStep(step: number) {
+		const validation = createLeaseValidationState();
+		const currentEntries = createLeaseStepErrorFields(step, validation.formErrors, validation.tenantErrors);
+		const currentErrors = Object.fromEntries(currentEntries.filter(([field]) => !field.startsWith('tenant.')));
+		const currentTenantErrors = Object.fromEntries(
+			currentEntries
+				.filter(([field]) => field.startsWith('tenant.'))
+				.map(([field, message]) => [field.replace('tenant.', ''), message])
+		);
+		const currentFields = new Set<string>(createLeaseStepFields[step] ?? []);
+		const nextFormErrors = Object.fromEntries(
+			Object.entries(formErrors).filter(([field]) => !currentFields.has(field))
+		);
+		const nextTenantErrors = Object.fromEntries(
+			Object.entries(tenantErrors).filter(([field]) => !currentFields.has(`tenant.${field}`))
+		);
+		formErrors = { ...nextFormErrors, ...currentErrors };
+		tenantErrors = { ...nextTenantErrors, ...currentTenantErrors };
+		const isValid = currentEntries.length === 0;
+		if (!isValid) markCreateLeaseStepInvalid(step);
+		return isValid;
+	}
+
+	function nextCreateLeaseStep() {
+		if (!validateCreateLeaseStep(createLeaseStep)) return;
+		if (completedCreateLeaseSteps.includes(createLeaseStep)) {
+			createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
 			return;
 		}
+		completedCreateLeaseSteps = [...completedCreateLeaseSteps, createLeaseStep];
+		window.setTimeout(() => {
+			createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
+		}, 260);
+	}
+
+	function submitCreateLease() {
+		const validation = createLeaseValidationState();
+		if (
+			Object.keys(validation.formErrors).length > 0 ||
+			Object.keys(validation.tenantErrors).length > 0
+		) {
+			formErrors = validation.formErrors;
+			tenantErrors = validation.tenantErrors;
+			const firstErrorStep = firstCreateLeaseErrorStep(validation.formErrors, validation.tenantErrors);
+			if (firstErrorStep >= 0) {
+				createLeaseStep = firstErrorStep;
+				markCreateLeaseStepInvalid(firstErrorStep);
+			}
+			return;
+		}
+		if (!validation.data) return;
 		formErrors = {};
 		tenantErrors = {};
 		createLeaseMutation.mutate({
-			leaseData: { portfolioId, ...result.data, tenantIds: selectedTenantIds },
+			leaseData: { portfolioId, ...validation.data, tenantIds: validation.selectedTenantIds },
 			simpleTenant: tenantMode === 'new' ? { ...tenantForm } : null,
 		});
 	}
@@ -311,6 +415,8 @@
 		{/if}
 		<LeaseDetail
 			leaseId={selectedLeaseId}
+			expectedUnitId={dashboard.unit.id}
+			onUnitMismatch={clearSelection}
 			onDeleted={() => {
 				queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 				queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, dashboard.unit.id] });
@@ -381,7 +487,7 @@
 </div>
 
 <Dialog.Root open={showCreateLease} onOpenChange={(v) => { if (!v) closeCreateLease(); }}>
-	<Dialog.Content class="max-w-2xl" data-testid="unit-lease-create-dialog">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto" data-testid="unit-lease-create-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Add lease</Dialog.Title>
 			<Dialog.Description>
@@ -401,93 +507,139 @@
 				</div>
 			</div>
 
-			<div class="space-y-3">
-				<div class="flex flex-wrap gap-2" aria-label="Tenant mode">
-					<Button
-						type="button"
-						size="sm"
-						variant={tenantMode === 'existing' ? 'default' : 'outline'}
-						class="gap-2"
-						onclick={() => {
-					tenantMode = 'existing';
-					tenantErrors = {};
-				}}
-						data-testid="unit-lease-existing-tenant-mode"
-					>
-						<Users class="h-4 w-4" /> Existing tenant
-					</Button>
-					<Button
-						type="button"
-						size="sm"
-						variant={tenantMode === 'new' ? 'default' : 'outline'}
-						class="gap-2"
-						onclick={() => {
-							tenantMode = 'new';
-							form.tenantId = '';
-							form.tenantIds = [];
-							clearLeaseError('tenantId');
-						}}
-						data-testid="unit-lease-new-tenant-mode"
-					>
-						<UserPlus class="h-4 w-4" /> New tenant
-					</Button>
-				</div>
+			<FormStepper
+				steps={createLeaseSteps}
+				bind:currentStep={createLeaseStep}
+				completedSteps={completedCreateLeaseSteps}
+				testid="unit-lease-create-stepper"
+			>
+				{#if createLeaseStep === 0}
+					<div class="space-y-3">
+						<div class="flex flex-wrap gap-2" aria-label="Tenant mode">
+							<Button
+								type="button"
+								size="sm"
+								variant={tenantMode === 'existing' ? 'default' : 'outline'}
+								class="gap-2"
+								onclick={() => {
+									tenantMode = 'existing';
+									tenantErrors = {};
+								}}
+								data-testid="unit-lease-existing-tenant-mode"
+							>
+								<Users class="h-4 w-4" /> Existing tenant
+							</Button>
+							<Button
+								type="button"
+								size="sm"
+								variant={tenantMode === 'new' ? 'default' : 'outline'}
+								class="gap-2"
+								onclick={() => {
+									tenantMode = 'new';
+									form.tenantId = '';
+									form.tenantIds = [];
+									clearLeaseError('tenantId');
+								}}
+								data-testid="unit-lease-new-tenant-mode"
+							>
+								<UserPlus class="h-4 w-4" /> New tenant
+							</Button>
+						</div>
 
-				{#if tenantMode === 'existing'}
-					<TenantMultiSelect
-						label="Tenants"
-						tenants={availableTenants}
-						bind:selectedIds={form.tenantIds}
-						error={formErrors.tenantId}
-						disabled={tenantsQuery.isLoading}
-						testid="unit-lease-tenants-input"
-					/>
-				{:else}
-					<div class="grid gap-3 sm:grid-cols-2" data-testid="unit-lease-new-tenant-fields">
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
-							<Input data-testid="unit-lease-new-tenant-first-name" bind:value={tenantForm.firstName} placeholder="First name" />
-							{#if tenantErrors.firstName}
-								<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-first-name-error">{tenantErrors.firstName}</p>
-							{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
-							<Input data-testid="unit-lease-new-tenant-last-name" bind:value={tenantForm.lastName} placeholder="Last name" />
-							{#if tenantErrors.lastName}
-								<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-last-name-error">{tenantErrors.lastName}</p>
-							{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-							<Input data-testid="unit-lease-new-tenant-email" bind:value={tenantForm.email} placeholder="Email" />
-							{#if tenantErrors.email}
-								<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-email-error">{tenantErrors.email}</p>
-							{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="unit-lease-new-tenant-phone" bind:value={tenantForm.phone} placeholder="Phone" />
-							{#if tenantErrors.phone}
-								<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-phone-error">{tenantErrors.phone}</p>
-							{/if}
-						</div>
+						{#if tenantMode === 'existing'}
+							<TenantMultiSelect
+								label="Tenants"
+								tenants={availableTenants}
+								bind:selectedIds={form.tenantIds}
+								error={formErrors.tenantId}
+								disabled={tenantsQuery.isLoading}
+								testid="unit-lease-tenants-input"
+							/>
+						{:else}
+							<div class="grid gap-3 sm:grid-cols-2" data-testid="unit-lease-new-tenant-fields">
+								<div>
+									<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
+									<Input data-testid="unit-lease-new-tenant-first-name" bind:value={tenantForm.firstName} placeholder="First name" />
+									{#if tenantErrors.firstName}
+										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-first-name-error">{tenantErrors.firstName}</p>
+									{/if}
+								</div>
+								<div>
+									<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
+									<Input data-testid="unit-lease-new-tenant-last-name" bind:value={tenantForm.lastName} placeholder="Last name" />
+									{#if tenantErrors.lastName}
+										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-last-name-error">{tenantErrors.lastName}</p>
+									{/if}
+								</div>
+								<div>
+									<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
+									<Input
+										data-testid="unit-lease-new-tenant-email"
+										type="email"
+										autocomplete="email"
+										bind:value={tenantForm.email}
+										placeholder="Email"
+									/>
+									{#if tenantErrors.email}
+										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-email-error">{tenantErrors.email}</p>
+									{/if}
+								</div>
+								<div>
+									<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
+									<Input
+										data-testid="unit-lease-new-tenant-phone"
+										type="tel"
+										autocomplete="tel"
+										inputmode="tel"
+										mask="phone"
+										bind:value={tenantForm.phone}
+										placeholder="Phone"
+									/>
+									{#if tenantErrors.phone}
+										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-phone-error">{tenantErrors.phone}</p>
+									{/if}
+								</div>
+							</div>
+						{/if}
 					</div>
+				{:else if createLeaseStep === 1}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="identity" testidPrefix="unit-lease-create" />
+				{:else if createLeaseStep === 2}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="dates" testidPrefix="unit-lease-create" />
+				{:else if createLeaseStep === 3}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="money" testidPrefix="unit-lease-create" />
+				{:else}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="status" testidPrefix="unit-lease-create" />
 				{/if}
-			</div>
-
-			<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} testidPrefix="unit-lease-create" />
+			</FormStepper>
 		</div>
 
 		<Dialog.Footer class="mt-4">
 			<Button variant="outline" onclick={closeCreateLease} data-testid="unit-lease-create-cancel">Cancel</Button>
-			<Button
-				onclick={submitCreateLease}
-				disabled={createLeaseMutation.isPending}
-				data-testid="unit-lease-create-save"
-			>
-				{createLeaseMutation.isPending ? 'Saving…' : 'Save lease'}
-			</Button>
+			{#if createLeaseStep > 0}
+				<Button
+					variant="outline"
+					onclick={() => (createLeaseStep = Math.max(createLeaseStep - 1, 0))}
+					data-testid="unit-lease-create-back"
+				>
+					Back
+				</Button>
+			{/if}
+			{#if createLeaseStep < createLeaseSteps.length - 1}
+				<StepperNextButton
+					testid="unit-lease-create-next"
+					onclick={nextCreateLeaseStep}
+					complete={completedCreateLeaseSteps.includes(createLeaseStep)}
+				/>
+			{:else}
+				<Button
+					onclick={submitCreateLease}
+					disabled={createLeaseMutation.isPending}
+					data-testid="unit-lease-create-save"
+				>
+					{createLeaseMutation.isPending ? 'Saving…' : 'Save lease'}
+				</Button>
+			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

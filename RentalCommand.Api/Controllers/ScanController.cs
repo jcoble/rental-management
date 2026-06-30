@@ -399,7 +399,13 @@ public class ScanController : ManagementControllerBase
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath, ct);
 
-        var response = ScanDraftResponse.FromEntity(draft, linkedFile?.EntityType, linkedFile?.EntityId);
+        var createdUnitId = await ResolveCreatedUnitIdAsync(
+            portfolioId, linkedFile?.EntityType, linkedFile?.EntityId, ct);
+        var response = ScanDraftResponse.FromEntity(
+            draft,
+            linkedFile?.EntityType,
+            linkedFile?.EntityId,
+            createdUnitId);
 
         // For a lease draft, attach the property/unit import proposal (link-existing vs create-new) so the
         // review UI can show what confirming will do — the empty-portfolio bootstrap is visible up front.
@@ -480,13 +486,171 @@ public class ScanController : ManagementControllerBase
                 .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
                 .ToDictionaryAsync(f => f.FilePath, ct);
 
+        var createdRefs = new List<CreatedEntityRef>();
+        foreach (var draft in drafts)
+        {
+            if (linkedFiles.TryGetValue(draft.FilePath, out var linkedFile)
+                && linkedFile.EntityId is > 0
+                && !string.IsNullOrWhiteSpace(linkedFile.EntityType))
+            {
+                createdRefs.Add(new CreatedEntityRef(linkedFile.EntityType, linkedFile.EntityId.Value));
+            }
+        }
+
+        var createdUnitIds = await ResolveCreatedUnitIdsAsync(portfolioId, createdRefs, ct);
+
         var items = drafts.Select(d =>
         {
             linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
-            return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId);
+            int? createdUnitId = null;
+            if (linkedFile?.EntityId is > 0 && !string.IsNullOrWhiteSpace(linkedFile.EntityType))
+            {
+                createdUnitId = createdUnitIds.GetValueOrDefault((linkedFile.EntityType, linkedFile.EntityId.Value));
+            }
+
+            return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId, createdUnitId);
         }).ToList();
 
         return new ScanDraftListResponse(items, totalCount, listQuery.NormalizedSkip, listQuery.NormalizedTake);
+    }
+
+    private async Task<IReadOnlyDictionary<(string EntityType, int EntityId), int?>> ResolveCreatedUnitIdsAsync(
+        int portfolioId,
+        IReadOnlyList<CreatedEntityRef> refs,
+        CancellationToken ct)
+    {
+        var unitIds = new Dictionary<(string, int), int?>();
+        if (refs.Count == 0)
+        {
+            return unitIds;
+        }
+
+        List<int> Ids(string type)
+        {
+            var ids = new List<int>();
+            foreach (var item in refs)
+            {
+                if (string.Equals(item.EntityType, type, StringComparison.OrdinalIgnoreCase)
+                    && !ids.Contains(item.EntityId))
+                {
+                    ids.Add(item.EntityId);
+                }
+            }
+
+            return ids;
+        }
+
+        async Task AddAsync(string type, IQueryable<CreatedUnitRefRow> projected)
+        {
+            foreach (var row in await projected.ToListAsync(ct))
+            {
+                unitIds[(type, row.Id)] = row.UnitId;
+            }
+        }
+
+        var paymentIds = Ids("Payment");
+        if (paymentIds.Count > 0)
+        {
+            await AddAsync("Payment", _db.Payments.AsNoTracking()
+                .Where(p => p.PortfolioId == portfolioId && paymentIds.Contains(p.Id))
+                .Select(p => new CreatedUnitRefRow { Id = p.Id, UnitId = p.Lease != null ? (int?)p.Lease.UnitId : null }));
+        }
+
+        var expenseIds = Ids("Expense");
+        if (expenseIds.Count > 0)
+        {
+            await AddAsync("Expense", _db.Expenses.AsNoTracking()
+                .Where(e => e.PortfolioId == portfolioId && expenseIds.Contains(e.Id))
+                .Select(e => new CreatedUnitRefRow
+                {
+                    Id = e.Id,
+                    UnitId = e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null),
+                }));
+        }
+
+        var workOrderIds = Ids("WorkOrder");
+        if (workOrderIds.Count > 0)
+        {
+            await AddAsync("WorkOrder", _db.WorkOrders.AsNoTracking()
+                .Where(w => w.PortfolioId == portfolioId && workOrderIds.Contains(w.Id))
+                .Select(w => new CreatedUnitRefRow { Id = w.Id, UnitId = w.UnitId }));
+        }
+
+        var leaseIds = Ids("Lease");
+        if (leaseIds.Count > 0)
+        {
+            await AddAsync("Lease", _db.Leases.AsNoTracking()
+                .Where(l => l.PortfolioId == portfolioId && leaseIds.Contains(l.Id))
+                .Select(l => new CreatedUnitRefRow { Id = l.Id, UnitId = l.UnitId }));
+        }
+
+        var applicationIds = Ids("Application");
+        applicationIds.AddRange(Ids("RentalApplication").Where(id => !applicationIds.Contains(id)));
+        if (applicationIds.Count > 0)
+        {
+            var rows = await _db.RentalApplications.AsNoTracking()
+                .Where(a => a.PortfolioId == portfolioId && applicationIds.Contains(a.Id))
+                .Select(a => new CreatedUnitRefRow { Id = a.Id, UnitId = a.UnitId })
+                .ToListAsync(ct);
+
+            foreach (var row in rows)
+            {
+                unitIds[("Application", row.Id)] = row.UnitId;
+                unitIds[("RentalApplication", row.Id)] = row.UnitId;
+            }
+        }
+
+        return unitIds;
+    }
+
+    private async Task<int?> ResolveCreatedUnitIdAsync(
+        int portfolioId,
+        string? entityType,
+        int? entityId,
+        CancellationToken ct)
+    {
+        if (entityId is not > 0 || string.IsNullOrWhiteSpace(entityType))
+        {
+            return null;
+        }
+
+        return entityType switch
+        {
+            "Payment" => await _db.Payments
+                .AsNoTracking()
+                .Where(p => p.PortfolioId == portfolioId && p.Id == entityId.Value)
+                .Select(p => p.Lease != null ? (int?)p.Lease.UnitId : null)
+                .FirstOrDefaultAsync(ct),
+            "Expense" => await _db.Expenses
+                .AsNoTracking()
+                .Where(e => e.PortfolioId == portfolioId && e.Id == entityId.Value)
+                .Select(e => e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null))
+                .FirstOrDefaultAsync(ct),
+            "WorkOrder" => await _db.WorkOrders
+                .AsNoTracking()
+                .Where(w => w.PortfolioId == portfolioId && w.Id == entityId.Value)
+                .Select(w => w.UnitId)
+                .FirstOrDefaultAsync(ct),
+            "Lease" => await _db.Leases
+                .AsNoTracking()
+                .Where(l => l.PortfolioId == portfolioId && l.Id == entityId.Value)
+                .Select(l => (int?)l.UnitId)
+                .FirstOrDefaultAsync(ct),
+            "Application" or "RentalApplication" => await _db.RentalApplications
+                .AsNoTracking()
+                .Where(a => a.PortfolioId == portfolioId && a.Id == entityId.Value)
+                .Select(a => a.UnitId)
+                .FirstOrDefaultAsync(ct),
+            _ => null,
+        };
+    }
+
+    private readonly record struct CreatedEntityRef(string EntityType, int EntityId);
+
+    private sealed class CreatedUnitRefRow
+    {
+        public int Id { get; set; }
+        public int? UnitId { get; set; }
     }
 
     // -------------------------------------------------------------------------
@@ -532,9 +696,16 @@ public class ScanController : ManagementControllerBase
     [HttpGet("{id:int}/file")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> DownloadFile(int id, [FromQuery] bool full, CancellationToken ct)
+    public async Task<IActionResult> DownloadFile(int id, [FromQuery] string? full, CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
+
+        // Accept both ?full=1 and ?full=true (case-insensitive). A plain bool param would
+        // 400 on "1"/"0", so parse the flag ourselves; anything else (null, empty, "0",
+        // "false", junk) means "serve the thumbnail" rather than erroring.
+        var wantsFull = full is not null
+            && (full.Equals("1", StringComparison.OrdinalIgnoreCase)
+                || full.Equals("true", StringComparison.OrdinalIgnoreCase));
 
         var draft = await _db.ScanDrafts
             .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
@@ -543,9 +714,9 @@ public class ScanController : ManagementControllerBase
             return NotFound(new { error = "Scan draft not found" });
 
         // Serve the small JPEG preview by default so clients (esp. phones) don't pull the
-        // full-resolution original. The original is available on ?full=1. Fall back to the
-        // original if the thumbnail is missing/unreadable (older scans, PDFs, etc.).
-        if (!full && !string.IsNullOrEmpty(draft.ThumbnailPath))
+        // full-resolution original. The original is available on ?full=1 or ?full=true. Fall
+        // back to the original if the thumbnail is missing/unreadable (older scans, PDFs, etc.).
+        if (!wantsFull && !string.IsNullOrEmpty(draft.ThumbnailPath))
         {
             try
             {
@@ -614,12 +785,12 @@ public class ScanController : ManagementControllerBase
         // entityType + entityId for a generic approach).
         return result.EntityType switch
         {
-            "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
-            "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
-            "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
-            "Application" => Ok(new { applicationId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
-            "Loan" => Ok(new { loanId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
-            _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+            "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            "Application" => Ok(new { applicationId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            "Loan" => Ok(new { loanId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
         };
     }
 

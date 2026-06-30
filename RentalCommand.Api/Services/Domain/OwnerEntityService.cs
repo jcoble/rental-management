@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -53,27 +54,58 @@ public class OwnerEntityService : IOwnerEntityService
 
         var totalCount = await q.CountAsync(ct);
 
-        var items = await q
+        var items = await ProjectOwnerResponses(q, portfolioId)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
         return new OwnerEntityListResponse
         {
-            Items = items.Select(OwnerEntityResponse.FromEntity).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
     }
 
+    private IQueryable<OwnerEntityResponse> ProjectOwnerResponses(IQueryable<OwnerEntity> query, int portfolioId)
+    {
+        return query.Select(o => new OwnerEntityResponse
+        {
+            Id = o.Id,
+            PortfolioId = o.PortfolioId,
+            OwnerEntityType = o.OwnerEntityType,
+            Name = o.Name,
+            TaxId = o.TaxId,
+            AddressLine1 = o.AddressLine1,
+            AddressLine2 = o.AddressLine2,
+            City = o.City,
+            State = o.State,
+            PostalCode = o.PostalCode,
+            Address = o.Address,
+            Phone = o.Phone,
+            Email = o.Email,
+            AssignedPropertyCount = _db.Properties
+                .Count(p => p.PortfolioId == portfolioId && p.OwnerEntityId == o.Id),
+            IsPrimary = o.IsPrimary,
+            CreatedAt = o.CreatedAt,
+            UpdatedAt = o.UpdatedAt,
+        });
+    }
+
+    private async Task<OwnerEntityResponse?> GetProjectedAsync(int portfolioId, int id, CancellationToken ct = default)
+    {
+        return await ProjectOwnerResponses(
+                _db.OwnerEntities
+                    .AsNoTracking()
+                    .Where(o => o.Id == id && o.PortfolioId == portfolioId),
+                portfolioId)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.OwnerEntities
-            .AsNoTracking()
-            .FirstOrDefaultAsync(o => o.Id == id && o.PortfolioId == portfolioId, ct);
-
-        return entity == null ? null : OwnerEntityResponse.FromEntity(entity);
+        return await GetProjectedAsync(portfolioId, id, ct);
     }
 
     public async Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default)
@@ -103,7 +135,8 @@ public class OwnerEntityService : IOwnerEntityService
         _db.OwnerEntities.Add(entity);
         await _db.SaveChangesAsync(ct);
 
-        var response = OwnerEntityResponse.FromEntity(entity);
+        var response = await GetProjectedAsync(portfolioId, entity.Id, ct)
+            ?? OwnerEntityResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -135,12 +168,17 @@ public class OwnerEntityService : IOwnerEntityService
 
         await _db.SaveChangesAsync(ct);
 
-        var response = OwnerEntityResponse.FromEntity(entity);
+        var response = await GetProjectedAsync(portfolioId, entity.Id, ct)
+            ?? OwnerEntityResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(
+        int portfolioId,
+        int id,
+        DeleteOwnerEntityOptions? options = null,
+        CancellationToken ct = default)
     {
         var entity = await _db.OwnerEntities
             .FirstOrDefaultAsync(o => o.Id == id && o.PortfolioId == portfolioId, ct);
@@ -149,7 +187,30 @@ public class OwnerEntityService : IOwnerEntityService
             return false;
         }
 
+        var propertyCount = await _db.Properties
+            .AsNoTracking()
+            .CountAsync(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id, ct);
+        if (propertyCount > 0)
+        {
+            if (options?.ClearPropertyAssignments != true)
+            {
+                var propertyNoun = propertyCount == 1 ? "property" : "properties";
+                var targetNoun = propertyCount == 1 ? "that property" : "those properties";
+                throw new DomainValidationException(
+                    $"This owner is assigned to {propertyCount} {propertyNoun}. Please reassign {targetNoun} or clear the owner before deleting this owner.",
+                    statusCode: 409);
+            }
+
+            var now = DateTime.UtcNow;
+            await _db.Properties
+                .Where(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(p => p.OwnerEntityId, (int?)null)
+                    .SetProperty(p => p.UpdatedAt, now), ct);
+        }
+
         entity.DeletedAt = DateTime.UtcNow;
+        entity.UpdatedAt = entity.DeletedAt.Value;
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

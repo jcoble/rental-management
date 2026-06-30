@@ -486,7 +486,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, expense.Id, null, "Expense");
+        return new ScanConfirmResult(true, expense.Id, null, "Expense", expense.UnitId);
     }
 
     private async Task<int?> FindOrCreateVendorForScannedExpenseAsync(
@@ -652,7 +652,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, payment.Id, null, "Payment");
+        return new ScanConfirmResult(true, payment.Id, null, "Payment", payment.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -755,7 +755,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder");
+        return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder", workOrder.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -917,7 +917,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, lease.Id, null, "Lease");
+        return new ScanConfirmResult(true, lease.Id, null, "Lease", lease.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -1035,7 +1035,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, application.Id, null, "Application");
+        return new ScanConfirmResult(true, application.Id, null, "Application", application.UnitId);
     }
 
     // -------------------------------------------------------------------------
@@ -1068,6 +1068,9 @@ public sealed class ScanService : IScanService
 
         if (string.IsNullOrWhiteSpace(fields.Lender))
             return new ScanConfirmResult(false, null, "Lender is required");
+
+        if (!ValidateAndNormalizeLoanFinancialFields(fields, out var financialError))
+            return new ScanConfirmResult(false, null, financialError);
 
         var request = new CreateLoanRequest
         {
@@ -1158,6 +1161,66 @@ public sealed class ScanService : IScanService
             : $"{extractedNotes!.Trim()} ({provenance})";
         return note.Length > 2000 ? note[..2000] : note;
     }
+
+    private static bool ValidateAndNormalizeLoanFinancialFields(LoanDraftFields fields, out string? error)
+    {
+        if (!TryNormalizeLoanDecimal(fields.OriginalAmount, "Original loan amount", 0m, 999_999_999m, 2, out var originalAmount, out error))
+            return false;
+        fields.OriginalAmount = originalAmount;
+
+        if (!TryNormalizeLoanDecimal(fields.CurrentBalance, "Current loan balance", 0m, 999_999_999m, 2, out var currentBalance, out error))
+            return false;
+        fields.CurrentBalance = currentBalance;
+
+        // Scan-confirm is for mortgages/closing disclosures. A rate like 65 usually means 6.5 was
+        // misread; reject it for human review instead of generating a bad amortization schedule.
+        if (!TryNormalizeLoanDecimal(fields.AnnualInterestRatePct, "Annual interest rate", 0m, 30m, 4, out var rate, out error))
+            return false;
+        fields.AnnualInterestRatePct = rate;
+
+        if (!TryNormalizeLoanDecimal(fields.MonthlyPrincipalInterest, "Monthly principal and interest", 0m, 9_999_999m, 2, out var monthlyPi, out error))
+            return false;
+        fields.MonthlyPrincipalInterest = monthlyPi;
+
+        if (!TryNormalizeLoanDecimal(fields.MonthlyEscrow, "Monthly escrow", 0m, 9_999_999m, 2, out var monthlyEscrow, out error))
+            return false;
+        fields.MonthlyEscrow = monthlyEscrow;
+
+        error = null;
+        return true;
+    }
+
+    private static bool TryNormalizeLoanDecimal(
+        decimal? raw,
+        string label,
+        decimal min,
+        decimal max,
+        int scale,
+        out decimal? normalized,
+        out string? error)
+    {
+        if (!raw.HasValue)
+        {
+            normalized = null;
+            error = null;
+            return true;
+        }
+
+        var value = raw.Value;
+        if (value < min || value > max)
+        {
+            normalized = null;
+            error = $"{label} must be between {FormatLoanDecimal(min)} and {FormatLoanDecimal(max)}.";
+            return false;
+        }
+
+        normalized = decimal.Round(value, scale, MidpointRounding.AwayFromZero);
+        error = null;
+        return true;
+    }
+
+    private static string FormatLoanDecimal(decimal value)
+        => value.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Folds the scanned-application details that have no dedicated <see cref="Core.Entities.RentalApplication"/>

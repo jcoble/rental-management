@@ -7,6 +7,7 @@
 		NotificationChannelType,
 		NotificationSeverity,
 		SmsProviderMeta,
+		LeaseEndAutoAction,
 	} from '$lib/api/types/notification';
 	import { getAuthState, currentUserIsAdmin, hasAnyRole } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
@@ -20,6 +21,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import TimeZoneSelect from '$lib/components/shared/TimeZoneSelect.svelte';
+	import NoticeTemplatesSection from '$lib/components/settings/NoticeTemplatesSection.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import WalkMeThrough from '$lib/components/onboarding/WalkMeThrough.svelte';
 	import {
@@ -156,6 +158,9 @@
 		smsCredentialASet: false,
 		smsCredentialBSet: false,
 		smsCredentialCSet: false,
+		autoSendRentReminder: false,
+		autoSendLateRent: false,
+		leaseEndAutoAction: 'Draft' as LeaseEndAutoAction,
 	});
 
 	// Provider catalogue: drives the <Select> and the labels of the three generic credential slots.
@@ -333,6 +338,7 @@
 	// (falls back to defaults) so a landlord is never locked out by a bad legacy value.
 	function loadSettingsModel(settingsJson: string | null | undefined) {
 		let parsed: Record<string, unknown> = {};
+		let rowId = 0;
 		try {
 			const candidate = JSON.parse(settingsJson || '{}');
 			if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
@@ -363,12 +369,13 @@
 			// Surface scalar extras as editable advanced rows; keep nested/complex values
 			// untouched in `preserved` so the structured editor never lossily flattens them.
 			if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
-				customRows.push({ id: nextRowId++, key, value: value === null ? '' : String(value) });
+				customRows.push({ id: rowId++, key, value: value === null ? '' : String(value) });
 			} else {
 				preserved[key] = value;
 			}
 		}
-		if (customRows.length > 0) showAdvanced = true;
+		nextRowId = rowId;
+		showAdvanced = customRows.length > 0;
 
 		settingsModel = { rentCollectionDay, messaging, customRows, preserved };
 	}
@@ -468,6 +475,9 @@
 				smsCredentialASet: data.smsCredentialASet,
 				smsCredentialBSet: data.smsCredentialBSet,
 				smsCredentialCSet: data.smsCredentialCSet,
+				autoSendRentReminder: data.autoSendRentReminder,
+				autoSendLateRent: data.autoSendLateRent,
+				leaseEndAutoAction: data.leaseEndAutoAction,
 			};
 			applyChannelPreferences(data.channelPreferences ?? []);
 			smsCredentialAInput = '';
@@ -516,6 +526,9 @@
 				smsCredentialA: smsCredentialAInput.length > 0 ? smsCredentialAInput : undefined,
 				smsCredentialB: smsCredentialBInput.length > 0 ? smsCredentialBInput : undefined,
 				smsCredentialC: smsCredentialCInput.length > 0 ? smsCredentialCInput : undefined,
+				autoSendRentReminder: notificationSettingsForm.autoSendRentReminder,
+				autoSendLateRent: notificationSettingsForm.autoSendLateRent,
+				leaseEndAutoAction: notificationSettingsForm.leaseEndAutoAction,
 				channelPreferences: channelPreferencesPayload(),
 			}),
 		onSuccess: (result) => {
@@ -537,6 +550,9 @@
 				smsCredentialASet: result.smsCredentialASet,
 				smsCredentialBSet: result.smsCredentialBSet,
 				smsCredentialCSet: result.smsCredentialCSet,
+				autoSendRentReminder: result.autoSendRentReminder,
+				autoSendLateRent: result.autoSendLateRent,
+				leaseEndAutoAction: result.leaseEndAutoAction,
 			};
 			applyChannelPreferences(result.channelPreferences ?? []);
 			smsCredentialAInput = '';
@@ -706,9 +722,10 @@
 									</label>
 									<Input
 										id="settings-rent-collection-day"
-										type="number"
-										min="1"
-										max="31"
+										type="text"
+										inputmode="numeric"
+										maxlength={2}
+										mask="integer"
 										bind:value={settingsModel.rentCollectionDay}
 										data-testid="settings-rent-collection-day"
 									/>
@@ -966,9 +983,10 @@
 								<label for="settings-briefing-hour" class="mb-1 block text-xs text-muted-foreground">Send Hour Local</label>
 								<Input
 									id="settings-briefing-hour"
-									type="number"
-									min="0"
-									max="23"
+									type="text"
+									inputmode="numeric"
+									maxlength={2}
+									mask="integer"
 									bind:value={notificationSettingsForm.dailyBriefingSendHourLocal}
 									data-testid="settings-briefing-hour"
 								/>
@@ -1023,6 +1041,15 @@
 						</p>
 					</Card.Content>
 				</Card.Root>
+
+				<!-- Notice message templates + recurring auto-send toggles + the single lease-end auto action.
+				     These bind to notificationSettingsForm and persist via the same delivery-settings save. -->
+				<NoticeTemplatesSection
+					settings={notificationSettingsForm}
+					onSaveSettings={() => saveNotificationSettingsMutation.mutate()}
+					savingSettings={saveNotificationSettingsMutation.isPending}
+					settingsDisabled={notificationSettingsQuery.isLoading}
+				/>
 
 				{#if canBroadcast}
 					<!-- Broadcast: a one-off announcement, not a stored setting. Lives under Notifications. -->
@@ -1133,9 +1160,10 @@
 								<label for="settings-rent-lead-days" class="mb-1 block text-xs text-muted-foreground">Rent Lead Days</label>
 								<Input
 									id="settings-rent-lead-days"
-									type="number"
-									min="0"
-									max="31"
+									type="text"
+									inputmode="numeric"
+									maxlength={2}
+									mask="integer"
 									bind:value={notificationSettingsForm.rentChargeLeadDays}
 									data-testid="settings-rent-lead-days"
 								/>
@@ -1145,9 +1173,10 @@
 								<label for="settings-late-grace-days" class="mb-1 block text-xs text-muted-foreground">Late Fee Grace Days</label>
 								<Input
 									id="settings-late-grace-days"
-									type="number"
-									min="0"
-									max="60"
+									type="text"
+									inputmode="numeric"
+									maxlength={2}
+									mask="integer"
 									bind:value={notificationSettingsForm.lateFeeGraceDays}
 									data-testid="settings-late-grace-days"
 								/>
@@ -1157,9 +1186,10 @@
 								<label for="settings-lease-reminder-days" class="mb-1 block text-xs text-muted-foreground">Lease Reminder Days</label>
 								<Input
 									id="settings-lease-reminder-days"
-									type="number"
-									min="1"
-									max="365"
+									type="text"
+									inputmode="numeric"
+									maxlength={3}
+									mask="integer"
 									bind:value={notificationSettingsForm.leaseExpiryReminderDays}
 									data-testid="settings-lease-reminder-days"
 								/>
@@ -1445,16 +1475,16 @@
 		<!-- ─────────────────────────── SETUP & IMPORT ─────────────────────────── -->
 		<Tabs.Content value="setup">
 			<div class="space-y-4">
-				{@render sectionIntro(section('setup'))}
-				<Card.Root class="gap-0 py-0" data-testid="settings-setup-link">
-					<Card.Content class="grid gap-3 p-5 sm:grid-cols-2">
-						<div class="rounded-lg border border-border bg-muted/30 p-4">
-							<p class="text-sm font-semibold">Guided setup</p>
-							<p class="mb-3 text-xs text-muted-foreground">Walk step-by-step through your portfolio, owner, properties, tenants, and first lease.</p>
-							<Button variant="outline" href="/onboarding?from=settings" data-testid="settings-setup-wizard">
-								Start guided setup <ArrowRight class="ml-1.5 h-4 w-4" />
-							</Button>
-						</div>
+					{@render sectionIntro(section('setup'))}
+					<Card.Root class="gap-0 py-0" data-testid="settings-setup-link">
+						<Card.Content class="grid gap-3 p-5 sm:grid-cols-2">
+							<div class="rounded-lg border border-border bg-muted/30 p-4">
+								<p class="text-sm font-semibold">Setup & Import</p>
+								<p class="mb-3 text-xs text-muted-foreground">Walk step-by-step through your portfolio, owner, properties, tenants, and first lease.</p>
+								<Button variant="outline" href="/onboarding?from=settings" data-testid="settings-setup-wizard">
+									Open setup & import <ArrowRight class="ml-1.5 h-4 w-4" />
+								</Button>
+							</div>
 						<div class="rounded-lg border border-border bg-muted/30 p-4">
 							<p class="text-sm font-semibold">Import from a spreadsheet</p>
 							<p class="mb-3 text-xs text-muted-foreground">Already have a list? Bring properties, tenants, and leases in from a spreadsheet — the app reads it and makes drafts to confirm.</p>

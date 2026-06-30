@@ -48,6 +48,37 @@ public class LeaseService : ILeaseService
     private static bool OccupiesUnit(LeaseStatus status)
         => status == LeaseStatus.Active || status == LeaseStatus.NoticeGiven;
 
+    private async Task<string> ResolveLeaseNumberAsync(
+        int portfolioId,
+        string? requestedLeaseNumber,
+        DateTime startUtc,
+        CancellationToken ct)
+    {
+        var trimmed = requestedLeaseNumber?.Trim();
+        if (!string.IsNullOrWhiteSpace(trimmed))
+        {
+            return trimmed;
+        }
+
+        var prefix = $"L-{startUtc.Year}-";
+        var existingForYear = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId && EF.Functions.Like(l.LeaseNumber, prefix + "%"))
+            .CountAsync(ct);
+
+        for (var next = existingForYear + 1; ; next++)
+        {
+            var candidate = $"{prefix}{next:000}";
+            var exists = await _db.Leases
+                .AsNoTracking()
+                .AnyAsync(l => l.PortfolioId == portfolioId && l.LeaseNumber == candidate, ct);
+            if (!exists)
+            {
+                return candidate;
+            }
+        }
+    }
+
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _storage;
@@ -605,6 +636,7 @@ public class LeaseService : ILeaseService
                 p.PaymentType,
                 p.Status,
                 p.Amount,
+                p.AmountPaid,
                 p.DueDate,
                 p.PaidDate,
                 p.Method,
@@ -632,7 +664,7 @@ public class LeaseService : ILeaseService
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
 
         var entries = payments
-            .Select(p =>
+            .SelectMany(p =>
             {
                 // A collected payment credits the tenant's balance (money in, shown positive). An
                 // outstanding charge debits it (money owed, shown negative) so the running total reads
@@ -640,22 +672,54 @@ public class LeaseService : ILeaseService
                 var isCollected = p.Status == PaymentStatus.Paid;
                 var signedAmount = isCollected ? p.Amount : -p.Amount;
 
-                return new LedgerTransactionResponse
+                var rows = new List<LedgerTransactionResponse>
                 {
-                    Date = p.LedgerDate,
-                    Type = isCollected ? "Payment" : "Charge",
-                    Id = p.Id,
-                    Description = p.PaymentType.ToString(),
-                    Amount = signedAmount,
-                    PropertyId = lease.PropertyId,
-                    PropertyName = lease.Property?.Name,
-                    Counterparty = tenantName,
-                    Category = p.PaymentType.ToString(),
-                    Status = p.Status.ToString(),
-                    SourceHref = $"/accounting/payments/{p.Id}",
-                    Explanation = LedgerExplanation.ForPayment(
-                        p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
+                    new()
+                    {
+                        Date = p.LedgerDate,
+                        Type = isCollected ? "Payment" : "Charge",
+                        Id = p.Id,
+                        Description = p.PaymentType.ToString(),
+                        Amount = signedAmount,
+                        PropertyId = lease.PropertyId,
+                        PropertyName = lease.Property?.Name,
+                        Counterparty = tenantName,
+                        Category = p.PaymentType.ToString(),
+                        Status = p.Status.ToString(),
+                        SourceHref = $"/accounting/payments/{p.Id}",
+                        Explanation = LedgerExplanation.ForPayment(
+                            p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
+                    },
                 };
+
+                // A Partial is billed at its full Amount (the charge above) but has already collected
+                // AmountPaid in cash. Surface that collection as a companion payment line so the money is
+                // visible on the ledger instead of only in the headline "Paid" total — the charge
+                // (−Amount) and this companion (+AmountPaid) net to the still-owed remainder. The headline
+                // Charged/Paid/Balance are a separate DB aggregate, so emitting this line does not
+                // double-count.
+                var collectedSoFar = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : 0m;
+                if (collectedSoFar > 0m)
+                {
+                    rows.Add(new LedgerTransactionResponse
+                    {
+                        Date = p.LedgerDate,
+                        Type = "Payment",
+                        Id = p.Id,
+                        Description = p.PaymentType.ToString(),
+                        Amount = collectedSoFar,
+                        PropertyId = lease.PropertyId,
+                        PropertyName = lease.Property?.Name,
+                        Counterparty = tenantName,
+                        Category = p.PaymentType.ToString(),
+                        Status = p.Status.ToString(),
+                        SourceHref = $"/accounting/payments/{p.Id}",
+                        Explanation = LedgerExplanation.ForPartialCollected(
+                            p.PaymentType, collectedSoFar, p.Amount, p.PaidDate, p.DueDate, p.Method),
+                    });
+                }
+
+                return rows;
             })
             .ToList();
 
@@ -663,33 +727,32 @@ public class LeaseService : ILeaseService
         // "Paid" is what's been collected. Balance (charged − paid) is exactly what's still owed.
         // Waived/Failed/Refunded rows aren't money owed and weren't collected, so they're excluded
         // from both totals and net to zero in the balance. Both totals are computed SQL-side as a single
-        // grouped-by-status aggregate (SUM per status in the database); only the handful of status rows
-        // come back, and the relevant statuses are summed from that tiny grouped result.
-        var statusTotals = await paymentsQuery
-            .GroupBy(p => p.Status)
+        // aggregate over the whole payment set.
+        var ledgerTotals = await paymentsQuery
+            .GroupBy(_ => 1)
             .Select(g => new
             {
-                Status = g.Key,
-                Total = g.Sum(p => p.Amount),
-                // Cash collected against this status' charges: only a Partial carries a split AmountPaid.
-                Collected = g.Sum(p => p.AmountPaid ?? 0m),
+                Charged = g.Sum(p =>
+                    p.Status == PaymentStatus.Scheduled ||
+                    p.Status == PaymentStatus.Partial ||
+                    p.Status == PaymentStatus.Late ||
+                    p.Status == PaymentStatus.Paid
+                        ? p.Amount
+                        : 0m),
+                Paid = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid
+                        ? p.Amount
+                        : p.Status == PaymentStatus.Partial
+                            ? p.AmountPaid ?? 0m
+                            : 0m),
             })
-            .ToListAsync(ct);
+            .SingleOrDefaultAsync(ct);
 
         // Charged = every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
-        var totalCharged = statusTotals
-            .Where(s => s.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
-                or PaymentStatus.Late or PaymentStatus.Paid)
-            .Sum(s => s.Total);
+        var totalCharged = ledgerTotals?.Charged ?? 0m;
         // Paid = the full Amount of Paid charges plus the collected-so-far of Partial charges; the
-        // Partial remainder stays in the balance (Balance = Charged − Paid). The grouped sums above are
-        // already DB-side aggregates over the tiny per-status result.
-        var totalPaid = statusTotals
-            .Where(s => s.Status == PaymentStatus.Paid)
-            .Sum(s => s.Total)
-            + statusTotals
-                .Where(s => s.Status == PaymentStatus.Partial)
-                .Sum(s => s.Collected);
+        // Partial remainder stays in the balance (Balance = Charged − Paid).
+        var totalPaid = ledgerTotals?.Paid ?? 0m;
 
         if (opening != null)
         {
@@ -752,6 +815,7 @@ public class LeaseService : ILeaseService
 
         var startUtc = request.StartDate.ToUtc();
         var endUtc = request.EndDate.ToUtc();
+        var leaseNumber = await ResolveLeaseNumberAsync(portfolioId, request.LeaseNumber, startUtc, ct);
 
         // Clean 400 for an inverted range before the DB CHECK constraint turns it into a raw 500.
         EnsureValidDateRange(startUtc, endUtc);
@@ -774,7 +838,7 @@ public class LeaseService : ILeaseService
             PropertyId = request.PropertyId,
             UnitId = request.UnitId,
             TenantId = tenantIds[0],
-            LeaseNumber = request.LeaseNumber,
+            LeaseNumber = leaseNumber,
             Status = request.Status,
             StartDate = startUtc,
             EndDate = endUtc,
@@ -854,12 +918,12 @@ public class LeaseService : ILeaseService
         // 2. Date range: clean 400 before the DB CHECK constraint would 500.
         EnsureValidDateRange(newStartUtc, newEndUtc);
 
-        // 3. Double-booking: when this edit ACTIVATES the lease (a genuine new occupation of the unit —
-        //    Draft/Pending/terminal → Active/NoticeGiven), reject if another occupying lease already holds
-        //    the unit over an overlapping range. Editing an already-occupying lease (e.g. a rent change on
-        //    an Active lease) does NOT re-run the check, so it never trips on pre-existing data; the
-        //    excluded-self clause also keeps a no-op safe.
-        if (OccupiesUnit(newStatus) && !OccupiesUnit(prevStatus))
+        // 3. Double-booking: when this edit makes the lease occupy the unit, or changes the date range of
+        //    a lease already occupying the unit, reject if another occupying lease holds an overlapping
+        //    range. A rent-only edit on an already-occupying lease does not re-run the check, so legacy
+        //    overlapping data is not blocked unless the user changes the occupancy dates/status.
+        var dateRangeChanged = newStartUtc != entity.StartDate || newEndUtc != entity.EndDate;
+        if (OccupiesUnit(newStatus) && (!OccupiesUnit(prevStatus) || dateRangeChanged))
         {
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, entity.UnitId, entity.Id, newStartUtc, newEndUtc, ct);
         }

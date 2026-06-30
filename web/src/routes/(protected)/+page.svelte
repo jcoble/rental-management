@@ -7,6 +7,7 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Dashboard, DashboardActivity } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { recordHref, type RecordType } from '$lib/navigation/record-href';
 	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, ArrowRight, ChevronRight, CircleCheckBig, ListChecks } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -41,18 +42,38 @@
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
 	}
 
-	// Resolve a briefing action item to the record it's about, so a to-do deep-links
-	// straight to the lease/payment/work-order. Keep in sync with the server's
-	// EntityType strings in DailyBriefingService (WorkOrder/Payment/Lease/Appointment/Inspection).
+	function recordTypeForEntity(entityType: string | null | undefined): RecordType | null {
+		switch (entityType) {
+			case 'WorkOrder':
+				return 'workOrder';
+			case 'Payment':
+				return 'payment';
+			case 'Lease':
+				return 'lease';
+			case 'Expense':
+				return 'expense';
+			case 'RentalApplication':
+			case 'Application':
+				return 'application';
+			default:
+				return null;
+		}
+	}
+
+	function recordEntityHref(entityType: string | null | undefined, entityId: number | null | undefined, unitId?: number | null): string | null {
+		if (!entityType || entityId == null) return null;
+		const type = recordTypeForEntity(entityType);
+		if (type) return recordHref(type, { id: entityId, unitId });
+		return null;
+	}
+
+	// Resolve a briefing action item to the record it's about. Unit-tied records deep-link into the
+	// unit Command Center tab; records without a unit keep their generic detail page.
 	function bulletHref(bullet: BriefingBullet): string | null {
 		if (!bullet.entityType || bullet.entityId == null) return null;
+		const unitHref = recordEntityHref(bullet.entityType, bullet.entityId, bullet.unitId);
+		if (unitHref) return unitHref;
 		switch (bullet.entityType) {
-			case 'WorkOrder':
-				return `/maintenance/${bullet.entityId}`;
-			case 'Payment':
-				return `/accounting/payments/${bullet.entityId}`;
-			case 'Lease':
-				return `/leases/${bullet.entityId}`;
 			case 'Appointment':
 				return `/appointments/${bullet.entityId}`;
 			case 'Inspection':
@@ -67,6 +88,8 @@
 	// (DashboardService.ResolveActivityLabelsAsync / AuditDescriber). Types without a page → no link.
 	function activityHref(activity: DashboardActivity): string | null {
 		if (!activity.entityId) return null;
+		const unitHref = recordEntityHref(activity.type, activity.entityId, activity.unitId);
+		if (unitHref) return unitHref;
 		switch (activity.type) {
 			case 'Tenant':
 				return `/tenants/${activity.entityId}`;
@@ -74,16 +97,6 @@
 				return `/units/${activity.entityId}`;
 			case 'Property':
 				return `/properties/${activity.entityId}`;
-			case 'Lease':
-				return `/leases/${activity.entityId}`;
-			case 'WorkOrder':
-				return `/maintenance/${activity.entityId}`;
-			case 'Payment':
-				return `/accounting/payments/${activity.entityId}`;
-			case 'Expense':
-				return `/accounting/expenses/${activity.entityId}`;
-			case 'RentalApplication':
-				return `/applications/${activity.entityId}`;
 			case 'Vendor':
 				return `/vendors/${activity.entityId}`;
 			case 'OwnerEntity':
@@ -208,7 +221,7 @@
 	{:else if dashboardQuery.data}
 		{@const data = dashboardQuery.data as Dashboard}
 		<Card.Root
-			class="m3-dashboard-hero m3-surface-pattern m3-surface-pattern--portfolio m3-motion-enter relative mb-6 overflow-hidden border-primary/30 p-0"
+			class="m3-dashboard-hero m3-dashboard-art m3-dashboard-art--portfolio m3-surface-art m3-surface-art--hero m3-art-09 m3-motion-enter relative mb-6 overflow-hidden p-0"
 			style="--m3-motion-index: 0"
 			data-testid="dashboard-hero"
 		>
@@ -231,9 +244,13 @@
 						<Button href="/accounting" class="gap-2" data-testid="dashboard-hero-primary-action">
 							Open money
 							<ArrowRight class="h-4 w-4" />
-						</Button>
-						<Button href="/properties" variant="secondary" data-testid="dashboard-hero-secondary-action">View properties</Button>
-					</div>
+							</Button>
+							<Button href="/properties" variant="secondary" data-testid="dashboard-hero-secondary-action">View properties</Button>
+							<Button href="/onboarding?from=dashboard" variant="outline" class="gap-2" data-testid="dashboard-hero-guided-setup">
+								Guided Setup
+								<ArrowRight class="h-4 w-4" />
+							</Button>
+						</div>
 				</div>
 				<div class="m3-dashboard-hero-status p-5" data-testid="dashboard-hero-status">
 					<div class="flex items-start justify-between gap-4">
@@ -267,7 +284,7 @@
 		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
 		     the AI voice (what the computer is saying) and the action list (what to do today). -->
 		<Card.Root
-			class="m3-surface-pattern m3-surface-pattern--briefing m3-motion-enter relative mb-6 gap-0 overflow-hidden border-primary/30 py-0"
+			class="m3-dashboard-art m3-dashboard-art--briefing m3-surface-art m3-surface-art--hero m3-art-04 m3-motion-enter relative mb-6 gap-0 overflow-hidden py-0"
 			style="--m3-motion-index: 1"
 			data-testid="dashboard-todays-briefing"
 		>
@@ -573,7 +590,7 @@
 					{:else}
 						<div class="space-y-2">
 							{#each (workOrdersQuery.data ?? []).filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status))).slice(0, 3) as order}
-								<a href="/maintenance/{order.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
+								<a href={recordHref('workOrder', order)} class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
 									<div class="flex items-center justify-between gap-3">
 										<p class="truncate text-sm font-medium">{order.title}</p>
 										<span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{order.priority}</span>

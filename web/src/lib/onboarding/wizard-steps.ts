@@ -109,10 +109,10 @@ export const WIZARD_STEPS: WizardStepMeta[] = [
 	{
 		key: 'lease',
 		label: 'Lease',
-		title: 'Create the first lease',
+		title: 'Import the first signed lease',
 		icon: 'FileText',
 		explanation:
-			'A lease ties a tenant to a unit and sets the rent, the dates, and the deposit. This is what drives rent charges, late fees, and renewal reminders.',
+			'A lease ties a tenant to a unit and preserves the rent, dates, deposit, and current status from the signed agreement. Current leases drive rent charges, late fees, and renewal reminders while older leases stay available as history.',
 		whereToFind:
 			'Everything here is on the signed lease agreement: the monthly rent, start and end dates, the security deposit, and the day rent is due. Have the lease handy — or snap a photo and let the computer read it.',
 		docsSlug: 'leases',

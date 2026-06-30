@@ -63,6 +63,7 @@
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
+	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -100,6 +101,7 @@
 	// "Scan / Edit" action, one tap away and outside any group.
 	const pinnedNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
+		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList },
 		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
 	];
 
@@ -183,6 +185,7 @@
 	// glyph here MUST be in the self-hosted subset (src/lib/styles/material-symbols.css).
 	const navGlyphByHref: Record<string, string> = {
 		'/': 'space_dashboard',
+		'/onboarding': 'rocket_launch',
 		'/scan': 'document_scanner',
 		'/accounting': 'account_balance_wallet',
 		'/deposits': 'savings',
@@ -585,7 +588,7 @@
 <div class="flex h-full w-full overflow-hidden bg-background">
 	<!-- Sidebar -->
 	<aside
-		class="fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar/95 shadow-[inset_-1px_0_0_rgb(255_255_255_/_0.025)] backdrop-blur transition-all duration-[var(--m3-motion-duration-medium-2)] ease-[var(--m3-motion-easing-emphasized-decelerate)]
+		class="rc-vt-sidebar fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar/95 shadow-[inset_-1px_0_0_rgb(255_255_255_/_0.025)] backdrop-blur transition-all duration-[var(--m3-motion-duration-medium-2)] ease-[var(--m3-motion-easing-emphasized-decelerate)]
 			{isMobile
 			? (isSidebarOpen ? 'translate-x-0 w-60' : '-translate-x-full w-60')
 			: (sidebarCollapsed ? 'w-14' : 'w-60')}"
@@ -709,6 +712,12 @@
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
 						{#if !portalUser}
+							<DropdownMenuItem data-testid="user-menu-guided-setup-collapsed">
+								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
+									<ClipboardList class="h-4 w-4" />
+									Guided Setup
+								</a>
+							</DropdownMenuItem>
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />
@@ -760,6 +769,12 @@
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
 						{#if !portalUser}
+							<DropdownMenuItem data-testid="user-menu-guided-setup">
+								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
+									<ClipboardList class="h-4 w-4" />
+									Guided Setup
+								</a>
+							</DropdownMenuItem>
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />
@@ -819,7 +834,7 @@
 
 		<!-- App header bar: quick actions + live badges (TODO #2). Always visible. -->
 		<header
-			class="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/88 px-3 shadow-[inset_0_-1px_0_rgb(255_255_255_/_0.025)] backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4"
+			class="rc-vt-topbar sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/88 px-3 shadow-[inset_0_-1px_0_rgb(255_255_255_/_0.025)] backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4"
 		>
 			{#if isMobile}
 				<Button
@@ -847,15 +862,14 @@
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
 					<!-- Scan / Edit -->
-					<a
-						href="/scan"
-						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Scan / Edit"
-						data-m3-tooltip="Scan / Edit"
-						data-testid="header-scan"
-					>
-						<ScanLine class="h-5 w-5" />
-					</a>
+					<ScanLauncher
+						triggerLabel=""
+						ariaLabel="Scan / Edit"
+						tooltip="Scan / Edit"
+						testid="header-scan"
+						triggerVariant="ghost"
+						triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+					/>
 
 					<!-- Messages -->
 					<a

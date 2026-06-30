@@ -15,6 +15,12 @@ public interface IPortfolioService
     /// <summary>Get one portfolio, only if it is the caller's own portfolio.</summary>
     Task<PortfolioResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 
+    /// <summary>
+    /// Server-side aggregate facts for the getting-started checklist. Clients use this instead of
+    /// downloading properties/tenants/leases/settings to count them locally.
+    /// </summary>
+    Task<GettingStartedSignalsResponse?> GetGettingStartedSignalsAsync(int portfolioId, CancellationToken ct = default);
+
     /// <summary>Create a new portfolio and scope the current user to it (sets their PortfolioId).</summary>
     Task<PortfolioResponse> CreateAsync(int userId, CreatePortfolioRequest request, CancellationToken ct = default);
 

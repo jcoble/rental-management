@@ -12,7 +12,9 @@ describe('tenant create/send notice editing', () => {
 		assert.match(source, /let noticeEdits = \$state/);
 		assert.match(source, /data-testid="tenant-notice-edit-subject-\{draft\.id\}"/);
 		assert.match(source, /data-testid="tenant-notice-edit-body-\{draft\.id\}"/);
-		assert.match(source, /notices\.update\(draft\.id, editedNoticePayload\(draft\)\)/);
+		// PATCH is skipped when the user did not edit the generated copy;
+		// the conditional guards the call.
+		assert.match(source, /if \(changed\).*notices\.update\(draft\.id/s);
 		assert.match(source, /notices\.approve\(draft\.id/);
 		assert.match(source, /onclick=\{\(\) => sendNoticeMutation\.mutate\(draft\)\}/);
 	});

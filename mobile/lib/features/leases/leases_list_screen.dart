@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
@@ -101,7 +102,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Leases')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Leases')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'leases-fab',
         onPressed: () => _showAddSheet(context),
@@ -555,7 +556,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     }
   }
 
-  bool _validateUnitStep() {
+  bool _validateLocationStep() {
     if (_selectedPropertyId == null) {
       setState(() => _error = 'Select a property.');
       return false;
@@ -564,26 +565,46 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       setState(() => _error = 'Select a unit.');
       return false;
     }
+    if (_error == 'Select a property.' || _error == 'Select a unit.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  bool _validateTenantsStep() {
     if (_selectedTenantIds.isEmpty) {
       setState(() => _error = 'Select at least one tenant.');
       return false;
     }
+    if (_error == 'Select at least one tenant.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  bool _validateDatesStep() {
     if (_startDate == null) {
       setState(() => _error = 'Please select a start date.');
       return false;
     }
+    if (_endDate == null) {
+      setState(() => _error = 'Please select an end date.');
+      return false;
+    }
+    if (_endDate!.isBefore(_startDate!)) {
+      setState(() => _error = 'End date must be on or after start date.');
+      return false;
+    }
     if (_error == 'Please select a start date.' ||
-        _error == 'Please select start and end dates.') {
+        _error == 'Please select an end date.' ||
+        _error == 'Please select start and end dates.' ||
+        _error == 'End date must be on or after start date.') {
       setState(() => _error = null);
     }
     return true;
   }
 
   bool _validateTermsStep() {
-    if (_endDate == null) {
-      setState(() => _error = 'Please select an end date.');
-      return false;
-    }
     if (_error == 'Please select an end date.' ||
         _error == 'Please select start and end dates.') {
       setState(() => _error = null);
@@ -608,7 +629,12 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (!_validateUnitStep() || !_validateTermsStep()) return;
+    if (!_validateLocationStep() ||
+        !_validateTenantsStep() ||
+        !_validateDatesStep() ||
+        !_validateTermsStep()) {
+      return;
+    }
 
     setState(() {
       _saving = true;
@@ -641,6 +667,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+      rethrow;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -673,8 +700,8 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
         onSave: _submit,
         tabs: [
           TabbedFormStepSpec(
-            label: 'Unit',
-            validate: _validateUnitStep,
+            label: 'Location',
+            validate: _validateLocationStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -750,7 +777,15 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                     validator: (_) =>
                         _selectedUnitId == null ? 'Select a unit' : null,
                   ),
-                gap,
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Tenants',
+            validate: _validateTenantsStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 _TenantMultiSelect(
                   tenants: tenants,
                   selectedTenantIds: _selectedTenantIds,
@@ -769,12 +804,27 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                     });
                   },
                 ),
-                gap,
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Dates',
+            validate: _validateDatesStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 _DateTile(
                   label: 'Start date',
                   date: _startDate,
                   onTap: () => _pickDate(context, isStart: true),
                   hasError: _startDate == null && _error != null,
+                ),
+                gap,
+                _DateTile(
+                  label: 'End date',
+                  date: _endDate,
+                  onTap: () => _pickDate(context, isStart: false),
+                  hasError: _endDate == null && _error != null,
                 ),
               ],
             ),
@@ -785,13 +835,6 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _DateTile(
-                  label: 'End date',
-                  date: _endDate,
-                  onTap: () => _pickDate(context, isStart: false),
-                  hasError: _endDate == null && _error != null,
-                ),
-                gap,
                 Row(
                   children: [
                     Expanded(
@@ -841,14 +884,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                       ? 'Enter an amount'
                       : null,
                 ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Rules',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+                gap,
                 TextFormField(
                   controller: _dueDayCtrl,
                   keyboardType: TextInputType.number,
@@ -863,6 +899,20 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                     }
                     return null;
                   },
+                ),
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Status',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Set the lease status after the required terms are complete.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 gap,
                 DropdownButtonFormField<String>(

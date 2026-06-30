@@ -2,13 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'recurring_maintenance_form_screen.dart';
 import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
 
 const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String fmtDueDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
@@ -126,25 +138,27 @@ class _RecurringMaintenanceListScreenState
     final activeOnly = notifier.activeOnly;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final filterControl = SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment(value: false, label: Text('All')),
+        ButtonSegment(value: true, label: Text('Active')),
+      ],
+      selected: {activeOnly},
+      onSelectionChanged: (s) => notifier.setActiveOnly(s.first),
+      style: const ButtonStyle(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+    );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: mobileDomainRootAppBar(
+        context,
         title: const Text('Recurring Maintenance'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('All')),
-                ButtonSegment(value: true, label: Text('Active')),
-              ],
-              selected: {activeOnly},
-              onSelectionChanged: (s) => notifier.setActiveOnly(s.first),
-              style: const ButtonStyle(
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
+            child: filterControl,
           ),
         ],
       ),
@@ -154,34 +168,41 @@ class _RecurringMaintenanceListScreenState
         tooltip: 'New recurring task',
         child: const Icon(Icons.add),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: tasksAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: _refresh,
-          ),
-          data: (list) {
-            if (list.isEmpty) {
-              return _EmptyBody(activeOnly: activeOnly);
-            }
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-              itemCount: list.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (ctx, i) => _TaskCard(
-                task: list[i],
-                theme: theme,
-                colorScheme: colorScheme,
-                onTap: () => _openForm(task: list[i]),
-                onToggleActive: (v) => _toggleActive(list[i], v),
-                onDelete: () => _confirmDelete(list[i]),
+      body: Column(
+        children: [
+          MobileDomainEmbeddedToolbar(children: [filterControl]),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: tasksAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: _refresh,
+                ),
+                data: (list) {
+                  if (list.isEmpty) {
+                    return _EmptyBody(activeOnly: activeOnly);
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+                    itemCount: list.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (ctx, i) => _TaskCard(
+                      task: list[i],
+                      theme: theme,
+                      colorScheme: colorScheme,
+                      onTap: () => _openForm(task: list[i]),
+                      onToggleActive: (v) => _toggleActive(list[i], v),
+                      onDelete: () => _confirmDelete(list[i]),
+                    ),
+                  );
+                },
               ),
-            );
-          },
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -232,7 +253,10 @@ class _TaskCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _PriorityChip(priority: task.priority, colorScheme: colorScheme),
+                  _PriorityChip(
+                    priority: task.priority,
+                    colorScheme: colorScheme,
+                  ),
                   PopupMenuButton<String>(
                     tooltip: 'More',
                     icon: Icon(
@@ -244,10 +268,7 @@ class _TaskCard extends StatelessWidget {
                       if (v == 'delete') onDelete();
                     },
                     itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: 'delete',
-                        child: Text('Delete'),
-                      ),
+                      PopupMenuItem(value: 'delete', child: Text('Delete')),
                     ],
                   ),
                 ],
@@ -294,10 +315,7 @@ class _TaskCard extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  Switch(
-                    value: task.isActive,
-                    onChanged: onToggleActive,
-                  ),
+                  Switch(value: task.isActive, onChanged: onToggleActive),
                 ],
               ),
             ],
@@ -365,8 +383,8 @@ class _EmptyBody extends StatelessWidget {
                 Text(
                   msg,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(

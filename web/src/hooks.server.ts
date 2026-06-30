@@ -9,11 +9,12 @@
  * keys and rental routes (no Sentry dependency here).
  */
 
-import type { Handle, HandleFetch } from '@sveltejs/kit';
+import type { Handle, HandleFetch, RequestEvent } from '@sveltejs/kit';
 import type { Cookies } from '@sveltejs/kit';
 import type { User } from '$lib/types/user';
 import { serverRefreshToken, applyRefreshCookies } from '$lib/server/token-refresh';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { userFromAccessToken } from '$lib/server/jwt-claims';
 import {
 	deleteAccessCookies,
 	getAccessToken,
@@ -65,25 +66,17 @@ export const handle: Handle = async ({ event, resolve }) => {
 					deleteAccessCookies(event.cookies);
 				}
 			} else {
-				// Transient server error (429/500/...) — keep the session and
-				// forward the existing token rather than logging the user out.
+				// Transient server error (429/500/...) — NOT a real 401, so keep the session alive
+				// rather than bouncing every logged-in user to /login during a brief API blip.
 				console.warn(
-					`Auth /me returned ${response.status} — preserving existing token for this request`
+					`Auth /me returned ${response.status} — preserving existing session for this request`
 				);
-				event.locals.accessToken = accessToken;
-				const storedExpiration = getAccessTokenExpiration(event.cookies);
-				if (storedExpiration) {
-					event.locals.accessTokenExpiration = storedExpiration;
-				}
+				preserveSessionFromToken(event, accessToken);
 			}
 		} catch (error) {
-			// Network error — keep the session and forward the existing token.
-			console.warn('Auth validation error (keeping session):', error);
-			event.locals.accessToken = accessToken;
-			const storedExpiration = getAccessTokenExpiration(event.cookies);
-			if (storedExpiration) {
-				event.locals.accessTokenExpiration = storedExpiration;
-			}
+			// Network/cert/timeout error reaching the API — keep the session alive through the blip.
+			console.warn('Auth validation error (preserving session):', error);
+			preserveSessionFromToken(event, accessToken);
 		}
 	} else {
 		// No access token — fall back to the refresh token if present.
@@ -100,6 +93,27 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	return resolve(event);
 };
+
+/**
+ * Transient /auth/me failure (a 5xx, or the fetch threw on network/cert/timeout — anything that is
+ * NOT a real 401): keep the user signed in through the blip instead of 303-bouncing every logged-in
+ * user to /login on a brief API hiccup. Forward the still-valid token AND reconstruct locals.user by
+ * decoding the token's own claims locally — but only when the token has not expired. An expired or
+ * malformed token leaves locals.user null, so a genuinely stale session still falls through to the
+ * guards' /login redirect rather than being silently extended.
+ */
+function preserveSessionFromToken(event: RequestEvent, accessToken: string): void {
+	event.locals.accessToken = accessToken;
+	const storedExpiration = getAccessTokenExpiration(event.cookies);
+	if (storedExpiration) {
+		event.locals.accessTokenExpiration = storedExpiration;
+	}
+
+	const user = userFromAccessToken(accessToken);
+	if (user) {
+		event.locals.user = user;
+	}
+}
 
 /**
  * Refresh the access token from the app-namespaced refresh cookie, using the shared

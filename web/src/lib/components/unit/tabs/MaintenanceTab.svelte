@@ -17,7 +17,9 @@
 		workOrderReceiptScanContext
 	} from '$lib/components/unit/maintenance-actions';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import WorkOrderDetail from '$lib/components/records/WorkOrderDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -145,9 +147,15 @@
 
 	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──
 	const emptyCreate = () => ({ title: '', description: '', priority: 'Normal', category: 'General' });
+	const createSteps: FormStepperStep[] = [
+		{ id: 'issue', label: 'Issue', description: 'Title and details' },
+		{ id: 'triage', label: 'Triage', description: 'Priority and category' },
+	];
 	let showCreate = $state(false);
 	let createForm = $state(emptyCreate());
 	let createErrors = $state<Record<string, string>>({});
+	let createStep = $state(0);
+	let completedCreateSteps = $state<number[]>([]);
 
 	function clearCreateError(field: string) {
 		if (!createErrors[field]) return;
@@ -159,11 +167,15 @@
 	function openCreate() {
 		createForm = emptyCreate();
 		createErrors = {};
+		createStep = 0;
+		completedCreateSteps = [];
 		showCreate = true;
 	}
 	function closeCreate() {
 		showCreate = false;
 		createErrors = {};
+		createStep = 0;
+		completedCreateSteps = [];
 	}
 
 	const createMut = createMutation(() => ({
@@ -196,6 +208,33 @@
 			...result.data,
 		});
 	}
+
+	function validateCreateStep() {
+		const result = parseForm(workOrderSchema, {
+			...createForm,
+			propertyId: String(propertyId),
+			unitId: String(unitId),
+		});
+		const fields = createStep === 0 ? ['title', 'description'] : ['priority', 'category'];
+		const nextErrors: Record<string, string> = {};
+		if (result.errors) {
+			for (const field of fields) {
+				if (result.errors[field]) nextErrors[field] = result.errors[field];
+			}
+		}
+		const retainedErrors = { ...createErrors };
+		for (const field of fields) delete retainedErrors[field];
+		createErrors = { ...retainedErrors, ...nextErrors };
+		return Object.keys(nextErrors).length === 0;
+	}
+
+	function nextCreateStep() {
+		if (!validateCreateStep()) return;
+		if (!completedCreateSteps.includes(createStep)) {
+			completedCreateSteps = [...completedCreateSteps, createStep];
+		}
+		createStep = Math.min(createStep + 1, createSteps.length - 1);
+	}
 </script>
 
 <div class="space-y-4" data-testid="unit-maintenance-tab">
@@ -204,7 +243,12 @@
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="wo-back-to-list">
 		<ArrowLeft class="h-4 w-4" /> Back to work orders
 	</Button>
-	<WorkOrderDetail workOrderId={selectedWo} onDeleted={clearSelection} />
+	<WorkOrderDetail
+		workOrderId={selectedWo}
+		onDeleted={clearSelection}
+		expectedUnitId={unitId}
+		onUnitMismatch={clearSelection}
+	/>
 {:else}
 	<div class="flex flex-wrap justify-end gap-2">
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="maintenance-create">
@@ -216,39 +260,55 @@
 	{#if showCreate}
 		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="maintenance-create-form">
 			<h3 class="mb-3 text-sm font-semibold">New work order</h3>
-			<div class="space-y-3">
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-title">Title</label>
-					<Input id="wo-title" data-testid="maintenance-title-input" bind:value={createForm.title} oninput={() => clearCreateError('title')} placeholder="Issue title" />
-					{#if createErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-title-error">{createErrors.title}</p>{/if}
+				<FormStepper steps={createSteps} bind:currentStep={createStep} completedSteps={completedCreateSteps} testid="maintenance-create-stepper">
+					<div class="space-y-3">
+						{#if createStep === 0}
+							<div>
+								<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-title">Title</label>
+								<Input id="wo-title" data-testid="maintenance-title-input" bind:value={createForm.title} oninput={() => clearCreateError('title')} placeholder="Issue title" />
+								{#if createErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-title-error">{createErrors.title}</p>{/if}
+							</div>
+							<div>
+								<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-desc">Description</label>
+								<textarea id="wo-desc" data-testid="maintenance-description-input" bind:value={createForm.description} oninput={() => clearCreateError('description')} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="What needs fixing?"></textarea>
+								{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-description-error">{createErrors.description}</p>{/if}
+							</div>
+						{:else}
+						<div class="grid grid-cols-2 gap-3">
+							<div>
+								<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-priority">Priority</label>
+								<Select.Root type="single" bind:value={createForm.priority}>
+									<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{createForm.priority}</Select.Trigger>
+									<Select.Content>
+										{#each WO_PRIORITIES as p}<Select.Item value={p} label={p}>{p}</Select.Item>{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
+								<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-cat">Category</label>
+								<Input id="wo-cat" data-testid="maintenance-category-input" bind:value={createForm.category} oninput={() => clearCreateError('category')} placeholder="Category" />
+								{#if createErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-category-error">{createErrors.category}</p>{/if}
+							</div>
+						</div>
+					{/if}
 				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-desc">Description</label>
-					<textarea id="wo-desc" data-testid="maintenance-description-input" bind:value={createForm.description} oninput={() => clearCreateError('description')} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="What needs fixing?"></textarea>
-					{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-description-error">{createErrors.description}</p>{/if}
-				</div>
-				<div class="grid grid-cols-2 gap-3">
-					<div>
-						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-priority">Priority</label>
-						<Select.Root type="single" bind:value={createForm.priority}>
-							<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{createForm.priority}</Select.Trigger>
-							<Select.Content>
-								{#each WO_PRIORITIES as p}<Select.Item value={p} label={p}>{p}</Select.Item>{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					<div>
-						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-cat">Category</label>
-						<Input id="wo-cat" data-testid="maintenance-category-input" bind:value={createForm.category} oninput={() => clearCreateError('category')} placeholder="Category" />
-						{#if createErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-category-error">{createErrors.category}</p>{/if}
-					</div>
-				</div>
-			</div>
+			</FormStepper>
 			<div class="mt-3 flex justify-end gap-2">
 				<Button variant="outline" size="sm" onclick={closeCreate}>Cancel</Button>
-				<Button size="sm" disabled={createMut.isPending} onclick={submitCreate} data-testid="maintenance-create-submit">
-					{createMut.isPending ? 'Creating…' : 'Create'}
-				</Button>
+				{#if createStep > 0}
+					<Button variant="outline" size="sm" onclick={() => (createStep = Math.max(createStep - 1, 0))}>Back</Button>
+				{/if}
+				{#if createStep < createSteps.length - 1}
+					<StepperNextButton
+						testid="maintenance-create-next"
+						onclick={nextCreateStep}
+						complete={completedCreateSteps.includes(createStep)}
+					/>
+				{:else}
+					<Button size="sm" disabled={createMut.isPending} onclick={submitCreate} data-testid="maintenance-create-submit">
+						{createMut.isPending ? 'Creating…' : 'Create'}
+					</Button>
+				{/if}
 			</div>
 		</div>
 	{/if}

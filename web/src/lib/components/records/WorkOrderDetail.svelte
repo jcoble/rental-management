@@ -29,8 +29,19 @@
 		shouldShowActiveDispatchHint,
 		workOrderStatusActionTargets,
 	} from '$lib/maintenance/work-order-dispatch';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
-	let { workOrderId, onDeleted }: { workOrderId: number; onDeleted: () => void } = $props();
+	let {
+		workOrderId,
+		onDeleted,
+		expectedUnitId,
+		onUnitMismatch,
+	}: {
+		workOrderId: number;
+		onDeleted: () => void;
+		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
+	} = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -49,6 +60,10 @@
 	}));
 
 	const wo = $derived(workOrderQuery.data);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(wo, expectedUnitId)) onUnitMismatch?.();
+	});
 
 	const priorityOptions = $derived(WO_PRIORITIES.map((value) => ({ value, label: value })));
 	const propertyOptions = $derived(
@@ -74,6 +89,12 @@
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
 
+	// Snapshot of the timing dates (yyyy-MM-dd) exactly as seeded when editing began, so save() re-sends
+	// ONLY a date the user actually changed. These fields bind a full timestamp as date-only; re-submitting
+	// an untouched date would overwrite the stored instant's time-of-day with 00:00:00Z (BUG-3). A field
+	// left equal to its seed is dropped from the PATCH → "leave unchanged" server-side.
+	let seededDates = $state({ requestedAt: '', scheduledFor: '', completedAt: '' });
+
 	function startEditing() {
 		if (!wo) return;
 		form = {
@@ -90,6 +111,12 @@
 			estimatedCost: wo.estimatedCost != null ? String(wo.estimatedCost) : '',
 			actualCost: wo.actualCost != null ? String(wo.actualCost) : '',
 		};
+		// Remember the seeded date-only values to dirty-check against on save (see seededDates).
+		seededDates = {
+			requestedAt: form.requestedAt,
+			scheduledFor: form.scheduledFor,
+			completedAt: form.completedAt,
+		};
 		formErrors = {};
 		editing = true;
 	}
@@ -104,7 +131,14 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ portfolioId, ...result.data });
+		// Drop any timing date the user didn't actually change so an unchanged value isn't re-sent and
+		// truncated to UTC-midnight (BUG-3); a dropped field is left untouched server-side. Costs and the
+		// Request fields always go through.
+		const data: Record<string, unknown> = { ...result.data };
+		for (const field of ['requestedAt', 'scheduledFor', 'completedAt'] as const) {
+			if (form[field] === seededDates[field]) delete data[field];
+		}
+		saveMutation.mutate({ portfolioId, ...data });
 	}
 
 	function invalidate() {
@@ -410,8 +444,10 @@
 			</div>
 		</div>
 
-		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it -->
-		{#if shouldShowActiveDispatchHint(wo.status, Boolean(wo.vendorName), dispatched)}
+		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it. Gated on a REAL open
+		     dispatch (server-computed hasActiveDispatch) or one just sent this session — never on a mere
+		     vendor assignment, which would falsely claim the job was sent. -->
+		{#if shouldShowActiveDispatchHint(wo.status, Boolean(wo.hasActiveDispatch), dispatched)}
 			<div
 				class="mb-6 flex items-start gap-3 rounded-md border bg-[var(--m3c-info-container)] text-[var(--m3c-on-info-container)] border-[color-mix(in_srgb,var(--info)_45%,transparent)] p-4 text-sm"
 				data-testid="work-order-dispatched-hint"

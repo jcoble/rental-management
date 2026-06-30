@@ -405,14 +405,14 @@
 				{#if accepts.has('year')}
 					<div>
 						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-year">Year</label>
-						<Input id="report-year" type="number" bind:value={year} class="h-10 w-28" data-testid="report-year-input" />
+						<Input id="report-year" type="text" inputmode="numeric" maxlength={4} mask="integer" bind:value={year} class="h-10 w-28" data-testid="report-year-input" />
 					</div>
 				{/if}
 
 				{#if accepts.has('days')}
 					<div>
 						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-days">Window (days)</label>
-						<Input id="report-days" type="number" min="1" bind:value={days} class="h-10 w-28" data-testid="report-days-input" />
+						<Input id="report-days" type="text" inputmode="numeric" mask="integer" bind:value={days} class="h-10 w-28" data-testid="report-days-input" />
 					</div>
 				{/if}
 

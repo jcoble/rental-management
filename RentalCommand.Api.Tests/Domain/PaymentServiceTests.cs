@@ -219,11 +219,10 @@ public class PaymentServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetAsync_ProjectsLeaseNumberAndTenantName_SoViewModeCanShowTheLease()
+    public async Task GetAsync_ProjectsLeaseHomeContext_SoViewModeCanShowPropertyAndUnit()
     {
-        // Regression for TSK-197 residual: the payment detail page's VIEW mode rendered "—" for the
-        // lease because PaymentResponse carried no LeaseNumber/TenantName — GetAsync never joined the
-        // lease. GetAsync must Include the lease + tenant and project both labels.
+        // Landlords identify a payment by the home first: property + unit, not by an
+        // internal lease number. The detail API must carry that context for view/edit labels.
         var now = DateTime.UtcNow;
         var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
         {
@@ -240,6 +239,8 @@ public class PaymentServiceTests : IDisposable
         fetched.Should().NotBeNull();
         fetched!.LeaseNumber.Should().Be("L-1");
         fetched.TenantName.Should().Be("Marcus Williams");
+        fetched.PropertyName.Should().Be("Maple Court");
+        fetched.UnitNumber.Should().Be("1");
     }
 
     [Fact]

@@ -113,6 +113,68 @@ public class LeaseLedgerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetLedgerAsync_PartialPayment_ShowsCollectedPortionAsCompanionPaymentLine()
+    {
+        var lease = SeedLease();
+
+        // A rent paid in full, plus a rent partially paid ($700 collected of $1,000 → $300 still owed).
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1000m,
+            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = new DateTime(2026, 03, 03, 0, 0, 0, DateTimeKind.Utc),
+            Method = "Check",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Partial,
+            Amount = 1000m,
+            AmountPaid = 700m,
+            DueDate = new DateTime(2026, 04, 01, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = new DateTime(2026, 04, 02, 0, 0, 0, DateTimeKind.Utc),
+            Method = "Cash",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
+
+        ledger.Should().NotBeNull();
+
+        // The Partial is still billed at its full amount as a charge (money owed, negative)...
+        var partialCharge = ledger!.Entries.Single(e => e.Status == "Partial" && e.Type == "Charge");
+        partialCharge.Amount.Should().Be(-1000m);
+
+        // ...and the $700 already collected now appears as its own companion payment line (previously
+        // absent — the collected portion was invisible on the ledger, BUG-4).
+        var partialPayment = ledger.Entries.Single(e => e.Status == "Partial" && e.Type == "Payment");
+        partialPayment.Amount.Should().Be(700m);
+        partialPayment.Explanation.Should().Be("Payment of $700 received by cash on Apr 2 — $300 still owed.");
+
+        // The partial's charge + companion net to exactly the still-owed remainder.
+        (partialCharge.Amount + partialPayment.Amount).Should().Be(-300m);
+
+        // Every collected dollar is now visible: the Payment-type lines sum to the headline Paid total.
+        ledger.Entries.Where(e => e.Type == "Payment").Sum(e => e.Amount).Should().Be(ledger.TotalPaid);
+
+        // Headline totals are unchanged by the companion line (no double-count — they're a separate DB
+        // aggregate): Charged $2,000 · Paid $1,700 · Balance $300.
+        ledger.TotalCharged.Should().Be(2000m);
+        ledger.TotalPaid.Should().Be(1700m);
+        ledger.Balance.Should().Be(300m);
+    }
+
+    [Fact]
     public async Task GetLedgerAsync_OrdersPaymentRowsInSql()
     {
         var lease = SeedLease();

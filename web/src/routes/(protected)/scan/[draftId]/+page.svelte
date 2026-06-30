@@ -40,8 +40,10 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -603,19 +605,23 @@
 	}
 
 	// Preview goes through a same-origin, cookie-authed SvelteKit route (the API's
-	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
+	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send). The inline preview
+	// uses the default (downsized) thumbnail for speed; "Open in new tab" requests the
+	// full-resolution original the landlord captured (?full=true).
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
+	const fileUrlFull = $derived(data ? `/scan-file/${data.id}?full=true` : '');
 
 	// Success state — what was just created, so the landlord keeps context
 	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
 	// the new lease instead, so they don't use this card.)
-	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null } | null>(null);
+	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null; unitId: number | null } | null>(null);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
-		return createdRecordHref(type, id);
+		const unitId = confirmedRecord?.unitId ?? data?.createdUnitId ?? scanContext.unitId ?? null;
+		return createdRecordHref(type, id, unitId);
 	})());
 
 	function formatUsd(val: number | null): string {
@@ -660,18 +666,19 @@
 				const leaseId = result.leaseId ?? result.entityId ?? null;
 				toast.success('Lease created');
 				if (leaseId) {
-					// Route to the unit Command Center Lease tab when the unit is known (an existing
-					// unit was selected); a brand-new unit from the address has no id in scope yet,
-					// so recordHref falls back to the generic /leases/{id} page.
-					const unitId = selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null;
+					const unitId = result.unitId ?? (selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null) ?? scanContext.unitId ?? null;
 					goto(recordHref('lease', { id: leaseId, unitId }));
-					return;
+				} else {
+					goto('/leases');
 				}
+				return;
 			}
-			// Application drafts land on the applications list, where the new applicant appears.
 			if (isApplication) {
+				const applicationId = result.applicationId ?? result.entityId ?? null;
 				toast.success('Applicant created');
-				goto('/applications');
+				goto(applicationId
+					? createdRecordHref('Application', applicationId, result.unitId ?? scanContext.unitId ?? null)
+					: '/applications');
 				return;
 			}
 			// Loan drafts attach to a property (no standalone loan page) — go back to that property,
@@ -691,7 +698,8 @@
 			confirmedRecord = {
 				type,
 				id: result.entityId ?? result.paymentId ?? result.expenseId ?? result.workOrderId ?? null,
-				amount: resolvedAmount
+				amount: resolvedAmount,
+				unitId: result.unitId ?? scanContext.unitId ?? null
 			};
 			if (isPayment) {
 				toast.success('Payment recorded');
@@ -859,6 +867,7 @@
 	// Reject dialog state
 	let showRejectDialog = $state(false);
 	let rejectReason = $state('');
+	let reviewTab = $state<'document' | 'details'>('details');
 
 	function handleReject() {
 		rejectReason = '';
@@ -883,7 +892,9 @@
 	{:else if draftQuery.isError}
 		<!-- M5: clear error state with retry instead of a perpetual spinner -->
 		<div class="mx-auto max-w-md py-12 text-center" data-testid="scan-load-error">
-			<div class="mb-3 text-3xl">⚠️</div>
+			<div class="mb-3 flex justify-center text-destructive">
+				<AlertTriangle class="h-9 w-9" />
+			</div>
 			<h2 class="mb-1 text-lg font-semibold">Couldn't load this scan</h2>
 			<p class="mb-4 text-sm text-muted-foreground">
 				{draftQuery.error instanceof Error ? draftQuery.error.message : 'Something went wrong fetching the scan draft.'}
@@ -923,7 +934,7 @@
 				data-testid="scan-confirm-success"
 			>
 				<div class="flex items-center gap-3">
-					<span class="text-2xl leading-none">✓</span>
+					<CheckCircle2 class="h-6 w-6 shrink-0" />
 					<div>
 						<p class="font-semibold">
 							{confirmedRecord.type === 'Payment' ? 'Payment recorded' : confirmedRecord.type === 'WorkOrder' ? 'Work order created' : 'Expense created'}{confirmedRecord.type !== 'WorkOrder' && confirmedRecord.amount != null ? ` — ${formatUsd(confirmedRecord.amount)}` : ''}
@@ -948,7 +959,7 @@
 				data-testid="scan-already-confirmed"
 			>
 				<div class="flex items-center gap-3">
-					<span class="text-2xl leading-none">✓</span>
+					<CheckCircle2 class="h-6 w-6 shrink-0" />
 					<div>
 						<p class="font-semibold">This scan was confirmed</p>
 						<p class="text-xs opacity-80">
@@ -1020,49 +1031,58 @@
 			</div>
 		{/if}
 
-		<div class="grid gap-6 lg:grid-cols-2">
-			<!-- Left: document preview -->
-			<Card.Root class="flex flex-col gap-0 py-0">
-				<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
-					<Card.Title class="text-sm">Document Preview</Card.Title>
-				</Card.Header>
-				<Card.Content class="flex flex-1 items-center justify-center overflow-hidden p-4">
-					{#if isWorkOrder && fieldValue('transcript')}
-						<div class="w-full rounded-md border bg-muted/30 p-4">
-							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Transcript</p>
-							<p class="whitespace-pre-wrap text-sm leading-relaxed">{fieldValue('transcript')}</p>
-						</div>
-					{:else if fileUrl}
-						<!-- Try img first; for PDFs it won't render but we also show an iframe/link -->
-						<div class="w-full">
-							<img
-								src={fileUrl}
-								alt="Scanned document"
-								class="max-h-[60vh] w-full rounded object-contain"
-								onerror={(e) => {
-									// If image fails (it's a PDF), hide img and show iframe
-									(e.currentTarget as HTMLImageElement).style.display = 'none';
-									(e.currentTarget.nextElementSibling as HTMLElement | null)?.removeAttribute('hidden');
-								}}
-							/>
-							<iframe
-								hidden
-								src={fileUrl}
-								title="Scanned document"
-								class="h-[60vh] w-full rounded border-0"
-							></iframe>
-							<div class="mt-2 text-center">
-								<Button variant="link" href={fileUrl} target="_blank" rel="noopener noreferrer" class="h-auto p-0 text-xs">
-									Open in new tab
-								</Button>
+		<Tabs.Root bind:value={reviewTab} class="gap-4" data-testid="scan-review-tabs">
+			<Tabs.List class="w-full sm:w-auto">
+				<Tabs.Trigger value="details" data-testid="scan-review-tab-details">Extracted fields</Tabs.Trigger>
+				<Tabs.Trigger value="document" data-testid="scan-review-tab-document">Document preview</Tabs.Trigger>
+			</Tabs.List>
+			<Tabs.Content value="document" class="mt-0">
+			{#if reviewTab === 'document'}
+				<!-- Left: document preview -->
+				<Card.Root class="flex flex-col gap-0 py-0">
+					<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
+						<Card.Title class="text-sm">Document Preview</Card.Title>
+					</Card.Header>
+					<Card.Content class="flex flex-1 items-center justify-center overflow-hidden p-4">
+						{#if isWorkOrder && fieldValue('transcript')}
+							<div class="w-full rounded-md border bg-muted/30 p-4">
+								<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Transcript</p>
+								<p class="whitespace-pre-wrap text-sm leading-relaxed">{fieldValue('transcript')}</p>
 							</div>
-						</div>
-					{:else}
-						<p class="text-sm text-muted-foreground">No preview available.</p>
-					{/if}
-				</Card.Content>
-			</Card.Root>
+						{:else if fileUrl}
+							<!-- Try img first; for PDFs it won't render but we also show an iframe/link -->
+							<div class="w-full">
+								<img
+									src={fileUrl}
+									alt="Scanned document"
+									class="max-h-[60vh] w-full rounded object-contain"
+									onerror={(e) => {
+										// If image fails (it's a PDF), hide img and show iframe
+										(e.currentTarget as HTMLImageElement).style.display = 'none';
+										(e.currentTarget.nextElementSibling as HTMLElement | null)?.removeAttribute('hidden');
+									}}
+								/>
+								<iframe
+									hidden
+									src={fileUrl}
+									title="Scanned document"
+									class="h-[60vh] w-full rounded border-0"
+								></iframe>
+								<div class="mt-2 text-center">
+									<Button variant="link" href={fileUrlFull} target="_blank" rel="noopener noreferrer" class="h-auto p-0 text-xs" data-testid="scan-open-original">
+										Open in new tab
+									</Button>
+								</div>
+							</div>
+						{:else}
+							<p class="text-sm text-muted-foreground">No preview available.</p>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+			{/if}
+			</Tabs.Content>
 
+			<Tabs.Content value="details" class="mt-0">
 			<!-- Right: extracted fields form -->
 			<Card.Root class="flex flex-col gap-0 py-0">
 				<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
@@ -1614,7 +1634,9 @@
 																	class="text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
 																	disabled={reviewControlsDisabled}
 																	aria-label="Remove line item {i + 1}"
-																>✕</button>
+																>
+																	<X class="h-4 w-4" />
+																</button>
 															</Table.Cell>
 														</Table.Row>
 													{/each}
@@ -1745,7 +1767,8 @@
 					</div>
 				</Card.Footer>
 			</Card.Root>
-		</div>
+			</Tabs.Content>
+		</Tabs.Root>
 	{/if}
 </div>
 

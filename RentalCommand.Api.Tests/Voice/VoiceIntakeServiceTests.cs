@@ -77,4 +77,32 @@ public class VoiceIntakeServiceTests : IDisposable
         json.RootElement.GetProperty("priority").GetProperty("value").GetString()
             .Should().Be("Emergency");
     }
+
+    [Theory]
+    [InlineData("uh")]
+    [InlineData("...")]
+    [InlineData("left right maybe")]
+    public async Task CreateDraftAsync_LowQualityInitialTranscript_ThrowsBeforeCreatingNoisyDraft(string transcript)
+    {
+        var sut = new VoiceIntakeService(
+            _ctx.Db,
+            _llm.Object,
+            _transcriber.Object,
+            _storage.Object,
+            NullLogger<VoiceIntakeService>.Instance);
+
+        var act = () => sut.CreateDraftAsync(
+            portfolioId: 1,
+            audioBytes: Array.Empty<byte>(),
+            contentType: null,
+            providedTranscript: transcript,
+            ct: CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<ArgumentException>()
+            .WithMessage("*clearer voice note*");
+
+        (await _ctx.Db.ScanDrafts.CountAsync()).Should().Be(0);
+        _llm.Verify(x => x.ChatAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

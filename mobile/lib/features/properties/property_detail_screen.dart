@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,6 +10,7 @@ import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'properties_repository.dart';
 import 'property_form_sheet.dart';
+import 'property_labels.dart';
 
 String _formatCurrency(double amount) {
   final rounded = amount.round();
@@ -40,6 +43,12 @@ const _monthNames = [
 ];
 
 String _formatDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
+
+String _unitTitle(Unit unit, {required bool propertyIsUnit}) {
+  final number = unit.unitNumber.trim();
+  if (propertyIsUnit) return number.isEmpty ? 'Rental space' : number;
+  return number.isEmpty ? 'Unit' : 'Unit $number';
+}
 
 void _openLeaseDetail(BuildContext context, Lease lease) {
   openUnitCommandCenter(
@@ -190,6 +199,62 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     }
   }
 
+  Future<void> _confirmDeleteProperty(BuildContext context) async {
+    final property = _property;
+    final unitCount = property.unitCount ?? 0;
+    final propertyIsUnit = isPropertyUnitType(property.type);
+    final message = propertyIsUnit && unitCount == 1
+        ? 'This will also remove the generated rental space if it is still empty. If it has leases, work orders, expenses, inspections, applications, appointments, or documents, the server will stop the delete.'
+        : unitCount > 0
+        ? 'This property still has $unitCount ${unitCount == 1 ? 'unit' : 'units'}. Remove units first unless this is an empty generated rental space.'
+        : 'This cannot be undone.';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Delete ${property.name}?'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      await ref.read(propertiesRepositoryProvider).deleteProperty(property.id);
+      ref.invalidate(propertyDetailProvider(property.id));
+      unawaited(ref.read(propertiesProvider.notifier).refresh());
+      if (!mounted) return;
+      navigator.pop();
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Property deleted.')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not delete property.')),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final property = _property;
@@ -197,6 +262,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final colorScheme = theme.colorScheme;
     final unitsAsync = ref.watch(unitsProvider(property.id));
     final leasesAsync = ref.watch(propertyLeasesProvider(property.id));
+    final propertyIsUnit = isPropertyUnitType(property.type);
 
     return Scaffold(
       appBar: AppBar(
@@ -206,6 +272,11 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit property',
             onPressed: () => _showEditPropertySheet(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete property',
+            onPressed: () => _confirmDeleteProperty(context),
           ),
         ],
       ),
@@ -227,7 +298,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    'Units',
+                    propertyIsUnit ? 'Rental space' : 'Units',
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
@@ -236,7 +307,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                 TextButton.icon(
                   onPressed: () => _showAddUnitSheet(context),
                   icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add unit'),
+                  label: Text(propertyIsUnit ? 'Add another' : 'Add unit'),
                 ),
               ],
             ),
@@ -252,7 +323,9 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      'No units yet. Tap "Add unit" to create one.',
+                      propertyIsUnit
+                          ? 'No rental space yet. Standalone homes get one automatically when the property is created.'
+                          : 'No units yet. Tap "Add unit" to create one.',
                       style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   );
@@ -266,6 +339,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                         (u) => _UnitTile(
                           unit: u,
                           activeLease: _activeLeaseForUnit(leases, u.id),
+                          propertyIsUnit: propertyIsUnit,
                           onEdit: () => _showEditUnitSheet(context, u),
                         ),
                       )
@@ -371,7 +445,10 @@ class _PropertyHeader extends StatelessWidget {
               spacing: 16,
               runSpacing: 4,
               children: [
-                _KeyValue(label: 'Type', value: property.type),
+                _KeyValue(
+                  label: 'Type',
+                  value: formatPropertyType(property.type),
+                ),
                 _KeyValue(label: 'Units', value: '${property.unitCount ?? 0}'),
                 _KeyValue(
                   label: 'Occupied',
@@ -450,9 +527,15 @@ class _KeyValue extends StatelessWidget {
 // ── Unit tile ─────────────────────────────────────────────────────────────────
 
 class _UnitTile extends StatelessWidget {
-  const _UnitTile({required this.unit, required this.onEdit, this.activeLease});
+  const _UnitTile({
+    required this.unit,
+    required this.propertyIsUnit,
+    required this.onEdit,
+    this.activeLease,
+  });
 
   final Unit unit;
+  final bool propertyIsUnit;
   final VoidCallback onEdit;
 
   /// The unit's active lease, when occupied — enables drill-through to it.
@@ -485,7 +568,7 @@ class _UnitTile extends StatelessWidget {
           ),
         ),
         title: Text(
-          'Unit ${unit.unitNumber}',
+          _unitTitle(unit, propertyIsUnit: propertyIsUnit),
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.w600,
           ),

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import 'go_live_refresh.dart';
 import 'onboarding_repository.dart';
 
 /// A11: the actionable "switch to my real rentals" (go-live) flow, reachable
@@ -61,7 +62,7 @@ class _GoLiveSheetState extends ConsumerState<_GoLiveSheet> {
       await ref.read(onboardingRepositoryProvider).goLive();
       // The account is now Live: refresh the sandbox indicator + the dashboard
       // data so the example records disappear and the real (empty) state shows.
-      ref.invalidate(sandboxStateProvider);
+      refreshPortfolioDataAfterGoLive(ref);
       if (!mounted) return;
       Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context)
@@ -110,8 +111,12 @@ class _GoLiveSheetState extends ConsumerState<_GoLiveSheet> {
                   color: cs.primaryContainer,
                   borderRadius: BorderRadius.circular(18),
                 ),
-                child: Icon(Symbols.rocket_launch_rounded,
-                    size: 28, color: cs.onPrimaryContainer, fill: 1),
+                child: Icon(
+                  Symbols.rocket_launch_rounded,
+                  size: 28,
+                  color: cs.onPrimaryContainer,
+                  fill: 1,
+                ),
               ),
             ),
             const SizedBox(height: 18),

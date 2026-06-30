@@ -7,6 +7,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import type { Lease, Property, Unit } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
+	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { propertySchema, propertyBasisSchema, unitSchema, parseForm } from '$lib/schemas';
 	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
@@ -66,6 +67,7 @@
 	}));
 
 	const property = $derived(propertyQuery.data);
+	const propertyDeleteState = $derived(property ? getPropertyDeleteState(property) : null);
 	const unitsList = $derived(unitsQuery.data ?? []);
 	const leasesList = $derived(leasesQuery.data ?? []);
 
@@ -133,7 +135,15 @@
 			return;
 		}
 		propertyFormErrors = {};
-		savePropertyMutation.mutate({ id, data: { portfolioId, ...result.data, ...basis.data } });
+		savePropertyMutation.mutate({
+			id,
+			data: {
+				portfolioId,
+				...result.data,
+				...basis.data,
+				clearOwnerEntity: result.data.ownerEntityId == null,
+			},
+		});
 	}
 
 	const savePropertyMutation = createMutation(() => ({
@@ -468,7 +478,7 @@
 
 	{:else}
 		<!-- Header -->
-		<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+		<div class="rc-hero mb-6 flex flex-wrap items-start justify-between gap-3">
 			<div>
 				<h1 class="text-2xl font-bold" data-testid="property-detail-name">{property.name}</h1>
 				<p class="mt-1 text-sm text-muted-foreground">
@@ -548,7 +558,7 @@
 				class="lg:col-span-2"
 				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3"
 				help="Summary counts rolled up from the property's units. 'Occupied' counts units whose status is Occupied."
-				helpDetail="Unit count and occupancy are read-only — they update automatically as you add, remove, or change the status of individual units."
+				helpDetail="Unit count and occupancy are read-only — unit count updates as you add or remove units, and occupancy updates automatically as leases move tenants in and out."
 				helpLearnMoreUrl="/docs/property-details"
 				helpTestid="detailcard-help-details"
 			>
@@ -683,10 +693,14 @@
 <ConfirmDialog
 	open={showDeletePropertyConfirm}
 	title="Delete property"
-	message={property ? `Delete "${property.name}"? This also removes its units.` : ''}
+	message={propertyDeleteState?.message ?? ''}
 	busy={deletePropertyMutation.isPending}
+	confirmDisabled={propertyDeleteState?.confirmDisabled ?? false}
 	testid="property-detail-delete-confirm"
-	onconfirm={() => property && deletePropertyMutation.mutate(property.id)}
+	onconfirm={() => {
+		if (!property || propertyDeleteState?.confirmDisabled) return;
+		deletePropertyMutation.mutate(property.id);
+	}}
 	oncancel={() => (showDeletePropertyConfirm = false)}
 />
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'banking_models.dart';
 import 'banking_repository.dart';
 
@@ -21,7 +22,7 @@ class BankingScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Banking')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Banking')),
       body: RefreshIndicator(
         onRefresh: refresh,
         child: ListView(
@@ -29,13 +30,16 @@ class BankingScreen extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
           children: [
             summaryAsync.when(
-              loading: () => const _LoadingCard(label: 'Loading banking summary...'),
+              loading: () =>
+                  const _LoadingCard(label: 'Loading banking summary...'),
               error: (e, _) => _ErrorCard(message: _message(e)),
               data: (summary) => _SummaryGrid(summary: summary),
             ),
             const SizedBox(height: 18),
             reviewAsync.when(
-              loading: () => const _LoadingCard(label: 'Checking for possible duplicates...'),
+              loading: () => const _LoadingCard(
+                label: 'Checking for possible duplicates...',
+              ),
               error: (e, _) => Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -67,8 +71,8 @@ class BankingScreen extends ConsumerWidget {
                       'These bank lines look like money already on record. '
                       'Confirm so we don\'t count it twice.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     for (final item in queue.items) ...[
@@ -82,14 +86,14 @@ class BankingScreen extends ConsumerWidget {
             const SizedBox(height: 18),
             Text(
               'Recent bank lines',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             transactionsAsync.when(
-              loading: () => const _LoadingCard(label: 'Loading transactions...'),
+              loading: () =>
+                  const _LoadingCard(label: 'Loading transactions...'),
               error: (e, _) => _ErrorCard(message: _message(e)),
               data: (transactions) {
                 if (transactions.isEmpty) {
@@ -111,7 +115,8 @@ class BankingScreen extends ConsumerWidget {
     );
   }
 
-  static String _message(Object e) => e is ApiException ? e.message : e.toString();
+  static String _message(Object e) =>
+      e is ApiException ? e.message : e.toString();
 }
 
 class _SummaryGrid extends StatelessWidget {
@@ -130,9 +135,15 @@ class _SummaryGrid extends StatelessWidget {
       childAspectRatio: 1.65,
       children: [
         _MetricCard(label: 'Connections', value: '${summary.connectionCount}'),
-        _MetricCard(label: 'Transactions', value: '${summary.transactionCount}'),
+        _MetricCard(
+          label: 'Transactions',
+          value: '${summary.transactionCount}',
+        ),
         _MetricCard(label: 'Unmatched', value: '${summary.unmatchedCount}'),
-        _MetricCard(label: 'Suggestions', value: '${summary.suggestedMatchCount}'),
+        _MetricCard(
+          label: 'Suggestions',
+          value: '${summary.suggestedMatchCount}',
+        ),
       ],
     );
   }
@@ -192,14 +203,17 @@ class _TransactionCard extends ConsumerWidget {
                 Expanded(
                   child: Text(
                     transaction.merchantName ?? transaction.description,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 Text(
                   _money(transaction.amount),
                   style: theme.textTheme.titleSmall?.copyWith(
-                    color: transaction.amount >= 0 ? Colors.green.shade700 : cs.error,
+                    color: transaction.amount >= 0
+                        ? Colors.green.shade700
+                        : cs.error,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -277,7 +291,8 @@ class _TransactionCard extends ConsumerWidget {
     return '$sign\$${value.abs().toStringAsFixed(2)}';
   }
 
-  static String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
+  static String _date(DateTime value) =>
+      '${value.month}/${value.day}/${value.year}';
 }
 
 class _SectionHeader extends StatelessWidget {
@@ -293,7 +308,9 @@ class _SectionHeader extends StatelessWidget {
       children: [
         Text(
           title,
-          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
         if (count != null && count! > 0) ...[
           const SizedBox(width: 8),
@@ -337,15 +354,15 @@ class _ReviewCard extends ConsumerWidget {
         ref.invalidate(bankingReviewQueueProvider);
         ref.invalidate(bankingTransactionsProvider);
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(done)),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(done)));
         }
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(BankingScreen._message(e))),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(BankingScreen._message(e))));
         }
       }
     }
@@ -365,14 +382,17 @@ class _ReviewCard extends ConsumerWidget {
                     transaction.merchantName?.isNotEmpty == true
                         ? transaction.merchantName!
                         : transaction.description,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 Text(
                   _money(transaction.amount),
                   style: theme.textTheme.titleSmall?.copyWith(
-                    color: transaction.amount >= 0 ? Colors.green.shade700 : cs.error,
+                    color: transaction.amount >= 0
+                        ? Colors.green.shade700
+                        : cs.error,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -381,7 +401,9 @@ class _ReviewCard extends ConsumerWidget {
             const SizedBox(height: 2),
             Text(
               'Bank line / ${_date(transaction.postedAt)}',
-              style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 10),
             // Suggested match
@@ -399,8 +421,9 @@ class _ReviewCard extends ConsumerWidget {
                       Expanded(
                         child: Text(
                           'Looks like: ${suggestion.label}',
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -411,8 +434,9 @@ class _ReviewCard extends ConsumerWidget {
                     const SizedBox(height: 4),
                     Text(
                       suggestion.reason,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ],
@@ -457,7 +481,8 @@ class _ReviewCard extends ConsumerWidget {
     return '$sign\$${value.abs().toStringAsFixed(2)}';
   }
 
-  static String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
+  static String _date(DateTime value) =>
+      '${value.month}/${value.day}/${value.year}';
 }
 
 class _ReviewEmptyCard extends StatelessWidget {
@@ -468,7 +493,9 @@ class _ReviewEmptyCard extends StatelessWidget {
     return const Card(
       child: Padding(
         padding: EdgeInsets.all(16),
-        child: Text("Nothing to review. We'll flag any bank lines that look like a duplicate."),
+        child: Text(
+          "Nothing to review. We'll flag any bank lines that look like a duplicate.",
+        ),
       ),
     );
   }
@@ -535,7 +562,10 @@ class _ErrorCard extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Text(message, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        child: Text(
+          message,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
       ),
     );
   }
@@ -549,7 +579,9 @@ class _EmptyCard extends StatelessWidget {
     return const Card(
       child: Padding(
         padding: EdgeInsets.all(16),
-        child: Text('No bank transactions yet. Import or connect a read-only account on web.'),
+        child: Text(
+          'No bank transactions yet. Import or connect a read-only account on web.',
+        ),
       ),
     );
   }

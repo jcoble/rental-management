@@ -157,6 +157,8 @@ public class PaymentService : IPaymentService
 
         var items = await ApplySort(filtered, query)
             .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
+            .Include(p => p.Lease!).ThenInclude(l => l.Property)
+            .Include(p => p.Lease!).ThenInclude(l => l.Unit)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -208,6 +210,8 @@ public class PaymentService : IPaymentService
         var entity = await _db.Payments
             .AsNoTracking()
             .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
+            .Include(p => p.Lease!).ThenInclude(l => l.Property)
+            .Include(p => p.Lease!).ThenInclude(l => l.Unit)
             .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
 
         if (entity == null)

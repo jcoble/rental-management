@@ -42,7 +42,7 @@
 				<span class="text-xs font-medium text-muted-foreground">Beds</span>
 				<AutoFilledBadge show={filled('bedrooms')} confidence={conf('bedrooms')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-bedrooms-input`} bind:value={form.bedrooms} placeholder="Beds" />
+			<Input data-testid={`${testidPrefix}-bedrooms-input`} bind:value={form.bedrooms} placeholder="Beds" inputmode="numeric" mask="integer" />
 			{#if errors.bedrooms}<p class="mt-1 text-xs text-destructive">{errors.bedrooms}</p>{/if}
 		</div>
 		<div>
@@ -50,12 +50,12 @@
 				<span class="text-xs font-medium text-muted-foreground">Baths</span>
 				<AutoFilledBadge show={filled('bathrooms')} confidence={conf('bathrooms')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-bathrooms-input`} bind:value={form.bathrooms} placeholder="Baths" />
+			<Input data-testid={`${testidPrefix}-bathrooms-input`} bind:value={form.bathrooms} placeholder="Baths" inputmode="decimal" mask="decimal" />
 			{#if errors.bathrooms}<p class="mt-1 text-xs text-destructive">{errors.bathrooms}</p>{/if}
 		</div>
 		<div>
 			<span class="mb-1 block text-xs font-medium text-muted-foreground">Rent</span>
-			<Input data-testid={`${testidPrefix}-rent-input`} bind:value={form.marketRent} placeholder="Rent" />
+			<Input data-testid={`${testidPrefix}-rent-input`} bind:value={form.marketRent} placeholder="Rent" inputmode="decimal" mask="currency" />
 			{#if errors.marketRent}<p class="mt-1 text-xs text-destructive">{errors.marketRent}</p>{/if}
 		</div>
 	</div>

@@ -297,6 +297,7 @@ public sealed class LeaseSignatureQueueItemResponse
 {
     public long Id { get; init; }
     public string RecipientEmail { get; init; } = string.Empty;
+    public int? TenantId { get; init; }
     public string? Subject { get; init; }
     public string Status { get; init; } = "Queued";
     public DateTime QueuedAt { get; init; }
@@ -329,9 +330,8 @@ public class CreateLeaseRequest
 
     public IReadOnlyList<int>? TenantIds { get; set; }
 
-    [Required]
     [MaxLength(100)]
-    public string LeaseNumber { get; set; } = string.Empty;
+    public string? LeaseNumber { get; set; }
 
     [EnumDataType(typeof(LeaseStatus))]
     public LeaseStatus Status { get; set; } = LeaseStatus.Draft;

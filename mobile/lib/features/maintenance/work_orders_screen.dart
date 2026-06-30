@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'create_work_order_sheet.dart';
@@ -120,9 +121,24 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
     final currentFilter = notifier.filter;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final filterControl = SegmentedButton<WorkOrderFilter>(
+      segments: const [
+        ButtonSegment(value: WorkOrderFilter.open, label: Text('Open')),
+        ButtonSegment(value: WorkOrderFilter.all, label: Text('All')),
+      ],
+      selected: {currentFilter},
+      onSelectionChanged: (s) {
+        notifier.setFilter(s.first);
+      },
+      style: ButtonStyle(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: VisualDensity.compact,
+      ),
+    );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: mobileDomainRootAppBar(
+        context,
         // A6: one professional term for the "things to fix" concept across the
         // app — "Work Orders" (the bottom-nav tab stays the short "Work").
         title: const Text('Work Orders'),
@@ -130,20 +146,7 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
           // Open / All toggle
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: SegmentedButton<WorkOrderFilter>(
-              segments: const [
-                ButtonSegment(value: WorkOrderFilter.open, label: Text('Open')),
-                ButtonSegment(value: WorkOrderFilter.all, label: Text('All')),
-              ],
-              selected: {currentFilter},
-              onSelectionChanged: (s) {
-                notifier.setFilter(s.first);
-              },
-              style: ButtonStyle(
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
+            child: filterControl,
           ),
         ],
       ),
@@ -153,32 +156,40 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
         tooltip: 'New work order',
         child: const Icon(Icons.add),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: workOrdersAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: _refresh,
-          ),
-          data: (list) {
-            if (list.isEmpty) {
-              return _EmptyBody(filter: currentFilter);
-            }
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-              itemCount: list.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (ctx, i) => _WorkOrderCard(
-                workOrder: list[i],
-                colorScheme: colorScheme,
-                theme: theme,
-                onTap: () => _openDetail(ctx, list[i]),
+      body: Column(
+        children: [
+          MobileDomainEmbeddedToolbar(children: [filterControl]),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: workOrdersAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: _refresh,
+                ),
+                data: (list) {
+                  if (list.isEmpty) {
+                    return _EmptyBody(filter: currentFilter);
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+                    itemCount: list.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 8),
+                    itemBuilder: (ctx, i) => _WorkOrderCard(
+                      workOrder: list[i],
+                      colorScheme: colorScheme,
+                      theme: theme,
+                      onTap: () => _openDetail(ctx, list[i]),
+                    ),
+                  );
+                },
               ),
-            );
-          },
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }

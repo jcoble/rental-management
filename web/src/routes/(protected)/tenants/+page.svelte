@@ -11,14 +11,17 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import TenantFields from '$lib/components/forms/TenantFields.svelte';
+	import { Input } from '$lib/components/ui/input';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { getTenantsEmptyStateCopy } from '$lib/tenants/tenant-list-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -67,9 +70,20 @@
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
+	let tenantStep = $state(0);
+	let completedTenantSteps = $state<number[]>([]);
 	let deleteTarget = $state<Tenant | null>(null);
 	const deleteState = $derived(deleteTarget ? getTenantDeleteState(deleteTarget) : null);
 	let createParamHandled = $state(false);
+
+	const tenantSteps: FormStepperStep[] = [
+		{ id: 'identity', label: 'Identity', description: 'Resident name' },
+		{ id: 'contact', label: 'Contact', description: 'Email and phone' },
+	];
+	const tenantStepFields = [
+		['firstName', 'lastName'],
+		['email', 'phone', 'emergencyContact'],
+	] as const;
 
 	function clearTenantError(field: string) {
 		const next = clearFieldError(formErrors, field);
@@ -115,6 +129,8 @@
 		editingId = null;
 		form = { ...empty };
 		formErrors = {};
+		tenantStep = 0;
+		completedTenantSteps = [];
 		showForm = true;
 	}
 
@@ -134,18 +150,63 @@
 			emergencyContact: t.emergencyContact ?? '',
 		};
 		formErrors = {};
+		tenantStep = 0;
+		completedTenantSteps = [];
 		showForm = true;
 	}
 	function closeForm() {
 		showForm = false;
 		editingId = null;
 		formErrors = {};
+		tenantStep = 0;
+		completedTenantSteps = [];
+	}
+
+	function tenantStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(tenantStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+
+	function firstTenantErrorStep(errors: Record<string, string>) {
+		return tenantStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+
+	function markTenantStepInvalid(step: number) {
+		completedTenantSteps = completedTenantSteps.filter((completedStep) => completedStep < step);
+	}
+
+	function validateTenantStep(step: number) {
+		const result = parseForm(tenantSchema, form);
+		const currentErrors = result.errors ? Object.fromEntries(tenantStepErrorFields(step, result.errors)) : {};
+		const currentFields = new Set<string>(tenantStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(formErrors).filter(([field]) => !currentFields.has(field)));
+		formErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markTenantStepInvalid(step);
+		return isValid;
+	}
+
+	function nextTenantStep() {
+		if (!validateTenantStep(tenantStep)) return;
+		if (completedTenantSteps.includes(tenantStep)) {
+			tenantStep = Math.min(tenantStep + 1, tenantSteps.length - 1);
+			return;
+		}
+		completedTenantSteps = [...completedTenantSteps, tenantStep];
+		window.setTimeout(() => {
+			tenantStep = Math.min(tenantStep + 1, tenantSteps.length - 1);
+		}, 260);
 	}
 
 	function submit() {
 		const result = parseForm(tenantSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
+			const firstErrorStep = firstTenantErrorStep(result.errors);
+			if (firstErrorStep >= 0) {
+				tenantStep = firstErrorStep;
+				markTenantStepInvalid(firstErrorStep);
+			}
 			return;
 		}
 		formErrors = {};
@@ -233,12 +294,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tenants-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Tenants</h1>
-			<p class="text-sm text-muted-foreground">Resident contacts and lease participation.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={4}
+		tone="mint"
+		eyebrow="Rentals"
+		title="Tenants"
+		description="Resident contacts and lease participation."
+		data-testid="tenants-header"
+	/>
 
 	<DataGrid
 		data={list}
@@ -278,18 +343,65 @@
 <!-- Row-level edit / delete: rendered via an actions column snippet -->
 
 <Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
-	<Dialog.Content class="max-w-lg">
+	<Dialog.Content class="max-h-[85vh] max-w-lg overflow-y-auto [background:var(--m3c-surface-container-highest)]">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Tenant' : 'Edit Tenant'}</Dialog.Title>
 		</Dialog.Header>
-		<div data-testid="tenant-form">
-			<TenantFields bind:form errors={formErrors} />
-		</div>
+		<FormStepper
+			steps={tenantSteps}
+			bind:currentStep={tenantStep}
+			completedSteps={completedTenantSteps}
+			testid="tenant-stepper"
+		>
+			<div data-testid="tenant-form">
+				{#if tenantStep === 0}
+					<div class="grid gap-3 md:grid-cols-2">
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
+							<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" />
+							{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
+						</div>
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
+							<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" />
+							{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
+						</div>
+					</div>
+				{:else}
+					<div class="grid gap-3 md:grid-cols-2">
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
+							<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" type="email" autocomplete="email" />
+							{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
+						</div>
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
+							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+						</div>
+						<div class="md:col-span-2">
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Emergency contact</span>
+							<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} placeholder="Emergency contact" />
+						</div>
+					</div>
+				{/if}
+			</div>
+		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="tenant-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
-			<Button data-testid="tenant-form-save" onclick={submit} disabled={saveMutation.isPending}>
-				{saveMutation.isPending ? 'Saving…' : 'Save tenant'}
-			</Button>
+			{#if tenantStep > 0}
+				<Button data-testid="tenant-step-back" variant="outline" onclick={() => (tenantStep = Math.max(tenantStep - 1, 0))}>Back</Button>
+				{/if}
+				{#if tenantStep < tenantSteps.length - 1}
+					<StepperNextButton
+						testid="tenant-step-next"
+						onclick={nextTenantStep}
+						complete={completedTenantSteps.includes(tenantStep)}
+					/>
+				{:else}
+				<Button data-testid="tenant-form-save" onclick={submit} disabled={saveMutation.isPending}>
+					{saveMutation.isPending ? 'Saving…' : 'Save tenant'}
+				</Button>
+			{/if}
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
