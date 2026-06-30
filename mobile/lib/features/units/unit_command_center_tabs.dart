@@ -5,6 +5,7 @@ enum UnitCommandCenterTab {
   applications,
   ledger,
   tenants,
+  turnover,
   work,
 }
 
@@ -64,6 +65,12 @@ UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) {
     case 'work-orders':
     case 'workorders':
       return UnitCommandCenterTab.work;
+    case 'turnover':
+    case 'make-ready':
+    case 'makeready':
+    case 'move-out':
+    case 'moveout':
+      return UnitCommandCenterTab.turnover;
     case 'overview':
     default:
       return UnitCommandCenterTab.overview;

@@ -118,6 +118,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
         Tab(text: 'Apps'),
         Tab(text: 'Ledger'),
         Tab(text: 'Tenants'),
+        Tab(text: 'Turnover'),
         Tab(text: 'Work'),
       ],
     );
@@ -132,6 +133,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
           dashboard: dashboard,
           selectedTenantId: selectedTenantId,
         ),
+        _UnitTurnoverTab(dashboard: dashboard),
         _UnitWorkTab(dashboard: dashboard, selectedWorkOrder: initialWorkOrder),
       ],
     );
@@ -1078,6 +1080,109 @@ class _UnitTenantsTab extends StatelessWidget {
   }
 }
 
+class _UnitTurnoverTab extends ConsumerWidget {
+  const _UnitTurnoverTab({required this.dashboard});
+
+  final UnitDashboard dashboard;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final turnover = dashboard.turnover;
+    final property = dashboard.propertyName.trim().isEmpty
+        ? 'Property'
+        : dashboard.propertyName.trim();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        _SurfacePanel(
+          children: [
+            _MetricRow(
+              icon: Symbols.construction_rounded,
+              label: 'Status',
+              value: _turnoverStatusLabel(turnover.status),
+            ),
+            _MetricRow(
+              icon: Symbols.task_alt_rounded,
+              label: 'Punch list',
+              value:
+                  '${turnover.openTaskCount} open / ${turnover.completedTaskCount} done',
+            ),
+            _MetricRow(
+              icon: Symbols.schedule_rounded,
+              label: 'Turn time',
+              value: turnover.daysInTurnover == null
+                  ? 'Not started'
+                  : '${turnover.daysInTurnover}d',
+            ),
+            _MetricRow(
+              icon: Symbols.event_available_rounded,
+              label: 'Target ready',
+              value: turnover.targetReadyDate == null
+                  ? 'Not set'
+                  : _formatDate(turnover.targetReadyDate!),
+            ),
+            _MetricRow(
+              icon: Symbols.receipt_long_rounded,
+              label: 'Budget / actual',
+              value:
+                  '${_formatCurrency(turnover.estimatedCost)} / ${_formatCurrency(turnover.actualCost)}',
+            ),
+            _MetricRow(
+              icon: Symbols.folder_open_rounded,
+              label: 'Receipts',
+              value: '${turnover.receiptCount}',
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _Section(
+          title: 'Make-ready plan',
+          empty: '',
+          children: const [
+            _CompactRow(
+              icon: Symbols.logout_rounded,
+              title: 'Move-out',
+              subtitle: 'Walkthrough, photos, keys, and vacancy handoff',
+            ),
+            _CompactRow(
+              icon: Symbols.format_list_bulleted_rounded,
+              title: 'Punch list',
+              subtitle: 'Cleanout, paint, repairs, re-key, appliances',
+            ),
+            _CompactRow(
+              icon: Symbols.verified_rounded,
+              title: 'Rent-ready',
+              subtitle: 'Close jobs, attach receipts, then list the unit',
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _WorkOrdersSection(
+          items: dashboard.overview.openWorkOrders,
+          openFullDetail: true,
+          trailing: IconButton.filledTonal(
+            tooltip: 'New turnover task',
+            icon: const Icon(Icons.add),
+            onPressed: () {
+              showCreateWorkOrderSheet(
+                context: context,
+                ref: ref,
+                onSaved: () =>
+                    ref.invalidate(unitDashboardProvider(dashboard.unit.id)),
+                initialPropertyId: dashboard.unit.propertyId,
+                initialUnitId: dashboard.unit.id,
+                initialPropertyLabel: property,
+                initialUnitLabel: _unitLabel(dashboard.unit.unitNumber),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _UnitWorkTab extends ConsumerWidget {
   const _UnitWorkTab({required this.dashboard, this.selectedWorkOrder});
 
@@ -1702,6 +1807,23 @@ String _leaseEndsLabel(int days) {
   if (days == 0) return 'Lease ends today';
   if (days == 1) return 'Lease ends tomorrow';
   return 'Lease ends in ${days}d';
+}
+
+String _turnoverStatusLabel(String status) {
+  switch (status) {
+    case 'AwaitingVacancy':
+      return 'Awaiting vacancy';
+    case 'MoveOut':
+      return 'Move-out';
+    case 'InProgress':
+      return 'In progress';
+    case 'RentReady':
+      return 'Rent-ready';
+    case 'NotStarted':
+      return 'Not started';
+    default:
+      return status;
+  }
 }
 
 String _formatDate(DateTime date) {

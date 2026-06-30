@@ -17,6 +17,7 @@ describe("unit tab routing", () => {
       "applications",
       "ledger",
       "maintenance",
+      "turnover",
       "documents",
       "timeline",
     ]);
@@ -26,6 +27,12 @@ describe("unit tab routing", () => {
     assert.equal(resolveUnitTab("rent"), "ledger");
     assert.equal(resolveUnitTab("payments"), "ledger");
     assert.equal(resolveUnitTab("expenses"), "ledger");
+  });
+
+  it("routes make-ready and move-out deep links to the Turnover workspace", () => {
+    assert.equal(resolveUnitTab("turnover"), "turnover");
+    assert.equal(resolveUnitTab("make-ready"), "turnover");
+    assert.equal(resolveUnitTab("move-out"), "turnover");
   });
 
   it("falls back to overview for missing or invalid tab query values", () => {
