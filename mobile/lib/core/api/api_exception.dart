@@ -5,7 +5,7 @@ import 'package:dio/dio.dart';
 /// Maps Dio's error hierarchy and the API's error body shapes:
 ///   - `{ "error": "message string" }` — plain error string
 ///   - `{ "error": { "message": "..." } }` — nested error object
-///   - ASP.NET ProblemDetails — `{ "title": "...", "status": 4xx }`
+///   - ASP.NET ProblemDetails — `{ "detail": "...", "title": "...", "status": 4xx }`
 class ApiException implements Exception {
   const ApiException({required this.statusCode, required this.message});
 
@@ -63,9 +63,15 @@ class ApiException implements Exception {
         final msg = errorField['message'];
         if (msg is String && msg.isNotEmpty) return msg;
       }
-      // ASP.NET ProblemDetails — { "title": "...", "status": 4xx }
-      final title = body['title'];
+      // ASP.NET ProblemDetails — prefer specific detail over generic title.
+      final detail = body['detail'];
       final validationDetails = _extractValidationErrors(body['errors']);
+      if (detail is String && detail.isNotEmpty) {
+        return validationDetails == null
+            ? detail
+            : '$detail $validationDetails';
+      }
+      final title = body['title'];
       if (title is String && title.isNotEmpty) {
         return validationDetails == null ? title : '$title $validationDetails';
       }

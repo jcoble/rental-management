@@ -333,7 +333,7 @@
 	// --- Expense form/dialog ---
 	const emptyExpense = {
 		category: 'Repairs', description: '', amount: '', subtotal: '', taxAmount: '',
-		incurredAt: '', dueDate: '', paidAt: '', propertyId: '', vendorId: '', workOrderId: '',
+		incurredAt: '', dueDate: '', paidAt: '', propertyId: '', unitId: '', vendorId: '', workOrderId: '',
 		status: 'Pending', billableToOwner: false, notes: '',
 		vendorAddress: '', vendorPhone: '', vendorWebsite: '', vendorTaxId: '',
 		receiptNumber: '', paymentMethod: '', cardLast4: '', taxRate: '', tip: '', discount: '', shipping: ''
@@ -358,7 +358,7 @@
 		{ id: 'adjustments', label: 'Adjustments', description: 'Tax and extras' }
 	];
 	const expenseStepFields = [
-		['workOrderId', 'propertyId', 'vendorId'],
+		['workOrderId', 'propertyId', 'unitId', 'vendorId'],
 		['description', 'amount', 'subtotal', 'taxAmount'],
 		['incurredAt', 'dueDate', 'paidAt'],
 		['category', 'status', 'billableToOwner', 'notes'],
@@ -453,6 +453,7 @@
 			dueDate: e.dueDate?.slice(0, 10) ?? '',
 			paidAt: e.paidAt?.slice(0, 10) ?? '',
 			propertyId: e.propertyId != null ? String(e.propertyId) : '',
+			unitId: e.unitId != null ? String(e.unitId) : '',
 			vendorId: e.vendorId != null ? String(e.vendorId) : '',
 			workOrderId: e.workOrderId != null ? String(e.workOrderId) : '',
 			status: e.status,
@@ -500,6 +501,7 @@
 	function autofillExpenseFromWorkOrder(workOrder: WorkOrder | undefined) {
 		if (!workOrder) return;
 		fillExpenseTextField('propertyId', workOrder.propertyId);
+		fillExpenseTextField('unitId', workOrder.unitId);
 		fillExpenseTextField('description', workOrder.title);
 		fillExpenseTextField('amount', workOrder.actualCost ?? workOrder.estimatedCost);
 		if (workOrder.vendorId && !expenseForm.vendorId) {
@@ -591,7 +593,7 @@
 			description: d.description, amount: d.amount, subtotal: d.subtotal, taxAmount: d.taxAmount,
 			category: d.category, status: d.status,
 			incurredAt: d.incurredAt, dueDate: d.dueDate, paidAt: d.paidAt,
-			propertyId: d.propertyId, vendorId: d.vendorId, workOrderId: d.workOrderId,
+			propertyId: d.propertyId, unitId: d.unitId, vendorId: d.vendorId, workOrderId: d.workOrderId,
 			billableToOwner: d.billableToOwner, notes: d.notes
 		};
 		if (receiptData != null) data.receiptData = receiptData;
