@@ -25,6 +25,23 @@ const _monthNames = [
 
 String fmtDueDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
+String _fmtMoney(double? value) {
+  if (value == null) return '—';
+  return '\$${value.toStringAsFixed(2)}';
+}
+
+String _fmtApiTime(String? raw) {
+  if (raw == null || raw.isEmpty) return 'No time set';
+  final parts = raw.split(':');
+  if (parts.length < 2) return raw;
+  final hour = int.tryParse(parts[0]);
+  final minute = int.tryParse(parts[1]);
+  if (hour == null || minute == null) return raw;
+  final suffix = hour >= 12 ? 'PM' : 'AM';
+  final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+  return '$displayHour:${minute.toString().padLeft(2, '0')} $suffix';
+}
+
 Color _priorityColor(String priority, ColorScheme cs) {
   switch (priority.toLowerCase()) {
     case 'emergency':
@@ -288,8 +305,38 @@ class _TaskCard extends StatelessWidget {
                       color: colorScheme.onSurfaceVariant,
                     ),
                   ),
+                  const SizedBox(width: 10),
+                  Icon(
+                    Icons.schedule_outlined,
+                    size: 15,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _fmtApiTime(task.scheduledTime),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 ],
               ),
+              if (task.propertyName != null ||
+                  task.unitNumber != null ||
+                  task.vendorName != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  [
+                    if (task.propertyName != null) task.propertyName!,
+                    if (task.unitNumber != null) 'Unit ${task.unitNumber}',
+                    if (task.vendorName != null) task.vendorName!,
+                  ].join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -317,6 +364,17 @@ class _TaskCard extends StatelessWidget {
                   ),
                   Switch(value: task.isActive, onChanged: onToggleActive),
                 ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                [
+                  if (task.estimatedCost != null)
+                    '${_fmtMoney(task.estimatedCost)} expected · ${_fmtMoney(task.monthlyEstimatedCost)}/mo',
+                  '${task.generatedWorkOrderCount} linked work order${task.generatedWorkOrderCount == 1 ? '' : 's'}',
+                ].join(' · '),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),

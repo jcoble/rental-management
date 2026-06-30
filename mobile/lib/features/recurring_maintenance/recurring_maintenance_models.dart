@@ -10,11 +10,19 @@ class RecurringMaintenanceTask {
     required this.propertyId,
     this.unitId,
     this.vendorId,
+    this.propertyName,
+    this.unitNumber,
+    this.vendorName,
     required this.title,
     this.description,
     this.category,
     required this.recurrenceInterval,
     required this.nextDueDate,
+    this.scheduledTime,
+    this.estimatedCost,
+    this.monthlyEstimatedCost,
+    this.generatedWorkOrderCount = 0,
+    this.lastGeneratedWorkOrderId,
     this.lastGeneratedAtUtc,
     required this.isActive,
     required this.priority,
@@ -27,11 +35,19 @@ class RecurringMaintenanceTask {
   final int propertyId;
   final int? unitId;
   final int? vendorId;
+  final String? propertyName;
+  final String? unitNumber;
+  final String? vendorName;
   final String title;
   final String? description;
   final String? category;
   final String recurrenceInterval;
   final DateTime nextDueDate;
+  final String? scheduledTime;
+  final double? estimatedCost;
+  final double? monthlyEstimatedCost;
+  final int generatedWorkOrderCount;
+  final int? lastGeneratedWorkOrderId;
   final DateTime? lastGeneratedAtUtc;
   final bool isActive;
   final String priority;
@@ -57,11 +73,21 @@ class RecurringMaintenanceTask {
       propertyId: (json['propertyId'] as num?)?.toInt() ?? 0,
       unitId: (json['unitId'] as num?)?.toInt(),
       vendorId: (json['vendorId'] as num?)?.toInt(),
+      propertyName: asString('propertyName'),
+      unitNumber: asString('unitNumber'),
+      vendorName: asString('vendorName'),
       title: json['title'] as String? ?? '',
       description: asString('description'),
       category: asString('category'),
       recurrenceInterval: json['recurrenceInterval'] as String? ?? 'Monthly',
       nextDueDate: parseDate('nextDueDate') ?? DateTime.now(),
+      scheduledTime: asString('scheduledTime'),
+      estimatedCost: (json['estimatedCost'] as num?)?.toDouble(),
+      monthlyEstimatedCost: (json['monthlyEstimatedCost'] as num?)?.toDouble(),
+      generatedWorkOrderCount:
+          (json['generatedWorkOrderCount'] as num?)?.toInt() ?? 0,
+      lastGeneratedWorkOrderId: (json['lastGeneratedWorkOrderId'] as num?)
+          ?.toInt(),
       lastGeneratedAtUtc: parseDate('lastGeneratedAtUtc'),
       isActive: json['isActive'] as bool? ?? true,
       priority: json['priority'] as String? ?? 'Normal',
@@ -77,11 +103,19 @@ class RecurringMaintenanceTask {
       propertyId: propertyId,
       unitId: unitId,
       vendorId: vendorId,
+      propertyName: propertyName,
+      unitNumber: unitNumber,
+      vendorName: vendorName,
       title: title,
       description: description,
       category: category,
       recurrenceInterval: recurrenceInterval,
       nextDueDate: nextDueDate,
+      scheduledTime: scheduledTime,
+      estimatedCost: estimatedCost,
+      monthlyEstimatedCost: monthlyEstimatedCost,
+      generatedWorkOrderCount: generatedWorkOrderCount,
+      lastGeneratedWorkOrderId: lastGeneratedWorkOrderId,
       lastGeneratedAtUtc: lastGeneratedAtUtc,
       isActive: isActive ?? this.isActive,
       priority: priority,

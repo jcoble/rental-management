@@ -991,6 +991,7 @@ export interface WorkOrder {
 	tenantId?: number;
 	leaseId?: number;
 	vendorId?: number;
+	recurringMaintenanceTaskId?: number;
 	title: string;
 	description: string;
 	category: string;
