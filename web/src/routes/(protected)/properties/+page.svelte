@@ -14,6 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import PropertyFields from '$lib/components/forms/PropertyFields.svelte';
@@ -119,8 +120,19 @@
 	let editingId = $state<number | null>(null);
 	let form = $state(createEmptyPropertyDraft());
 	let formErrors = $state<Record<string, string>>({});
+	let propertyStep = $state(0);
+	let completedPropertySteps = $state<number[]>([]);
 	let deleteTarget = $state<Property | null>(null);
 	const deleteState = $derived(deleteTarget ? getPropertyDeleteState(deleteTarget) : null);
+
+	const propertySteps: FormStepperStep[] = [
+		{ id: 'address', label: 'Address', description: 'Name and location' },
+		{ id: 'setup', label: 'Setup', description: 'Status and owner' },
+	];
+	const propertyStepFields = [
+		['name', 'addressLine1', 'city', 'state', 'postalCode', 'type'],
+		['status', 'addressLine2', 'ownerEntityId'],
+	] as const;
 
 	function clearPropertyError(field: string) {
 		const next = clearFieldError(formErrors, field);
@@ -172,6 +184,8 @@
 		editingId = null;
 		form = createEmptyPropertyDraft({ typeFilter, statusFilter });
 		formErrors = {};
+		propertyStep = 0;
+		completedPropertySteps = [];
 		showForm = true;
 	}
 
@@ -189,6 +203,8 @@
 			ownerEntityId: p.ownerEntityId != null ? String(p.ownerEntityId) : '',
 		};
 		formErrors = {};
+		propertyStep = 0;
+		completedPropertySteps = [];
 		showForm = true;
 	}
 
@@ -196,12 +212,51 @@
 		showForm = false;
 		editingId = null;
 		formErrors = {};
+		propertyStep = 0;
+		completedPropertySteps = [];
+	}
+
+	function propertyStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(propertyStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+
+	function firstPropertyErrorStep(errors: Record<string, string>) {
+		return propertyStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+
+	function markPropertyStepInvalid(step: number) {
+		completedPropertySteps = completedPropertySteps.filter((completedStep) => completedStep < step);
+	}
+
+	function validatePropertyStep(step: number) {
+		const result = parseForm(propertySchema, form);
+		const currentErrors = result.errors ? Object.fromEntries(propertyStepErrorFields(step, result.errors)) : {};
+		const currentFields = new Set<string>(propertyStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(formErrors).filter(([field]) => !currentFields.has(field)));
+		formErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markPropertyStepInvalid(step);
+		return isValid;
+	}
+
+	function nextPropertyStep() {
+		if (!validatePropertyStep(propertyStep)) return;
+		if (!completedPropertySteps.includes(propertyStep)) {
+			completedPropertySteps = [...completedPropertySteps, propertyStep];
+		}
+		propertyStep = Math.min(propertyStep + 1, propertySteps.length - 1);
 	}
 
 	function submitProperty() {
 		const result = parseForm(propertySchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
+			const firstErrorStep = firstPropertyErrorStep(result.errors);
+			if (firstErrorStep >= 0) {
+				propertyStep = firstErrorStep;
+				markPropertyStepInvalid(firstErrorStep);
+			}
 			return;
 		}
 		formErrors = {};
@@ -375,47 +430,64 @@
 </div>
 
 <Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
-	<Dialog.Content class="max-w-2xl">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto [background:var(--m3c-surface-container-highest)]">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Property' : 'Edit Property'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="space-y-3" data-testid="property-form">
-			<PropertyFields bind:form errors={formErrors} />
-			<div>
-				<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
-				<Select.Root type="single" bind:value={form.status}>
-					<Select.Trigger class="w-full" data-testid="property-status-input">{form.status ? formatPropertyStatus(form.status) : 'Select status'}</Select.Trigger>
-					<Select.Content>
-						{#each propertyStatusOptions as option}
-							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+		<FormStepper
+			steps={propertySteps}
+			bind:currentStep={propertyStep}
+			completedSteps={completedPropertySteps}
+			testid="property-stepper"
+		>
+			<div class="space-y-3" data-testid="property-form">
+				{#if propertyStep === 0}
+					<PropertyFields bind:form errors={formErrors} />
+				{:else}
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
+						<Select.Root type="single" bind:value={form.status}>
+							<Select.Trigger class="w-full" data-testid="property-status-input">{form.status ? formatPropertyStatus(form.status) : 'Select status'}</Select.Trigger>
+							<Select.Content>
+								{#each propertyStatusOptions as option}
+									<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit #</span>
+						<Input data-testid="property-address2-input" bind:value={form.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
+						<Select.Root type="single" bind:value={form.ownerEntityId}>
+							<Select.Trigger class="w-full" data-testid="property-owner-input">
+								{form.ownerEntityId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerEntityId)?.name ?? 'No owner assigned') : 'No owner assigned'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
+								{#each ownersQuery.data || [] as owner}
+									<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				{/if}
 			</div>
-			<div>
-				<span class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit #</span>
-				<Input data-testid="property-address2-input" bind:value={form.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
-				<Select.Root type="single" bind:value={form.ownerEntityId}>
-					<Select.Trigger class="w-full" data-testid="property-owner-input">
-						{form.ownerEntityId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerEntityId)?.name ?? 'No owner assigned') : 'No owner assigned'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
-						{#each ownersQuery.data || [] as owner}
-							<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-		</div>
+		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="property-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
-			<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
-				{savePropertyMutation.isPending ? 'Saving…' : 'Save property'}
-			</Button>
+			{#if propertyStep > 0}
+				<Button data-testid="property-step-back" variant="outline" onclick={() => (propertyStep = Math.max(propertyStep - 1, 0))}>Back</Button>
+			{/if}
+			{#if propertyStep < propertySteps.length - 1}
+				<Button data-testid="property-step-next" onclick={nextPropertyStep}>Next</Button>
+			{:else}
+				<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
+					{savePropertyMutation.isPending ? 'Saving…' : 'Save property'}
+				</Button>
+			{/if}
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
