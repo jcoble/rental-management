@@ -20,6 +20,7 @@ function completedCore(overrides: Partial<OnboardingStepDone> = {}): OnboardingS
 		...stepDone(),
 		portfolio: true,
 		owner: true,
+		import: true,
 		property: true,
 		tenants: true,
 		lease: true,
@@ -123,5 +124,20 @@ describe('onboarding flow state', () => {
 		assert.ok(phaseButton > -1, 'phase button should exist');
 		assert.ok(phaseButtonClose > phaseButton, 'phase button should close after opening');
 		assert.ok(phaseHelp > phaseButtonClose, 'help popover trigger must not be nested in the phase button');
+	});
+
+	it('makes lease-first scan a first-class onboarding step and import-center action', () => {
+		const source = readFileSync(
+			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /currentStep\.key === 'import'/);
+		assert.match(source, /<LeaseFirstImport[^>]*oncomplete=\{handleLeaseImportComplete\}/s);
+		assert.match(source, /data-testid="onboarding-active-lease-first-scan"/);
+		assert.match(source, /data-testid="onboarding-lease-first-dialog"/);
+		assert.match(source, /activeImportUsesLeaseFirst/);
+		assert.match(source, /leaseImportCreatedSpine/);
+		assert.match(source, /if \(!result\.leaseId\)/);
 	});
 });
