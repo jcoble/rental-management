@@ -16,10 +16,9 @@
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
 	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
-	import RentTab from '$lib/components/unit/tabs/RentTab.svelte';
+	import LedgerTab from '$lib/components/unit/tabs/LedgerTab.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
-	import ExpensesTab from '$lib/components/unit/tabs/ExpensesTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
@@ -216,10 +215,9 @@
 							<Tabs.Trigger value="listing" data-testid="tab-listing">Listing</Tabs.Trigger>
 							<Tabs.Trigger value="lease" data-testid="tab-lease">Lease</Tabs.Trigger>
 							<Tabs.Trigger value="applications" data-testid="tab-applications">Applications</Tabs.Trigger>
-							<Tabs.Trigger value="rent" data-testid="tab-rent">Rent</Tabs.Trigger>
+							<Tabs.Trigger value="ledger" data-testid="tab-ledger">Ledger</Tabs.Trigger>
 							<Tabs.Trigger value="maintenance" data-testid="tab-maintenance">Maintenance</Tabs.Trigger>
 							<Tabs.Trigger value="documents" data-testid="tab-documents">Documents</Tabs.Trigger>
-							<Tabs.Trigger value="expenses" data-testid="tab-expenses">Expenses</Tabs.Trigger>
 							<Tabs.Trigger value="timeline" data-testid="tab-timeline">Timeline</Tabs.Trigger>
 						</Tabs.List>
 						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
@@ -237,8 +235,8 @@
 					<Tabs.Content value="applications" class="mt-4">
 						<ApplicationsTab {dashboard} />
 					</Tabs.Content>
-					<Tabs.Content value="rent" class="mt-4">
-						<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
+					<Tabs.Content value="ledger" class="mt-4">
+						<LedgerTab {dashboard} onScan={goScan} />
 					</Tabs.Content>
 					<Tabs.Content value="maintenance" class="mt-4">
 						<MaintenanceTab {dashboard} onScan={goScan} />
@@ -250,9 +248,6 @@
 							onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
 							onDocumentsChanged={refreshUnitDashboard}
 						/>
-					</Tabs.Content>
-					<Tabs.Content value="expenses" class="mt-4">
-						<ExpensesTab {dashboard} onScan={goScan} />
 					</Tabs.Content>
 					<Tabs.Content value="timeline" class="mt-4">
 						<TimelineTab unitId={id} />

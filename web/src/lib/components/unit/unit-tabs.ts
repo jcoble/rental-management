@@ -1,7 +1,27 @@
-export const UNIT_TABS = ['overview', 'listing', 'lease', 'applications', 'rent', 'maintenance', 'documents', 'expenses', 'timeline'] as const;
+export const UNIT_TABS = [
+  "overview",
+  "listing",
+  "lease",
+  "applications",
+  "ledger",
+  "maintenance",
+  "documents",
+  "timeline",
+] as const;
 
 export type UnitTab = (typeof UNIT_TABS)[number];
 
+const UNIT_TAB_ALIASES: Record<string, UnitTab> = {
+  rent: "ledger",
+  payments: "ledger",
+  expenses: "ledger",
+};
+
 export function resolveUnitTab(value: string | undefined | null): UnitTab {
-	return UNIT_TABS.includes(value as UnitTab) ? (value as UnitTab) : 'overview';
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return "overview";
+  if (UNIT_TAB_ALIASES[normalized]) return UNIT_TAB_ALIASES[normalized];
+  return UNIT_TABS.includes(normalized as UnitTab)
+    ? (normalized as UnitTab)
+    : "overview";
 }

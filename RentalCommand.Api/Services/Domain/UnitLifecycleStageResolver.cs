@@ -28,7 +28,7 @@ public enum UnitLifecycleStage
 /// which performs no I/O so it stays a pure, testable O(1) function.
 /// </summary>
 /// <param name="UnitStatus">The unit's occupancy status (Vacant/Occupied/Reserved/Offline).</param>
-/// <param name="CurrentLease">Most-recent Active lease, else the latest lease of any status; null if the unit has never been leased.</param>
+/// <param name="CurrentLease">In-force Active/NoticeGiven lease or pending signature lease; null when only historical leases remain.</param>
 /// <param name="HasDraftOrPendingLease">True when a lease in {Draft, PendingSignature} exists for the unit (and no Active lease).</param>
 /// <param name="HasOpenApplication">True when an open application {Submitted, UnderReview, Approved} exists that has not yet converted to a lease.</param>
 /// <param name="HasUpcomingShowing">True when a Showing appointment is scheduled in the future.</param>

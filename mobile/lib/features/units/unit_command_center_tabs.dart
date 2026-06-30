@@ -3,6 +3,7 @@ enum UnitCommandCenterTab {
   listing,
   lease,
   applications,
+  ledger,
   tenants,
   work,
 }
@@ -47,6 +48,14 @@ UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) {
     case 'application':
     case 'applications':
       return UnitCommandCenterTab.applications;
+    case 'ledger':
+    case 'rent':
+    case 'rents':
+    case 'payment':
+    case 'payments':
+    case 'expense':
+    case 'expenses':
+      return UnitCommandCenterTab.ledger;
     case 'tenant':
     case 'tenants':
       return UnitCommandCenterTab.tenants;
