@@ -22,12 +22,13 @@
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import { Plus, RefreshCw, Pencil, Trash2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -323,6 +324,10 @@
 	</div>
 {/snippet}
 
+{#snippet headerActions()}
+	<Button data-testid="recurring-task-create-button" onclick={openCreate}><Plus class="h-4 w-4" /> New recurring task</Button>
+{/snippet}
+
 <svelte:head>
 	<title>Recurring Maintenance - Rental Command</title>
 </svelte:head>
@@ -330,15 +335,17 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="recurring-maintenance-page">
 	<PageBreadcrumb crumbs={[{ label: 'Work Orders', href: '/maintenance' }, { label: 'Recurring' }]} />
 
-	<div class="mt-4 mb-6 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="flex items-center gap-2 text-2xl font-bold"><RefreshCw class="h-6 w-6" /> Recurring Maintenance</h1>
-			<p class="text-sm text-muted-foreground">
-				Set up chores that repeat on a schedule (like "HVAC filter every Quarter"). We create the work order for you each time it comes due.
-			</p>
-		</div>
-		<Button data-testid="recurring-task-create-button" onclick={openCreate}><Plus class="h-4 w-4" /> New recurring task</Button>
-	</div>
+	<PageHeader
+		class="mt-4 mb-6"
+		band
+		art={10}
+		tone="coral"
+		eyebrow="Work"
+		title="Recurring Maintenance"
+		description='Set up chores that repeat on a schedule, like "HVAC filter every Quarter." We create the work order each time it comes due.'
+		actions={headerActions}
+		data-testid="recurring-maintenance-header"
+	/>
 
 	<DataGrid
 		data={tasks}

@@ -20,6 +20,18 @@ public interface IInspectionService
     /// </summary>
     Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct = default);
 
+    /// <summary>Loads one built-in or portfolio-custom template by id.</summary>
+    Task<InspectionTemplateResponse?> GetTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default);
+
+    /// <summary>Creates a portfolio-owned custom template. Built-ins are code-defined and not mutable.</summary>
+    Task<InspectionTemplateResponse> CreateTemplateAsync(int portfolioId, CreateInspectionTemplateRequest request, CancellationToken ct = default);
+
+    /// <summary>Replaces a portfolio-owned custom template's metadata and ordered question rows.</summary>
+    Task<InspectionTemplateResponse?> UpdateTemplateAsync(int portfolioId, int templateId, UpdateInspectionTemplateRequest request, CancellationToken ct = default);
+
+    /// <summary>Deletes a portfolio-owned custom template. Built-ins cannot be deleted.</summary>
+    Task<bool> DeleteTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default);
+
     /// <summary>
     /// Creates an inspection, optionally materializing checklist items (all Pending) from the template
     /// referenced by <see cref="CreateInspectionRequest.TemplateId"/>. Returns null when a referenced
