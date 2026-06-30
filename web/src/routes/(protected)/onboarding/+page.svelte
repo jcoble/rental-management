@@ -788,7 +788,8 @@
 	const rentTrackingStartOptions = [
 		{ value: 'ForwardOnly', label: 'Start from today' },
 		{ value: 'BackfillFromLeaseStart', label: 'Backfill from lease start' },
-		{ value: 'CustomCutoffDate', label: 'Use cutoff date' }
+		{ value: 'CustomCutoffDate', label: 'Use cutoff date' },
+		{ value: 'OpeningBalanceOnly', label: 'Use opening balance' }
 	] as const;
 	const rentTrackingStartLabel = (value: string) =>
 		rentTrackingStartOptions.find((option) => option.value === value)?.label ?? 'Select start';
@@ -806,6 +807,9 @@
 		rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
+		openingBalanceAmount: '',
+		openingBalanceAsOfDate: '',
+		openingBalanceNote: '',
 	});
 	// Pre-fill security deposit with monthly rent (common default) once — stays
 	// editable; if the user clears it we do not re-fill.
@@ -853,6 +857,13 @@
 	$effect(() => {
 		if (leaseForm.rentTrackingStartMode !== 'CustomCutoffDate' && leaseForm.rentTrackingStartDate) {
 			leaseForm.rentTrackingStartDate = '';
+		}
+	});
+	$effect(() => {
+		if (leaseForm.rentTrackingStartMode !== 'OpeningBalanceOnly') {
+			if (leaseForm.openingBalanceAmount) leaseForm.openingBalanceAmount = '';
+			if (leaseForm.openingBalanceAsOfDate) leaseForm.openingBalanceAsOfDate = '';
+			if (leaseForm.openingBalanceNote) leaseForm.openingBalanceNote = '';
 		}
 	});
 
@@ -924,6 +935,9 @@
 			rentDueDay: leaseForm.rentDueDay,
 			rentTrackingStartMode: leaseForm.rentTrackingStartMode,
 			rentTrackingStartDate: leaseForm.rentTrackingStartDate,
+			openingBalanceAmount: leaseForm.openingBalanceAmount,
+			openingBalanceAsOfDate: leaseForm.openingBalanceAsOfDate,
+			openingBalanceNote: leaseForm.openingBalanceNote,
 			status: 'Active',
 			notes: '',
 		});
@@ -1906,7 +1920,7 @@
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
 									<div class={leaseForm.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
-										<span class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent tracking start<HelpPopover title="Rent tracking start" summary="Controls when the system starts generating rent records for this lease." detail="Start from today: only future months are tracked (good for new leases). Backfill from lease start: creates past records back to the lease start date (use when catching up). Use cutoff date: you choose a specific date to start from, useful if you've already been tracking rent elsewhere and want to pick up mid-lease." testid="help-rent-tracking-start" /></span>
+										<span class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent tracking start<HelpPopover title="Rent tracking start" summary="Controls when the system starts generating rent records for this lease." detail="Start from today: only future months are tracked. Backfill from lease start: creates past records back to the lease start date. Use cutoff date: choose a specific date to start from. Use opening balance: start generating from today and carry the current balance into the ledger." testid="help-rent-tracking-start" /></span>
 										<Select.Root type="single" bind:value={leaseForm.rentTrackingStartMode}>
 											<Select.Trigger class="w-full" data-testid="onboarding-lease-rent-tracking-mode">{rentTrackingStartLabel(leaseForm.rentTrackingStartMode)}</Select.Trigger>
 											<Select.Content>
@@ -1921,6 +1935,29 @@
 											<label for="ob-lease-rent-tracking-date" class="mb-1 block text-xs font-medium text-muted-foreground">Cutoff date</label>
 											<DatePicker id="ob-lease-rent-tracking-date" testid="onboarding-lease-rent-tracking-date" bind:value={leaseForm.rentTrackingStartDate} placeholder="Cutoff date" min={leaseForm.startDate || undefined} />
 											{#if leaseErrors.rentTrackingStartDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentTrackingStartDate}</p>{/if}
+										</div>
+									{/if}
+									{#if leaseForm.rentTrackingStartMode === 'OpeningBalanceOnly'}
+										<div>
+											<label for="ob-lease-opening-balance" class="mb-1 block text-xs font-medium text-muted-foreground">Opening balance</label>
+											<Input id="ob-lease-opening-balance" type="text" inputmode="decimal" mask="currency" data-testid="onboarding-lease-opening-balance-amount" bind:value={leaseForm.openingBalanceAmount} placeholder="Optional amount" />
+											{#if leaseErrors.openingBalanceAmount}<p class="mt-1 text-xs text-destructive">{leaseErrors.openingBalanceAmount}</p>{/if}
+										</div>
+										<div>
+											<label for="ob-lease-opening-balance-date" class="mb-1 block text-xs font-medium text-muted-foreground">As of date</label>
+											<DatePicker id="ob-lease-opening-balance-date" testid="onboarding-lease-opening-balance-date" bind:value={leaseForm.openingBalanceAsOfDate} placeholder="As of date" max={leaseForm.startDate || undefined} />
+											{#if leaseErrors.openingBalanceAsOfDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.openingBalanceAsOfDate}</p>{/if}
+										</div>
+										<div class="sm:col-span-2">
+											<label for="ob-lease-opening-balance-note" class="mb-1 block text-xs font-medium text-muted-foreground">Opening note</label>
+											<textarea
+												id="ob-lease-opening-balance-note"
+												data-testid="onboarding-lease-opening-balance-note"
+												bind:value={leaseForm.openingBalanceNote}
+												rows="2"
+												class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+											></textarea>
+											{#if leaseErrors.openingBalanceNote}<p class="mt-1 text-xs text-destructive">{leaseErrors.openingBalanceNote}</p>{/if}
 										</div>
 									{/if}
 								</div>
