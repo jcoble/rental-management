@@ -942,7 +942,7 @@
 							Set Active
 						</Button>
 					{:else if visibleStatus === 'Active'}
-						<Button data-testid="lease-give-notice" variant="outline" size="sm" class="gap-1.5" onclick={openNoticeDialog}>
+						<Button data-testid="lease-create-send-notice" variant="outline" size="sm" class="gap-1.5" onclick={openNoticeDialog}>
 							<BellRing class="h-4 w-4" />
 							Create / Send notice
 						</Button>
