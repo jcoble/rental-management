@@ -60,13 +60,25 @@ public class VoiceSlotsTests
     }
 
     [Fact]
-    public void UnknownRecordType_IsAlwaysComplete()
+    public void UnknownRecordType_IsAmbiguousAndNotComplete()
     {
         var result = VoiceSlots.Evaluate("WorkOrder", Fields());
 
-        result.Complete.Should().BeTrue();
+        result.Complete.Should().BeFalse();
+        result.Ambiguous.Should().BeTrue();
         result.Missing.Should().BeEmpty();
-        result.NextPrompt.Should().BeNull();
+        result.NextPrompt.Should().Contain("expenses by voice");
+    }
+
+    [Fact]
+    public void VoiceAmbiguousFlag_IsAmbiguousAndNotComplete()
+    {
+        var result = VoiceSlots.Evaluate("Expense", Fields(("voice_ambiguous", "true"), ("amount", "40")));
+
+        result.Complete.Should().BeFalse();
+        result.Ambiguous.Should().BeTrue();
+        result.Missing.Should().BeEmpty();
+        result.NextPrompt.Should().Contain("expenses by voice");
     }
 
     [Fact]

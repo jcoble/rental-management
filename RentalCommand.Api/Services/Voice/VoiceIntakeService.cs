@@ -214,7 +214,20 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
     private static string MergeFields(string? priorJson, string newJson)
     {
         var merged = ParseFieldMap(priorJson);
-        foreach (var (name, value) in ParseFieldMap(newJson))
+        var next = ParseFieldMap(newJson);
+
+        // These are server-owned per-turn classification flags, not user slots.
+        // If the latest full-conversation classification no longer marks the
+        // draft ambiguous, clear the stale prior flags so the flow can recover.
+        foreach (var transient in new[] { "voice_ambiguous", "voice_intent" })
+        {
+            if (!next.ContainsKey(transient))
+            {
+                merged.Remove(transient);
+            }
+        }
+
+        foreach (var (name, value) in next)
         {
             if (!string.IsNullOrWhiteSpace(value.Value) || !merged.ContainsKey(name))
             {
@@ -276,18 +289,21 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         var grounding = await BuildGroundingContextAsync(portfolioId, ct);
         var prompt =
             """
-            Convert this spoken rental-management note into one human-review draft.
-            Choose targetEntityType as exactly one of: WorkOrder, Expense, Payment.
+            Convert this spoken rental-management note into one human-review draft for the voice Expense v1 flow.
+            V1 only saves expenses by voice. Choose targetEntityType as exactly one of: Expense, Unsupported.
             Return only JSON in this shape:
             {
-              "targetEntityType": "WorkOrder",
+              "targetEntityType": "Expense",
               "fields": {
-                "title": {"value": "...", "confidence": 0.0},
-                "description": {"value": "...", "confidence": 0.0}
+                "vendor_name": {"value": "...", "confidence": 0.0},
+                "amount": {"value": "...", "confidence": 0.0},
+                "notes": {"value": "...", "confidence": 0.0}
               }
             }
-            For WorkOrder include property_id when known or strongly matched, optional unit_id, tenant_id, title, description, category, priority, estimated_cost.
-            For Expense/Payment use the same snake_case field names as receipt/payment scan drafts: vendor_name, amount/total, transaction_date, category, notes, payer_name, check_number, lease_id. Also include property_id when the speaker names a property that matches one in Known records (otherwise omit it).
+            Use Expense only when the transcript is trying to log a cost, receipt, bill, invoice, purchase, repair charge, utility charge, or similar expense.
+            Use Unsupported when the transcript is clearly asking for a payment, work order, tenant message, lease, appointment, or any non-expense record.
+            For Expense use the same snake_case field names as receipt scan drafts: vendor_name, amount/total, transaction_date, category, notes. Also include property_id when the speaker names a property that matches one in Known records (otherwise omit it).
+            For Unsupported include notes summarizing what the speaker asked for.
             Known records:
             """ + "\n" + grounding + "\n\nTranscript:\n" + transcript;
 
@@ -334,12 +350,13 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
                 : root.TryGetProperty("target_entity_type", out var snakeTargetEl)
                     ? snakeTargetEl.GetString()
                     : null;
-            target = NormalizeTarget(target);
+            var voiceIntent = NormalizeVoiceIntent(target);
+            var ambiguous = voiceIntent != "Expense";
+            target = "Expense";
 
             var fields = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
             {
                 ["transcript"] = new { value = transcript, confidence = 1m },
-                ["target_entity_type"] = new { value = target, confidence = 1m },
             };
 
             if (root.TryGetProperty("fields", out var fieldsEl) && fieldsEl.ValueKind == JsonValueKind.Object)
@@ -350,6 +367,16 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
                 }
             }
 
+            fields.Remove("target_entity_type");
+            fields.Remove("voice_intent");
+            fields.Remove("voice_ambiguous");
+            fields["target_entity_type"] = new { value = target, confidence = 1m };
+            if (ambiguous)
+            {
+                fields["voice_intent"] = new { value = voiceIntent, confidence = 1m };
+                fields["voice_ambiguous"] = new { value = "true", confidence = 1m };
+            }
+
             return new VoiceClassification(
                 target,
                 JsonSerializer.Serialize(fields, JsonOptions),
@@ -358,15 +385,14 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not parse voice-intake LLM JSON; creating fallback WorkOrder draft.");
+            _logger.LogWarning(ex, "Could not parse voice-intake LLM JSON; creating fallback Expense draft.");
             var fallback = new Dictionary<string, object?>
             {
                 ["transcript"] = new { value = transcript, confidence = 1m },
-                ["target_entity_type"] = new { value = "WorkOrder", confidence = 0.2m },
-                ["title"] = new { value = transcript.Length <= 80 ? transcript : transcript[..80], confidence = 0.2m },
-                ["description"] = new { value = transcript, confidence = 0.2m },
+                ["target_entity_type"] = new { value = "Expense", confidence = 0.2m },
+                ["notes"] = new { value = transcript, confidence = 0.2m },
             };
-            return new VoiceClassification("WorkOrder", JsonSerializer.Serialize(fallback, JsonOptions), "voice-intake-fallback", null);
+            return new VoiceClassification("Expense", JsonSerializer.Serialize(fallback, JsonOptions), "voice-intake-fallback", null);
         }
     }
 
@@ -381,11 +407,12 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         return new { value = raw ?? string.Empty, confidence = 0.5m };
     }
 
-    private static string NormalizeTarget(string? target) => target?.Trim().ToLowerInvariant() switch
+    private static string NormalizeVoiceIntent(string? target) => target?.Trim().ToLowerInvariant() switch
     {
         "expense" => "Expense",
         "payment" => "Payment",
-        _ => "WorkOrder",
+        "workorder" or "work_order" or "work order" => "WorkOrder",
+        _ => "Unsupported",
     };
 
     private static string ExtractJsonObject(string raw)

@@ -22,6 +22,7 @@ public sealed record ScanDraftResponse(
     IReadOnlyList<string>? MissingRequired = null,
     string? NextPrompt = null,
     bool Complete = true,
+    bool Ambiguous = false,
     // Lease-import preview: for a lease draft, what confirm would do with the property/unit
     // (link-existing vs create-new). Null for non-lease drafts. Populated by the controller via
     // WithLeaseProposal() so the review UI can show + let the user correct before committing.
@@ -75,6 +76,7 @@ public sealed record ScanDraftResponse(
             MissingRequired = eval.Missing,
             NextPrompt = eval.NextPrompt,
             Complete = eval.Complete,
+            Ambiguous = eval.Ambiguous,
         };
     }
 

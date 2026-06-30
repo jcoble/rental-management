@@ -51,6 +51,10 @@ export interface ScanDraftResponse {
 	createdEntityType: string | null;
 	createdEntityId: number | null;
 	createdUnitId: number | null;
+	missingRequired?: string[] | null;
+	nextPrompt?: string | null;
+	complete?: boolean;
+	ambiguous?: boolean;
 	/**
 	 * Lease-import property/unit proposal (link-existing vs create-new). Populated by the API only for
 	 * Lease drafts; null otherwise. The review screen renders this so the empty-portfolio create path is

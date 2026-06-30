@@ -19,6 +19,7 @@ void main() {
         'missingRequired': ['amount'],
         'nextPrompt': 'How much was it?',
         'complete': false,
+        'ambiguous': false,
       });
 
       expect(turn.draftId, 7);
@@ -27,10 +28,11 @@ void main() {
       expect(turn.missingRequired, ['amount']);
       expect(turn.nextPrompt, 'How much was it?');
       expect(turn.complete, isFalse);
+      expect(turn.ambiguous, isFalse);
       expect(turn.transcript, contains('123 Main'));
     });
 
-    test('defaults complete=true / empty missing when those keys are absent', () {
+    test('defaults complete=true / empty missing / not ambiguous when those keys are absent', () {
       final turn = VoiceTurn.fromJson({
         'id': 1,
         'targetEntityType': 'Expense',
@@ -38,8 +40,27 @@ void main() {
       });
 
       expect(turn.complete, isTrue);
+      expect(turn.ambiguous, isFalse);
       expect(turn.missingRequired, isEmpty);
       expect(turn.nextPrompt, isNull);
+    });
+
+    test('parses ambiguous voice turns', () {
+      final turn = VoiceTurn.fromJson({
+        'id': 2,
+        'targetEntityType': 'Expense',
+        'fields': [
+          {'name': 'voice_intent', 'value': 'WorkOrder'},
+          {'name': 'voice_ambiguous', 'value': 'true'},
+        ],
+        'nextPrompt': 'I can save expenses by voice right now.',
+        'complete': false,
+        'ambiguous': true,
+      });
+
+      expect(turn.ambiguous, isTrue);
+      expect(turn.complete, isFalse);
+      expect(phaseForTurn(turn), VoicePhase.asking);
     });
   });
 
