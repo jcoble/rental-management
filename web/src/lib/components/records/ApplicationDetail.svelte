@@ -6,6 +6,7 @@
 		type ApplicationResponse,
 		type ScreeningResultResponse,
 		type AdverseActionNoticeResponse,
+		type UpdateApplicationRequest,
 	} from '$lib/api/endpoints/applications';
 	import { downloadDocument } from '$lib/api/endpoints/documents';
 	import { ApiError } from '$lib/api/client';
@@ -19,10 +20,12 @@
 	import { leaseCreateHrefForApprovedTenant } from '$lib/leases/lease-create-prefill';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { Input } from '$lib/components/ui/input';
 	import {
 		Mail,
 		Phone,
@@ -39,6 +42,7 @@
 		ScanSearch,
 		Download,
 		User,
+		Edit3,
 	} from '@lucide/svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
@@ -131,6 +135,122 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
+	// ── Landlord corrections ─────────────────────────────────────────────────────
+	type ApplicationEditForm = {
+		firstName: string;
+		lastName: string;
+		email: string;
+		phone: string;
+		dateOfBirth: string;
+		currentAddress: string;
+		employer: string;
+		monthlyIncome: string;
+		desiredMoveInDate: string;
+		notes: string;
+	};
+
+	function emptyApplicationEditForm(): ApplicationEditForm {
+		return {
+			firstName: '',
+			lastName: '',
+			email: '',
+			phone: '',
+			dateOfBirth: '',
+			currentAddress: '',
+			employer: '',
+			monthlyIncome: '',
+			desiredMoveInDate: '',
+			notes: '',
+		};
+	}
+
+	let showEdit = $state(false);
+	let editForm = $state<ApplicationEditForm>(emptyApplicationEditForm());
+	let editErrors = $state<Record<string, string>>({});
+
+	function dateInputValue(value: string | null | undefined): string {
+		if (!value) return '';
+		const parsed = new Date(value);
+		return isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+	}
+
+	function openEditApplication() {
+		if (!application) return;
+		const formattedAddress = formatApplicationAddress(application);
+		editForm = {
+			firstName: application.firstName ?? '',
+			lastName: application.lastName ?? '',
+			email: application.email ?? '',
+			phone: application.phone ?? '',
+			dateOfBirth: dateInputValue(application.dateOfBirth),
+			currentAddress: formattedAddress === '—' ? '' : formattedAddress,
+			employer: application.employer ?? '',
+			monthlyIncome: application.monthlyIncome == null ? '' : String(application.monthlyIncome),
+			desiredMoveInDate: dateInputValue(application.desiredMoveInDate),
+			notes: application.notes ?? '',
+		};
+		editErrors = {};
+		showEdit = true;
+	}
+
+	function buildApplicationUpdate(): UpdateApplicationRequest | null {
+		const errors: Record<string, string> = {};
+		const firstName = editForm.firstName.trim();
+		const lastName = editForm.lastName.trim();
+		if (!firstName) errors.firstName = 'First name is required.';
+		if (!lastName) errors.lastName = 'Last name is required.';
+
+		const incomeText = editForm.monthlyIncome.trim();
+		let income: number | null = null;
+		if (incomeText) {
+			const parsedIncome = Number(incomeText);
+			if (!Number.isFinite(parsedIncome) || parsedIncome < 0) {
+				errors.monthlyIncome = 'Enter a valid monthly income.';
+			} else {
+				income = parsedIncome;
+			}
+		}
+
+		if (Object.keys(errors).length > 0) {
+			editErrors = errors;
+			return null;
+		}
+
+		editErrors = {};
+		return {
+			firstName,
+			lastName,
+			email: editForm.email.trim(),
+			phone: editForm.phone.trim(),
+			...(editForm.dateOfBirth
+				? { dateOfBirth: editForm.dateOfBirth }
+				: { clearDateOfBirth: true }),
+			currentAddress: editForm.currentAddress.trim(),
+			employer: editForm.employer.trim(),
+			...(income == null ? { clearMonthlyIncome: true } : { monthlyIncome: income }),
+			...(editForm.desiredMoveInDate
+				? { desiredMoveInDate: editForm.desiredMoveInDate }
+				: { clearDesiredMoveInDate: true }),
+			notes: editForm.notes.trim(),
+		};
+	}
+
+	const updateMutation = createMutation(() => ({
+		mutationFn: (payload: UpdateApplicationRequest) => applications.update(id, payload),
+		onSuccess: () => {
+			showEdit = false;
+			showSuccess('Application updated.');
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Application could not be updated.')),
+	}));
+
+	function submitEdit() {
+		const payload = buildApplicationUpdate();
+		if (!payload) return;
+		updateMutation.mutate(payload);
+	}
+
 	// ── Screening ─────────────────────────────────────────────────────────────────
 	const screeningQuery = createQuery(() => ({
 		queryKey: ['application-screening', id],
@@ -142,9 +262,9 @@
 		screeningQuery.data?.[0]
 	);
 	const hasScreening = $derived(!!latestScreening);
-		const canScreen = $derived(
-			canRunApplicationScreening(application?.status, application?.consentGiven)
-		);
+	const canScreen = $derived(
+		canRunApplicationScreening(application?.status, application?.consentGiven)
+	);
 
 	const RECOMMENDATION_MAP = {
 		Accept: { label: 'Accept', class: 'm3-tone-chip border m3-tone--success' },
@@ -275,6 +395,9 @@
 			</div>
 			{#if isOpen}
 				<div class="flex flex-wrap items-center gap-2">
+					<Button variant="outline" class="gap-2" onclick={openEditApplication} data-testid="application-edit">
+						<Edit3 class="h-4 w-4" /> Edit
+					</Button>
 					<Button class="gap-2" onclick={() => (showApprove = true)} data-testid="application-approve">
 						<CheckCircle2 class="h-4 w-4" /> Approve
 					</Button>
@@ -575,6 +698,75 @@
 		<p class="mt-0.5 break-words text-sm text-foreground">{value}</p>
 	</div>
 {/snippet}
+
+<!-- Edit submitted application -->
+<Dialog.Root open={showEdit} onOpenChange={(v) => { if (!v) showEdit = false; }}>
+	<Dialog.Content class="max-w-3xl">
+		<Dialog.Header>
+			<Dialog.Title>Edit application</Dialog.Title>
+			<Dialog.Description>
+				Correct applicant details before making a decision. Legal consent and decision history stay unchanged.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="grid gap-4 sm:grid-cols-2">
+			<div>
+				<label for="application-edit-first" class="mb-1 block text-sm font-medium text-foreground">First name</label>
+				<Input id="application-edit-first" bind:value={editForm.firstName} data-testid="application-edit-first-name" />
+				{#if editErrors.firstName}<p class="mt-1 text-xs text-destructive">{editErrors.firstName}</p>{/if}
+			</div>
+			<div>
+				<label for="application-edit-last" class="mb-1 block text-sm font-medium text-foreground">Last name</label>
+				<Input id="application-edit-last" bind:value={editForm.lastName} data-testid="application-edit-last-name" />
+				{#if editErrors.lastName}<p class="mt-1 text-xs text-destructive">{editErrors.lastName}</p>{/if}
+			</div>
+			<div>
+				<label for="application-edit-email" class="mb-1 block text-sm font-medium text-foreground">Email</label>
+				<Input id="application-edit-email" type="email" bind:value={editForm.email} data-testid="application-edit-email" />
+			</div>
+			<div>
+				<label for="application-edit-phone" class="mb-1 block text-sm font-medium text-foreground">Phone</label>
+				<Input id="application-edit-phone" bind:value={editForm.phone} data-testid="application-edit-phone" />
+			</div>
+			<div>
+				<label for="application-edit-dob" class="mb-1 block text-sm font-medium text-foreground">Date of birth</label>
+				<DatePicker id="application-edit-dob" bind:value={editForm.dateOfBirth} testid="application-edit-date-of-birth" />
+			</div>
+			<div>
+				<label for="application-edit-movein" class="mb-1 block text-sm font-medium text-foreground">Desired move-in</label>
+				<DatePicker id="application-edit-movein" bind:value={editForm.desiredMoveInDate} testid="application-edit-desired-move-in" />
+			</div>
+			<div>
+				<label for="application-edit-employer" class="mb-1 block text-sm font-medium text-foreground">Employer</label>
+				<Input id="application-edit-employer" bind:value={editForm.employer} data-testid="application-edit-employer" />
+			</div>
+			<div>
+				<label for="application-edit-income" class="mb-1 block text-sm font-medium text-foreground">Monthly income</label>
+				<Input id="application-edit-income" type="text" inputmode="decimal" bind:value={editForm.monthlyIncome} data-testid="application-edit-monthly-income" />
+				{#if editErrors.monthlyIncome}<p class="mt-1 text-xs text-destructive">{editErrors.monthlyIncome}</p>{/if}
+			</div>
+			<div class="sm:col-span-2">
+				<label for="application-edit-address" class="mb-1 block text-sm font-medium text-foreground">Current address</label>
+				<Input id="application-edit-address" bind:value={editForm.currentAddress} data-testid="application-edit-current-address" />
+			</div>
+			<div class="sm:col-span-2">
+				<label for="application-edit-notes" class="mb-1 block text-sm font-medium text-foreground">Notes</label>
+				<textarea
+					id="application-edit-notes"
+					bind:value={editForm.notes}
+					rows="3"
+					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
+					data-testid="application-edit-notes"
+				></textarea>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showEdit = false)} data-testid="application-edit-cancel">Cancel</Button>
+			<Button onclick={submitEdit} disabled={updateMutation.isPending} data-testid="application-edit-save">
+				{updateMutation.isPending ? 'Saving…' : 'Save changes'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <!-- Approve confirmation -->
 <ConfirmDialog

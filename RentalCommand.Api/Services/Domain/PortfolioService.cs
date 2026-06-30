@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -58,6 +59,81 @@ public class PortfolioService : IPortfolioService
             .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
 
         return entity == null ? null : PortfolioResponse.FromEntity(entity);
+    }
+
+    public async Task<GettingStartedSignalsResponse?> GetGettingStartedSignalsAsync(
+        int portfolioId,
+        CancellationToken ct = default)
+    {
+        if (portfolioId <= 0)
+        {
+            return null;
+        }
+
+        var summary = await _db.Portfolios
+            .AsNoTracking()
+            .Where(p => p.Id == portfolioId)
+            .Select(p => new
+            {
+                p.Id,
+                p.Name,
+                p.Settings,
+                p.IsSandbox,
+                OwnerCount = _db.OwnerEntities.Count(o => o.PortfolioId == p.Id),
+                PropertyCount = _db.Properties.Count(property => property.PortfolioId == p.Id),
+                UnitCount = _db.Units.Count(unit => unit.Property != null && unit.Property.PortfolioId == p.Id),
+                TenantCount = _db.Tenants.Count(tenant => tenant.PortfolioId == p.Id),
+                LeaseCount = _db.Leases.Count(lease => lease.PortfolioId == p.Id),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (summary is null)
+        {
+            return null;
+        }
+
+        var notificationSettings = await _db.NotificationSettings
+            .AsNoTracking()
+            .Where(settings => settings.PortfolioId == portfolioId)
+            .Select(settings => new
+            {
+                settings.EnableRentCharges,
+                settings.EnableLateFees,
+                HasDailyBriefingEmail = settings.DailyBriefingEmailRecipientsCipherText != null
+                    && settings.DailyBriefingEmailRecipientsCipherText != string.Empty,
+                HasSmsCredentialA = (settings.SmsCredentialACipherText != null
+                    && settings.SmsCredentialACipherText != string.Empty)
+                    || (settings.SignalWireProjectIdCipherText != null
+                    && settings.SignalWireProjectIdCipherText != string.Empty),
+                HasSmsCredentialB = (settings.SmsCredentialBCipherText != null
+                    && settings.SmsCredentialBCipherText != string.Empty)
+                    || (settings.SignalWireTokenCipherText != null
+                    && settings.SignalWireTokenCipherText != string.Empty),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var hasEmailPreference = await _db.NotificationPreferences
+            .AsNoTracking()
+            .AnyAsync(pref => pref.PortfolioId == portfolioId && pref.EnableEmail, ct);
+
+        return new GettingStartedSignalsResponse
+        {
+            PortfolioId = summary.Id,
+            PortfolioNamed = !string.IsNullOrWhiteSpace(summary.Name),
+            OwnerCount = summary.OwnerCount,
+            PropertyCount = summary.PropertyCount,
+            UnitCount = summary.UnitCount,
+            TenantCount = summary.TenantCount,
+            LeaseCount = summary.LeaseCount,
+            HasNotificationEmail = ReadNotificationEmail(summary.Settings) != null
+                || hasEmailPreference
+                || notificationSettings?.HasDailyBriefingEmail == true,
+            HasTexting = notificationSettings?.HasSmsCredentialA == true
+                || notificationSettings?.HasSmsCredentialB == true,
+            HasAutomations = notificationSettings?.EnableRentCharges == true
+                || notificationSettings?.EnableLateFees == true,
+            IsSandbox = summary.IsSandbox,
+        };
     }
 
     public async Task<PortfolioResponse> CreateAsync(int userId, CreatePortfolioRequest request, CancellationToken ct = default)
@@ -145,5 +221,31 @@ public class PortfolioService : IPortfolioService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    private static string? ReadNotificationEmail(string? settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(settingsJson);
+            if (doc.RootElement.TryGetProperty("notifications", out var notifications) &&
+                notifications.ValueKind == JsonValueKind.Object &&
+                notifications.TryGetProperty("email", out var email) &&
+                email.ValueKind == JsonValueKind.String)
+            {
+                return string.IsNullOrWhiteSpace(email.GetString()) ? null : email.GetString();
+            }
+        }
+        catch
+        {
+            return null;
+        }
+
+        return null;
     }
 }

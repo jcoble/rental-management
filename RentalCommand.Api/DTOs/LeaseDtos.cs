@@ -358,9 +358,23 @@ public class CreateLeaseRequest
     public int RentDueDay { get; set; } = 1;
 
     [EnumDataType(typeof(RentTrackingStartMode))]
-    public RentTrackingStartMode RentTrackingStartMode { get; set; } = RentTrackingStartMode.BackfillFromLeaseStart;
+    public RentTrackingStartMode RentTrackingStartMode { get; set; } = RentTrackingStartMode.ForwardOnly;
 
     public DateTime? RentTrackingStartDate { get; set; }
+
+    /// <summary>
+    /// Optional carried-over balance to create with the lease when using
+    /// <see cref="RentTrackingStartMode.OpeningBalanceOnly"/>. Positive means the tenant already owed
+    /// money; negative means they had a credit. Omit to start from today with no carried balance.
+    /// </summary>
+    [Range(-99999999, 99999999)]
+    public decimal? OpeningBalanceAmount { get; set; }
+
+    /// <summary>The date the optional carried-over balance was true as of.</summary>
+    public DateTime? OpeningBalanceAsOfDate { get; set; }
+
+    [MaxLength(2000)]
+    public string? OpeningBalanceNote { get; set; }
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
@@ -403,6 +417,14 @@ public class UpdateLeaseRequest
     public RentTrackingStartMode? RentTrackingStartMode { get; set; }
 
     public DateTime? RentTrackingStartDate { get; set; }
+
+    [Range(-99999999, 99999999)]
+    public decimal? OpeningBalanceAmount { get; set; }
+
+    public DateTime? OpeningBalanceAsOfDate { get; set; }
+
+    [MaxLength(2000)]
+    public string? OpeningBalanceNote { get; set; }
 
     [MaxLength(2000)]
     public string? Notes { get; set; }

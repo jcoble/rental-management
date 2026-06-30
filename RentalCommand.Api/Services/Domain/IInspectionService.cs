@@ -42,8 +42,17 @@ public interface IInspectionService
     Task<InspectionResponse?> UpdateAsync(int portfolioId, int id, UpdateInspectionRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 
-    /// <summary>Sets a checklist item's result and/or note. Returns null when not found in portfolio.</summary>
+    /// <summary>Adds a checklist question to an editable inspection. Returns null when the inspection is not found in portfolio.</summary>
+    Task<InspectionItemResponse?> CreateItemAsync(int portfolioId, int inspectionId, CreateInspectionItemRequest request, CancellationToken ct = default);
+
+    /// <summary>Sets a checklist item's question text, result, and/or note. Returns null when not found in portfolio.</summary>
     Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default);
+
+    /// <summary>Deletes a checklist question from an editable inspection. Returns false when not found in portfolio.</summary>
+    Task<bool> DeleteItemAsync(int portfolioId, int inspectionId, int itemId, CancellationToken ct = default);
+
+    /// <summary>Replaces the display order for all checklist questions on an editable inspection.</summary>
+    Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAsync(int portfolioId, int inspectionId, ReorderInspectionItemsRequest request, CancellationToken ct = default);
 
     /// <summary>
     /// Attaches a stored photo (a <see cref="Core.Entities.StoredFile"/> id) to a checklist item.

@@ -96,6 +96,40 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAsync_OrdersReceiptLineItemsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var expense = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Category = ScheduleECategory.Repairs,
+            Description = "Receipt with line items",
+            Status = ExpenseStatus.Paid,
+            Amount = 30m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        expense.LineItems.Add(new ExpenseLineItem { Description = "Second", Amount = 20m, LineNumber = 2 });
+        expense.LineItems.Add(new ExpenseLineItem { Description = "First", Amount = 10m, LineNumber = 1 });
+        _db.Expenses.Add(expense);
+        await _db.SaveChangesAsync();
+
+        _commands.Clear();
+
+        var result = await _sut.GetAsync(PortfolioId, expense.Id);
+
+        result.Should().NotBeNull();
+        result!.LineItems.Select(li => li.Description).Should().Equal("First", "Second");
+
+        var lineItemsSql = _commands.FirstOrDefault(sql =>
+            sql.Contains("ExpenseLineItems", StringComparison.OrdinalIgnoreCase));
+        lineItemsSql.Should().NotBeNull("the expense detail query must load receipt line items from SQL");
+        lineItemsSql!.Should().Contain("ORDER BY");
+        lineItemsSql.Should().MatchRegex("ORDER BY[\\s\\S]*LineNumber");
+    }
+
+    [Fact]
     public async Task UpdateAsync_WithLineItems_ReplacesAllExistingLineItemRows()
     {
         // Arrange — seed an expense with two typed line items.

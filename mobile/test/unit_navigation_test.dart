@@ -89,6 +89,9 @@ void main() {
     final apps = parseUnitCommandCenterRoute('/units/42?tab=apps');
     expect(apps?.initialTab, UnitCommandCenterTab.applications);
 
+    final listing = parseUnitCommandCenterRoute('/units/42?tab=listing');
+    expect(listing?.initialTab, UnitCommandCenterTab.listing);
+
     expect(parseUnitCommandCenterRoute('/units/0?tab=lease'), isNull);
     expect(parseUnitCommandCenterRoute('/work-orders/42'), isNull);
   });

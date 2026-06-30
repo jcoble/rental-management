@@ -11,6 +11,7 @@
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PaymentDetail from '$lib/components/records/PaymentDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -209,7 +210,7 @@
 				</div>
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-due">Date</label>
-					<Input id="rent-due" data-testid="rent-due-input" type="date" bind:value={createForm.dueDate} />
+					<DatePicker id="rent-due" testid="rent-due-input" bind:value={createForm.dueDate} />
 					{#if createErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="rent-due-error">{createErrors.dueDate}</p>{/if}
 				</div>
 				<div>

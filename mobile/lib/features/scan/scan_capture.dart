@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 
 import '../../core/api/api_exception.dart';
+import '../voice/voice_error_message.dart';
 import 'scan_repository.dart';
 
 /// Handles picking an image (camera or gallery), uploading it, then navigating
@@ -189,7 +190,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
       setState(() {
         _recording = false;
         _voiceUploading = false;
-        _error = e.message;
+        _error = voiceDraftErrorMessage(e);
       });
     } catch (_) {
       if (!mounted) return;

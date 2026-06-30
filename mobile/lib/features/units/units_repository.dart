@@ -372,6 +372,161 @@ class UnitAppointmentSummary {
   }
 }
 
+class UnitListing {
+  const UnitListing({
+    required this.id,
+    required this.portfolioId,
+    required this.propertyId,
+    required this.unitId,
+    required this.channel,
+    required this.status,
+    required this.headline,
+    required this.description,
+    required this.rent,
+    required this.bedrooms,
+    required this.bathrooms,
+    required this.isPosted,
+    required this.createdAt,
+    required this.updatedAt,
+    this.securityDeposit,
+    this.squareFeet,
+    this.availableOn,
+    this.leaseTerms,
+    this.petPolicy,
+    this.utilities,
+    this.parking,
+    this.amenities,
+    this.photoNotes,
+    this.zillowListingUrl,
+    this.zillowApplicationUrl,
+    this.postedAtUtc,
+  });
+
+  final int id;
+  final int portfolioId;
+  final int propertyId;
+  final int unitId;
+  final String channel;
+  final String status;
+  final String headline;
+  final String description;
+  final double rent;
+  final double? securityDeposit;
+  final double bedrooms;
+  final double bathrooms;
+  final int? squareFeet;
+  final DateTime? availableOn;
+  final String? leaseTerms;
+  final String? petPolicy;
+  final String? utilities;
+  final String? parking;
+  final String? amenities;
+  final String? photoNotes;
+  final String? zillowListingUrl;
+  final String? zillowApplicationUrl;
+  final DateTime? postedAtUtc;
+  final bool isPosted;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  factory UnitListing.fromJson(Map<String, dynamic> json) {
+    return UnitListing(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      portfolioId: (json['portfolioId'] as num?)?.toInt() ?? 0,
+      propertyId: (json['propertyId'] as num?)?.toInt() ?? 0,
+      unitId: (json['unitId'] as num?)?.toInt() ?? 0,
+      channel: json['channel'] as String? ?? '',
+      status: json['status'] as String? ?? 'Draft',
+      headline: json['headline'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      rent: (json['rent'] as num?)?.toDouble() ?? 0,
+      securityDeposit: (json['securityDeposit'] as num?)?.toDouble(),
+      bedrooms: (json['bedrooms'] as num?)?.toDouble() ?? 0,
+      bathrooms: (json['bathrooms'] as num?)?.toDouble() ?? 0,
+      squareFeet: (json['squareFeet'] as num?)?.toInt(),
+      availableOn: _parseOptionalDate(json['availableOn']),
+      leaseTerms: json['leaseTerms'] as String?,
+      petPolicy: json['petPolicy'] as String?,
+      utilities: json['utilities'] as String?,
+      parking: json['parking'] as String?,
+      amenities: json['amenities'] as String?,
+      photoNotes: json['photoNotes'] as String?,
+      zillowListingUrl: json['zillowListingUrl'] as String?,
+      zillowApplicationUrl: json['zillowApplicationUrl'] as String?,
+      postedAtUtc: _parseOptionalDate(json['postedAtUtc']),
+      isPosted: json['isPosted'] as bool? ?? false,
+      createdAt: _parseDate(json['createdAt']),
+      updatedAt: _parseDate(json['updatedAt']),
+    );
+  }
+}
+
+class SaveUnitListingRequest {
+  const SaveUnitListingRequest({
+    this.status,
+    this.headline,
+    this.description,
+    this.rent,
+    this.securityDeposit,
+    this.bedrooms,
+    this.bathrooms,
+    this.squareFeet,
+    this.availableOn,
+    this.leaseTerms,
+    this.petPolicy,
+    this.utilities,
+    this.parking,
+    this.amenities,
+    this.photoNotes,
+    this.zillowListingUrl,
+    this.zillowApplicationUrl,
+    this.postedAtUtc,
+  });
+
+  final String? status;
+  final String? headline;
+  final String? description;
+  final double? rent;
+  final double? securityDeposit;
+  final double? bedrooms;
+  final double? bathrooms;
+  final int? squareFeet;
+  final DateTime? availableOn;
+  final String? leaseTerms;
+  final String? petPolicy;
+  final String? utilities;
+  final String? parking;
+  final String? amenities;
+  final String? photoNotes;
+  final String? zillowListingUrl;
+  final String? zillowApplicationUrl;
+  final DateTime? postedAtUtc;
+
+  Map<String, dynamic> toJson() => {
+    if (status != null) 'status': status,
+    if (headline != null) 'headline': headline,
+    if (description != null) 'description': description,
+    if (rent != null) 'rent': rent,
+    if (securityDeposit != null) 'securityDeposit': securityDeposit,
+    if (bedrooms != null) 'bedrooms': bedrooms,
+    if (bathrooms != null) 'bathrooms': bathrooms,
+    if (squareFeet != null) 'squareFeet': squareFeet,
+    if (availableOn != null)
+      'availableOn': availableOn!.toUtc().toIso8601String(),
+    if (leaseTerms != null) 'leaseTerms': leaseTerms,
+    if (petPolicy != null) 'petPolicy': petPolicy,
+    if (utilities != null) 'utilities': utilities,
+    if (parking != null) 'parking': parking,
+    if (amenities != null) 'amenities': amenities,
+    if (photoNotes != null) 'photoNotes': photoNotes,
+    if (zillowListingUrl != null) 'zillowListingUrl': zillowListingUrl,
+    if (zillowApplicationUrl != null)
+      'zillowApplicationUrl': zillowApplicationUrl,
+    if (postedAtUtc != null)
+      'postedAtUtc': postedAtUtc!.toUtc().toIso8601String(),
+  };
+}
+
 typedef UnitHealthListArgs = ({String? search, int skip, int take});
 
 class UnitsRepository {
@@ -426,6 +581,58 @@ class UnitsRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  Future<UnitListing?> listing(int unitId) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>?>(
+        '/units/$unitId/listing',
+      );
+      final data = response.data;
+      return data == null ? null : UnitListing.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<UnitListing> generateListing(int unitId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/units/$unitId/listing/generate',
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return UnitListing.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<UnitListing> saveListing(
+    int unitId,
+    SaveUnitListingRequest request,
+  ) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/units/$unitId/listing',
+        data: request.toJson(),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return UnitListing.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 final unitsRepositoryProvider = Provider<UnitsRepository>((ref) {
@@ -446,6 +653,11 @@ final unitHealthPageProvider = FutureProvider.autoDispose
 final unitDashboardProvider = FutureProvider.autoDispose
     .family<UnitDashboard, int>((ref, unitId) {
       return ref.watch(unitsRepositoryProvider).dashboard(unitId);
+    });
+
+final unitListingProvider = FutureProvider.autoDispose
+    .family<UnitListing?, int>((ref, unitId) {
+      return ref.watch(unitsRepositoryProvider).listing(unitId);
     });
 
 Map<String, dynamic> _jsonObject(Object? value) {

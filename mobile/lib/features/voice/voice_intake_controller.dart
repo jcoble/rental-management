@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../scan/scan_repository.dart';
+import 'voice_error_message.dart';
 import 'voice_intake_models.dart';
 import 'voice_intake_repository.dart';
 
@@ -79,7 +80,10 @@ class VoiceConversationController extends Notifier<VoiceState> {
       final turn = await call();
       state = VoiceState(phase: phaseForTurn(turn), turn: turn);
     } on ApiException catch (e) {
-      state = state.copyWith(phase: VoicePhase.error, error: e.message);
+      state = state.copyWith(
+        phase: VoicePhase.error,
+        error: voiceDraftErrorMessage(e),
+      );
     }
   }
 }

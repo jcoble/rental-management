@@ -256,6 +256,8 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
         'amount': double.tryParse(_amountCtrl.text.trim()) ?? 0,
         if (_selectedWorkOrder != null)
           'propertyId': _selectedWorkOrder!.propertyId,
+        if (_selectedWorkOrder?.unitId != null)
+          'unitId': _selectedWorkOrder!.unitId,
         if (_vendorId != null) 'vendorId': _vendorId,
         if (_selectedWorkOrder != null) 'workOrderId': _selectedWorkOrder!.id,
         'category': _category.wire,

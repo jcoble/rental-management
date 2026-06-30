@@ -57,15 +57,71 @@ public class OwnerEntityServiceListTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void SeedOwner(string name, OwnerEntityType type)
+    [Fact]
+    public async Task ListPageAsync_ReturnsAssignedPropertyCountsDbSide()
+    {
+        var owner = SeedOwner("Alpha Holdings", OwnerEntityType.LLC);
+        var otherOwner = SeedOwner("Bravo Trust", OwnerEntityType.Trust);
+        SeedProperty(owner, "Alpha One");
+        SeedProperty(owner, "Alpha Two");
+        SeedProperty(otherOwner, "Bravo One");
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new ListQuery
+        {
+            Sort = "name",
+            Take = 10,
+        });
+
+        result.Items.Single(o => o.Id == owner.Id).AssignedPropertyCount.Should().Be(2);
+        result.Items.Single(o => o.Id == otherOwner.Id).AssignedPropertyCount.Should().Be(1);
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task GetAsync_ReturnsAssignedPropertyCount()
+    {
+        var owner = SeedOwner("Alpha Holdings", OwnerEntityType.LLC);
+        SeedProperty(owner, "Alpha One");
+        SeedProperty(owner, "Alpha Two");
+
+        var result = await _sut.GetAsync(PortfolioId, owner.Id);
+
+        result.Should().NotBeNull();
+        result!.AssignedPropertyCount.Should().Be(2);
+    }
+
+    private OwnerEntity SeedOwner(string name, OwnerEntityType type)
     {
         var now = DateTime.UtcNow;
-        _ctx.Db.OwnerEntities.Add(new OwnerEntity
+        var owner = new OwnerEntity
         {
             PortfolioId = PortfolioId,
             Name = name,
             OwnerEntityType = type,
             Email = $"{name.Replace(" ", ".", StringComparison.Ordinal).ToLowerInvariant()}@example.local",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.OwnerEntities.Add(owner);
+        _ctx.Db.SaveChanges();
+        return owner;
+    }
+
+    private void SeedProperty(OwnerEntity owner, string name)
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Properties.Add(new Property
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityId = owner.Id,
+            Name = name,
+            AddressLine1 = "1 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
         });

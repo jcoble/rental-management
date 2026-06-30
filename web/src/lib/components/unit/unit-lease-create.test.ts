@@ -26,6 +26,9 @@ describe('unit-scoped lease creation helpers', () => {
 		assert.equal(form.monthlyRent, '1600');
 		assert.equal(form.status, 'Draft');
 		assert.equal(form.rentTrackingStartMode, 'ForwardOnly');
+		assert.equal(form.openingBalanceAmount, '');
+		assert.equal(form.openingBalanceAsOfDate, '');
+		assert.equal(form.openingBalanceNote, '');
 	});
 
 	it('requires the simple inline tenant fields and omits emergency contact', () => {

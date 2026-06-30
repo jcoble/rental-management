@@ -51,6 +51,9 @@
 		rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
+		openingBalanceAmount: '',
+		openingBalanceAsOfDate: '',
+		openingBalanceNote: '',
 		status: 'Active',
 		notes: ''
 	});
@@ -101,6 +104,9 @@
 			rentDueDay: '1',
 			rentTrackingStartMode: 'ForwardOnly',
 			rentTrackingStartDate: '',
+			openingBalanceAmount: '',
+			openingBalanceAsOfDate: '',
+			openingBalanceNote: '',
 			status: 'Active',
 			notes: ''
 		};
@@ -239,6 +245,13 @@
 			leaseForm.rentTrackingStartDate = '';
 		}
 	});
+	$effect(() => {
+		if (leaseForm.rentTrackingStartMode !== 'OpeningBalanceOnly') {
+			if (leaseForm.openingBalanceAmount) leaseForm.openingBalanceAmount = '';
+			if (leaseForm.openingBalanceAsOfDate) leaseForm.openingBalanceAsOfDate = '';
+			if (leaseForm.openingBalanceNote) leaseForm.openingBalanceNote = '';
+		}
+	});
 
 	$effect(() => {
 		if (phase !== 'steps' || isCreatingProperty || unitChoiceSeeded || unitChoice !== CREATE) return;
@@ -343,6 +356,11 @@
 		o.rentTrackingStartMode = leaseForm.rentTrackingStartMode;
 		if (leaseForm.rentTrackingStartMode === 'CustomCutoffDate') {
 			o.rentTrackingStartDate = leaseForm.rentTrackingStartDate;
+		}
+		if (leaseForm.rentTrackingStartMode === 'OpeningBalanceOnly') {
+			if (leaseForm.openingBalanceAmount.trim()) o.openingBalanceAmount = Number(leaseForm.openingBalanceAmount);
+			if (leaseForm.openingBalanceAsOfDate.trim()) o.openingBalanceAsOfDate = leaseForm.openingBalanceAsOfDate;
+			if (leaseForm.openingBalanceNote.trim()) o.openingBalanceNote = leaseForm.openingBalanceNote.trim();
 		}
 		return JSON.stringify(o);
 	}

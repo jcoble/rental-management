@@ -204,12 +204,92 @@ public class LeaseService : ILeaseService
             RentTrackingStartMode.CustomCutoffDate => requestedStartDate.HasValue
                 ? MaxDate(leaseStartDate, requestedStartDate.Value.ToUtc().Date)
                 : throw new DomainValidationException("Rent tracking cutoff date is required."),
+            RentTrackingStartMode.OpeningBalanceOnly => MaxDate(leaseStartDate, today.Date),
             _ => throw new DomainValidationException("Rent tracking start mode is invalid."),
         };
     }
 
     private static DateTime MaxDate(DateTime left, DateTime right)
         => left >= right ? left : right;
+
+    private static bool HasOpeningBalanceRequest(decimal? amount, DateTime? asOfDate, string? note)
+        => amount.HasValue || asOfDate.HasValue || note is not null;
+
+    private static void EnsureOpeningBalanceRequestIsValid(
+        RentTrackingStartMode mode,
+        decimal? amount,
+        DateTime? asOfDate,
+        string? note)
+    {
+        if (!HasOpeningBalanceRequest(amount, asOfDate, note))
+        {
+            return;
+        }
+
+        if (mode != RentTrackingStartMode.OpeningBalanceOnly)
+        {
+            throw new DomainValidationException(
+                "Opening balance fields can only be used with the opening balance rent tracking option.");
+        }
+
+        if (!amount.HasValue)
+        {
+            throw new DomainValidationException("Opening balance amount is required.");
+        }
+
+        if (!asOfDate.HasValue)
+        {
+            throw new DomainValidationException("Opening balance as-of date is required.");
+        }
+    }
+
+    private async Task<OpeningBalance?> UpsertOpeningBalanceAsync(
+        Lease lease,
+        decimal? amount,
+        DateTime? asOfDate,
+        string? note,
+        CancellationToken ct)
+    {
+        if (!HasOpeningBalanceRequest(amount, asOfDate, note))
+        {
+            return null;
+        }
+
+        if (!amount.HasValue || !asOfDate.HasValue)
+        {
+            throw new DomainValidationException("Opening balance amount and as-of date are required.");
+        }
+
+        var now = DateTime.UtcNow;
+        var opening = await _db.OpeningBalances
+            .FirstOrDefaultAsync(o => o.PortfolioId == lease.PortfolioId && o.LeaseId == lease.Id, ct);
+
+        if (opening is null)
+        {
+            opening = new OpeningBalance
+            {
+                PortfolioId = lease.PortfolioId,
+                LeaseId = lease.Id,
+                CreatedAt = now,
+            };
+            _db.OpeningBalances.Add(opening);
+        }
+
+        opening.Amount = amount.Value;
+        opening.AsOfDate = asOfDate.Value.ToUtc();
+        opening.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        opening.UpdatedAt = now;
+
+        await _db.SaveChangesAsync(ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(
+            lease.PortfolioId,
+            "OpeningBalance",
+            opening.Id,
+            OpeningBalanceResponse.FromEntity(opening),
+            ct);
+
+        return opening;
+    }
 
     private async Task<IReadOnlyList<Payment>> EnsureRentChargesThroughTodayAsync(Lease lease, CancellationToken ct)
     {
@@ -696,8 +776,8 @@ public class LeaseService : ILeaseService
                 // AmountPaid in cash. Surface that collection as a companion payment line so the money is
                 // visible on the ledger instead of only in the headline "Paid" total — the charge
                 // (−Amount) and this companion (+AmountPaid) net to the still-owed remainder. The headline
-                // Charged/Paid/Balance are a separate DB aggregate (statusTotals below), so emitting this
-                // line does not double-count.
+                // Charged/Paid/Balance are a separate DB aggregate, so emitting this line does not
+                // double-count.
                 var collectedSoFar = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : 0m;
                 if (collectedSoFar > 0m)
                 {
@@ -727,33 +807,32 @@ public class LeaseService : ILeaseService
         // "Paid" is what's been collected. Balance (charged − paid) is exactly what's still owed.
         // Waived/Failed/Refunded rows aren't money owed and weren't collected, so they're excluded
         // from both totals and net to zero in the balance. Both totals are computed SQL-side as a single
-        // grouped-by-status aggregate (SUM per status in the database); only the handful of status rows
-        // come back, and the relevant statuses are summed from that tiny grouped result.
-        var statusTotals = await paymentsQuery
-            .GroupBy(p => p.Status)
+        // aggregate over the whole payment set.
+        var ledgerTotals = await paymentsQuery
+            .GroupBy(_ => 1)
             .Select(g => new
             {
-                Status = g.Key,
-                Total = g.Sum(p => p.Amount),
-                // Cash collected against this status' charges: only a Partial carries a split AmountPaid.
-                Collected = g.Sum(p => p.AmountPaid ?? 0m),
+                Charged = g.Sum(p =>
+                    p.Status == PaymentStatus.Scheduled ||
+                    p.Status == PaymentStatus.Partial ||
+                    p.Status == PaymentStatus.Late ||
+                    p.Status == PaymentStatus.Paid
+                        ? p.Amount
+                        : 0m),
+                Paid = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid
+                        ? p.Amount
+                        : p.Status == PaymentStatus.Partial
+                            ? p.AmountPaid ?? 0m
+                            : 0m),
             })
-            .ToListAsync(ct);
+            .SingleOrDefaultAsync(ct);
 
         // Charged = every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
-        var totalCharged = statusTotals
-            .Where(s => s.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
-                or PaymentStatus.Late or PaymentStatus.Paid)
-            .Sum(s => s.Total);
+        var totalCharged = ledgerTotals?.Charged ?? 0m;
         // Paid = the full Amount of Paid charges plus the collected-so-far of Partial charges; the
-        // Partial remainder stays in the balance (Balance = Charged − Paid). The grouped sums above are
-        // already DB-side aggregates over the tiny per-status result.
-        var totalPaid = statusTotals
-            .Where(s => s.Status == PaymentStatus.Paid)
-            .Sum(s => s.Total)
-            + statusTotals
-                .Where(s => s.Status == PaymentStatus.Partial)
-                .Sum(s => s.Collected);
+        // Partial remainder stays in the balance (Balance = Charged − Paid).
+        var totalPaid = ledgerTotals?.Paid ?? 0m;
 
         if (opening != null)
         {
@@ -820,6 +899,11 @@ public class LeaseService : ILeaseService
 
         // Clean 400 for an inverted range before the DB CHECK constraint turns it into a raw 500.
         EnsureValidDateRange(startUtc, endUtc);
+        EnsureOpeningBalanceRequestIsValid(
+            request.RentTrackingStartMode,
+            request.OpeningBalanceAmount,
+            request.OpeningBalanceAsOfDate,
+            request.OpeningBalanceNote);
 
         // A new lease created already-occupying its unit (Active/NoticeGiven) must not double-book a unit
         // that another lease already holds over an overlapping range. A Draft/Pending lease books nothing,
@@ -874,6 +958,12 @@ public class LeaseService : ILeaseService
             changeReason: $"Lease {entity.LeaseNumber} created (status {entity.Status})", ct: ct);
 
         await EnsureSecurityDepositHoldingAsync(entity, ct);
+        await UpsertOpeningBalanceAsync(
+            entity,
+            request.OpeningBalanceAmount,
+            request.OpeningBalanceAsOfDate,
+            request.OpeningBalanceNote,
+            ct);
         await EnsureRentChargesThroughTodayAsync(entity, ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity);
@@ -912,12 +1002,33 @@ public class LeaseService : ILeaseService
         var newStatus = request.Status ?? entity.Status;
         var newStartUtc = request.StartDate?.ToUtc() ?? entity.StartDate;
         var newEndUtc = request.EndDate?.ToUtc() ?? entity.EndDate;
+        var shouldResolveRentTrackingStart =
+            request.RentTrackingStartMode.HasValue ||
+            (prevStatus != LeaseStatus.Active && newStatus == LeaseStatus.Active);
+        var rentTrackingMode = request.RentTrackingStartMode
+            ?? (shouldResolveRentTrackingStart ? RentTrackingStartMode.ForwardOnly : (RentTrackingStartMode?)null);
 
         // 1. State machine: a status move must be a legal lifecycle edge (no-op same→same allowed).
         EnsureTransitionAllowed(prevStatus, newStatus);
 
         // 2. Date range: clean 400 before the DB CHECK constraint would 500.
         EnsureValidDateRange(newStartUtc, newEndUtc);
+        if (rentTrackingMode.HasValue)
+        {
+            EnsureOpeningBalanceRequestIsValid(
+                rentTrackingMode.Value,
+                request.OpeningBalanceAmount,
+                request.OpeningBalanceAsOfDate,
+                request.OpeningBalanceNote);
+        }
+        else if (HasOpeningBalanceRequest(
+            request.OpeningBalanceAmount,
+            request.OpeningBalanceAsOfDate,
+            request.OpeningBalanceNote))
+        {
+            throw new DomainValidationException(
+                "Opening balance fields can only be used when updating the rent tracking option.");
+        }
 
         // 3. Double-booking: when this edit makes the lease occupy the unit, or changes the date range of
         //    a lease already occupying the unit, reject if another occupying lease holds an overlapping
@@ -956,10 +1067,10 @@ public class LeaseService : ILeaseService
 
             SetLeaseTenantMemberships(entity, tenantIds, DateTime.UtcNow);
         }
-        if (request.RentTrackingStartMode.HasValue)
+        if (rentTrackingMode.HasValue)
         {
             entity.RentTrackingStartDate = newStatus == LeaseStatus.Active
-                ? ResolveRentTrackingStartDate(entity.StartDate, request.RentTrackingStartMode.Value, request.RentTrackingStartDate, DateTime.UtcNow.Date)
+                ? ResolveRentTrackingStartDate(entity.StartDate, rentTrackingMode.Value, request.RentTrackingStartDate, DateTime.UtcNow.Date)
                 : null;
         }
         if (request.Notes != null) entity.Notes = request.Notes;
@@ -994,9 +1105,15 @@ public class LeaseService : ILeaseService
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
 
         await EnsureSecurityDepositHoldingAsync(entity, ct);
+        await UpsertOpeningBalanceAsync(
+            entity,
+            request.OpeningBalanceAmount,
+            request.OpeningBalanceAsOfDate,
+            request.OpeningBalanceNote,
+            ct);
 
         if ((prevStatus != LeaseStatus.Active && entity.Status == LeaseStatus.Active)
-            || (entity.Status == LeaseStatus.Active && request.RentTrackingStartMode.HasValue))
+            || (entity.Status == LeaseStatus.Active && rentTrackingMode.HasValue))
         {
             await EnsureRentChargesThroughTodayAsync(entity, ct);
         }
