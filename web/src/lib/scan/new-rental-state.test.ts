@@ -95,12 +95,35 @@ describe('seedNewRentalLateFeeAmount', () => {
 describe('new rental lease prefill seeding', () => {
 	it('does not turn missing extracted bed/bath values into real zeroes', () => {
 		const source = readFileSync(
-			resolve(dirname(fileURLToPath(import.meta.url)), '../../routes/(protected)/scan/new-rental/+page.svelte'),
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
 			'utf8'
 		);
 
 		assert.doesNotMatch(source, /unitForm\.bedrooms\s*=\s*values\.unitBedrooms\s*\|\|\s*['"]0['"]/);
 		assert.doesNotMatch(source, /unitForm\.bathrooms\s*=\s*values\.unitBathrooms\s*\|\|\s*['"]0['"]/);
+	});
+});
+
+describe('new rental route shell', () => {
+	it('renders the reusable lease-first import component with URL resume enabled', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../../routes/(protected)/scan/new-rental/+page.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /import LeaseFirstImport/);
+		assert.match(source, /<LeaseFirstImport[^>]*syncDraftToUrl/s);
+		assert.match(source, /parseNewRentalDraftId\(page\.url\.searchParams\)/);
+	});
+
+	it('clears a failed standalone draft from the URL before returning to capture', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /d\.status === 'Failed' \|\| d\.status === 'Rejected'/);
+		assert.match(source, /if \(syncDraftToUrl\)\s*{\s*void goto\('\/scan\/new-rental'/s);
 	});
 });
 
