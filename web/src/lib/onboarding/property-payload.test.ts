@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildOnboardingPropertyPayload, onboardingPropertyFormFromProperty } from './property-payload.ts';
+import {
+	buildOnboardingPropertyPayload,
+	onboardingPropertyFormFromProperty,
+	onboardingPropertyRecordOptions
+} from './property-payload.ts';
 
 const propertyForm = {
 	name: 'Maple Grove Duplex',
@@ -74,5 +78,31 @@ test('selected property fills the editable onboarding property fields', () => {
 			state: 'OH',
 			postalCode: '43201'
 		}
+	);
+});
+
+test('property record options include current-session properties before the query refreshes', () => {
+	assert.deepEqual(
+		onboardingPropertyRecordOptions({
+			createdProperty: { id: 11, name: 'Clintonville Townhome' },
+			existingProperties: [
+				{ id: 8, name: 'Eastland 8-Plex' },
+				{ id: 9, name: 'Westview Four-Plex' }
+			]
+		}).map((property) => property.name),
+		['Eastland 8-Plex', 'Westview Four-Plex', 'Clintonville Townhome']
+	);
+});
+
+test('property record options do not duplicate a created property after the query refreshes', () => {
+	assert.deepEqual(
+		onboardingPropertyRecordOptions({
+			createdProperty: { id: 9, name: 'Westview Four-Plex' },
+			existingProperties: [
+				{ id: 8, name: 'Eastland 8-Plex' },
+				{ id: 9, name: 'Westview Four-Plex' }
+			]
+		}).map((property) => property.id),
+		[8, 9]
 	);
 });

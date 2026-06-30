@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { onboardingOwnerFormFromOwner, ownerEntityIdForOnboarding } from './owner-selection.ts';
+import {
+	onboardingOwnerFormFromOwner,
+	onboardingOwnerRecordOptions,
+	ownerEntityIdForOnboarding
+} from './owner-selection.ts';
 
 test('uses the owner created during the current onboarding session first', () => {
 	assert.equal(
@@ -62,5 +66,31 @@ test('selected owner fills the editable onboarding owner fields', () => {
 			email: 'books@mapleriver.example',
 			taxId: '12-3456789'
 		}
+	);
+});
+
+test('owner record options include current-session owners before the query refreshes', () => {
+	assert.deepEqual(
+		onboardingOwnerRecordOptions({
+			createdOwner: { id: 7, name: 'Coble Holdings LLC' },
+			existingOwners: [
+				{ id: 1, name: 'Emily Chen' },
+				{ id: 2, name: 'Maple River Holdings' }
+			]
+		}).map((owner) => owner.name),
+		['Emily Chen', 'Maple River Holdings', 'Coble Holdings LLC']
+	);
+});
+
+test('owner record options do not duplicate a created owner after the query refreshes', () => {
+	assert.deepEqual(
+		onboardingOwnerRecordOptions({
+			createdOwner: { id: 2, name: 'Maple River Holdings' },
+			existingOwners: [
+				{ id: 1, name: 'Emily Chen' },
+				{ id: 2, name: 'Maple River Holdings' }
+			]
+		}).map((owner) => owner.id),
+		[1, 2]
 	);
 });

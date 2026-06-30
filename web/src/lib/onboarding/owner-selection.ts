@@ -34,6 +34,20 @@ export function ownerEntityIdForOnboarding({
 	return owner ? String(owner.id) : '';
 }
 
+export function onboardingOwnerRecordOptions({
+	createdOwner,
+	existingOwners
+}: {
+	createdOwner: OwnerLike | null | undefined;
+	existingOwners: readonly OwnerLike[] | null | undefined;
+}): OwnerLike[] {
+	const options = [...(existingOwners ?? [])];
+	if (createdOwner && !options.some((owner) => String(owner.id) === String(createdOwner.id))) {
+		options.push(createdOwner);
+	}
+	return options;
+}
+
 export function onboardingOwnerFormFromOwner(owner: OwnerLike): OnboardingOwnerForm {
 	const ownerEntityType = owner.ownerEntityType;
 
