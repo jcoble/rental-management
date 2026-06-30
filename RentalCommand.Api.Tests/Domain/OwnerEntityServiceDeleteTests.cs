@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Moq;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
@@ -37,6 +38,23 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_ClearsPropertyAssignmentsWhenExplicitlyRequested()
+    {
+        var owner = SeedOwner();
+        var propertyId = SeedProperty(owner);
+
+        var deleted = await _sut.DeleteAsync(
+            PortfolioId,
+            owner.Id,
+            new DeleteOwnerEntityOptions { ClearPropertyAssignments = true });
+
+        deleted.Should().BeTrue();
+        _ctx.Db.ChangeTracker.Clear();
+        (await _sut.GetAsync(PortfolioId, owner.Id)).Should().BeNull();
+        _ctx.Db.Properties.Single(p => p.Id == propertyId).OwnerEntityId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task DeleteAsync_SoftDeletesUnreferencedOwner()
     {
         var owner = SeedOwner();
@@ -63,10 +81,10 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
         return owner;
     }
 
-    private void SeedProperty(OwnerEntity owner)
+    private int SeedProperty(OwnerEntity owner)
     {
         var now = DateTime.UtcNow;
-        _ctx.Db.Properties.Add(new Property
+        var property = new Property
         {
             PortfolioId = PortfolioId,
             OwnerEntityId = owner.Id,
@@ -77,7 +95,9 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
             PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
-        });
+        };
+        _ctx.Db.Properties.Add(property);
         _ctx.Db.SaveChanges();
+        return property.Id;
     }
 }

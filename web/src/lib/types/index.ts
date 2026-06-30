@@ -81,6 +81,7 @@ export interface Owner {
 	address?: string;
 	phone?: string;
 	email?: string;
+	assignedPropertyCount?: number;
 	createdAt: string;
 	updatedAt: string;
 }
