@@ -27,6 +27,21 @@ function pad(n: number, width: number): string {
 	return String(n).padStart(width, '0');
 }
 
+function parseIsoDateParts(input: string): { year: number; month: number; day: number } | null {
+	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.trim());
+	if (!m) return null;
+
+	const year = Number(m[1]);
+	const month = Number(m[2]);
+	const day = Number(m[3]);
+	if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+	if (year < 1 || year > 9999) return null;
+	if (month < 1 || month > 12) return null;
+	if (day < 1 || day > daysInMonth(year, month)) return null;
+
+	return { year, month, day };
+}
+
 /**
  * Parse a loosely-typed date string into a canonical `yyyy-MM-dd` string.
  * Returns `null` when the input can't be understood as a real calendar date.
@@ -112,4 +127,30 @@ export function formatIsoToUsInput(iso: string | undefined | null): string {
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
 	if (!m) return '';
 	return `${m[2]}/${m[3]}/${m[1]}`;
+}
+
+/**
+ * Keep a date text field in a visible US mask while the user types.
+ * Non-digits are ignored and the value is capped at MM/DD/YYYY.
+ */
+export function maskDateInput(input: string): string {
+	const digits = input.replace(/\D/g, '').slice(0, 8);
+	if (digits.length <= 2) return digits;
+	if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+	return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+/**
+ * Add one calendar year to an ISO date without constructing a JS Date.
+ * Leap day clamps to Feb 28 in non-leap years.
+ */
+export function addCalendarYear(iso: string): string | null {
+	const parts = parseIsoDateParts(iso);
+	if (!parts) return null;
+
+	const nextYear = parts.year + 1;
+	if (nextYear > 9999) return null;
+
+	const nextDay = Math.min(parts.day, daysInMonth(nextYear, parts.month));
+	return `${pad(nextYear, 4)}-${pad(parts.month, 2)}-${pad(nextDay, 2)}`;
 }

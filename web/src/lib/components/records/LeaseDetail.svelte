@@ -35,6 +35,7 @@
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { addCalendarYear } from '$lib/utils/parse-date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -253,6 +254,7 @@
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
+	let autoDefaultedEndDate = $state('');
 
 	$effect(() => {
 		if (form.propertyId !== formPropertyId) {
@@ -608,12 +610,30 @@
 		};
 		formPropertyId = String(lease.propertyId);
 		formErrors = {};
+		autoDefaultedEndDate = '';
 		setTab(tabForLeaseEdit(activeTab));
 		editing = true;
 	}
 	function cancelEditing() {
 		editing = false;
 		formErrors = {};
+		autoDefaultedEndDate = '';
+	}
+
+	function handleLeaseStartDateChange(iso: string) {
+		form.startDate = iso;
+		if (!iso) return;
+		const defaultEndDate = addCalendarYear(iso);
+		if (!defaultEndDate) return;
+		if (!form.endDate || form.endDate === autoDefaultedEndDate) {
+			form.endDate = defaultEndDate;
+			autoDefaultedEndDate = defaultEndDate;
+		}
+	}
+
+	function handleLeaseEndDateChange(iso: string) {
+		form.endDate = iso;
+		if (iso !== autoDefaultedEndDate) autoDefaultedEndDate = '';
 	}
 
 	function submit() {
@@ -1016,8 +1036,8 @@
 				     (the Edit button) — values are calm, non-clickable rows otherwise. -->
 				<div class="grid gap-6 lg:grid-cols-2">
 					<DetailCard title="Term" icon={CalendarRange} accent="primary" testid="lease-card-term" contentClass="grid grid-cols-2 gap-x-6 gap-y-4">
-						{@render dateField({ label: 'Start Date', value: form.startDate, setValue: (v) => (form.startDate = v), display: formatDate(lease.startDate), error: formErrors.startDate, max: form.endDate || undefined, testid: 'lease-detail-start' })}
-						{@render dateField({ label: 'End Date', value: form.endDate, setValue: (v) => (form.endDate = v), display: formatDate(lease.endDate), error: formErrors.endDate, min: form.startDate || undefined, testid: 'lease-detail-end' })}
+						{@render dateField({ label: 'Start Date', value: form.startDate, setValue: handleLeaseStartDateChange, display: formatDate(lease.startDate), error: formErrors.startDate, max: form.endDate || undefined, testid: 'lease-detail-start' })}
+						{@render dateField({ label: 'End Date', value: form.endDate, setValue: handleLeaseEndDateChange, display: formatDate(lease.endDate), error: formErrors.endDate, min: form.startDate || undefined, testid: 'lease-detail-end' })}
 						<!-- Move-in is distinct from lease start (tenant may take possession on a different day)
 						     and is optional/clearable, so it gets its own editable date field. -->
 						{@render dateField({ label: 'Move-In', value: form.moveInDate, setValue: (v) => (form.moveInDate = v), display: formatDate(lease.moveInDate), error: formErrors.moveInDate, testid: 'lease-detail-move-in' })}

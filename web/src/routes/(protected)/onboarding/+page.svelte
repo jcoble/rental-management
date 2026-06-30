@@ -59,6 +59,7 @@
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
+	import { addCalendarYear } from '$lib/utils/parse-date';
 	import {
 		NEW_ONBOARDING_OWNER_VALUE,
 		onboardingOwnerFormFromOwner,
@@ -811,6 +812,7 @@
 		openingBalanceAsOfDate: '',
 		openingBalanceNote: '',
 	});
+	let leaseEndDateAutoDefault = $state(leaseForm.endDate);
 	// Pre-fill security deposit with monthly rent (common default) once — stays
 	// editable; if the user clears it we do not re-fill.
 	let securityDepositDefaulted = $state(false);
@@ -867,6 +869,22 @@
 		}
 	});
 
+	function handleLeaseStartDateChange(iso: string) {
+		leaseForm.startDate = iso;
+		if (!iso) return;
+		const defaultEndDate = addCalendarYear(iso);
+		if (!defaultEndDate) return;
+		if (!leaseForm.endDate || leaseForm.endDate === leaseEndDateAutoDefault) {
+			leaseForm.endDate = defaultEndDate;
+			leaseEndDateAutoDefault = defaultEndDate;
+		}
+	}
+
+	function handleLeaseEndDateChange(iso: string) {
+		leaseForm.endDate = iso;
+		if (iso !== leaseEndDateAutoDefault) leaseEndDateAutoDefault = '';
+	}
+
 	// Apply photo-extracted (and user-confirmed) lease terms onto the form. Never overwrites a value
 	// the user already typed — the confirmed extraction fills blanks, the user stays in control.
 	function applyLeasePrefill(values: {
@@ -881,8 +899,11 @@
 	}) {
 		leasePrefillDraftId = values.draftId;
 		if (values.leaseNumber) leaseForm.leaseNumber = values.leaseNumber;
-		if (values.startDate) leaseForm.startDate = values.startDate;
-		if (values.endDate) leaseForm.endDate = values.endDate;
+		if (values.startDate) handleLeaseStartDateChange(values.startDate);
+		if (values.endDate) {
+			leaseForm.endDate = values.endDate;
+			leaseEndDateAutoDefault = '';
+		}
 		if (values.monthlyRent) leaseForm.monthlyRent = values.monthlyRent;
 		if (values.securityDeposit) leaseForm.securityDeposit = values.securityDeposit;
 		if (values.lateFee) leaseForm.lateFeeAmount = values.lateFee;
@@ -1901,12 +1922,24 @@
 									</div>
 									<div>
 										<label for="ob-lease-start" class="mb-1 block text-xs font-medium text-muted-foreground">Start date</label>
-										<DatePicker id="ob-lease-start" testid="onboarding-lease-start" bind:value={leaseForm.startDate} placeholder="Start date" />
+										<DatePicker
+											id="ob-lease-start"
+											testid="onboarding-lease-start"
+											bind:value={leaseForm.startDate}
+											onchange={handleLeaseStartDateChange}
+											placeholder="Start date"
+										/>
 										{#if leaseErrors.startDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.startDate}</p>{/if}
 									</div>
 									<div>
 										<label for="ob-lease-end" class="mb-1 block text-xs font-medium text-muted-foreground">End date</label>
-										<DatePicker id="ob-lease-end" testid="onboarding-lease-end" bind:value={leaseForm.endDate} placeholder="End date" />
+										<DatePicker
+											id="ob-lease-end"
+											testid="onboarding-lease-end"
+											bind:value={leaseForm.endDate}
+											onchange={handleLeaseEndDateChange}
+											placeholder="End date"
+										/>
 										{#if leaseErrors.endDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.endDate}</p>{/if}
 									</div>
 									<div>
