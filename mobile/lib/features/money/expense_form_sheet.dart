@@ -270,6 +270,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+      rethrow;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -292,7 +293,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
         onSave: _submit,
         tabs: [
           TabbedFormStepSpec(
-            label: 'Details',
+            label: 'Context',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -300,6 +301,27 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
                 gap,
                 _vendorField(vendorsState),
                 gap,
+                DropdownButtonFormField<ScheduleECategory>(
+                  initialValue: _category,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  items: ScheduleECategory.values
+                      .map(
+                        (c) => DropdownMenuItem(value: c, child: Text(c.label)),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _category = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Amount',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 TextFormField(
                   key: const Key('expense-description-field'),
                   controller: _descCtrl,
@@ -333,20 +355,6 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
                       return 'Amount must be greater than zero';
                     }
                     return null;
-                  },
-                ),
-                gap,
-                DropdownButtonFormField<ScheduleECategory>(
-                  initialValue: _category,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Category'),
-                  items: ScheduleECategory.values
-                      .map(
-                        (c) => DropdownMenuItem(value: c, child: Text(c.label)),
-                      )
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) setState(() => _category = v);
                   },
                 ),
                 gap,
@@ -408,7 +416,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
             ),
           ),
           TabbedFormStepSpec(
-            label: 'Extra',
+            label: 'Notes',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

@@ -267,6 +267,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+      rethrow;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -440,14 +441,17 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         onSave: _submit,
         tabs: [
           WorkOrderFormTabSpec(
-            label: 'Details',
+            label: 'Location',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [propertyField, gap, unitField],
+            ),
+          ),
+          WorkOrderFormTabSpec(
+            label: 'Issue',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                propertyField,
-                gap,
-                unitField,
-                gap,
                 TextFormField(
                   key: const Key('work-order-title-field'),
                   controller: _titleCtrl,
