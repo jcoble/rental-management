@@ -4,7 +4,7 @@
 	import { page } from '$app/state';
 	import { inspections, openInspectionReport } from '$lib/api/endpoints/inspections';
 	import { documents, fileObjectUrl } from '$lib/api/endpoints/documents';
-	import type { InspectionCompleteResult, InspectionDetail, InspectionItem } from '$lib/types';
+	import type { InspectionCompleteResult, InspectionDetail, InspectionItem, InspectionItemInput, InspectionItemResult } from '$lib/types';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { recordHref } from '$lib/navigation/record-href';
 	import * as Card from '$lib/components/ui/card';
@@ -13,7 +13,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import { Camera, Check, ClipboardCheck, Download, Minus, X } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Camera, Check, ClipboardCheck, Download, Edit2, Minus, Plus, Save, Trash2, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
@@ -27,12 +27,14 @@
 	const inspection = $derived(inspectionQuery.data);
 	const isCompleted = $derived(inspection?.status === 'Completed');
 	const readOnly = $derived(isCompleted);
+	const orderedItems = $derived.by(() =>
+		[...(inspection?.items ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+	);
 
 	// Group checklist items by area, preserving sort order within each group.
 	const groupedItems = $derived.by(() => {
-		const items = [...(inspection?.items ?? [])].sort((a, b) => a.sortOrder - b.sortOrder);
 		const groups = new Map<string, InspectionItem[]>();
-		for (const item of items) {
+		for (const item of orderedItems) {
 			const area = item.area || 'General';
 			if (!groups.has(area)) groups.set(area, []);
 			groups.get(area)!.push(item);
@@ -58,17 +60,169 @@
 	}
 
 	// Patch the item in the query cache so the UI updates without a full refetch.
+	function sortItems(items: InspectionItem[]) {
+		return [...items].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+	}
+
+	function setItemsInCache(items: InspectionItem[]) {
+		queryClient.setQueryData<InspectionDetail>(['inspection', id], (prev) =>
+			prev ? { ...prev, items: sortItems(items) } : prev
+		);
+	}
+
 	function patchItemInCache(updated: InspectionItem) {
 		queryClient.setQueryData<InspectionDetail>(['inspection', id], (prev) =>
-			prev ? { ...prev, items: prev.items.map((it) => (it.id === updated.id ? updated : it)) } : prev
+			prev ? { ...prev, items: sortItems(prev.items.map((it) => (it.id === updated.id ? updated : it))) } : prev
 		);
+	}
+
+	function addItemToCache(created: InspectionItem) {
+		queryClient.setQueryData<InspectionDetail>(['inspection', id], (prev) =>
+			prev ? { ...prev, items: sortItems([...prev.items, created]) } : prev
+		);
+	}
+
+	function removeItemFromCache(itemId: number) {
+		queryClient.setQueryData<InspectionDetail>(['inspection', id], (prev) =>
+			prev ? { ...prev, items: prev.items.filter((it) => it.id !== itemId) } : prev
+		);
+	}
+
+	// --- Checklist question structure (editable until completion) ---
+	const emptyQuestionDraft = (): InspectionItemInput => ({ area: '', label: '' });
+	let addQuestionDraft = $state<InspectionItemInput>(emptyQuestionDraft());
+	let addQuestionErrors = $state<Record<string, string>>({});
+	let editingQuestionId = $state<number | null>(null);
+	let editQuestionDrafts = $state<Record<number, InspectionItemInput>>({});
+	let editQuestionErrors = $state<Record<number, Record<string, string>>>({});
+	let deletingQuestionId = $state<number | null>(null);
+	let reorderingQuestionId = $state<number | null>(null);
+
+	function validateQuestionDraft(draft: InspectionItemInput) {
+		const area = draft.area.trim();
+		const label = draft.label.trim();
+		const errors: Record<string, string> = {};
+
+		if (!area) errors.area = 'Area is required.';
+		else if (area.length > 120) errors.area = 'Area must be 120 characters or fewer.';
+		if (!label) errors.label = 'Question is required.';
+		else if (label.length > 300) errors.label = 'Question must be 300 characters or fewer.';
+
+		return Object.keys(errors).length > 0
+			? { value: null, errors }
+			: { value: { area, label } satisfies InspectionItemInput, errors };
+	}
+
+	const createQuestionMutation = createMutation(() => ({
+		mutationFn: (data: InspectionItemInput) => inspections.createItem(id, data),
+		onSuccess: (created) => {
+			addItemToCache(created);
+			addQuestionDraft = emptyQuestionDraft();
+			addQuestionErrors = {};
+			showSuccess('Question added.');
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Could not add question.')),
+	}));
+
+	function addQuestion() {
+		if (readOnly) return;
+		const result = validateQuestionDraft(addQuestionDraft);
+		addQuestionErrors = result.errors;
+		if (!result.value) return;
+		createQuestionMutation.mutate(result.value);
+	}
+
+	function startEditingQuestion(item: InspectionItem) {
+		if (readOnly) return;
+		editingQuestionId = item.id;
+		editQuestionDrafts = { ...editQuestionDrafts, [item.id]: { area: item.area, label: item.label } };
+		editQuestionErrors = { ...editQuestionErrors, [item.id]: {} };
+	}
+
+	function cancelEditingQuestion(itemId: number) {
+		editingQuestionId = null;
+		const { [itemId]: _draft, ...remainingDrafts } = editQuestionDrafts;
+		const { [itemId]: _errors, ...remainingErrors } = editQuestionErrors;
+		editQuestionDrafts = remainingDrafts;
+		editQuestionErrors = remainingErrors;
+	}
+
+	const updateQuestionMutation = createMutation(() => ({
+		mutationFn: ({ itemId, data }: { itemId: number; data: InspectionItemInput }) =>
+			inspections.updateItem(id, itemId, data),
+		onSuccess: (updated) => {
+			patchItemInCache(updated);
+			cancelEditingQuestion(updated.id);
+			showSuccess('Question updated.');
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Could not update question.')),
+	}));
+
+	function saveQuestion(item: InspectionItem) {
+		if (readOnly) return;
+		const draft = editQuestionDrafts[item.id] ?? { area: item.area, label: item.label };
+		const result = validateQuestionDraft(draft);
+		editQuestionErrors = { ...editQuestionErrors, [item.id]: result.errors };
+		if (!result.value) return;
+		if (result.value.area === item.area && result.value.label === item.label) {
+			cancelEditingQuestion(item.id);
+			return;
+		}
+		updateQuestionMutation.mutate({ itemId: item.id, data: result.value });
+	}
+
+	const deleteQuestionMutation = createMutation(() => ({
+		mutationFn: (itemId: number) => inspections.deleteItem(id, itemId),
+		onMutate: (itemId) => {
+			deletingQuestionId = itemId;
+		},
+		onSuccess: (_result, itemId) => {
+			removeItemFromCache(itemId);
+			showSuccess('Question deleted.');
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Could not delete question.')),
+		onSettled: () => {
+			deletingQuestionId = null;
+		},
+	}));
+
+	function deleteQuestion(item: InspectionItem) {
+		if (readOnly) return;
+		if (!window.confirm('Delete this checklist question?')) return;
+		deleteQuestionMutation.mutate(item.id);
+	}
+
+	const reorderQuestionMutation = createMutation(() => ({
+		mutationFn: ({ itemId, itemIds }: { itemId: number; itemIds: number[] }) =>
+			inspections.reorderItems(id, itemIds).then((items) => ({ itemId, items })),
+		onMutate: ({ itemId }) => {
+			reorderingQuestionId = itemId;
+		},
+		onSuccess: ({ items }) => {
+			setItemsInCache(items);
+			showSuccess('Question order updated.');
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Could not reorder questions.')),
+		onSettled: () => {
+			reorderingQuestionId = null;
+		},
+	}));
+
+	function moveQuestion(item: InspectionItem, direction: -1 | 1) {
+		if (readOnly) return;
+		const currentIndex = orderedItems.findIndex((it) => it.id === item.id);
+		const nextIndex = currentIndex + direction;
+		if (currentIndex < 0 || nextIndex < 0 || nextIndex >= orderedItems.length) return;
+		const nextItems = [...orderedItems];
+		[nextItems[currentIndex], nextItems[nextIndex]] = [nextItems[nextIndex], nextItems[currentIndex]];
+		reorderQuestionMutation.mutate({ itemId: item.id, itemIds: nextItems.map((it) => it.id) });
 	}
 
 	// --- Result (Pass / Fail / N/A) ---
 	let savingResultFor = $state<number | null>(null);
 
 	const resultMutation = createMutation(() => ({
-		mutationFn: ({ itemId, result }: { itemId: number; result: string }) =>
+		mutationFn: ({ itemId, result }: { itemId: number; result: InspectionItemResult }) =>
 			inspections.updateItem(id, itemId, { result }),
 		onMutate: ({ itemId }) => {
 			savingResultFor = itemId;
@@ -82,7 +236,7 @@
 		},
 	}));
 
-	function setResult(item: InspectionItem, result: string) {
+	function setResult(item: InspectionItem, result: InspectionItemResult) {
 		if (readOnly) return;
 		if (item.result === result) return;
 		resultMutation.mutate({ itemId: item.id, result });
@@ -329,6 +483,55 @@
 			</div>
 		{/if}
 
+		{#if !readOnly}
+			<Card.Root class="mb-6 gap-0 py-0" data-testid="inspection-add-question-card">
+				<Card.Header class="border-b border-border px-4 py-3">
+					<Card.Title class="text-base font-semibold">Add checklist question</Card.Title>
+				</Card.Header>
+				<Card.Content class="p-4">
+					<div class="grid gap-3 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] lg:items-start">
+						<div>
+							<label for="inspection-new-question-area" class="mb-1 block text-xs font-medium text-muted-foreground">Area</label>
+							<Input
+								id="inspection-new-question-area"
+								bind:value={addQuestionDraft.area}
+								placeholder="Kitchen"
+								aria-invalid={!!addQuestionErrors.area}
+								oninput={() => (addQuestionErrors = { ...addQuestionErrors, area: '' })}
+								data-testid="inspection-new-question-area"
+							/>
+							{#if addQuestionErrors.area}
+								<p class="mt-1 text-xs text-destructive" data-testid="inspection-new-question-area-error">{addQuestionErrors.area}</p>
+							{/if}
+						</div>
+						<div>
+							<label for="inspection-new-question-label" class="mb-1 block text-xs font-medium text-muted-foreground">Question</label>
+							<Input
+								id="inspection-new-question-label"
+								bind:value={addQuestionDraft.label}
+								placeholder="Sink and faucet are dry"
+								aria-invalid={!!addQuestionErrors.label}
+								oninput={() => (addQuestionErrors = { ...addQuestionErrors, label: '' })}
+								data-testid="inspection-new-question-label"
+							/>
+							{#if addQuestionErrors.label}
+								<p class="mt-1 text-xs text-destructive" data-testid="inspection-new-question-label-error">{addQuestionErrors.label}</p>
+							{/if}
+						</div>
+						<Button
+							class="mt-5"
+							onclick={addQuestion}
+							disabled={createQuestionMutation.isPending}
+							data-testid="inspection-new-question-save"
+						>
+							<Plus class="h-4 w-4" />
+							{createQuestionMutation.isPending ? 'Adding…' : 'Add question'}
+						</Button>
+					</div>
+				</Card.Content>
+			</Card.Root>
+		{/if}
+
 		<!-- Checklist grouped by area -->
 		{#if inspection.items.length === 0}
 			<Card.Root>
@@ -347,8 +550,118 @@
 							{#each group.items as item (item.id)}
 								<div class="space-y-3 p-4" data-testid="inspection-item-{item.id}">
 									<div class="flex flex-wrap items-center justify-between gap-2">
-										<p class="font-medium" data-testid="inspection-item-label">{item.label}</p>
-										<StatusBadge status={item.result} map={RESULT_BADGE} />
+										{#if editingQuestionId === item.id}
+											<div class="grid min-w-0 flex-1 gap-3 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
+												<div>
+													<label for="inspection-item-{item.id}-area" class="mb-1 block text-xs font-medium text-muted-foreground">Area</label>
+													<Input
+														id="inspection-item-{item.id}-area"
+														bind:value={editQuestionDrafts[item.id].area}
+														aria-invalid={!!editQuestionErrors[item.id]?.area}
+														oninput={() =>
+															(editQuestionErrors = {
+																...editQuestionErrors,
+																[item.id]: { ...(editQuestionErrors[item.id] ?? {}), area: '' },
+															})}
+														data-testid="inspection-item-{item.id}-area-input"
+													/>
+													{#if editQuestionErrors[item.id]?.area}
+														<p class="mt-1 text-xs text-destructive" data-testid="inspection-item-{item.id}-area-error">
+															{editQuestionErrors[item.id].area}
+														</p>
+													{/if}
+												</div>
+												<div>
+													<label for="inspection-item-{item.id}-label-input" class="mb-1 block text-xs font-medium text-muted-foreground">Question</label>
+													<Input
+														id="inspection-item-{item.id}-label-input"
+														bind:value={editQuestionDrafts[item.id].label}
+														aria-invalid={!!editQuestionErrors[item.id]?.label}
+														oninput={() =>
+															(editQuestionErrors = {
+																...editQuestionErrors,
+																[item.id]: { ...(editQuestionErrors[item.id] ?? {}), label: '' },
+															})}
+														data-testid="inspection-item-{item.id}-label-input"
+													/>
+													{#if editQuestionErrors[item.id]?.label}
+														<p class="mt-1 text-xs text-destructive" data-testid="inspection-item-{item.id}-label-error">
+															{editQuestionErrors[item.id].label}
+														</p>
+													{/if}
+												</div>
+											</div>
+											<div class="flex flex-wrap items-center gap-2">
+												<Button
+													size="sm"
+													onclick={() => saveQuestion(item)}
+													disabled={updateQuestionMutation.isPending}
+													data-testid="inspection-item-{item.id}-question-save"
+												>
+													<Save class="h-4 w-4" />
+													Save
+												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() => cancelEditingQuestion(item.id)}
+													disabled={updateQuestionMutation.isPending}
+													data-testid="inspection-item-{item.id}-question-cancel"
+												>
+													Cancel
+												</Button>
+											</div>
+										{:else}
+											<div class="min-w-0">
+												<p class="font-medium" data-testid="inspection-item-label">{item.label}</p>
+												<p class="mt-0.5 text-xs text-muted-foreground" data-testid="inspection-item-area">{item.area}</p>
+											</div>
+											<div class="flex flex-wrap items-center gap-2">
+												<StatusBadge status={item.result} map={RESULT_BADGE} />
+												{#if !readOnly}
+													<Button
+														variant="ghost"
+														size="icon-sm"
+														aria-label="Move question up"
+														disabled={orderedItems.findIndex((it) => it.id === item.id) <= 0 || reorderingQuestionId === item.id}
+														onclick={() => moveQuestion(item, -1)}
+														data-testid="inspection-item-{item.id}-move-up"
+													>
+														<ArrowUp class="h-4 w-4" />
+													</Button>
+													<Button
+														variant="ghost"
+														size="icon-sm"
+														aria-label="Move question down"
+														disabled={orderedItems.findIndex((it) => it.id === item.id) >= orderedItems.length - 1 || reorderingQuestionId === item.id}
+														onclick={() => moveQuestion(item, 1)}
+														data-testid="inspection-item-{item.id}-move-down"
+													>
+														<ArrowDown class="h-4 w-4" />
+													</Button>
+													<Button
+														variant="outline"
+														size="sm"
+														onclick={() => startEditingQuestion(item)}
+														data-testid="inspection-item-{item.id}-question-edit"
+													>
+														<Edit2 class="h-4 w-4" />
+														Edit
+													</Button>
+													<Button
+														variant="ghost"
+														size="icon-sm"
+														class="hover:text-destructive"
+														aria-label="Delete question"
+														disabled={deletingQuestionId === item.id}
+														onclick={() => deleteQuestion(item)}
+														data-testid="inspection-item-{item.id}-question-delete"
+													>
+														<Trash2 class="h-4 w-4" />
+													</Button>
+												{/if}
+											</div>
+										{/if}
 									</div>
 
 									<!-- Pass / Fail / N/A — big touch targets -->
