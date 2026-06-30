@@ -48,6 +48,10 @@ void main() {
     await tester.tap(find.textContaining('Kitchen sink leak').last);
     await tester.pumpAndSettle();
 
+    expect(find.text('Akron Plumbing'), findsAtLeastNWidgets(1));
+
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
     final descField = tester.widget<TextFormField>(
       find.byKey(const Key('expense-description-field')),
     );
@@ -56,7 +60,6 @@ void main() {
     );
     expect(descField.controller?.text, 'Kitchen sink leak');
     expect(amountField.controller?.text, '185.75');
-    expect(find.text('Akron Plumbing'), findsAtLeastNWidgets(1));
 
     await tester.tap(find.text('Next'));
     await tester.pumpAndSettle();

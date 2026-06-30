@@ -23,7 +23,7 @@ void main() {
     await tester.tap(find.text('Next'));
     await tester.pump();
 
-    expect(find.byIcon(Icons.check), findsOneWidget);
+    expect(find.byIcon(Icons.check), findsAtLeastNWidgets(1));
     expect(saves, 0);
 
     await tester.pump(const Duration(milliseconds: 420));
@@ -40,10 +40,8 @@ void main() {
     await _pumpTabbedForm(tester);
 
     expect(find.byType(LinearProgressIndicator), findsNothing);
-    expect(
-      tester.widget<TabBar>(find.byType(TabBar)).dividerColor,
-      Colors.transparent,
-    );
+    expect(find.byType(TabBar), findsNothing);
+    expect(find.byKey(const Key('tabbed-form-step-0')), findsOneWidget);
   });
 
   testWidgets('next validates the current card before advancing', (
@@ -125,7 +123,7 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pump();
 
-    expect(find.byIcon(Icons.check), findsOneWidget);
+    expect(find.byIcon(Icons.check), findsAtLeastNWidgets(1));
 
     await tester.pumpAndSettle();
 
@@ -133,7 +131,7 @@ void main() {
     expect(find.text('Save complete'), findsOneWidget);
     expect(
       tester.widget<SnackBar>(find.byType(SnackBar)).backgroundColor,
-      Colors.green.shade700,
+      const Color(0xFF2E7D32),
     );
   });
 }

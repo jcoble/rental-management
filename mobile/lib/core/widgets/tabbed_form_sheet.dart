@@ -42,6 +42,7 @@ class TabbedFormSheet extends StatefulWidget {
 
 class _TabbedFormSheetState extends State<TabbedFormSheet> {
   static const _successDuration = Duration(milliseconds: 360);
+  static const _successColor = Color(0xFF2E7D32);
 
   late List<GlobalKey<FormState>> _stepFormKeys;
   final Set<int> _completedSteps = <int>{};
@@ -113,6 +114,38 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     return formValid && customValid;
   }
 
+  Widget _buildStepper(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < widget.tabs.length; i++) ...[
+            _StepperCard(
+              index: i,
+              label: widget.tabs[i].label,
+              selected: i == _currentIndex,
+              complete: _isComplete(i),
+              celebrating: _celebratingIndex == i,
+              enabled: !_isBusy,
+              onTap: () => _selectTab(i),
+            ),
+            if (i < widget.tabs.length - 1)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Future<void> _completeCurrentStep({required int nextIndex}) async {
     if (_isBusy || !_validateCurrentStep()) return;
 
@@ -154,7 +187,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
           ..showSnackBar(
             SnackBar(
               content: const Text('Save complete'),
-              backgroundColor: Colors.green.shade700,
+              backgroundColor: _successColor,
             ),
           );
       }
@@ -205,53 +238,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                 ],
               ),
               const SizedBox(height: 8),
-              DefaultTabController(
-                key: ValueKey(_currentIndex),
-                length: widget.tabs.length,
-                initialIndex: _currentIndex,
-                child: TabBar(
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  dividerColor: Colors.transparent,
-                  onTap: _selectTab,
-                  tabs: [
-                    for (var i = 0; i < widget.tabs.length; i++)
-                      Tab(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 180),
-                              transitionBuilder: (child, animation) =>
-                                  ScaleTransition(
-                                    scale: CurvedAnimation(
-                                      parent: animation,
-                                      curve: Curves.easeOutBack,
-                                    ),
-                                    child: FadeTransition(
-                                      opacity: animation,
-                                      child: child,
-                                    ),
-                                  ),
-                              child: _isComplete(i)
-                                  ? Padding(
-                                      key: Key('tabbed-form-complete-$i'),
-                                      padding: const EdgeInsets.only(right: 6),
-                                      child: Icon(
-                                        Icons.check_circle,
-                                        size: 16,
-                                        color: colorScheme.primary,
-                                      ),
-                                    )
-                                  : const SizedBox.shrink(),
-                            ),
-                            Text(widget.tabs[i].label),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+              _buildStepper(context),
               const SizedBox(height: 12),
               Expanded(
                 child: AnimatedSwitcher(
@@ -320,9 +307,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                     flex: 2,
                     child: FilledButton.icon(
                       style: FilledButton.styleFrom(
-                        backgroundColor: isCelebrating
-                            ? Colors.green.shade700
-                            : null,
+                        backgroundColor: isCelebrating ? _successColor : null,
                         foregroundColor: isCelebrating ? Colors.white : null,
                       ),
                       onPressed: _isBusy
@@ -370,6 +355,118 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                     ),
                   ),
                 ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StepperCard extends StatelessWidget {
+  const _StepperCard({
+    required this.index,
+    required this.label,
+    required this.selected,
+    required this.complete,
+    required this.celebrating,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final int index;
+  final String label;
+  final bool selected;
+  final bool complete;
+  final bool celebrating;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final successSurface = _TabbedFormSheetState._successColor.withValues(
+      alpha: 0.16,
+    );
+    final successBorder = _TabbedFormSheetState._successColor.withValues(
+      alpha: 0.72,
+    );
+    final background = complete
+        ? successSurface
+        : selected
+        ? colorScheme.primaryContainer
+        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.55);
+    final borderColor = complete
+        ? successBorder
+        : selected
+        ? colorScheme.primary
+        : colorScheme.outlineVariant;
+    final foreground = complete
+        ? _TabbedFormSheetState._successColor
+        : selected
+        ? colorScheme.onPrimaryContainer
+        : colorScheme.onSurfaceVariant;
+
+    return Material(
+      color: background,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: borderColor),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: Key('tabbed-form-step-$index'),
+        onTap: enabled ? onTap : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          constraints: const BoxConstraints(minHeight: 48, minWidth: 118),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                transitionBuilder: (child, animation) => ScaleTransition(
+                  scale: CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutBack,
+                  ),
+                  child: FadeTransition(opacity: animation, child: child),
+                ),
+                child: complete || celebrating
+                    ? Icon(
+                        Icons.check,
+                        key: Key('tabbed-form-complete-$index'),
+                        size: 18,
+                        color: foreground,
+                      )
+                    : CircleAvatar(
+                        key: Key('tabbed-form-number-$index'),
+                        radius: 10,
+                        backgroundColor: foreground.withValues(alpha: 0.16),
+                        child: Text(
+                          '${index + 1}',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: foreground,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: foreground,
+                  fontWeight: selected || complete
+                      ? FontWeight.w800
+                      : FontWeight.w600,
+                ),
               ),
             ],
           ),
