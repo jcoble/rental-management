@@ -395,6 +395,8 @@ export const recurringMaintenanceSchema = z.object({
 	vendorId: idString,
 	recurrenceInterval: z.string(),
 	nextDueDate: required('Next due date'),
+	scheduledTime: optionalText,
+	estimatedCost: optionalNonNegative('Estimated cost'),
 	priority: z.string(),
 	isActive: z.boolean(),
 });

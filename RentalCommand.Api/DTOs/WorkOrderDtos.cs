@@ -14,6 +14,7 @@ public class WorkOrderResponse
     public int? TenantId { get; set; }
     public int? LeaseId { get; set; }
     public int? VendorId { get; set; }
+    public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = "General";
@@ -55,6 +56,7 @@ public class WorkOrderResponse
         TenantId = e.TenantId,
         LeaseId = e.LeaseId,
         VendorId = e.VendorId,
+        RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
         Title = e.Title,
         Description = e.Description,
         Category = e.Category,
@@ -154,6 +156,7 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             TenantId = e.TenantId,
             LeaseId = e.LeaseId,
             VendorId = e.VendorId,
+            RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
             Title = e.Title,
             Description = e.Description,
             Category = e.Category,

@@ -48,12 +48,17 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
             Category = "Landscaping",
             RecurrenceInterval = RecurrenceInterval.Quarterly,
             NextDueDate = new DateTime(2026, 7, 1, 14, 30, 0, DateTimeKind.Utc),
+            ScheduledTime = new TimeOnly(9, 15),
+            EstimatedCost = 180m,
             Priority = WorkOrderPriority.Normal,
         });
 
         result.Should().NotBeNull();
         result!.Title.Should().Be("Quarterly gutter cleaning");
         result.RecurrenceInterval.Should().Be(RecurrenceInterval.Quarterly);
+        result.ScheduledTime.Should().Be(new TimeOnly(9, 15));
+        result.EstimatedCost.Should().Be(180m);
+        result.MonthlyEstimatedCost.Should().Be(60m);
         result.IsActive.Should().BeTrue();
         // Time-of-day is dropped (it's a calendar date).
         result.NextDueDate.Date.Should().Be(new DateTime(2026, 7, 1));
@@ -147,8 +152,15 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
     {
         var property = SeedProperty();
-        SeedTask(property.Id, title: "Alpha filters");
-        SeedTask(property.Id, title: "Bravo filters");
+        var alpha = SeedTask(property.Id, title: "Alpha filters");
+        var bravo = SeedTask(
+            property.Id,
+            title: "Bravo filters",
+            interval: RecurrenceInterval.Weekly,
+            scheduledTime: new TimeOnly(8, 30),
+            estimatedCost: 120m);
+        SeedGeneratedWorkOrder(bravo, "Bravo filters - June");
+        SeedGeneratedWorkOrder(bravo, "Bravo filters - July");
         SeedTask(property.Id, title: "Cedar filters");
         SeedTask(property.Id, title: "Delta filters");
 
@@ -165,6 +177,12 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         result.Take.Should().Be(2);
         result.Items.Select(t => t.Title).Should().Equal("Bravo filters", "Cedar filters");
         result.Items.Should().OnlyContain(t => t.PropertyName == "Test Property");
+        result.Items[0].ScheduledTime.Should().Be(new TimeOnly(8, 30));
+        result.Items[0].EstimatedCost.Should().Be(120m);
+        result.Items[0].MonthlyEstimatedCost.Should().Be(520m);
+        result.Items[0].GeneratedWorkOrderCount.Should().Be(2);
+        result.Items[0].LastGeneratedWorkOrderId.Should().NotBeNull();
+        alpha.Id.Should().BePositive();
 
         _commands.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
@@ -173,6 +191,10 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"WorkOrders\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RecurringMaintenanceTaskId", StringComparison.OrdinalIgnoreCase));
     }
 
     // -----------------------------------------------------------------------
@@ -212,7 +234,13 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         return property;
     }
 
-    private RecurringMaintenanceTask SeedTask(int propertyId, bool isActive = true, string title = "Recurring chore")
+    private RecurringMaintenanceTask SeedTask(
+        int propertyId,
+        bool isActive = true,
+        string title = "Recurring chore",
+        RecurrenceInterval interval = RecurrenceInterval.Monthly,
+        TimeOnly? scheduledTime = null,
+        decimal? estimatedCost = null)
     {
         var now = DateTime.UtcNow;
         var task = new RecurringMaintenanceTask
@@ -220,8 +248,10 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
             Title = title,
-            RecurrenceInterval = RecurrenceInterval.Monthly,
+            RecurrenceInterval = interval,
             NextDueDate = DateTime.SpecifyKind(now.Date, DateTimeKind.Utc),
+            ScheduledTime = scheduledTime,
+            EstimatedCost = estimatedCost,
             IsActive = isActive,
             Priority = WorkOrderPriority.Normal,
             CreatedAt = now,
@@ -230,6 +260,27 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         _ctx.Db.RecurringMaintenanceTasks.Add(task);
         _ctx.Db.SaveChanges();
         return task;
+    }
+
+    private WorkOrder SeedGeneratedWorkOrder(RecurringMaintenanceTask task, string title)
+    {
+        var now = DateTime.UtcNow;
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = task.PortfolioId,
+            PropertyId = task.PropertyId,
+            RecurringMaintenanceTaskId = task.Id,
+            Title = title,
+            Description = title,
+            Category = task.Category ?? "General",
+            Priority = task.Priority,
+            Status = WorkOrderStatus.New,
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.WorkOrders.Add(workOrder);
+        _ctx.Db.SaveChanges();
+        return workOrder;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

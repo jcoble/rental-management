@@ -20,12 +20,20 @@ export interface RecurringMaintenanceTask {
 	unitId?: number | null;
 	vendorId?: number | null;
 	propertyName?: string | null;
+	unitNumber?: string | null;
+	vendorName?: string | null;
 	title: string;
 	description?: string | null;
 	category?: string | null;
 	recurrenceInterval: RecurrenceInterval;
 	/** Calendar date of the next generation (ISO `YYYY-MM-DD...`). */
 	nextDueDate: string;
+	/** Local time of day (`HH:mm:ss`) used for the generated work order's scheduled time. */
+	scheduledTime?: string | null;
+	estimatedCost?: number | null;
+	monthlyEstimatedCost?: number | null;
+	generatedWorkOrderCount: number;
+	lastGeneratedWorkOrderId?: number | null;
 	/** When the worker last spawned a work order from this task; null until first run. */
 	lastGeneratedAtUtc?: string | null;
 	isActive: boolean;
@@ -52,6 +60,8 @@ export interface CreateRecurringMaintenanceTask {
 	category?: string | null;
 	recurrenceInterval?: RecurrenceInterval;
 	nextDueDate: string;
+	scheduledTime?: string | null;
+	estimatedCost?: number | null;
 	isActive?: boolean;
 	priority?: RecurringMaintenancePriority;
 }
@@ -65,6 +75,8 @@ export interface UpdateRecurringMaintenanceTask {
 	category?: string | null;
 	recurrenceInterval?: RecurrenceInterval;
 	nextDueDate?: string;
+	scheduledTime?: string | null;
+	estimatedCost?: number | null;
 	isActive?: boolean;
 	priority?: RecurringMaintenancePriority;
 }

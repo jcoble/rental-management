@@ -12,6 +12,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public int? TenantId { get; set; }
     public int? LeaseId { get; set; }
     public int? VendorId { get; set; }
+    public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = "General";
@@ -45,6 +46,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public Tenant? Tenant { get; set; }
     public Lease? Lease { get; set; }
     public Vendor? Vendor { get; set; }
+    public RecurringMaintenanceTask? RecurringMaintenanceTask { get; set; }
     public List<Expense> Expenses { get; set; } = [];
 
     /// <summary>Append-only status timeline (Received → Assigned → In Progress → Done), oldest first.</summary>
