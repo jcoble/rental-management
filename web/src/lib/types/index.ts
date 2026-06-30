@@ -64,6 +64,21 @@ export interface SandboxState {
 	onboardingChoicePending?: boolean;
 }
 
+/** Server-shaped checklist facts for the getting-started card. */
+export interface GettingStartedSignalsResponse {
+	portfolioId: number;
+	portfolioNamed: boolean;
+	ownerCount: number;
+	propertyCount: number;
+	unitCount: number;
+	tenantCount: number;
+	leaseCount: number;
+	hasNotificationEmail: boolean;
+	hasTexting: boolean;
+	hasAutomations: boolean;
+	isSandbox: boolean;
+}
+
 export type OwnerEntityType = 'Person' | 'LLC' | 'Trust';
 
 export interface Owner {

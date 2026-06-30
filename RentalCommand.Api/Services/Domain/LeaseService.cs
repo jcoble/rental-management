@@ -696,8 +696,8 @@ public class LeaseService : ILeaseService
                 // AmountPaid in cash. Surface that collection as a companion payment line so the money is
                 // visible on the ledger instead of only in the headline "Paid" total — the charge
                 // (−Amount) and this companion (+AmountPaid) net to the still-owed remainder. The headline
-                // Charged/Paid/Balance are a separate DB aggregate (statusTotals below), so emitting this
-                // line does not double-count.
+                // Charged/Paid/Balance are a separate DB aggregate, so emitting this line does not
+                // double-count.
                 var collectedSoFar = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : 0m;
                 if (collectedSoFar > 0m)
                 {
@@ -727,33 +727,32 @@ public class LeaseService : ILeaseService
         // "Paid" is what's been collected. Balance (charged − paid) is exactly what's still owed.
         // Waived/Failed/Refunded rows aren't money owed and weren't collected, so they're excluded
         // from both totals and net to zero in the balance. Both totals are computed SQL-side as a single
-        // grouped-by-status aggregate (SUM per status in the database); only the handful of status rows
-        // come back, and the relevant statuses are summed from that tiny grouped result.
-        var statusTotals = await paymentsQuery
-            .GroupBy(p => p.Status)
+        // aggregate over the whole payment set.
+        var ledgerTotals = await paymentsQuery
+            .GroupBy(_ => 1)
             .Select(g => new
             {
-                Status = g.Key,
-                Total = g.Sum(p => p.Amount),
-                // Cash collected against this status' charges: only a Partial carries a split AmountPaid.
-                Collected = g.Sum(p => p.AmountPaid ?? 0m),
+                Charged = g.Sum(p =>
+                    p.Status == PaymentStatus.Scheduled ||
+                    p.Status == PaymentStatus.Partial ||
+                    p.Status == PaymentStatus.Late ||
+                    p.Status == PaymentStatus.Paid
+                        ? p.Amount
+                        : 0m),
+                Paid = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid
+                        ? p.Amount
+                        : p.Status == PaymentStatus.Partial
+                            ? p.AmountPaid ?? 0m
+                            : 0m),
             })
-            .ToListAsync(ct);
+            .SingleOrDefaultAsync(ct);
 
         // Charged = every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
-        var totalCharged = statusTotals
-            .Where(s => s.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
-                or PaymentStatus.Late or PaymentStatus.Paid)
-            .Sum(s => s.Total);
+        var totalCharged = ledgerTotals?.Charged ?? 0m;
         // Paid = the full Amount of Paid charges plus the collected-so-far of Partial charges; the
-        // Partial remainder stays in the balance (Balance = Charged − Paid). The grouped sums above are
-        // already DB-side aggregates over the tiny per-status result.
-        var totalPaid = statusTotals
-            .Where(s => s.Status == PaymentStatus.Paid)
-            .Sum(s => s.Total)
-            + statusTotals
-                .Where(s => s.Status == PaymentStatus.Partial)
-                .Sum(s => s.Collected);
+        // Partial remainder stays in the balance (Balance = Charged − Paid).
+        var totalPaid = ledgerTotals?.Paid ?? 0m;
 
         if (opening != null)
         {

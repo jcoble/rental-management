@@ -64,6 +64,25 @@ public class SandboxStateResponse
 }
 
 /// <summary>
+/// Small, server-shaped facts used by the web and mobile getting-started checklist. These are
+/// deliberately counts/booleans so clients never download list payloads just to aggregate them.
+/// </summary>
+public class GettingStartedSignalsResponse
+{
+    public int PortfolioId { get; set; }
+    public bool PortfolioNamed { get; set; }
+    public int OwnerCount { get; set; }
+    public int PropertyCount { get; set; }
+    public int UnitCount { get; set; }
+    public int TenantCount { get; set; }
+    public int LeaseCount { get; set; }
+    public bool HasNotificationEmail { get; set; }
+    public bool HasTexting { get; set; }
+    public bool HasAutomations { get; set; }
+    public bool IsSandbox { get; set; }
+}
+
+/// <summary>
 /// Body for the first-login onboarding decision. <c>mode</c> is "sandbox" (seed the demo portfolio) or
 /// "live" (keep an empty real portfolio). Any other value is rejected with 400.
 /// </summary>
