@@ -1598,7 +1598,7 @@
 							<div class="grid gap-4">
 								<div>
 									<label for="ob-portfolio-name" class="mb-1 block text-xs font-medium text-muted-foreground">Portfolio name</label>
-									<Input id="ob-portfolio-name" data-testid="onboarding-portfolio-name" bind:value={portfolioForm.name} placeholder="e.g. Smith Family Rentals" />
+									<Input id="ob-portfolio-name" data-testid="onboarding-portfolio-name" data-coach="onboarding-portfolio" bind:value={portfolioForm.name} placeholder="e.g. Smith Family Rentals" />
 									{#if portfolioErrors.name}<p class="mt-1 text-xs text-destructive">{portfolioErrors.name}</p>{/if}
 								</div>
 								<div>
@@ -1670,7 +1670,7 @@
 							<div class="grid gap-4 sm:grid-cols-2">
 								<div class="sm:col-span-2">
 									<label for="ob-owner-name" class="mb-1 block text-xs font-medium text-muted-foreground">Owner name</label>
-									<Input id="ob-owner-name" data-testid="onboarding-owner-name" bind:value={ownerForm.name} placeholder="e.g. John Smith or Smith Holdings LLC" />
+									<Input id="ob-owner-name" data-testid="onboarding-owner-name" data-coach="onboarding-owner" bind:value={ownerForm.name} placeholder="e.g. John Smith or Smith Holdings LLC" />
 									{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive">{ownerErrors.name}</p>{/if}
 								</div>
 								<div>
@@ -1766,7 +1766,7 @@
 									</div>
 									<div>
 										<label for="ob-prop-name" class="mb-1 block text-xs font-medium text-muted-foreground">Property name</label>
-										<Input id="ob-prop-name" data-testid="onboarding-property-name" bind:value={propertyForm.name} placeholder="e.g. 123 Main St Duplex" />
+										<Input id="ob-prop-name" data-testid="onboarding-property-name" data-coach="onboarding-property" bind:value={propertyForm.name} placeholder="e.g. 123 Main St Duplex" />
 										{#if propertyErrors.name}<p class="mt-1 text-xs text-destructive">{propertyErrors.name}</p>{/if}
 									</div>
 									<div>
@@ -1940,7 +1940,7 @@
 										<div class="grid gap-2 sm:grid-cols-2">
 											<div>
 												<span class="mb-1 block text-[11px] text-muted-foreground">First name</span>
-												<Input data-testid="onboarding-tenant-first-{i}" bind:value={row.firstName} placeholder="First name" />
+												<Input data-testid="onboarding-tenant-first-{i}" data-coach={i === 0 ? 'onboarding-tenants' : undefined} bind:value={row.firstName} placeholder="First name" />
 												{#if tenantRowErrors[i]?.firstName}<p class="mt-1 text-[11px] text-destructive">{tenantRowErrors[i].firstName}</p>{/if}
 											</div>
 											<div>
@@ -1977,7 +1977,9 @@
 					<!-- ============ Import a lease (lease-first: scan → builds the whole chain) ============ -->
 					{:else if currentStep.key === 'import'}
 						<WizardStepScaffold step={currentStep}>
-							<LeaseFirstImport {portfolioId} oncomplete={handleLeaseImportComplete} />
+							<div data-coach="onboarding-import">
+								<LeaseFirstImport {portfolioId} oncomplete={handleLeaseImportComplete} />
+							</div>
 						</WizardStepScaffold>
 
 					<!-- ============ Lease ============ -->
@@ -2006,7 +2008,7 @@
 									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">Tenant</span>
 										<Select.Root type="single" bind:value={leaseForm.tenantId}>
-											<Select.Trigger class="w-full" data-testid="onboarding-lease-tenant">{leaseTenantLabel}</Select.Trigger>
+											<Select.Trigger class="w-full" data-testid="onboarding-lease-tenant" data-coach="onboarding-lease">{leaseTenantLabel}</Select.Trigger>
 											<Select.Content>
 												{#each leaseTenants as t}
 													<Select.Item value={String(t.id)} label={t.fullName || `${t.firstName} ${t.lastName}`}>{t.fullName || `${t.firstName} ${t.lastName}`}</Select.Item>
@@ -2125,7 +2127,7 @@
 						<WizardStepScaffold step={currentStep}>
 							<div>
 								<label for="ob-notif-email" class="mb-1 block text-xs font-medium text-muted-foreground">Alert email <span class="font-normal">(optional)</span></label>
-								<Input id="ob-notif-email" type="email" autocomplete="email" data-testid="onboarding-notification-email" bind:value={notificationEmail} placeholder="your-email@example.com" />
+								<Input id="ob-notif-email" type="email" autocomplete="email" data-testid="onboarding-notification-email" data-coach="onboarding-notifications" bind:value={notificationEmail} placeholder="your-email@example.com" />
 								<p class="mt-1 text-xs text-muted-foreground">Leave blank to use your login email.</p>
 							</div>
 						</WizardStepScaffold>
@@ -2141,7 +2143,7 @@
 							<div class="grid gap-4 sm:grid-cols-2">
 								<div>
 									<label for="ob-sw-project" class="mb-1 block text-xs font-medium text-muted-foreground">Project ID</label>
-									<Input id="ob-sw-project" autocomplete="off" data-testid="onboarding-texting-project" bind:value={textingForm.projectId} />
+									<Input id="ob-sw-project" autocomplete="off" data-testid="onboarding-texting-project" data-coach="onboarding-texting" bind:value={textingForm.projectId} />
 								</div>
 								<div>
 									<label for="ob-sw-space" class="mb-1 block text-xs font-medium text-muted-foreground">Space URL</label>
