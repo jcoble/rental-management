@@ -61,11 +61,13 @@
 	import {
 		NEW_ONBOARDING_OWNER_VALUE,
 		onboardingOwnerFormFromOwner,
+		onboardingOwnerRecordOptions,
 	} from '$lib/onboarding/owner-selection';
 	import {
 		NEW_ONBOARDING_PROPERTY_VALUE,
 		buildOnboardingPropertyPayload,
 		onboardingPropertyFormFromProperty,
+		onboardingPropertyRecordOptions,
 	} from '$lib/onboarding/property-payload';
 	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
@@ -304,13 +306,17 @@
 	let ownerErrors = $state<Record<string, string>>({});
 	let selectedOwnerId = $state(NEW_ONBOARDING_OWNER_VALUE);
 	let ownerSelectionPrefilled = false;
+	const ownerRecordOptions = $derived(onboardingOwnerRecordOptions({
+		createdOwner,
+		existingOwners: ownersQuery.data ?? []
+	}));
 
 	function ownerById(id: string): Owner | null {
-		return (
-			(createdOwner && String(createdOwner.id) === id ? createdOwner : null) ??
-			(ownersQuery.data ?? []).find((owner) => String(owner.id) === id) ??
-			null
-		);
+		return (ownerRecordOptions.find((owner) => String(owner.id) === id) as Owner | undefined) ?? null;
+	}
+
+	function ownerOptionLabel(owner: { name?: string | null }): string {
+		return owner.name?.trim() || 'Unnamed owner';
 	}
 
 	function ownerIdFromSelection(): number | null {
@@ -334,14 +340,14 @@
 
 	const ownerSelectionLabel = $derived.by(() => {
 		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) {
-			return (ownersQuery.data?.length ?? 0) > 0 ? 'Add a new owner' : 'Add first owner';
+			return ownerRecordOptions.length > 0 ? 'Add a new owner' : 'Add first owner';
 		}
 		return ownerById(selectedOwnerId)?.name ?? 'Choose owner';
 	});
 
 	$effect(() => {
 		if (ownerSelectionPrefilled) return;
-		const owner = createdOwner ?? ownersQuery.data?.[0] ?? null;
+		const owner = createdOwner ?? ownerRecordOptions[0] ?? null;
 		if (!owner) return;
 		ownerSelectionPrefilled = true;
 		selectedOwnerId = String(owner.id);
@@ -423,13 +429,17 @@
 	let propertyErrors = $state<Record<string, string>>({});
 	let selectedPropertyId = $state(NEW_ONBOARDING_PROPERTY_VALUE);
 	let propertySelectionPrefilled = false;
+	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
+		createdProperty,
+		existingProperties: propertiesQuery.data ?? []
+	}));
 
 	function propertyById(id: string): Property | null {
-		return (
-			(createdProperty && String(createdProperty.id) === id ? createdProperty : null) ??
-			(propertiesQuery.data ?? []).find((property) => String(property.id) === id) ??
-			null
-		);
+		return (propertyRecordOptions.find((property) => String(property.id) === id) as Property | undefined) ?? null;
+	}
+
+	function propertyOptionLabel(property: { name?: string | null }): string {
+		return property.name?.trim() || 'Unnamed property';
 	}
 
 	function propertyIdFromSelection(): number | null {
@@ -467,14 +477,14 @@
 
 	const propertySelectionLabel = $derived.by(() => {
 		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
-			return (propertiesQuery.data?.length ?? 0) > 0 ? 'Add a new property' : 'Add first property';
+			return propertyRecordOptions.length > 0 ? 'Add a new property' : 'Add first property';
 		}
 		return propertyById(selectedPropertyId)?.name ?? 'Choose property';
 	});
 
 	$effect(() => {
 		if (propertySelectionPrefilled) return;
-		const property = createdProperty ?? propertiesQuery.data?.[0] ?? null;
+		const property = createdProperty ?? propertyRecordOptions[0] ?? null;
 		if (!property) return;
 		propertySelectionPrefilled = true;
 		selectedPropertyId = String(property.id);
@@ -554,7 +564,7 @@
 				propertyForm,
 				selectedOwnerId,
 				createdOwner,
-				existingOwners: ownersQuery.data ?? []
+				existingOwners: ownerRecordOptions
 			})
 		);
 		if (propResult.errors) {
@@ -1347,20 +1357,17 @@
 									We filled this in from your account — just confirm it's right. Own through an LLC or trust? Change the name and type below.
 								</div>
 							{/if}
-							{#if hasExistingOwners || createdOwner}
+							{#if ownerRecordOptions.length > 0}
 								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-owner-selector-panel">
 									<label for="ob-owner-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Owner record</label>
-									<Select.Root type="single" value={selectedOwnerId} onValueChange={selectOwnerRecord}>
-										<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-selector">
+									<Select.Root type="single" bind:value={selectedOwnerId} onValueChange={selectOwnerRecord}>
+										<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-record-select">
 											{ownerSelectionLabel}
 										</Select.Trigger>
 										<Select.Content>
-											{#each ownersQuery.data ?? [] as owner (owner.id)}
-												<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
+											{#each ownerRecordOptions as owner (owner.id)}
+												<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
 											{/each}
-											{#if createdOwner && !(ownersQuery.data ?? []).some((owner) => owner.id === createdOwner?.id)}
-												<Select.Item value={String(createdOwner.id)} label={createdOwner.name}>{createdOwner.name}</Select.Item>
-											{/if}
 											<Select.Item value={NEW_ONBOARDING_OWNER_VALUE} label="Add a new owner">
 												<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new owner</span>
 											</Select.Item>
@@ -1406,20 +1413,17 @@
 									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Choose one to review, add another, or skip ahead.
 								</div>
 							{/if}
-							{#if hasExistingProperties || createdProperty}
+							{#if propertyRecordOptions.length > 0}
 								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-property-selector-panel">
 									<label for="ob-property-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Property record</label>
-									<Select.Root type="single" value={selectedPropertyId} onValueChange={selectPropertyRecord}>
-										<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-selector">
+									<Select.Root type="single" bind:value={selectedPropertyId} onValueChange={selectPropertyRecord}>
+										<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-record-select">
 											{propertySelectionLabel}
 										</Select.Trigger>
 										<Select.Content>
-											{#each propertiesQuery.data ?? [] as property (property.id)}
-												<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+											{#each propertyRecordOptions as property (property.id)}
+												<Select.Item value={String(property.id)} label={propertyOptionLabel(property)}>{propertyOptionLabel(property)}</Select.Item>
 											{/each}
-											{#if createdProperty && !(propertiesQuery.data ?? []).some((property) => property.id === createdProperty?.id)}
-												<Select.Item value={String(createdProperty.id)} label={createdProperty.name}>{createdProperty.name}</Select.Item>
-											{/if}
 											<Select.Item value={NEW_ONBOARDING_PROPERTY_VALUE} label="Add a new property">
 												<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new property</span>
 											</Select.Item>
