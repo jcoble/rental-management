@@ -17,6 +17,7 @@
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
+	import { formatExpenseMoney, receiptGrandTotal } from '$lib/accounting/expense-receipt-display';
 	import {
 		confirmExpenseDelete,
 		expenseDeleteConfirmMessage,
@@ -179,6 +180,7 @@
 	const readHasLineItemTotal = $derived(
 		readLineItems.some((li) => typeof li.amount === 'number' && !Number.isNaN(li.amount))
 	);
+	const receiptGrandTotalValue = $derived(expense ? receiptGrandTotal(expense) : 0);
 	const scanHasFields = $derived(
 		!!(
 			scan &&
@@ -377,7 +379,7 @@
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Expense" icon={ReceiptText} accent="primary" testid="expense-card-main" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} error={formErrors.description} testid="expense-detail-description" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={`$${expense.amount}`} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
+				<InlineField label="Amount" bind:value={form.amount} display={formatExpenseMoney(expense.amount)} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
 				<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
 				{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: formatDateOnly(expense.incurredAt), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? formatDateOnly(expense.dueDate) : '', testid: 'expense-detail-due-date' })}
@@ -460,13 +462,22 @@
 				</DetailCard>
 			{/if}
 
-			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
-				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
-				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-2" />
+			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-3">
+				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal != null ? formatExpenseMoney(expense.subtotal) : ''} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
+				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount != null ? formatExpenseMoney(expense.taxAmount) : ''} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
+				<div data-testid="expense-detail-receipt-amount-field">
+					<p class="mb-1 block text-xs font-medium text-muted-foreground">Amount</p>
+					<p
+						class="min-h-10 rounded-md bg-primary/10 px-3 py-2 font-mono text-sm font-semibold tabular-nums text-foreground"
+						data-testid="expense-detail-receipt-amount"
+					>
+						{formatExpenseMoney(receiptGrandTotalValue)}
+					</p>
+				</div>
+				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-3" />
 
 				<!-- Line items: read-only table in view mode, editable table with add/remove in edit mode. -->
-				<div class="sm:col-span-2" data-testid="expense-detail-line-items">
+				<div class="sm:col-span-3" data-testid="expense-detail-line-items">
 					{#if editing}
 						<!-- Edit mode: editable line items (mirrors scan review page) -->
 						<div class="mb-2 flex items-center justify-between">
@@ -592,10 +603,18 @@
 									<tfoot>
 										<tr class="border-t border-border bg-muted/30">
 											<td class="px-3 py-2 text-xs text-muted-foreground" colspan="3">
-												{readLineItems.length} {readLineItems.length === 1 ? 'item' : 'items'}
+												{readLineItems.length} {readLineItems.length === 1 ? 'item' : 'items'} subtotal
 											</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums font-semibold text-foreground" data-testid="expense-detail-line-items-total">
 												{readHasLineItemTotal ? usd(readLineItemsTotal) : ''}
+											</td>
+										</tr>
+										<tr class="border-t border-border bg-primary/10">
+											<td class="px-3 py-2 text-xs font-semibold text-foreground" colspan="3">
+												Grand total
+											</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums font-bold text-foreground" data-testid="expense-detail-line-items-grand-total">
+												{formatExpenseMoney(receiptGrandTotalValue)}
 											</td>
 										</tr>
 									</tfoot>
