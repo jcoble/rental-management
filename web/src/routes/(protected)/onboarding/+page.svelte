@@ -26,7 +26,6 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -39,7 +38,6 @@
 	import WizardStepScaffold from '$lib/components/onboarding/WizardStepScaffold.svelte';
 	import LeasePhotoPrefill from '$lib/components/onboarding/LeasePhotoPrefill.svelte';
 	import LeaseFirstImport from '$lib/components/scan/LeaseFirstImport.svelte';
-	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import {
 		WIZARD_STEPS,
@@ -48,12 +46,6 @@
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
 	import { celebrateMilestone, bigFinale } from '$lib/onboarding/celebrations';
-	import {
-		ONBOARDING_IMPORT_PHASES,
-		onboardingImportPhaseProgress,
-		onboardingResumePhase,
-		type OnboardingImportPhaseKey,
-	} from '$lib/onboarding/onboarding-import-plan';
 	import {
 		resolveInitialOnboardingState,
 		shouldFinishAfterOptionalStep,
@@ -76,7 +68,6 @@
 		onboardingPropertyRecordOptions,
 	} from '$lib/onboarding/property-payload';
 	import { defaultLeaseNumber } from '$lib/leases/lease-number';
-	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
 	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
 	import {
 		Check,
@@ -96,6 +87,7 @@
 		Bell,
 		MessageSquare,
 		ListChecks,
+		PiggyBank,
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -109,6 +101,15 @@
 	// ---------------------------------------------------------------------------
 	const STEP_ICONS = { Building, UserCircle2, Home, Users, FileText, Bell, MessageSquare } as const;
 	const STEPS = WIZARD_STEPS;
+	// Stepper redesign (TSK-602): group the flat 8-step row into labeled sections so it reads as
+	// "where am I in the journey" instead of 8 squeezed, identical-looking circles. Replaces the
+	// separate "Guided import" phase rail, which duplicated this same progress as a second UI.
+	const STEP_GROUPS: { label: string; keys: WizardStepKey[] }[] = [
+		{ label: 'Setup', keys: ['portfolio', 'owner'] },
+		{ label: 'Property', keys: ['import', 'property'] },
+		{ label: 'People', keys: ['tenants', 'lease'] },
+		{ label: 'Notify', keys: ['notifications', 'texting'] },
+	];
 
 	let stepIndex = $state(0);
 	let finished = $state(false);
@@ -128,7 +129,6 @@
 	let notificationsSaved = $state(false);
 	let textingSaved = $state(false);
 	let returnToFinishAfterOptional = $state(false);
-	let activeLeaseImportOpen = $state(false);
 
 	// ---------------------------------------------------------------------------
 	// Resumable progress — persisted per portfolio so a reload resumes in place.
@@ -244,7 +244,6 @@
 			showError('The scan finished, but no lease was created. Please review the draft or try again.');
 			return;
 		}
-		activeLeaseImportOpen = false;
 		leaseImportCreatedSpine = true;
 		createdLease = true;
 		showSuccess('Imported! We created the property, unit, tenant, and lease from your document.');
@@ -1217,7 +1216,10 @@
 	function openImportCenterFromFinished() {
 		returnToFinishAfterOptional = false;
 		finished = false;
-		goToStep(activeImportTarget ?? 'property');
+		// Resume at the first incomplete core step (same fallback resolveInitialOnboardingState
+		// uses), or 'property' if everything core is already done — there's always more to add.
+		const next = CORE_WIZARD_STEPS.find((s) => !stepDone[s.key]);
+		goToStep(next?.key ?? 'property');
 	}
 
 	const anyPending = $derived(
@@ -1246,100 +1248,9 @@
 		return t ? t.fullName || `${t.firstName} ${t.lastName}` : 'Select tenant';
 	});
 
-	// Which steps show in the progress rail. The optional provider steps appear after the core ones
-	// but are visually marked as optional.
 	const coreCount = $derived(CORE_WIZARD_STEPS.length);
 	const leaseBlocked = $derived(leaseProperties.length === 0 || leaseTenants.length === 0);
-	const importPhaseCompletion = $derived<Record<OnboardingImportPhaseKey, boolean>>({
-		welcome: true,
-		portfolio: stepDone.portfolio && stepDone.owner,
-		properties: stepDone.property,
-		people: stepDone.tenants,
-		leases: stepDone.lease,
-		money: false,
-		automation: stepDone.notifications || stepDone.texting,
-		review: finished && coreSpineComplete,
-	});
-	const completedImportPhaseKeys = $derived(
-		ONBOARDING_IMPORT_PHASES
-			.filter((phase) => importPhaseCompletion[phase.key])
-			.map((phase) => phase.key)
-	);
-	const importProgress = $derived(onboardingImportPhaseProgress({
-		completedPhaseKeys: completedImportPhaseKeys,
-		totalPhaseCount: ONBOARDING_IMPORT_PHASES.length
-	}));
-	const activeImportPhaseKey = $derived(onboardingResumePhase(importPhaseCompletion));
-	const activeImportPhase = $derived(
-		ONBOARDING_IMPORT_PHASES.find((phase) => phase.key === activeImportPhaseKey) ?? ONBOARDING_IMPORT_PHASES[0]
-	);
-	const activeImportTarget = $derived(wizardTargetForImportPhase(activeImportPhase.key));
-	const activeImportHref = $derived(manualHrefForImportPhase(activeImportPhase.key));
-	const activeImportUsesLeaseFirst = $derived(
-		activeImportPhaseKey === 'properties' ||
-			activeImportPhaseKey === 'people' ||
-			activeImportPhaseKey === 'leases'
-	);
 
-	function wizardTargetForImportPhase(key: OnboardingImportPhaseKey): WizardStepKey | null {
-		switch (key) {
-			case 'welcome':
-				return 'portfolio';
-			case 'portfolio':
-				return stepDone.portfolio ? 'owner' : 'portfolio';
-			case 'properties':
-				return 'property';
-			case 'people':
-				return 'tenants';
-			case 'leases':
-				return 'lease';
-			case 'automation':
-				return stepDone.notifications ? 'texting' : 'notifications';
-			case 'money':
-			case 'review':
-			default:
-				return null;
-		}
-	}
-
-	function manualHrefForImportPhase(key: OnboardingImportPhaseKey): string | null {
-		switch (key) {
-			case 'money':
-				return '/deposits';
-			case 'review':
-				return '/get-started?view=checklist';
-			default:
-				return null;
-		}
-	}
-
-	function openImportPhase(key: OnboardingImportPhaseKey) {
-		const target = wizardTargetForImportPhase(key);
-		if (!target) return;
-		finished = false;
-		goToStep(target);
-	}
-
-	function scanTypeForImportPhase(key: OnboardingImportPhaseKey): ScanDocType | undefined {
-		switch (key) {
-			case 'properties':
-			case 'leases':
-				return 'Lease';
-			case 'people':
-				return 'Application';
-			case 'money':
-				return 'Expense';
-			default:
-				return undefined;
-		}
-	}
-
-	const activeImportScanContext = $derived.by<ScanContext>(() => {
-		const type = scanTypeForImportPhase(activeImportPhaseKey);
-		const context: ScanContext = { returnTo: `/onboarding?step=${currentStep.key}` };
-		if (type) context.type = type;
-		return context;
-	});
 </script>
 
 <svelte:head>
@@ -1400,6 +1311,10 @@
 							<FileSpreadsheet class="h-4 w-4" />
 							Import more records
 						</Button>
+						<Button variant="outline" class="gap-2" href="/deposits" data-testid="onboarding-setup-deposits">
+							<PiggyBank class="h-4 w-4" />
+							Add security deposits
+						</Button>
 						{#if !stepDone.notifications}
 							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => openOptionalStepFromFinished('notifications')}>
 								<Bell class="h-4 w-4" />
@@ -1428,164 +1343,59 @@
 				</p>
 			</div>
 
-			<section
-				class="mb-5 overflow-hidden rounded-lg border border-border bg-background"
-				data-testid="onboarding-import-center"
-			>
-				<div class="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
-					<div class="border-b border-border p-5 lg:border-b-0 lg:border-r">
-						<div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-							<div>
-								<p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Guided import</p>
-								<h2 class="mt-1 text-lg font-semibold">Bring records in one phase at a time</h2>
-								<p class="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-									Each phase asks for only the records needed next. Save a step, scan a document, come back later,
-									or import more records without restarting the setup flow.
-								</p>
-							</div>
-							<div class="shrink-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-right">
-								<p class="text-xl font-semibold tabular-nums">{importProgress.percent}%</p>
-								<p class="text-[11px] text-muted-foreground">{importProgress.completed} of {importProgress.total} phases</p>
-							</div>
-						</div>
-						<Progress value={importProgress.completed} max={importProgress.total} class="mb-4" />
-						<div class="grid gap-2 sm:grid-cols-2">
-							{#each ONBOARDING_IMPORT_PHASES as phase (phase.key)}
-								{@const done = importPhaseCompletion[phase.key]}
-								{@const active = phase.key === activeImportPhaseKey}
-								{@const target = wizardTargetForImportPhase(phase.key)}
-								<div class="relative">
+			<!-- Step indicator (TSK-602): one progress source, grouped into sections so it reads as
+			     "where am I" instead of 8 squeezed circles. Replaces the old dual stepper + "Guided
+			     import" phase rail (same progress, shown twice, two different visual languages). -->
+			<div class="mb-5" data-testid="onboarding-steps">
+				<div class="mb-3 flex items-center gap-3">
+					<Progress value={Math.min(stepIndex + 1, coreCount)} max={coreCount} class="flex-1" />
+					<span class="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">
+						Step {Math.min(stepIndex + 1, coreCount)} of {coreCount}
+					</span>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					{#each STEP_GROUPS as group (group.label)}
+						{@const groupSteps = group.keys.map((k) => STEPS.find((s) => s.key === k)).filter((s) => !!s)}
+						{@const groupOptional = groupSteps.every((s) => !s.core)}
+						{@const groupActive = groupSteps.some((s) => s.key === currentStep.key)}
+						<div
+							class="flex items-center gap-2 rounded-lg border px-2.5 py-2 transition-colors {groupActive ? 'border-primary/40 bg-primary/5' : 'border-border bg-muted/20'}"
+							data-testid="onboarding-step-group-{group.label.toLowerCase()}"
+						>
+							<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+								{group.label}{#if groupOptional}<span class="ml-1 normal-case text-muted-foreground/70">optional</span>{/if}
+							</span>
+							<div class="flex items-center gap-1">
+								{#each groupSteps as step, i (step.key)}
+									{@const active = step.key === currentStep.key}
+									{@const done = stepDone[step.key]}
+									{@const StepIcon = STEP_ICONS[step.icon]}
+									{#if i > 0}<span class="h-px w-2.5 shrink-0 bg-border" aria-hidden="true"></span>{/if}
 									<button
 										type="button"
-										class="relative flex min-h-16 w-full items-start gap-3 rounded-md border px-3 py-2.5 pr-9 text-left transition-colors
+										class="flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-1 text-xs transition-colors {active ? 'pr-2.5' : ''}
 											{active
-												? 'border-primary bg-primary/10 text-foreground'
-												: done
-													? 'phase-complete border-success/50 bg-success/10 text-foreground'
-													: 'border-border bg-muted/20 text-muted-foreground hover:bg-muted/40'}
-											{!target && !done ? 'cursor-default' : ''}"
-										disabled={!target && !done}
-										onclick={() => openImportPhase(phase.key)}
-										data-testid="onboarding-import-phase-{phase.key}"
+											? 'border-primary bg-primary text-primary-foreground'
+											: done
+												? 'border-success bg-success/15 text-success'
+												: 'border-border bg-background text-muted-foreground'}"
+										data-testid="onboarding-step-tab-{step.key}"
+										title={step.label}
+										aria-label={step.label}
+										onclick={() => goToStep(step.key)}
 									>
-										<span
-											class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs
-												{done
-													? 'border-success bg-success text-success-foreground'
-													: active
-														? 'border-primary bg-primary text-primary-foreground'
-														: 'border-border bg-background'}"
-										>
-											{#if done}
+										<span class="flex h-6 w-6 shrink-0 items-center justify-center">
+											{#if done && !active}
 												<Check class="h-4 w-4" />
 											{:else}
-												{ONBOARDING_IMPORT_PHASES.indexOf(phase) + 1}
+												<StepIcon class="h-4 w-4" />
 											{/if}
 										</span>
-										<span class="min-w-0">
-											<span class="block text-sm font-semibold">{phase.label}</span>
-											<span class="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-												{done ? phase.rewardLabel : phase.title}
-											</span>
-										</span>
-										{#if done}
-											<span class="reward-burst" aria-hidden="true">
-												<span></span><span></span><span></span>
-											</span>
-										{/if}
+										{#if active}<span class="font-medium">{step.label}</span>{/if}
 									</button>
-									<div class="absolute right-2 top-2">
-										<HelpPopover title={phase.label} summary={phase.tooltip} side="top" testid="onboarding-help-{phase.key}" />
-									</div>
-								</div>
-							{/each}
-						</div>
-					</div>
-
-					<div class="p-5" data-testid="onboarding-active-import-phase">
-						<p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Next best phase</p>
-						<div class="mt-2 flex items-start justify-between gap-3">
-							<div>
-								<h2 class="text-lg font-semibold">{activeImportPhase.title}</h2>
-								<p class="mt-2 text-sm leading-relaxed text-muted-foreground">{activeImportPhase.explanation}</p>
+								{/each}
 							</div>
-							<HelpPopover title={activeImportPhase.label} summary={activeImportPhase.tooltip} side="left" testid="onboarding-active-import-help" />
 						</div>
-						<div class="mt-5 flex flex-col gap-2">
-							{#if activeImportTarget}
-								<Button class="justify-start gap-2" data-testid="onboarding-active-manual" onclick={() => openImportPhase(activeImportPhase.key)}>
-									<ListChecks class="h-4 w-4" />
-									{activeImportPhase.manualAction}
-								</Button>
-							{:else if activeImportHref}
-								<Button class="justify-start gap-2" data-testid="onboarding-active-manual" href={activeImportHref}>
-									<ListChecks class="h-4 w-4" />
-									{activeImportPhase.manualAction}
-								</Button>
-							{/if}
-							{#if activeImportPhase.scanAction !== 'Skip scans for this phase'}
-								{#if activeImportUsesLeaseFirst}
-									<Button
-										type="button"
-										variant="outline"
-										class="justify-start gap-2"
-										data-testid="onboarding-active-lease-first-scan"
-										onclick={() => (activeLeaseImportOpen = true)}
-									>
-										<FileText class="h-4 w-4" />
-										{activeImportPhase.scanAction}
-									</Button>
-								{:else}
-									<ScanLauncher
-										context={activeImportScanContext}
-										triggerLabel={activeImportPhase.scanAction}
-										triggerVariant="outline"
-										triggerClass="justify-start gap-2"
-										testid="onboarding-active-scan"
-									/>
-								{/if}
-							{/if}
-							<Button variant="outline" class="justify-start gap-2" href="/import" data-testid="onboarding-active-spreadsheet">
-								<FileSpreadsheet class="h-4 w-4" />
-								Import a spreadsheet
-							</Button>
-						</div>
-					</div>
-				</div>
-			</section>
-
-			<!-- Step indicator (core steps + optional add-ons) -->
-			<div class="mb-4" data-testid="onboarding-steps">
-				<Progress value={Math.min(stepIndex + 1, coreCount)} max={coreCount} class="mb-3" />
-				<div class="flex items-center justify-between gap-1">
-					{#each STEPS as step (step.key)}
-						{@const active = step.key === currentStep.key}
-						{@const done = stepDone[step.key]}
-						{@const StepIcon = STEP_ICONS[step.icon]}
-						<button
-							type="button"
-							class="flex flex-1 flex-col items-center gap-1 text-center"
-							data-testid="onboarding-step-tab-{step.key}"
-							onclick={() => goToStep(step.key)}
-						>
-							<span
-								class="flex h-8 w-8 items-center justify-center rounded-full border text-xs transition-colors
-									{active
-									? 'border-primary bg-primary text-primary-foreground'
-									: done
-										? 'border-success bg-success/15 text-success'
-										: 'border-border bg-background text-muted-foreground'}"
-							>
-								{#if done && !active}
-									<Check class="h-4 w-4" />
-								{:else}
-									<StepIcon class="h-4 w-4" />
-								{/if}
-							</span>
-							<span class="text-[11px] {active ? 'font-medium text-foreground' : 'text-muted-foreground'}">
-								{step.label}{#if !step.core}<span class="block text-[9px] text-muted-foreground/70">optional</span>{/if}
-							</span>
-						</button>
 					{/each}
 				</div>
 			</div>
@@ -2239,21 +2049,6 @@
 	</div>
 </div>
 
-<Dialog.Root open={activeLeaseImportOpen} onOpenChange={(open) => { activeLeaseImportOpen = open; }}>
-	<Dialog.Content class="max-h-[88vh] max-w-3xl overflow-y-auto" data-testid="onboarding-lease-first-dialog">
-		<Dialog.Header>
-			<Dialog.Title class="flex items-center gap-2">
-				<FileText class="h-5 w-5 text-accent" />
-				Scan a lease into setup
-			</Dialog.Title>
-			<Dialog.Description>
-				Read a signed lease here and use it to create the property, unit, tenant, and lease without leaving onboarding.
-			</Dialog.Description>
-		</Dialog.Header>
-		<LeaseFirstImport {portfolioId} oncomplete={handleLeaseImportComplete} oncancel={() => (activeLeaseImportOpen = false)} />
-	</Dialog.Content>
-</Dialog.Root>
-
 <ConfirmDialog
 	open={ownerDeleteTarget !== null}
 	title="Delete owner"
@@ -2298,69 +2093,3 @@
 	oncancel={() => (unitDeleteTarget = null)}
 />
 
-<style>
-	@keyframes phase-complete-pop {
-		0% {
-			transform: scale(0.98);
-		}
-		55% {
-			transform: scale(1.015);
-		}
-		100% {
-			transform: scale(1);
-		}
-	}
-
-	@keyframes reward-rise {
-		0% {
-			opacity: 0;
-			transform: translateY(4px) scaleY(0.4);
-		}
-		35% {
-			opacity: 1;
-		}
-		100% {
-			opacity: 0;
-			transform: translateY(-18px) scaleY(1);
-		}
-	}
-
-	.phase-complete {
-		animation: phase-complete-pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
-	}
-
-	.reward-burst {
-		position: absolute;
-		right: 0.75rem;
-		top: 0.75rem;
-		display: inline-flex;
-		gap: 0.125rem;
-		pointer-events: none;
-	}
-
-	.reward-burst span {
-		display: block;
-		width: 0.1875rem;
-		height: 0.625rem;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--success) 75%, white);
-		animation: reward-rise 900ms ease-out infinite;
-	}
-
-	.reward-burst span:nth-child(2) {
-		animation-delay: 110ms;
-		background: color-mix(in srgb, var(--primary) 70%, white);
-	}
-
-	.reward-burst span:nth-child(3) {
-		animation-delay: 220ms;
-		background: color-mix(in srgb, var(--accent) 70%, white);
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.phase-complete,
-		.reward-burst span {
-			animation: none;
-		}
-	}
-</style>

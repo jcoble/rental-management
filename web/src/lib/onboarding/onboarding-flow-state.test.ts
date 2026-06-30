@@ -112,21 +112,7 @@ describe('onboarding flow state', () => {
 		assert.doesNotMatch(source, /sandboxQuery\.data\?\.isSandbox === true\) return/);
 	});
 
-	it('keeps import phase help controls outside the phase button', () => {
-		const source = readFileSync(
-			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
-			'utf8'
-		);
-		const phaseButton = source.indexOf('data-testid="onboarding-import-phase-{phase.key}"');
-		const phaseButtonClose = source.indexOf('</button>', phaseButton);
-		const phaseHelp = source.indexOf('testid="onboarding-help-{phase.key}"');
-
-		assert.ok(phaseButton > -1, 'phase button should exist');
-		assert.ok(phaseButtonClose > phaseButton, 'phase button should close after opening');
-		assert.ok(phaseHelp > phaseButtonClose, 'help popover trigger must not be nested in the phase button');
-	});
-
-	it('makes lease-first scan a first-class onboarding step and import-center action', () => {
+	it('makes lease-first scan a first-class onboarding step', () => {
 		const source = readFileSync(
 			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
 			'utf8'
@@ -134,9 +120,6 @@ describe('onboarding flow state', () => {
 
 		assert.match(source, /currentStep\.key === 'import'/);
 		assert.match(source, /<LeaseFirstImport[^>]*oncomplete=\{handleLeaseImportComplete\}/s);
-		assert.match(source, /data-testid="onboarding-active-lease-first-scan"/);
-		assert.match(source, /data-testid="onboarding-lease-first-dialog"/);
-		assert.match(source, /activeImportUsesLeaseFirst/);
 		assert.match(source, /leaseImportCreatedSpine/);
 		assert.match(source, /if \(!result\.leaseId\)/);
 	});
