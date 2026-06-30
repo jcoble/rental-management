@@ -45,6 +45,7 @@
 		type WizardStepKey,
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
+	import { celebrateMilestone, bigFinale } from '$lib/onboarding/celebrations';
 	import {
 		ONBOARDING_IMPORT_PHASES,
 		onboardingImportPhaseProgress,
@@ -1030,6 +1031,7 @@
 		// The last CORE step (lease) is the natural "done" point — show the celebration and offer the
 		// optional provider steps from there rather than forcing the user through them.
 		if (currentStep.key === 'lease') {
+			bigFinale();
 			finishFlow();
 			return;
 		}
@@ -1037,12 +1039,16 @@
 			currentStepKey: currentStep.key,
 			returnToFinishAfterOptional,
 		})) {
+			bigFinale();
 			finishFlow();
 			return;
 		}
 		if (stepIndex < STEPS.length - 1) {
+			// Each completed milestone gets a (varying) reward — onboarding should feel fun (TSK-599).
+			celebrateMilestone();
 			stepIndex += 1;
 		} else {
+			bigFinale();
 			finishFlow();
 		}
 	}
