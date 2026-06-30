@@ -204,7 +204,7 @@
 			<div class="grid gap-3 sm:grid-cols-2">
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-amount">Amount</label>
-					<Input id="rent-amount" data-testid="rent-amount-input" type="number" step="0.01" bind:value={createForm.amount} placeholder="0.00" />
+					<Input id="rent-amount" data-testid="rent-amount-input" type="text" inputmode="decimal" mask="currency" bind:value={createForm.amount} placeholder="0.00" />
 					{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="rent-amount-error">{createErrors.amount}</p>{/if}
 				</div>
 				<div>

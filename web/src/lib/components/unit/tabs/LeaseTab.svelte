@@ -463,14 +463,28 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-							<Input data-testid="unit-lease-new-tenant-email" bind:value={tenantForm.email} placeholder="Email" />
+							<Input
+								data-testid="unit-lease-new-tenant-email"
+								type="email"
+								autocomplete="email"
+								bind:value={tenantForm.email}
+								placeholder="Email"
+							/>
 							{#if tenantErrors.email}
 								<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-email-error">{tenantErrors.email}</p>
 							{/if}
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="unit-lease-new-tenant-phone" bind:value={tenantForm.phone} placeholder="Phone" />
+							<Input
+								data-testid="unit-lease-new-tenant-phone"
+								type="tel"
+								autocomplete="tel"
+								inputmode="tel"
+								mask="phone"
+								bind:value={tenantForm.phone}
+								placeholder="Phone"
+							/>
 							{#if tenantErrors.phone}
 								<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-phone-error">{tenantErrors.phone}</p>
 							{/if}

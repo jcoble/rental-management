@@ -1,11 +1,13 @@
 <script lang="ts">
 	import type { HTMLInputAttributes, HTMLInputTypeAttribute } from "svelte/elements";
+	import { maskInputValue, type InputMask } from "$lib/forms/input-masks";
 	import { cn, type WithElementRef } from "$lib/utils.js";
 
 	type InputType = Exclude<HTMLInputTypeAttribute, "file">;
 
 	type Props = WithElementRef<
-		Omit<HTMLInputAttributes, "type"> &
+		Omit<HTMLInputAttributes, "type" | "oninput"> &
+			{ mask?: InputMask; oninput?: (event: Event) => void } &
 			({ type: "file"; files?: FileList } | { type?: InputType; files?: undefined })
 	>;
 
@@ -16,8 +18,27 @@
 		files = $bindable(),
 		class: className,
 		"data-slot": dataSlot = "input",
+		mask,
+		oninput,
 		...restProps
 	}: Props = $props();
+
+	function handleInput(event: Event) {
+		if (mask) {
+			const input = event.currentTarget as HTMLInputElement;
+			const rawMaxLength =
+				typeof restProps.maxlength === "number"
+					? restProps.maxlength
+					: typeof restProps.maxlength === "string"
+						? Number.parseInt(restProps.maxlength, 10)
+						: undefined;
+			const maxLength = Number.isFinite(rawMaxLength) ? rawMaxLength : undefined;
+			const next = maskInputValue(input.value, mask, { maxLength });
+			if (next !== input.value) input.value = next;
+			value = next;
+		}
+		oninput?.(event);
+	}
 </script>
 
 {#if type === "file"}
@@ -33,6 +54,7 @@
 		type="file"
 		bind:files
 		bind:value
+		oninput={oninput}
 		{...restProps}
 	/>
 {:else}
@@ -47,6 +69,7 @@
 		)}
 		{type}
 		bind:value
+		oninput={handleInput}
 		{...restProps}
 	/>
 {/if}
