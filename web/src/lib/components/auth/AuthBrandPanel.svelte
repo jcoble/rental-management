@@ -14,7 +14,7 @@
 </script>
 
 <div
-	class="relative hidden overflow-hidden bg-[#0b0f1a] lg:flex lg:flex-col lg:justify-between lg:p-12"
+	class="relative hidden overflow-hidden bg-[var(--m3c-surface-container-lowest)] lg:flex lg:flex-col lg:justify-between lg:p-12"
 >
 	<!-- Ambient aurora wash -->
 	<div

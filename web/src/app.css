@@ -50,7 +50,7 @@
   --input: var(--m3c-outline-variant);
   --ring: var(--m3c-primary);
 
-  --chart-1: #a36bff;
+  --chart-1: #7c6ff5;
   --chart-2: #34d399;
   --chart-3: #f59e0b;
   --chart-4: #22d3ee;
@@ -541,7 +541,9 @@
     gap: 8px;
     border: 1px solid color-mix(in srgb, var(--m3c-outline) 55%, transparent);
     border-radius: var(--m3-shape-small);
-    background: color-mix(in srgb, var(--m3c-surface-container-highest) 54%, transparent);
+    background: color-mix(in srgb, var(--m3c-surface-container-highest) 48%, transparent);
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
     padding: 5px 12px;
     color: var(--app-text-secondary);
     font: var(--m3-type-label-large);
@@ -564,14 +566,18 @@
     border: 1px solid color-mix(in srgb, var(--m3c-outline-variant) 72%, transparent);
     border-radius: var(--m3-shape-extra-large);
     background:
-      linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 44%),
-      color-mix(in srgb, var(--m3c-surface-container-lowest) 80%, transparent);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.035);
+      linear-gradient(180deg, rgb(255 255 255 / 0.05), transparent 44%),
+      color-mix(in srgb, var(--m3c-surface-container-lowest) 62%, transparent);
+    backdrop-filter: blur(18px) saturate(1.3);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
   }
 
   .m3-dashboard-hero-stat {
     border-radius: var(--m3-shape-large);
-    background: color-mix(in srgb, var(--m3c-surface-container-high) 72%, transparent);
+    background: color-mix(in srgb, var(--m3c-surface-container-high) 56%, transparent);
+    backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
     padding: 14px 16px;
   }
 
@@ -615,7 +621,8 @@
 
   .m3-route-transition {
     height: 100%;
-    animation: m3-route-enter var(--m3-motion-duration-long-1) var(--m3-motion-easing-emphasized-decelerate) both;
+    animation: m3-route-enter var(--m3-motion-duration-long-1) var(--m3-motion-easing-expressive, cubic-bezier(0.18, 1.08, 0.18, 1)) both;
+    transform-origin: 50% 38%;
   }
 
   .m3-card {
@@ -884,6 +891,39 @@
     animation: m3-dialog-overlay-out var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard) both;
   }
 
+  /* ── Glassmorphism (TSK-596) ────────────────────────────────────────────────
+     Frosted translucent chrome that floats over content/gradients: segmented
+     toggles, menus, popovers, selects, hero sub-cards. The backdrop blur + a
+     little saturation let the violet gradients glow through; a 1px hairline +
+     inset top highlight give the "lit glass" edge. Solid-tint fallback where
+     backdrop-filter is unsupported. */
+  .m3-glass {
+    background: color-mix(in srgb, var(--m3c-surface-container-high) 55%, transparent);
+    backdrop-filter: blur(16px) saturate(1.5);
+    -webkit-backdrop-filter: blur(16px) saturate(1.5);
+    border: 1px solid color-mix(in srgb, var(--m3c-on-surface) 12%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #ffffff 9%, transparent),
+      0 10px 30px -16px rgb(0 0 0 / 0.55);
+  }
+
+  /* Menu / popover / select panels — a touch more opaque so list text stays crisp;
+     !important to override the components' bg-popover / border / shadow utilities. */
+  .m3-glass-pop {
+    background: color-mix(in srgb, var(--m3c-surface-container-high) 60%, transparent) !important;
+    backdrop-filter: blur(24px) saturate(1.5);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    border-color: color-mix(in srgb, var(--m3c-on-surface) 12%, transparent) !important;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent),
+      0 16px 40px -18px rgb(0 0 0 / 0.6) !important;
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .m3-glass { background: var(--m3c-surface-container-high); }
+    .m3-glass-pop { background: var(--m3c-surface-container-high) !important; }
+  }
+
   .m3-dialog-content {
     left: 50%;
     top: 50%;
@@ -993,10 +1033,24 @@
      + a touch of saturation so the image reads as color while copy stays on the
      scrimmed side. */
   .m3-surface-art--band {
-    --m3-art-opacity: 0.52;
+    /* TSK-596: drop the warm/brown raster photos + any rose/amber tone tint; paint a
+       cohesive violet / lavender / periwinkle gradient with soft blobs for ALL band
+       headers. !important beats PageHeader's scoped .is-band background/border/scrim. */
+    --m3-art-opacity: 0 !important;
     --m3-art-size: cover;
     --m3-art-position: right center;
-    --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container) 72%, var(--m3c-primary-container));
+    --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container) 80%, var(--m3c-primary-container)) !important;
+    background:
+      radial-gradient(68% 145% at 87% 6%, color-mix(in srgb, var(--m3c-primary) 22%, transparent), transparent 60%),
+      radial-gradient(52% 135% at 99% 86%, color-mix(in srgb, var(--m3c-surface-violet-high, var(--m3c-primary-container)) 36%, transparent), transparent 64%),
+      radial-gradient(58% 120% at 56% 128%, color-mix(in srgb, var(--m3c-surface-sky-high, var(--m3c-info-container)) 20%, transparent), transparent 62%),
+      linear-gradient(
+        100deg,
+        color-mix(in srgb, var(--m3c-primary-container) 30%, var(--m3c-surface-container)) 0%,
+        color-mix(in srgb, var(--m3c-surface-container) 90%, var(--m3c-primary-container)) 52%,
+        color-mix(in srgb, var(--m3c-surface-container) 78%, var(--m3c-surface-violet, var(--m3c-surface-container))) 100%
+      ) !important;
+    border-color: color-mix(in srgb, var(--m3c-primary) 24%, transparent) !important;
   }
   /* Vertical bleed: the layer is ~70% taller than the strip, so cover computes
      against a taller box and the image gains vertical overscan. */
@@ -1058,9 +1112,30 @@
       var(--m3-dashboard-art-tint, var(--m3c-primary-container))
     );
     border-color: color-mix(in srgb, var(--m3-dashboard-art-border, var(--m3c-primary)) 34%, transparent) !important;
+    /* Vibrant M3 "color blobs": three accent radials (tint / brand / warm) layered
+       over the tinted base so the hero surfaces read colorful like the M3 reference,
+       while the ::after scrim keeps the copy side legible. Each --portfolio/--briefing
+       variant feeds its own hues via the art-tint/border/line tokens. */
     background:
+      radial-gradient(120% 135% at 4% -12%, color-mix(in srgb, var(--m3-dashboard-art-tint, var(--m3c-primary-container)) 64%, transparent), transparent 56%),
+      radial-gradient(115% 130% at 104% -4%, color-mix(in srgb, var(--m3-dashboard-art-border, var(--m3c-primary)) 36%, transparent), transparent 52%),
+      radial-gradient(150% 155% at 98% 112%, color-mix(in srgb, var(--m3-dashboard-art-line, var(--m3c-tertiary)) 32%, transparent), transparent 58%),
       linear-gradient(135deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 18%, transparent), transparent 72%),
       var(--m3-dashboard-art-bg, var(--m3c-surface-container-low));
+    transition:
+      transform var(--m3-motion-duration-medium-2, 240ms) var(--m3-motion-easing-expressive, cubic-bezier(0.18, 1.08, 0.18, 1)),
+      box-shadow var(--m3-motion-duration-medium-2, 240ms) var(--m3-motion-easing-standard, ease);
+  }
+
+  /* Expressive lift: hero cards gently rise + glow in their own accent on hover. */
+  .m3-dashboard-art:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 38px -18px color-mix(in srgb, var(--m3-dashboard-art-border, var(--m3c-primary)) 55%, transparent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .m3-dashboard-art { transition: none; }
+    .m3-dashboard-art:hover { transform: none; }
   }
 
   .m3-dashboard-art::after {
@@ -1084,18 +1159,22 @@
       );
   }
 
+  /* M3 "color blobs" palette — violet / periwinkle / pink / lavender / coral.
+     (Previously these mixed in mint + amber, which read as the olive-green wash
+     on the portfolio hero — the "dark green" the refresh removes. No green here;
+     green stays reserved for the success/"collected" semantics.) */
   .m3-dashboard-art--portfolio {
-    --m3-dashboard-art-bg: color-mix(in srgb, var(--m3c-surface-violet, var(--m3c-surface-container-low)) 72%, var(--m3c-surface-sky, var(--m3c-surface-container-low)));
-    --m3-dashboard-art-tint: var(--m3c-surface-mint-high, var(--m3c-success-container));
+    --m3-dashboard-art-bg: color-mix(in srgb, var(--m3c-surface-violet, var(--m3c-surface-container-low)) 78%, var(--m3c-surface-sky, var(--m3c-surface-container-low)));
+    --m3-dashboard-art-tint: var(--m3c-surface-sky-high, var(--m3c-info-container));
     --m3-dashboard-art-border: var(--m3c-primary);
-    --m3-dashboard-art-line: var(--m3c-surface-amber-high, var(--m3c-warning-container));
+    --m3-dashboard-art-line: var(--m3c-surface-rose-high, var(--m3c-primary-container));
   }
 
   .m3-dashboard-art--briefing {
-    --m3-dashboard-art-bg: color-mix(in srgb, var(--m3c-surface-rose, var(--m3c-surface-container-low)) 70%, var(--m3c-surface-amber, var(--m3c-surface-container-low)));
-    --m3-dashboard-art-tint: var(--m3c-surface-sky-high, var(--m3c-info-container));
+    --m3-dashboard-art-bg: color-mix(in srgb, var(--m3c-surface-rose, var(--m3c-surface-container-low)) 64%, var(--m3c-surface-violet, var(--m3c-surface-container-low)));
+    --m3-dashboard-art-tint: var(--m3c-surface-violet-high, var(--m3c-primary-container));
     --m3-dashboard-art-border: var(--accent-coral);
-    --m3-dashboard-art-line: var(--m3c-surface-mint-high, var(--m3c-success-container));
+    --m3-dashboard-art-line: var(--m3c-surface-sky-high, var(--m3c-info-container));
   }
 
   :root.light .m3-dashboard-art,
@@ -1354,8 +1433,10 @@
     position: relative;
     isolation: isolate;
     overflow: hidden;
+    --m3-tonal-art-opacity: 0.22;
     border-color: color-mix(in srgb, var(--m3-tonal-border, var(--m3c-outline-variant)) var(--m3-tonal-border-strength), transparent);
     background:
+      var(--m3-tonal-glow, transparent),
       linear-gradient(180deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 24%, transparent), transparent 70%),
       var(--m3-tonal-bg, var(--card));
   }
@@ -1376,6 +1457,9 @@
     transform: rotate(var(--m3-tonal-rotate, 5deg)) skewX(-7deg);
   }
 
+  /* Soft bottom fade only. The old 105deg/142deg diagonal bands repeated on every
+     card and read as "the same background image" — dropped (TSK-596). Per-card
+     variety now comes from --m3-tonal-glow, not a shared diagonal texture. */
   .m3-tonal-card::after {
     content: "";
     position: absolute;
@@ -1383,9 +1467,7 @@
     z-index: 0;
     pointer-events: none;
     background:
-      linear-gradient(105deg, color-mix(in srgb, var(--m3-tonal-bg, var(--card)) 72%, transparent) 0 54%, transparent 76%),
-      linear-gradient(142deg, transparent 0 74%, color-mix(in srgb, var(--m3c-surface-container-lowest) 24%, transparent) 74% 80%, transparent 80%),
-      linear-gradient(0deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 18%, transparent), transparent 50%);
+      linear-gradient(0deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 16%, transparent), transparent 48%);
   }
 
   .m3-tonal-card > * {
@@ -1406,51 +1488,44 @@
     background: var(--m3-tonal-bg, var(--card));
   }
 
+  /* Calm-but-distinct tonal cards (TSK-596): each card gets a soft single corner
+     GLOW (radial, unclipped — no hard diagonal stripe, which read as "camouflage")
+     so the set has gentle depth + variety while staying cohesive. Cool + green/brand
+     hues (mint/sky/violet) carry their own glow; warm semantic cards (amber/rose/
+     coral) get a neutral light sheen instead of a red/yellow wash — their meaning
+     rides the icon + number color. */
   .m3-tonal-card--mint {
-    --m3-tonal-bg: var(--m3c-surface-mint, color-mix(in srgb, var(--success) 8%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--success) 38%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-mint-high, var(--m3c-success-container));
-    --m3-tonal-art: linear-gradient(128deg, color-mix(in srgb, var(--m3-tonal-accent) 48%, transparent), transparent 66%), linear-gradient(78deg, transparent 0 58%, color-mix(in srgb, var(--accent-cyan) 18%, transparent) 58% 76%, transparent 76%);
+    --m3-tonal-bg: color-mix(in srgb, var(--success) 9%, var(--card));
+    --m3-tonal-border: color-mix(in srgb, var(--success) 30%, var(--m3c-outline-variant));
+    --m3-tonal-glow: radial-gradient(125% 140% at 112% -14%, color-mix(in srgb, var(--success) 24%, transparent), transparent 58%);
+    --m3-tonal-art: none;
   }
 
   .m3-tonal-card--sky {
-    --m3-tonal-bg: var(--m3c-surface-sky, color-mix(in srgb, var(--info) 8%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--info) 34%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-sky-high, var(--m3c-info-container));
-    --m3-tonal-art: linear-gradient(132deg, color-mix(in srgb, var(--m3-tonal-accent) 42%, transparent), transparent 68%), linear-gradient(82deg, transparent 0 48%, color-mix(in srgb, var(--m3c-primary-container) 18%, transparent) 48% 64%, transparent 64%);
-    --m3-tonal-shape: var(--m3-shape-extra-large);
-  }
-
-  .m3-tonal-card--amber {
-    --m3-tonal-bg: var(--m3c-surface-amber, color-mix(in srgb, var(--warning) 9%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--warning) 38%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-amber-high, var(--m3c-warning-container));
-    --m3-tonal-art: linear-gradient(124deg, color-mix(in srgb, var(--m3-tonal-accent) 44%, transparent), transparent 64%), linear-gradient(96deg, transparent 0 42%, color-mix(in srgb, var(--m3c-outline) 10%, transparent) 42% 54%, transparent 54%);
-    --m3-tonal-shape: var(--m3-shape-extra-large);
-  }
-
-  .m3-tonal-card--rose {
-    --m3-tonal-bg: var(--m3c-surface-rose, color-mix(in srgb, var(--destructive) 7%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--destructive) 38%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-rose-high, var(--m3c-error-container));
-    --m3-tonal-art: linear-gradient(136deg, color-mix(in srgb, var(--m3-tonal-accent) 42%, transparent), transparent 64%), linear-gradient(78deg, transparent 0 54%, color-mix(in srgb, var(--m3c-secondary-container) 18%, transparent) 54% 72%, transparent 72%);
+    --m3-tonal-bg: color-mix(in srgb, var(--info) 9%, var(--card));
+    --m3-tonal-border: color-mix(in srgb, var(--info) 28%, var(--m3c-outline-variant));
+    --m3-tonal-glow: radial-gradient(125% 140% at 112% -14%, color-mix(in srgb, var(--info) 24%, transparent), transparent 58%);
+    --m3-tonal-art: none;
     --m3-tonal-shape: var(--m3-shape-extra-large);
   }
 
   .m3-tonal-card--violet {
-    --m3-tonal-bg: var(--m3c-surface-violet, color-mix(in srgb, var(--primary) 8%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--primary) 36%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-violet-high, var(--m3c-primary-container));
-    --m3-tonal-art: linear-gradient(128deg, color-mix(in srgb, var(--m3-tonal-accent) 48%, transparent), transparent 66%), linear-gradient(82deg, transparent 0 52%, color-mix(in srgb, var(--m3c-info-container) 18%, transparent) 52% 70%, transparent 70%);
+    --m3-tonal-bg: color-mix(in srgb, var(--primary) 10%, var(--card));
+    --m3-tonal-border: color-mix(in srgb, var(--primary) 30%, var(--m3c-outline-variant));
+    --m3-tonal-glow: radial-gradient(125% 140% at 112% -14%, color-mix(in srgb, var(--primary) 28%, transparent), transparent 58%);
+    --m3-tonal-art: none;
   }
 
-  /* Coral card keeps its own warm-coral family (tertiary is amber after the
-     accent pin; deriving coral from tertiary would duplicate the amber card). */
+  /* Warm semantic cards (Spent / Overdue / Work Orders / Leases / Appointments):
+     a neutral light sheen, NOT a red/yellow wash. Color lives in their icon + number. */
+  .m3-tonal-card--amber,
+  .m3-tonal-card--rose,
   .m3-tonal-card--coral {
-    --m3-tonal-bg: var(--m3c-surface-coral, color-mix(in srgb, var(--accent-coral) 8%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--accent-coral) 32%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-coral-high, var(--m3c-coral-container));
-    --m3-tonal-art: linear-gradient(126deg, color-mix(in srgb, var(--m3-tonal-accent) 46%, transparent), transparent 66%), linear-gradient(78deg, transparent 0 56%, color-mix(in srgb, var(--m3c-surface-sky-high, var(--m3c-info-container)) 18%, transparent) 56% 74%, transparent 74%);
+    --m3-tonal-bg: color-mix(in srgb, var(--m3c-on-surface) 4%, var(--card));
+    --m3-tonal-border: color-mix(in srgb, var(--m3c-outline-variant) 72%, transparent);
+    --m3-tonal-glow: radial-gradient(125% 140% at 112% -14%, color-mix(in srgb, var(--m3c-on-surface) 9%, transparent), transparent 56%);
+    --m3-tonal-art: none;
+    --m3-tonal-shape: var(--m3-shape-extra-large);
   }
 }
 
@@ -1488,7 +1563,10 @@
 @keyframes m3-route-enter {
   from {
     opacity: 0;
-    transform: translateY(18px) scale(0.992);
+    transform: translateY(10px) scale(0.955);
+  }
+  62% {
+    opacity: 1;
   }
   to {
     opacity: 1;
@@ -1776,6 +1854,77 @@
   .m3-state-layer,
   .m3-state-layer::before {
     transition-duration: 1ms !important;
+  }
+}
+
+/* ── View Transitions (TSK-596) — scoped page morphs ──────────────────────────
+   The earlier whole-root cross-fade flickered the shell + drifted 12px. Fixed: the
+   sidebar/topbar carry stable view-transition-names (pinned — never animate), only the
+   content cross-fades (opacity, no transform → no drift), and the CSS route-enter is
+   disabled where the API runs (the two stacked = the old drift). A clicked DataGrid row
+   + a detail header share `rc-hero` → an M3 container transform. onNavigate (root layout)
+   drives it, guarded for reduced-motion + unsupported browsers. */
+@supports (view-transition-name: none) {
+  .rc-vt-sidebar {
+    view-transition-name: rc-shell-sidebar;
+  }
+  .rc-vt-topbar {
+    view-transition-name: rc-shell-topbar;
+  }
+  .customer-shell-main {
+    view-transition-name: rc-shell-content;
+  }
+  /* Shared element for the container transform — any clicked grid row morphs into the
+     destination's `.rc-hero` header. One per page (the DataGrid guard enforces it). */
+  .rc-hero {
+    view-transition-name: rc-hero;
+  }
+  /* The View Transition now owns the page change, so retire the per-mount route-enter. */
+  .m3-route-transition {
+    animation: none !important;
+  }
+}
+
+/* Pinned chrome — hold still, no cross-fade flicker. */
+::view-transition-group(rc-shell-sidebar),
+::view-transition-group(rc-shell-topbar) {
+  animation: none;
+}
+
+/* Content — a clear "bloom": the incoming page scales + rises in while the old fades
+   away fast. Only the content area transforms (the shell is pinned), so there's no
+   whole-page drift. This is the visible page transition. */
+::view-transition-old(rc-shell-content) {
+  animation: m3-vt-content-out 140ms var(--m3-motion-easing-emphasized-accelerate, cubic-bezier(0.3, 0, 0.8, 0.15)) both;
+}
+::view-transition-new(rc-shell-content) {
+  animation: m3-vt-content-in 380ms var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1)) both;
+  transform-origin: 50% 36%;
+}
+
+/* The shared-element container transform (clicked grid row → detail `.rc-hero` header). */
+::view-transition-group(rc-hero) {
+  animation-duration: var(--m3-motion-duration-long-1, 450ms);
+  animation-timing-function: var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1));
+}
+
+@keyframes m3-vt-content-out {
+  to {
+    opacity: 0;
+    transform: scale(0.99) translateY(-6px);
+  }
+}
+@keyframes m3-vt-content-in {
+  from {
+    opacity: 0;
+    transform: scale(0.975) translateY(12px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

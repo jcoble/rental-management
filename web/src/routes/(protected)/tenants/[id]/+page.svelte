@@ -263,7 +263,7 @@
 
 	{:else}
 		<!-- Header -->
-		<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+		<div class="rc-hero mb-6 flex flex-wrap items-start justify-between gap-3">
 			<div>
 				<h1 class="text-2xl font-bold" data-testid="tenant-detail-name">{fullName}</h1>
 				<div class="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
