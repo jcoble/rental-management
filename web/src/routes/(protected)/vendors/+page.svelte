@@ -14,6 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
@@ -86,12 +87,14 @@
 
 	const vendorSteps: FormStepperStep[] = [
 		{ id: 'basics', label: 'Basics', description: 'Name and service' },
-		{ id: 'contact', label: 'Contact', description: 'Address and contact' },
+		{ id: 'contact', label: 'Contact', description: 'Email and phone' },
+		{ id: 'address', label: 'Address', description: 'Mailing details' },
 		{ id: 'compliance', label: 'Compliance', description: '1099 and W-9' },
 	];
 	const vendorStepFields = [
 		['name', 'serviceType'],
-		['email', 'phone', 'addressLine1', 'city', 'state', 'postalCode'],
+		['email', 'phone'],
+		['addressLine1', 'city', 'state', 'postalCode'],
 		['is1099Eligible', 'w9OnFile', 'preferred'],
 	] as const;
 
@@ -199,8 +202,14 @@
 	}
 	function nextVendorStep() {
 		if (!validateVendorStep(vendorStep)) return;
-		if (!completedVendorSteps.includes(vendorStep)) completedVendorSteps = [...completedVendorSteps, vendorStep];
-		vendorStep = Math.min(vendorStep + 1, vendorSteps.length - 1);
+		if (completedVendorSteps.includes(vendorStep)) {
+			vendorStep = Math.min(vendorStep + 1, vendorSteps.length - 1);
+			return;
+		}
+		completedVendorSteps = [...completedVendorSteps, vendorStep];
+		window.setTimeout(() => {
+			vendorStep = Math.min(vendorStep + 1, vendorSteps.length - 1);
+		}, 260);
 	}
 	function submitVendor() {
 		const result = parseForm(vendorSchema, vendorForm);
@@ -377,21 +386,22 @@
 						<Input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} placeholder="Service type" />
 						{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
 					</div>
-				{:else if vendorStep === 1}
-					<div class="grid gap-3 md:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
+					{:else if vendorStep === 1}
+						<div class="grid gap-3 md:grid-cols-2">
+							<div>
+								<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
 							<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" type="email" autocomplete="email" />
 							{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+								<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+							</div>
 						</div>
-					</div>
-					<div class="space-y-2">
-						<AddressAutocomplete
-							testid="vendor-address-input"
+					{:else if vendorStep === 2}
+						<div class="space-y-2">
+							<AddressAutocomplete
+								testid="vendor-address-input"
 							bind:value={vendorForm.addressLine1}
 							placeholder="Vendor address"
 							onresolved={(a) => {
@@ -408,9 +418,9 @@
 								placeholder="State"
 							/>
 							<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
+							</div>
 						</div>
-					</div>
-				{:else}
+					{:else}
 					<div class="flex flex-wrap gap-4 text-sm">
 						<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
 						<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
@@ -423,10 +433,14 @@
 			<Button data-testid="vendor-form-cancel" variant="outline" onclick={closeVendorForm}>Cancel</Button>
 			{#if vendorStep > 0}
 				<Button data-testid="vendor-step-back" variant="outline" onclick={() => (vendorStep = Math.max(vendorStep - 1, 0))}>Back</Button>
-			{/if}
-			{#if vendorStep < vendorSteps.length - 1}
-				<Button data-testid="vendor-step-next" onclick={nextVendorStep}>Next</Button>
-			{:else}
+				{/if}
+				{#if vendorStep < vendorSteps.length - 1}
+					<StepperNextButton
+						testid="vendor-step-next"
+						onclick={nextVendorStep}
+						complete={completedVendorSteps.includes(vendorStep)}
+					/>
+				{:else}
 				<Button data-testid="vendor-form-save" onclick={submitVendor} disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save vendor'}</Button>
 			{/if}
 		</div>

@@ -12,6 +12,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
@@ -166,8 +167,14 @@
 	}
 	function nextOwnerStep() {
 		if (!validateOwnerStep(ownerStep)) return;
-		if (!completedOwnerSteps.includes(ownerStep)) completedOwnerSteps = [...completedOwnerSteps, ownerStep];
-		ownerStep = Math.min(ownerStep + 1, ownerSteps.length - 1);
+		if (completedOwnerSteps.includes(ownerStep)) {
+			ownerStep = Math.min(ownerStep + 1, ownerSteps.length - 1);
+			return;
+		}
+		completedOwnerSteps = [...completedOwnerSteps, ownerStep];
+		window.setTimeout(() => {
+			ownerStep = Math.min(ownerStep + 1, ownerSteps.length - 1);
+		}, 260);
 	}
 	function submitOwner() {
 		const result = parseForm(ownerSchema, ownerForm);
@@ -361,10 +368,14 @@
 			<Button data-testid="owner-form-cancel" variant="outline" onclick={closeOwnerForm}>Cancel</Button>
 			{#if ownerStep > 0}
 				<Button data-testid="owner-step-back" variant="outline" onclick={() => (ownerStep = Math.max(ownerStep - 1, 0))}>Back</Button>
-			{/if}
-			{#if ownerStep < ownerSteps.length - 1}
-				<Button data-testid="owner-step-next" onclick={nextOwnerStep}>Next</Button>
-			{:else}
+				{/if}
+				{#if ownerStep < ownerSteps.length - 1}
+					<StepperNextButton
+						testid="owner-step-next"
+						onclick={nextOwnerStep}
+						complete={completedOwnerSteps.includes(ownerStep)}
+					/>
+				{:else}
 				<Button data-testid="owner-form-save" onclick={submitOwner} disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save owner'}</Button>
 			{/if}
 		</div>

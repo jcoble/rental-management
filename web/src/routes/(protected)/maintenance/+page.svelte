@@ -16,6 +16,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
@@ -116,12 +117,14 @@
 
 	const woSteps: FormStepperStep[] = [
 		{ id: 'issue', label: 'Issue', description: 'Title and details' },
+		{ id: 'triage', label: 'Triage', description: 'Priority and type' },
 		{ id: 'location', label: 'Location', description: 'Property and unit' },
 		{ id: 'schedule', label: 'Schedule', description: 'Visit window' },
 		{ id: 'people', label: 'People', description: 'Tenant, vendor, cost' },
 	];
 	const woStepFields = [
-		['title', 'description', 'priority', 'category'],
+		['title', 'description'],
+		['priority', 'category'],
 		['propertyId', 'unitId'],
 		['scheduledFor', 'scheduledWindowEnd'],
 		['tenantId', 'vendorId', 'estimatedCost'],
@@ -262,8 +265,14 @@
 	}
 	function nextWoStep() {
 		if (!validateWoStep(woStep)) return;
-		if (!completedWoSteps.includes(woStep)) completedWoSteps = [...completedWoSteps, woStep];
-		woStep = Math.min(woStep + 1, woSteps.length - 1);
+		if (completedWoSteps.includes(woStep)) {
+			woStep = Math.min(woStep + 1, woSteps.length - 1);
+			return;
+		}
+		completedWoSteps = [...completedWoSteps, woStep];
+		window.setTimeout(() => {
+			woStep = Math.min(woStep + 1, woSteps.length - 1);
+		}, 260);
 	}
 	function submitWo() {
 		const result = parseForm(workOrderSchema, woForm);
@@ -293,6 +302,18 @@
 	let showInspectionForm = $state(false);
 	let inspectionForm = $state({ ...emptyInspection });
 	let inspectionErrors = $state<Record<string, string>>({});
+	let inspectionStep = $state(0);
+	let completedInspectionSteps = $state<number[]>([]);
+	const inspectionSteps: FormStepperStep[] = [
+		{ id: 'where', label: 'Where', description: 'Property and type' },
+		{ id: 'checklist', label: 'Checklist', description: 'Template and inspector' },
+		{ id: 'schedule', label: 'Schedule', description: 'Date and time' },
+	];
+	const inspectionStepFields = [
+		['propertyId', 'type'],
+		['templateId', 'inspector'],
+		['scheduledFor'],
+	] as const;
 
 	function clearInspectionError(field: string) {
 		const next = clearFieldError(inspectionErrors, field);
@@ -305,6 +326,58 @@
 	$effect(() => {
 		if (inspectionForm.scheduledFor) clearInspectionError('scheduledFor');
 	});
+
+	function openInspectionForm() {
+		inspectionForm = { ...emptyInspection };
+		inspectionErrors = {};
+		inspectionStep = 0;
+		completedInspectionSteps = [];
+		showInspectionForm = true;
+	}
+
+	function closeInspectionForm() {
+		showInspectionForm = false;
+		inspectionForm = { ...emptyInspection };
+		inspectionErrors = {};
+		inspectionStep = 0;
+		completedInspectionSteps = [];
+	}
+
+	function inspectionStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(inspectionStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+
+	function firstInspectionErrorStep(errors: Record<string, string>) {
+		return inspectionStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+
+	function markInspectionStepInvalid(step: number) {
+		completedInspectionSteps = completedInspectionSteps.filter((completedStep) => completedStep < step);
+	}
+
+	function validateInspectionStep(step: number) {
+		const result = parseForm(inspectionSchema, inspectionForm);
+		const currentErrors = result.errors ? Object.fromEntries(inspectionStepErrorFields(step, result.errors)) : {};
+		const currentFields = new Set<string>(inspectionStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(inspectionErrors).filter(([field]) => !currentFields.has(field)));
+		inspectionErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markInspectionStepInvalid(step);
+		return isValid;
+	}
+
+	function nextInspectionStep() {
+		if (!validateInspectionStep(inspectionStep)) return;
+		if (completedInspectionSteps.includes(inspectionStep)) {
+			inspectionStep = Math.min(inspectionStep + 1, inspectionSteps.length - 1);
+			return;
+		}
+		completedInspectionSteps = [...completedInspectionSteps, inspectionStep];
+		window.setTimeout(() => {
+			inspectionStep = Math.min(inspectionStep + 1, inspectionSteps.length - 1);
+		}, 260);
+	}
 
 	// Smart-checklist templates (built-ins have negative ids). Custom templates are editable below.
 	const templatesQuery = createQuery(() => ({
@@ -491,8 +564,7 @@
 		mutationFn: (data: Record<string, unknown>) => inspections.create(data),
 		onSuccess: (created) => {
 			showSuccess('Inspection scheduled.');
-			showInspectionForm = false;
-			inspectionForm = { ...emptyInspection };
+			closeInspectionForm();
 			queryClient.invalidateQueries({ queryKey: ['inspections', portfolioId] });
 			// Jump straight into the checklist so Maria can start ticking items.
 			goto('/maintenance/inspections/' + created.id);
@@ -504,6 +576,11 @@
 		const result = parseForm(inspectionSchema, inspectionForm);
 		if (result.errors) {
 			inspectionErrors = result.errors;
+			const firstErrorStep = firstInspectionErrorStep(result.errors);
+			if (firstErrorStep >= 0) {
+				inspectionStep = firstErrorStep;
+				markInspectionStepInvalid(firstErrorStep);
+			}
 			return;
 		}
 		inspectionErrors = {};
@@ -569,7 +646,7 @@
 
 {#snippet headerActions()}
 	<div class="flex flex-wrap gap-2">
-		<Button data-testid="inspection-create-button" variant="outline" onclick={() => (showInspectionForm = true)}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
+		<Button data-testid="inspection-create-button" variant="outline" onclick={openInspectionForm}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
 		<Button data-testid="recurring-maintenance-link" variant="outline" onclick={() => goto('/maintenance/recurring')}><RefreshCw class="h-4 w-4" /> Recurring</Button>
 	</div>
 {/snippet}
@@ -757,14 +834,15 @@
 						<Input data-testid="work-order-title-input" bind:value={woForm.title} placeholder="Issue title" />
 						{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
 					</div>
-					<div>
-						<span class="mb-1 block text-xs font-medium text-muted-foreground">Description</span>
-						<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={4} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Description"></textarea>
-						{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
-					</div>
-					<div class="grid gap-3 sm:grid-cols-2">
 						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Priority</span>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Description</span>
+							<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={4} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Description"></textarea>
+							{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
+						</div>
+					{:else if woStep === 1}
+						<div class="grid gap-3 sm:grid-cols-2">
+							<div>
+								<span class="mb-1 block text-xs font-medium text-muted-foreground">Priority</span>
 							<Select.Root type="single" bind:value={woForm.priority}>
 								<Select.Trigger class="w-full" data-testid="work-order-priority-input">
 									{woForm.priority || 'Priority'}
@@ -779,13 +857,13 @@
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Category</span>
 							<Input data-testid="work-order-category-input" bind:value={woForm.category} placeholder="Category" />
-							{#if woErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="work-order-category-error">{woErrors.category}</p>{/if}
+								{#if woErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="work-order-category-error">{woErrors.category}</p>{/if}
+							</div>
 						</div>
-					</div>
-				{:else if woStep === 1}
-					<div>
-						<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
-						<Select.Root
+					{:else if woStep === 2}
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
+							<Select.Root
 							type="single"
 							value={woForm.propertyId}
 							onValueChange={(v) => {
@@ -823,12 +901,12 @@
 									<Select.Item value={String(unit.id)} label={unit.unitNumber}>Unit {unit.unitNumber}</Select.Item>
 								{/each}
 							</Select.Content>
-						</Select.Root>
-					</div>
-				{:else if woStep === 2}
-					<div class="grid gap-3 sm:grid-cols-2">
-						<div>
-							<label for="work-order-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled start</label>
+							</Select.Root>
+						</div>
+					{:else if woStep === 3}
+						<div class="grid gap-3 sm:grid-cols-2">
+							<div>
+								<label for="work-order-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled start</label>
 							<Input id="work-order-scheduled" data-testid="work-order-scheduled-input" type="datetime-local" bind:value={woForm.scheduledFor} />
 							{#if woErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="work-order-scheduled-error">{woErrors.scheduledFor}</p>{/if}
 						</div>
@@ -891,10 +969,14 @@
 			<Button data-testid="work-order-form-cancel" variant="outline" onclick={closeWoForm}>Cancel</Button>
 			{#if woStep > 0}
 				<Button data-testid="work-order-step-back" variant="outline" onclick={() => (woStep = Math.max(woStep - 1, 0))}>Back</Button>
-			{/if}
-			{#if woStep < woSteps.length - 1}
-				<Button data-testid="work-order-step-next" onclick={nextWoStep}>Next</Button>
-			{:else}
+				{/if}
+				{#if woStep < woSteps.length - 1}
+					<StepperNextButton
+						testid="work-order-step-next"
+						onclick={nextWoStep}
+						complete={completedWoSteps.includes(woStep)}
+					/>
+				{:else}
 				<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save work order'}</Button>
 			{/if}
 		</Dialog.Footer>
@@ -904,78 +986,100 @@
 <!-- Inspection create dialog -->
 <Dialog.Root
 	open={showInspectionForm}
-	onOpenChange={(v) => { if (!v) showInspectionForm = false; }}
+	onOpenChange={(v) => { if (!v) closeInspectionForm(); }}
 >
-	<Dialog.Content class="max-w-md">
+	<Dialog.Content class="max-h-[85vh] max-w-xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>Schedule Inspection</Dialog.Title>
 		</Dialog.Header>
-		<div class="space-y-2" data-testid="inspection-form">
-			<div>
-				<Select.Root type="single" bind:value={inspectionForm.propertyId}>
-					<Select.Trigger class="w-full" data-testid="inspection-property-input">
-						{inspectionForm.propertyId
-							? ((propertiesQuery.data || []).find((p) => String(p.id) === inspectionForm.propertyId)?.name ?? 'Select property')
-							: 'Select property'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select property">Select property</Select.Item>
-						{#each propertiesQuery.data || [] as property}
-							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
+		<FormStepper
+			steps={inspectionSteps}
+			bind:currentStep={inspectionStep}
+			completedSteps={completedInspectionSteps}
+			testid="inspection-stepper"
+		>
+			<div class="space-y-4" data-testid="inspection-form">
+				{#if inspectionStep === 0}
+					<div>
+						<Select.Root type="single" bind:value={inspectionForm.propertyId}>
+							<Select.Trigger class="w-full" data-testid="inspection-property-input">
+								{inspectionForm.propertyId
+									? ((propertiesQuery.data || []).find((p) => String(p.id) === inspectionForm.propertyId)?.name ?? 'Select property')
+									: 'Select property'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="" label="Select property">Select property</Select.Item>
+								{#each propertiesQuery.data || [] as property}
+									<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
+					</div>
+					<Select.Root type="single" bind:value={inspectionForm.type}>
+						<Select.Trigger class="w-full" data-testid="inspection-type-input">
+							{inspectionForm.type || 'Select type'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each INSPECTION_TYPES as type}
+								<Select.Item value={type} label={type}>{type}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				{:else if inspectionStep === 1}
+					<div>
+						<label for="inspection-template" class="mb-1 block text-xs font-medium text-muted-foreground">Checklist (optional)</label>
+						<Select.Root
+							type="single"
+							value={inspectionForm.templateId}
+							onValueChange={(v) => {
+								inspectionForm.templateId = v;
+								// Match the inspection type to the chosen checklist for a sensible default.
+								const tpl = templateOptions.find((t) => String(t.id) === v);
+								if (tpl) inspectionForm.type = tpl.inspectionType;
+							}}
+						>
+							<Select.Trigger id="inspection-template" class="w-full" data-testid="inspection-template-input">
+								{selectedTemplateName}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="" label="No checklist (blank)">No checklist (blank)</Select.Item>
+								{#each templateOptions as tpl (tpl.id)}
+									<Select.Item value={String(tpl.id)} label={tpl.name}>
+										{tpl.name}{tpl.isBuiltIn ? ' · built-in' : ''}
+									</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						<p class="mt-1 text-xs text-muted-foreground">Pick a checklist to load the items for this inspection.</p>
+					</div>
+					<div>
+						<label for="inspection-inspector" class="mb-1 block text-xs font-medium text-muted-foreground">Inspector (optional)</label>
+						<Input id="inspection-inspector" data-testid="inspection-inspector-input" bind:value={inspectionForm.inspector} placeholder="Who's doing this inspection?" />
+					</div>
+				{:else}
+					<div>
+						<label for="inspection-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled for</label>
+						<Input id="inspection-scheduled" data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} />
+						{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
+					</div>
+				{/if}
 			</div>
-			<Select.Root type="single" bind:value={inspectionForm.type}>
-				<Select.Trigger class="w-full" data-testid="inspection-type-input">
-					{inspectionForm.type || 'Select type'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each INSPECTION_TYPES as type}
-						<Select.Item value={type} label={type}>{type}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<div>
-				<label for="inspection-template" class="mb-1 block text-xs font-medium text-muted-foreground">Checklist (optional)</label>
-				<Select.Root
-					type="single"
-					value={inspectionForm.templateId}
-					onValueChange={(v) => {
-						inspectionForm.templateId = v;
-						// Match the inspection type to the chosen checklist for a sensible default.
-						const tpl = templateOptions.find((t) => String(t.id) === v);
-						if (tpl) inspectionForm.type = tpl.inspectionType;
-					}}
-				>
-					<Select.Trigger id="inspection-template" class="w-full" data-testid="inspection-template-input">
-						{selectedTemplateName}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No checklist (blank)">No checklist (blank)</Select.Item>
-						{#each templateOptions as tpl (tpl.id)}
-							<Select.Item value={String(tpl.id)} label={tpl.name}>
-								{tpl.name}{tpl.isBuiltIn ? ' · built-in' : ''}
-							</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<p class="mt-1 text-xs text-muted-foreground">Pick a checklist to load the items for this inspection.</p>
-			</div>
-			<div>
-				<label for="inspection-inspector" class="mb-1 block text-xs font-medium text-muted-foreground">Inspector (optional)</label>
-				<Input id="inspection-inspector" data-testid="inspection-inspector-input" bind:value={inspectionForm.inspector} placeholder="Who's doing this inspection?" />
-			</div>
-			<div>
-				<label for="inspection-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled for</label>
-				<Input id="inspection-scheduled" data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} />
-				{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
-			</div>
-		</div>
+		</FormStepper>
 		<Dialog.Footer>
-			<Button data-testid="inspection-form-cancel" variant="outline" onclick={() => (showInspectionForm = false)}>Cancel</Button>
-			<Button data-testid="inspection-form-save" onclick={submitInspection} disabled={createInspectionMutation.isPending}>{createInspectionMutation.isPending ? 'Scheduling…' : 'Schedule'}</Button>
+			<Button data-testid="inspection-form-cancel" variant="outline" onclick={closeInspectionForm}>Cancel</Button>
+			{#if inspectionStep > 0}
+				<Button data-testid="inspection-step-back" variant="outline" onclick={() => (inspectionStep = Math.max(inspectionStep - 1, 0))}>Back</Button>
+			{/if}
+			{#if inspectionStep < inspectionSteps.length - 1}
+				<StepperNextButton
+					testid="inspection-step-next"
+					onclick={nextInspectionStep}
+					complete={completedInspectionSteps.includes(inspectionStep)}
+				/>
+			{:else}
+				<Button data-testid="inspection-form-save" onclick={submitInspection} disabled={createInspectionMutation.isPending}>{createInspectionMutation.isPending ? 'Scheduling…' : 'Schedule'}</Button>
+			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
