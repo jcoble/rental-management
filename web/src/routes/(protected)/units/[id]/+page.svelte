@@ -9,6 +9,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
+	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
@@ -22,7 +23,7 @@
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
 	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
-	import { scanHref, type ScanContext } from '$lib/scan/scan-context';
+	import type { ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import type { UnitLeaseSummary } from '$lib/types';
@@ -36,6 +37,8 @@
 	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
 	let showEditUnit = $state(false);
 	let showMoveInDialog = $state(false);
+	let showScanLauncher = $state(false);
+	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
 	let unitForm = $state({ ...emptyUnitForm });
 	let unitFormErrors = $state<Record<string, string>>({});
@@ -163,21 +166,21 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// Scan / Upload routes into the existing scan -> draft -> confirm flow while preserving
-	// the unit context the user started from.
+	// Scan / Upload opens an in-place launcher while preserving the unit context the user started from.
 	function goScan(context: Partial<ScanContext> = {}) {
 		if (!dashboard) {
 			goto('/scan');
 			return;
 		}
 		const unit = dashboard.unit;
-		goto(scanHref({
+		scanLauncherContext = {
 			...context,
 			type: context.type ?? 'Expense',
 			propertyId: context.propertyId ?? unit.propertyId,
 			unitId: context.unitId ?? unit.id,
 			returnTo: context.returnTo ?? `/units/${unit.id}?tab=${activeTab}`
-		}));
+		};
+		showScanLauncher = true;
 	}
 </script>
 
@@ -313,6 +316,8 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<ScanLauncher bind:open={showScanLauncher} context={scanLauncherContext} showTrigger={false} />
 
 <Dialog.Root open={showEditUnit} onOpenChange={(v) => { if (!v) closeEditUnit(); }}>
 	<Dialog.Content class="max-w-sm" data-testid="unit-detail-edit-dialog">

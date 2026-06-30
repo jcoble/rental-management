@@ -232,13 +232,37 @@ describe('scan review field grouping', () => {
 			[
 				'vendor_name',
 				'receipt_number',
+				'total',
 				'subtotal',
 				'tax',
-				'total',
 				'payment_method',
 				'category',
 				'transaction_date'
 			]
+		);
+	});
+
+	it('puts the review total before component amounts for scanned expenses', () => {
+		const groups = buildScanReviewFieldGroups(
+			[
+				field('subtotal', '256.00'),
+				field('tax', '19.20'),
+				field('tax_rate', '0.075'),
+				field('tip', ''),
+				field('discount', ''),
+				field('shipping', ''),
+				field('total', '275.20'),
+				field('payment_method', 'Cash'),
+				field('card_last4', ''),
+				field('due_date', '')
+			],
+			'Expense'
+		);
+
+		const amountGroup = groups.find((group) => group.label === 'Amounts');
+		assert.deepEqual(
+			amountGroup?.fields.map((reviewField) => reviewField.name),
+			['total', 'subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'payment_method', 'due_date', 'card_last4']
 		);
 	});
 

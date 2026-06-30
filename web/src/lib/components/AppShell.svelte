@@ -63,6 +63,7 @@
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
+	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -847,15 +848,14 @@
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
 					<!-- Scan / Edit -->
-					<a
-						href="/scan"
-						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Scan / Edit"
-						data-m3-tooltip="Scan / Edit"
-						data-testid="header-scan"
-					>
-						<ScanLine class="h-5 w-5" />
-					</a>
+					<ScanLauncher
+						triggerLabel=""
+						ariaLabel="Scan / Edit"
+						tooltip="Scan / Edit"
+						testid="header-scan"
+						triggerVariant="ghost"
+						triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+					/>
 
 					<!-- Messages -->
 					<a
