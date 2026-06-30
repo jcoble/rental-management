@@ -47,9 +47,24 @@
 	// cross-fades, and the CSS route-enter is disabled where the API runs (app.css @supports), so
 	// the two never stack. A shared `rc-hero` name (clicked list row ↔ detail header) yields an M3
 	// container transform. Skips in-place ?tab= changes; no-ops where unsupported / reduced-motion.
+	//
+	// Cold-cache fix: detail pages fetch their hero data client-side via TanStack Query, which is
+	// independent of SvelteKit's own navigation lifecycle. `navigation.complete` resolves once the
+	// destination component has mounted — but on a NEVER-visited record, its query is still
+	// in-flight at that moment, so `.rc-hero` hasn't rendered yet and the transition's "after"
+	// snapshot misses it (silently degrades to a plain cross-fade). A REVISIT happens to work
+	// because the cached, already-resolved query renders the hero synchronously on mount — hence
+	// the bug report "only works the 2nd time a row is clicked." Detect a hero-tagged click
+	// source (DataGrid.svelte tags the clicked row `view-transition-name: rc-hero` before
+	// navigating) and, only then, give the destination a bounded window to actually render its
+	// hero before the snapshot is taken — every other navigation is untouched.
 	onNavigate((navigation) => {
 		const doc = document as unknown as {
-			startViewTransition?: (cb: () => Promise<void> | void) => unknown;
+			startViewTransition?: (cb: () => Promise<void> | void) => {
+				ready: Promise<void>;
+				finished: Promise<void>;
+				updateCallbackDone: Promise<void>;
+			};
 		};
 		if (
 			typeof document === 'undefined' ||
@@ -59,13 +74,40 @@
 		) {
 			return;
 		}
+		// Must be read now, synchronously, before startViewTransition takes its "before" snapshot —
+		// the clicked row (still in the live DOM at this point) carries the tag DataGrid set on click.
+		const heroTaggedSource = document.querySelector('[style*="rc-hero"]') !== null;
 		return new Promise<void>((resolve) => {
-			doc.startViewTransition!(async () => {
+			const transition = doc.startViewTransition!(async () => {
 				resolve();
 				await navigation.complete;
+				if (heroTaggedSource) await waitForHeroReady();
 			});
+			// The transition can be superseded/skipped (e.g. another navigation starts, or the tab
+			// is backgrounded) — that's a normal race, not a bug. Its own ready/finished/
+			// updateCallbackDone promises reject in that case; without a handler that surfaces as an
+			// unhandled-rejection console error even though the page itself already navigated
+			// correctly via SvelteKit regardless of what the VT animation does.
+			transition.finished.catch(() => {});
+			transition.ready.catch(() => {});
 		});
 	});
+
+	/** Poll for `.rc-hero` to mount WITH real content. Uses setTimeout rather than
+	 *  requestAnimationFrame — rAF can be throttled/paused entirely by the browser while the tab
+	 *  is backgrounded, which would hold the transition's old-page freeze open far longer than
+	 *  intended if the user switches away mid-navigation. Bounded: if it never shows up (slow
+	 *  network, or the destination has no hero at all), this just times out and the transition
+	 *  proceeds with its existing degrade-gracefully cross-fade — never blocks navigation
+	 *  indefinitely. */
+	async function waitForHeroReady(maxMs = 1500): Promise<void> {
+		const start = performance.now();
+		while (performance.now() - start < maxMs) {
+			const hero = document.querySelector('.rc-hero');
+			if (hero && (hero.textContent ?? '').trim().length > 0) return;
+			await new Promise<void>((r) => setTimeout(r, 30));
+		}
+	}
 
 	// Seed the runes auth store from server-provided session data. Re-runs when
 	// the server data changes (e.g. after login/logout navigations).
