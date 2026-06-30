@@ -91,7 +91,7 @@ const EXPENSE_FIELD_GROUPS: { label: string; fields: string[] }[] = [
 	},
 	{
 		label: 'Amounts',
-		fields: ['subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'total', 'payment_method', 'card_last4', 'due_date']
+		fields: ['total', 'subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'payment_method', 'due_date', 'card_last4']
 	},
 	{
 		label: 'Details',
