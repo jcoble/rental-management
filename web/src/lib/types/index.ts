@@ -323,6 +323,8 @@ export interface Payment {
 	notes?: string;
 	tenantName?: string;
 	leaseNumber?: string;
+	propertyName?: string;
+	unitNumber?: string;
 	hasScan?: boolean;
 	scanIsImage?: boolean;
 	createdAt: string;

@@ -47,6 +47,12 @@ public class PaymentResponse
     /// <summary>Tenant name on the payment's lease; populated when the Lease/Tenant navigations are loaded.</summary>
     public string? TenantName { get; set; }
 
+    /// <summary>Property name on the payment's lease; populated when the Lease/Property navigation is loaded.</summary>
+    public string? PropertyName { get; set; }
+
+    /// <summary>Unit number on the payment's lease; populated when the Lease/Unit navigation is loaded.</summary>
+    public string? UnitNumber { get; set; }
+
     /// <summary>Name on the check / of the payer; from a scanned rent check.</summary>
     public string? PayerName { get; set; }
 
@@ -89,6 +95,8 @@ public class PaymentResponse
         LeaseNumber = e.Lease?.LeaseNumber,
         UnitId = e.Lease?.UnitId,
         PropertyId = e.Lease?.PropertyId,
+        PropertyName = e.Lease?.Property?.Name,
+        UnitNumber = e.Lease?.Unit?.UnitNumber,
         TenantName = e.Lease?.Tenant == null
             ? null
             : $"{e.Lease.Tenant.FirstName} {e.Lease.Tenant.LastName}".Trim(),

@@ -1311,7 +1311,17 @@
 									<div class="py-2 first:pt-0 last:pb-0">
 										<div class="flex items-start justify-between gap-3">
 											<div class="min-w-0">
-												<p class="truncate text-sm font-medium">{item.recipientEmail || 'No recipient email'}</p>
+												{#if item.recipientEmail && item.tenantId}
+													<a
+														href="/tenants/{item.tenantId}"
+														class="block truncate text-sm font-medium text-foreground underline-offset-4 hover:underline"
+														data-testid="lease-esign-tenant-link-{item.id}"
+													>
+														{item.recipientEmail}
+													</a>
+												{:else}
+													<p class="truncate text-sm font-medium">{item.recipientEmail || 'No recipient email'}</p>
+												{/if}
 												<p class="mt-0.5 truncate text-xs text-muted-foreground">{item.subject || 'Lease signing email'}</p>
 											</div>
 											<span class={queueStatusClass(item.status)}>{queueStatusLabel(item.status)}</span>

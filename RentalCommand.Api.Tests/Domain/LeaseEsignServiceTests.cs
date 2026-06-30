@@ -433,6 +433,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
         queue!.Items.Should().ContainSingle();
         queue.Items[0].Status.Should().Be("DeliveryDisabled");
         queue.Items[0].SigningUrl.Should().Be("https://localhost:5667/sign/signer-token-123");
+        queue.Items[0].TenantId.Should().Be(lease.TenantId);
     }
 
     [Fact]
@@ -607,6 +608,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
             "tenant-on-lease@example.com",
             "tenant-on-lease@example.com",
             "tenant-on-lease@example.com");
+        queue.Items.Select(i => i.TenantId).Should().Equal(lease.TenantId, lease.TenantId, lease.TenantId);
         queue.Items.Select(i => i.Status).Should().Equal("Failed", "DeliveryDisabled", "Sent");
         queue.Items.Select(i => i.StatusAt).Should().Equal(now.AddMinutes(-2), now.AddMinutes(-5), now.AddMinutes(-9));
         queue.Items[0].Error.Should().Be("SMTP rejected the message.");
