@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Mail, MessageSquare } from '@lucide/svelte';
 	import { assistantChat, type AssistantChatMessage } from '$lib/stores/assistantChat.svelte';
+	import AssistantActionDraftCard from './AssistantActionDraftCard.svelte';
 
 	let { message }: { message: AssistantChatMessage } = $props();
 
@@ -24,6 +25,18 @@
 				<p class="whitespace-pre-wrap">{message.content}</p>
 			{/if}
 		</div>
+
+		{#if message.role === 'assistant' && (message.actionDraft || message.actionNote)}
+			<AssistantActionDraftCard
+				draft={message.actionDraft}
+				status={message.actionStatus}
+				missingFields={message.actionMissingFields ?? []}
+				writeModeEnabled={assistantChat.writeModeEnabled}
+				isExecuting={message.isExecutingAction}
+				note={message.actionNote}
+				onConfirm={() => assistantChat.executeAction(message.id)}
+			/>
+		{/if}
 
 		{#if canDeliver}
 			<div class="flex items-center gap-2 px-1" data-testid="assistant-deliver">

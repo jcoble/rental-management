@@ -1,4 +1,11 @@
-import { ai, type AskDelivery, type QaTurn } from '$lib/api/endpoints/ai';
+import {
+	ai,
+	type AskDelivery,
+	type AssistantActionDraft,
+	type AssistantActionDraftResponse,
+	type QaTurn
+} from '$lib/api/endpoints/ai';
+import { looksLikeAssistantActionCommand } from '$lib/assistant/actions';
 
 export type AssistantChatMessage = {
 	id: string;
@@ -12,11 +19,17 @@ export type AssistantChatMessage = {
 	deliveringChannel?: 'email' | 'sms' | null;
 	/** Short status note shown under the message after a delivery attempt. */
 	deliveryNote?: string | null;
+	actionDraft?: AssistantActionDraft | null;
+	actionStatus?: AssistantActionDraftResponse['status'] | null;
+	actionMissingFields?: string[];
+	actionNote?: string | null;
+	isExecutingAction?: boolean;
 };
 
 class AssistantChatStore {
 	isOpen = $state(false);
 	isLoading = $state(false);
+	writeModeEnabled = $state(false);
 	error = $state<string | null>(null);
 	messages = $state<AssistantChatMessage[]>([]);
 
@@ -35,6 +48,10 @@ class AssistantChatStore {
 	clear() {
 		this.messages = [];
 		this.error = null;
+	}
+
+	setWriteMode(enabled: boolean) {
+		this.writeModeEnabled = enabled;
 	}
 
 	async send(message: string) {
@@ -64,12 +81,28 @@ class AssistantChatStore {
 		this.isLoading = true;
 
 		try {
-			const response = await ai.ask(text, history);
-			this.messages = this.messages.map((m) =>
-				m.id === assistantMessage.id
-					? { ...m, content: response.answer, isLoading: false }
-					: m
-			);
+			if (looksLikeAssistantActionCommand(text)) {
+				const response = await ai.draftAction(text, this.writeModeEnabled);
+				this.messages = this.messages.map((m) =>
+					m.id === assistantMessage.id
+						? {
+								...m,
+								content: response.message,
+								isLoading: false,
+								actionDraft: response.draft,
+								actionStatus: response.status,
+								actionMissingFields: response.missingFields,
+							}
+						: m
+				);
+			} else {
+				const response = await ai.ask(text, history);
+				this.messages = this.messages.map((m) =>
+					m.id === assistantMessage.id
+						? { ...m, content: response.answer, isLoading: false }
+						: m
+				);
+			}
 		} catch (err) {
 			const message = err instanceof Error ? err.message : 'Assistant failed to respond.';
 			this.error = message;
@@ -80,6 +113,27 @@ class AssistantChatStore {
 			);
 		} finally {
 			this.isLoading = false;
+		}
+	}
+
+	async executeAction(messageId: string) {
+		const target = this.messages.find((m) => m.id === messageId);
+		if (!target?.actionDraft || target.isExecutingAction) return;
+
+		this.#patch(messageId, { isExecutingAction: true, actionNote: null });
+
+		try {
+			const response = await ai.executeAction(target.actionDraft, this.writeModeEnabled);
+			this.#patch(messageId, {
+				content: response.message,
+				actionStatus: response.status,
+				actionNote: response.detailHref ? `Open: ${response.detailHref}` : null,
+				isExecutingAction: false,
+				actionDraft: response.status === 'Created' ? null : target.actionDraft,
+			});
+		} catch (err) {
+			const note = err instanceof Error ? err.message : 'Action failed.';
+			this.#patch(messageId, { isExecutingAction: false, actionNote: note });
 		}
 	}
 

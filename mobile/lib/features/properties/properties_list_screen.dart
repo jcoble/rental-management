@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'property_form_sheet.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
@@ -66,11 +68,16 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Properties')),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'properties-fab',
-        onPressed: () => _showAddSheet(context),
-        tooltip: 'Add property',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'Add property',
+          icon: Icons.add,
+          onPressed: () => _showAddSheet(context),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,

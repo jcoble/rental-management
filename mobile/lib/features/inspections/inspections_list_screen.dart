@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'inspection_run_screen.dart';
 import 'inspections_models.dart';
 import 'inspections_repository.dart';
@@ -66,10 +68,16 @@ class InspectionsListScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Inspections')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _newInspection(context, ref),
-        icon: const Icon(Icons.add),
-        label: const Text('New inspection'),
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'inspections-fab',
+        primaryAction: MobileQuickAction(
+          label: 'New inspection',
+          icon: Icons.add,
+          onPressed: () => _newInspection(context, ref),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: () async => ref.invalidate(inspectionsProvider),

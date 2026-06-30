@@ -6,6 +6,8 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
 import 'message_detail_screen.dart';
@@ -129,11 +131,16 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
       appBar: mobileDomainRootAppBar(context, title: const Text('Messages')),
       floatingActionButton: tenantMode
           ? null
-          : FloatingActionButton(
+          : MobileQuickActionFab(
               heroTag: 'messages-fab',
-              onPressed: () => _startNewConversation(context),
-              tooltip: 'New conversation',
-              child: const Icon(Icons.edit_outlined),
+              primaryAction: MobileQuickAction(
+                label: 'New conversation',
+                icon: Icons.edit_outlined,
+                onPressed: () => _startNewConversation(context),
+              ),
+              onChat: () => openMobileAssistant(context),
+              onRecord: () => openMobileRecord(context),
+              onScan: () => openMobileScan(context),
             ),
       body: RefreshIndicator(
         onRefresh: _refresh,

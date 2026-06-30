@@ -22,8 +22,6 @@ import '../accounting/accounting_repository.dart';
 import '../onboarding/onboarding_repository.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
-import '../ai/ai_tab.dart';
-import '../capture/capture_fab_sheet.dart';
 import '../appointments/appointments_screen.dart';
 import '../appointments/tenant_appointments_screen.dart';
 import '../inspections/inspections_list_screen.dart';
@@ -54,6 +52,8 @@ import '../tenants/tenant_lease_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import 'mobile_domain_hub.dart';
 import 'mobile_domain_navigation.dart';
+import 'mobile_quick_action_fab.dart';
+import 'mobile_quick_action_helpers.dart';
 import 'mobile_shell_actions.dart';
 
 // ---------------------------------------------------------------------------
@@ -150,8 +150,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _TabItem(label: 'More', icon: Symbols.more_horiz_rounded),
   ];
 
-  /// Opens the TSK-138 capture menu (camera / gallery / PDF / voice / type).
-  void _openCapture() => showCaptureFabSheet(context);
+  void _openAssistant() => openMobileAssistant(context);
+  void _openCapture() => openMobileScan(context);
+  void _openRecord() => openMobileRecord(context);
 
   void _registerDomain(MobileShellTabId tab, MobileDomainNavigator controller) {
     _domainNavigators[tab] = controller;
@@ -498,13 +499,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                           ),
                           onSwitchToTab: (index) =>
                               setState(() => _selectedIndex = index),
-                          onOpenAssistant: () {
-                            Navigator.of(context).push<void>(
-                              MaterialPageRoute<void>(
-                                builder: (_) => const AiTab(),
-                              ),
-                            );
-                          },
+                          onOpenAssistant: _openAssistant,
                         ),
                         RentalsHubScreen(
                           onControllerReady: (controller) => _registerDomain(
@@ -557,12 +552,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ),
         floatingActionButton: tenantMode || selectedIndex != 0
             ? null
-            : FloatingActionButton(
-                heroTag: 'home-capture-fab',
-                onPressed: _openCapture,
-                tooltip: 'Scan / Add',
-                elevation: 2,
-                child: const Icon(Symbols.add_a_photo_rounded, fill: 1),
+            : MobileQuickActionFab(
+                heroTag: 'home-quick-action-fab',
+                onChat: _openAssistant,
+                onRecord: _openRecord,
+                onScan: _openCapture,
               ),
         floatingActionButtonLocation: tenantMode || selectedIndex != 0
             ? null

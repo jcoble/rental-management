@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'recurring_maintenance_form_screen.dart';
 import 'recurring_maintenance_models.dart';
 import 'recurring_maintenance_repository.dart';
@@ -179,11 +181,16 @@ class _RecurringMaintenanceListScreenState
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'recurring-maintenance-fab',
-        onPressed: () => _openForm(),
-        tooltip: 'New recurring task',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'New recurring task',
+          icon: Icons.add,
+          onPressed: () => _openForm(),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: Column(
         children: [

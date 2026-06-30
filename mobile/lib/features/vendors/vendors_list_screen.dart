@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'dispatch_vendor_sheet.dart' show VendorRatingSummary;
 import 'vendor_detail_screen.dart';
 import 'vendors_models.dart';
@@ -75,11 +77,16 @@ class VendorsListScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Vendors')),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'vendors-fab',
-        onPressed: () => _showVendorForm(context, ref),
-        tooltip: 'Add vendor',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'Add vendor',
+          icon: Icons.add,
+          onPressed: () => _showVendorForm(context, ref),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: () async => ref.invalidate(vendorsProvider),

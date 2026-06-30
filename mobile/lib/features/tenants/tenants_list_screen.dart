@@ -5,6 +5,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'tenant_detail_screen.dart';
 import 'tenants_repository.dart';
 
@@ -74,11 +76,16 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Tenants')),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'tenants-fab',
-        onPressed: () => _showAddSheet(context),
-        tooltip: 'Add tenant',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'Add tenant',
+          icon: Icons.add,
+          onPressed: () => _showAddSheet(context),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: Column(
         children: [
