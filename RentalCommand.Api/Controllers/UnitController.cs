@@ -16,11 +16,13 @@ public class UnitController : ManagementControllerBase
 {
     private readonly IUnitService _service;
     private readonly IUnitDashboardService _dashboard;
+    private readonly IUnitListingService _listings;
 
-    public UnitController(IUnitService service, IUnitDashboardService dashboard)
+    public UnitController(IUnitService service, IUnitDashboardService dashboard, IUnitListingService listings)
     {
         _service = service;
         _dashboard = dashboard;
+        _listings = listings;
     }
 
     [HttpGet]
@@ -76,6 +78,37 @@ public class UnitController : ManagementControllerBase
     {
         var dashboard = await _dashboard.GetDashboardAsync(GetPortfolioId(), id, ct);
         return dashboard == null ? NotFound(new { error = "Unit not found" }) : Ok(dashboard);
+    }
+
+    [HttpGet("{id:int}/listing")]
+    [ProducesResponseType(typeof(UnitListingResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UnitListingResponse?>> GetListing(int id, CancellationToken ct)
+    {
+        if (!await _listings.UnitExistsInPortfolioAsync(GetPortfolioId(), id, ct))
+            return NotFound(new { error = "Unit not found" });
+
+        var listing = await _listings.GetForUnitAsync(GetPortfolioId(), id, ct);
+        return Ok(listing);
+    }
+
+    [HttpPost("{id:int}/listing/generate")]
+    [ProducesResponseType(typeof(UnitListingResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UnitListingResponse>> GenerateListing(int id, CancellationToken ct)
+    {
+        var listing = await _listings.GenerateForUnitAsync(GetPortfolioId(), id, GetUserId(), ct);
+        return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
+    }
+
+    [HttpPut("{id:int}/listing")]
+    [ProducesResponseType(typeof(UnitListingResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UnitListingResponse>> SaveListing(
+        int id, [FromBody] SaveUnitListingRequest request, CancellationToken ct)
+    {
+        var listing = await _listings.SaveAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
-import type { AuditEntry, Unit, UnitDashboard, UnitHealth } from '$lib/types';
+import type { AuditEntry, SaveUnitListingRequest, Unit, UnitDashboard, UnitHealth, UnitListing } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { normalizeOptionalApiResult } from '../optional-result';
 
 export interface UnitHealthListParams extends ListParams {
 	propertyId?: number;
@@ -43,6 +44,14 @@ export const units = {
 
 	/** The Unit Command Center at-a-glance aggregate (header, lease/tenant, stage, overview, timeline). */
 	dashboard: (id: number) => api.get<UnitDashboard>(`/units/${id}/dashboard`),
+
+	listing: async (id: number) =>
+		normalizeOptionalApiResult(await api.get<UnitListing | null | undefined>(`/units/${id}/listing`)),
+
+	generateListing: (id: number) => api.post<UnitListing>(`/units/${id}/listing/generate`),
+
+	saveListing: (id: number, data: SaveUnitListingRequest) =>
+		api.put<UnitListing>(`/units/${id}/listing`, data),
 
 	/** The unit's deep, paged history (timeline tab) — a bounded AuditLog union over the unit + children. */
 	timeline: (id: number, params?: ListParams) => api.get<AuditEntry[]>(`/units/${id}/timeline${buildListQuery(params)}`),
