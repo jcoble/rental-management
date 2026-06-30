@@ -39,7 +39,7 @@
 	);
 </script>
 
-<header class="rounded-xl border bg-card p-4 sm:p-5" data-testid="unit-header">
+<header class="rc-hero m3-surface-art m3-surface-art--band rounded-xl border p-4 sm:p-5" data-testid="unit-header">
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<nav class="text-xs text-muted-foreground" aria-label="Breadcrumb">

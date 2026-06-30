@@ -158,7 +158,7 @@
 		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="vendor-detail-not-found">Vendor not found.</p>
 	{:else}
 		<!-- Header -->
-		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+		<div class="rc-hero mb-6 flex flex-wrap items-start justify-between gap-4">
 			<div class="space-y-2">
 				<div class="flex flex-wrap items-center gap-2">
 					<h1 class="text-2xl font-bold" data-testid="vendor-detail-name">{vendor.name}</h1>

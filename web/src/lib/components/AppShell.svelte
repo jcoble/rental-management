@@ -588,7 +588,7 @@
 <div class="flex h-full w-full overflow-hidden bg-background">
 	<!-- Sidebar -->
 	<aside
-		class="fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar/95 shadow-[inset_-1px_0_0_rgb(255_255_255_/_0.025)] backdrop-blur transition-all duration-[var(--m3-motion-duration-medium-2)] ease-[var(--m3-motion-easing-emphasized-decelerate)]
+		class="rc-vt-sidebar fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar/95 shadow-[inset_-1px_0_0_rgb(255_255_255_/_0.025)] backdrop-blur transition-all duration-[var(--m3-motion-duration-medium-2)] ease-[var(--m3-motion-easing-emphasized-decelerate)]
 			{isMobile
 			? (isSidebarOpen ? 'translate-x-0 w-60' : '-translate-x-full w-60')
 			: (sidebarCollapsed ? 'w-14' : 'w-60')}"
@@ -834,7 +834,7 @@
 
 		<!-- App header bar: quick actions + live badges (TODO #2). Always visible. -->
 		<header
-			class="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/88 px-3 shadow-[inset_0_-1px_0_rgb(255_255_255_/_0.025)] backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4"
+			class="rc-vt-topbar sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/88 px-3 shadow-[inset_0_-1px_0_rgb(255_255_255_/_0.025)] backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4"
 		>
 			{#if isMobile}
 				<Button
