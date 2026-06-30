@@ -445,6 +445,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final authState = ref.watch(authControllerProvider);
     final user = authState is AuthStateAuthenticated ? authState.user : null;
     final tenantMode = user?.isTenant ?? false;
+    // A Tenant-role account with no linked tenantId can't load any /portal/* data
+    // (every call 403s), so show a friendly "not linked yet" screen instead of a
+    // dashboard that error-spams every card. Mirrors web's /portal/unlinked.
+    if (user != null && user.isTenant && user.tenantId == null) {
+      return _TenantUnlinkedScreen(
+        onSignOut: () => ref.read(authControllerProvider.notifier).logout(),
+      );
+    }
     final tabs = tenantMode ? _tenantTabs : _tabs;
     final selectedIndex = _selectedIndex >= tabs.length
         ? tabs.length - 1
@@ -616,6 +624,65 @@ class _SandboxIndicator extends ConsumerWidget {
                   Icons.arrow_forward_rounded,
                   size: 15,
                   color: scheme.onTertiaryContainer,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Resident-portal "account not linked" screen. Shown in place of the tenant
+/// dashboard when a Tenant-role account has no linked tenantId (so every
+/// /portal/* call would 403). Mirrors web's /portal/unlinked: a friendly
+/// explanation + a sign-out, rather than an error-spamming dashboard.
+class _TenantUnlinkedScreen extends StatelessWidget {
+  const _TenantUnlinkedScreen({required this.onSignOut});
+
+  final VoidCallback onSignOut;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.link_off_rounded,
+                  size: 56,
+                  color: cs.onSurfaceVariant,
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Account not linked yet',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Your account isn’t connected to a tenant record yet, so there’s '
+                  'nothing to show here. Please contact your landlord or property '
+                  'manager to finish setting up your resident portal.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 28),
+                OutlinedButton.icon(
+                  onPressed: onSignOut,
+                  icon: const Icon(Icons.logout_outlined),
+                  label: const Text('Sign out'),
                 ),
               ],
             ),
