@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import 'inspections_list_screen.dart' show fmtInspectionDate;
 import 'inspections_models.dart';
 import 'inspections_repository.dart';
@@ -45,11 +46,11 @@ class _NewInspectionScreenState extends ConsumerState<NewInspectionScreen> {
     final propertyId = _propertyId;
     if (template == null) {
       setState(() => _error = 'Please choose a checklist template.');
-      return;
+      throw StateError('Checklist template is required.');
     }
     if (propertyId == null) {
       setState(() => _error = 'Please choose a property.');
-      return;
+      throw StateError('Property is required.');
     }
 
     setState(() {
@@ -69,6 +70,7 @@ class _NewInspectionScreenState extends ConsumerState<NewInspectionScreen> {
       Navigator.of(context).pop(detail.id);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+      rethrow;
     } finally {
       if (mounted) setState(() => _creating = false);
     }
@@ -78,7 +80,34 @@ class _NewInspectionScreenState extends ConsumerState<NewInspectionScreen> {
     setState(() {
       _propertyId = value;
       _unitId = null;
+      if (_error == 'Please choose a property.') {
+        _error = null;
+      }
     });
+  }
+
+  bool _validateTemplateStep() {
+    if (_template != null) {
+      if (_error == 'Please choose a checklist template.') {
+        setState(() => _error = null);
+      }
+      return true;
+    }
+
+    setState(() => _error = 'Please choose a checklist template.');
+    return false;
+  }
+
+  bool _validateLocationStep() {
+    if (_propertyId != null) {
+      if (_error == 'Please choose a property.') {
+        setState(() => _error = null);
+      }
+      return true;
+    }
+
+    setState(() => _error = 'Please choose a property.');
+    return false;
   }
 
   @override
@@ -90,109 +119,129 @@ class _NewInspectionScreenState extends ConsumerState<NewInspectionScreen> {
     final propertyId = _propertyId;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('New inspection')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-        children: [
-          Text(
-            'Checklist',
-            style: theme.textTheme.titleSmall
-                ?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 8),
-          templatesAsync.when(
-            loading: () => const _FieldLoader(label: 'Loading templates…'),
-            error: (e, _) => _FieldError(
-              message: e is ApiException ? e.message : e.toString(),
-            ),
-            data: (templates) {
-              if (templates.isEmpty) {
-                return Text(
-                  'No checklist templates are available.',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: cs.onSurfaceVariant),
-                );
-              }
-              return Column(
-                children: [
-                  for (final t in templates)
-                    _TemplateTile(
-                      template: t,
-                      selected: _template?.id == t.id,
-                      onTap: () => setState(() => _template = t),
-                    ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Where',
-            style: theme.textTheme.titleSmall
-                ?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 12),
-          propertiesAsync.when(
-            loading: () => const _FieldLoader(label: 'Property'),
-            error: (e, _) => _FieldError(
-              message: e is ApiException ? e.message : e.toString(),
-            ),
-            data: (properties) => DropdownButtonFormField<int>(
-              initialValue: _propertyId,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Property'),
-              items: properties
-                  .map(
-                    (p) => DropdownMenuItem(
-                      value: p.id,
-                      child: Text(p.name, overflow: TextOverflow.ellipsis),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _onPropertyChanged,
+      body: TabbedFormSheet(
+        title: 'New inspection',
+        saveLabel: 'Start inspection',
+        saving: _creating,
+        error: _error,
+        heightFactor: 0.94,
+        onSave: _create,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Checklist',
+            isComplete: () => _template != null,
+            validate: _validateTemplateStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Checklist',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                templatesAsync.when(
+                  loading: () =>
+                      const _FieldLoader(label: 'Loading templates…'),
+                  error: (e, _) => _FieldError(
+                    message: e is ApiException ? e.message : e.toString(),
+                  ),
+                  data: (templates) {
+                    if (templates.isEmpty) {
+                      return Text(
+                        'No checklist templates are available.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      );
+                    }
+                    return Column(
+                      children: [
+                        for (final t in templates)
+                          _TemplateTile(
+                            template: t,
+                            selected: _template?.id == t.id,
+                            onTap: () => setState(() {
+                              _template = t;
+                              if (_error ==
+                                  'Please choose a checklist template.') {
+                                _error = null;
+                              }
+                            }),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 16),
-          if (propertyId != null) ...[
-            _UnitPicker(
-              propertyId: propertyId,
-              value: _unitId,
-              onChanged: (v) => setState(() => _unitId = v),
+          TabbedFormStepSpec(
+            label: 'Location',
+            isComplete: () => _propertyId != null,
+            validate: _validateLocationStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Where',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                propertiesAsync.when(
+                  loading: () => const _FieldLoader(label: 'Property'),
+                  error: (e, _) => _FieldError(
+                    message: e is ApiException ? e.message : e.toString(),
+                  ),
+                  data: (properties) => DropdownButtonFormField<int>(
+                    initialValue: _propertyId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Property'),
+                    items: properties
+                        .map(
+                          (p) => DropdownMenuItem(
+                            value: p.id,
+                            child: Text(
+                              p.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _onPropertyChanged,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (propertyId != null)
+                  _UnitPicker(
+                    propertyId: propertyId,
+                    value: _unitId,
+                    onChanged: (v) => setState(() => _unitId = v),
+                  ),
+              ],
             ),
-            const SizedBox(height: 16),
-          ],
-          _DateField(
-            label: 'Scheduled date',
-            date: _scheduledFor,
-            onTap: _pickDate,
           ),
-          if (_error != null) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: cs.errorContainer,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                _error!,
-                style: TextStyle(color: cs.onErrorContainer, fontSize: 13),
-              ),
-            ),
-          ],
-          const SizedBox(height: 28),
-          SizedBox(
-            height: 52,
-            child: FilledButton.icon(
-              onPressed: _creating ? null : _create,
-              icon: _creating
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.play_arrow),
-              label: Text(_creating ? 'Creating…' : 'Start inspection'),
+          TabbedFormStepSpec(
+            label: 'Schedule',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Schedule',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _DateField(
+                  label: 'Scheduled date',
+                  date: _scheduledFor,
+                  onTap: _pickDate,
+                ),
+              ],
             ),
           ),
         ],
@@ -298,12 +347,17 @@ class _UnitPicker extends ConsumerWidget {
           isExpanded: true,
           decoration: const InputDecoration(labelText: 'Unit (optional)'),
           items: [
-            const DropdownMenuItem<int?>(value: null, child: Text('Whole property')),
+            const DropdownMenuItem<int?>(
+              value: null,
+              child: Text('Whole property'),
+            ),
             ...units.map(
               (u) => DropdownMenuItem<int?>(
                 value: u.id,
-                child: Text('Unit ${u.unitNumber}',
-                    overflow: TextOverflow.ellipsis),
+                child: Text(
+                  'Unit ${u.unitNumber}',
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ),
           ],
@@ -336,10 +390,7 @@ class _DateField extends StatelessWidget {
           labelText: label,
           suffixIcon: const Icon(Icons.calendar_today_outlined, size: 18),
         ),
-        child: Text(
-          fmtInspectionDate(date),
-          style: theme.textTheme.bodyMedium,
-        ),
+        child: Text(fmtInspectionDate(date), style: theme.textTheme.bodyMedium),
       ),
     );
   }

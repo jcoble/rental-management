@@ -12,6 +12,8 @@ namespace RentalCommand.Api.Services.Domain;
 public class PropertyService : IPropertyService
 {
     private const string EntityType = "Property";
+    private const string UnitEntityType = "Unit";
+    private const int UnitNumberMaxLength = 50;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -145,8 +147,8 @@ public class PropertyService : IPropertyService
 
         // When no owner is supplied, link the property to the portfolio's primary (self) owner so it shows up
         // in the owners report. If the portfolio has no primary owner yet, leave it null rather than failing.
-        var ownerEntityId = request.OwnerEntityId;
-        if (!ownerEntityId.HasValue)
+        var ownerEntityId = request.ClearOwnerEntity ? null : request.OwnerEntityId;
+        if (!ownerEntityId.HasValue && !request.ClearOwnerEntity)
         {
             ownerEntityId = await _db.OwnerEntities
                 .Where(oe => oe.PortfolioId == portfolioId && oe.IsPrimary)
@@ -179,12 +181,27 @@ public class PropertyService : IPropertyService
             UpdatedAt = now,
         };
 
+        Unit? canonicalUnit = null;
+        if (IsPropertyUnitType(entity.PropertyType))
+        {
+            canonicalUnit = NewCanonicalUnit(entity, now);
+            _db.Units.Add(canonicalUnit);
+        }
+
         _db.Properties.Add(entity);
         await _db.SaveChangesAsync(ct);
 
-        // A freshly-created property has no units yet, so the aggregates are 0 — no query needed.
-        var response = PropertyResponse.FromEntity(entity);
+        var response = PropertyResponse.FromEntity(entity, canonicalUnit == null ? 0 : 1, 0);
         response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
+        if (canonicalUnit != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId,
+                UnitEntityType,
+                canonicalUnit.Id,
+                UnitResponse.FromEntity(canonicalUnit),
+                ct);
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -213,8 +230,18 @@ public class PropertyService : IPropertyService
             return null;
         }
 
+        var previousCanonicalUnitNumber = CanonicalUnitNumber(entity.Name);
+        var now = DateTime.UtcNow;
+
         if (request.OwnerId.HasValue) entity.OwnerId = request.OwnerId;
-        if (request.OwnerEntityId.HasValue) entity.OwnerEntityId = request.OwnerEntityId;
+        if (request.ClearOwnerEntity)
+        {
+            entity.OwnerEntityId = null;
+        }
+        else if (request.OwnerEntityId.HasValue)
+        {
+            entity.OwnerEntityId = request.OwnerEntityId;
+        }
         if (request.Name != null) entity.Name = request.Name;
         if (request.PropertyType.HasValue) entity.PropertyType = request.PropertyType.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
@@ -230,8 +257,13 @@ public class PropertyService : IPropertyService
         if (request.LandValue.HasValue) entity.LandValue = request.LandValue;
         if (request.InServiceDate.HasValue) entity.InServiceDate = request.InServiceDate.ToUtc();
         if (request.ManualAnnualDepreciation.HasValue) entity.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = now;
 
+        var touchedCanonicalUnit = await EnsureCanonicalUnitAsync(
+            entity,
+            previousCanonicalUnitNumber,
+            now,
+            ct);
         await _db.SaveChangesAsync(ct);
 
         // Re-read the unit aggregates in SQL (single scalar query) so the broadcast row carries the
@@ -245,6 +277,15 @@ public class PropertyService : IPropertyService
 
         var response = PropertyResponse.FromEntity(entity, counts?.UnitCount ?? 0, counts?.Occupied ?? 0);
         response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
+        if (touchedCanonicalUnit != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId,
+                UnitEntityType,
+                touchedCanonicalUnit.Id,
+                UnitResponse.FromEntity(touchedCanonicalUnit),
+                ct);
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -272,7 +313,8 @@ public class PropertyService : IPropertyService
         {
             var unitNoun = liveUnitCount == 1 ? "unit" : "units";
             throw new DomainValidationException(
-                $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.");
+                $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.",
+                statusCode: 409);
         }
 
         // Safety net for the orphan edge case: an occupying lease whose unit was already soft-deleted
@@ -285,13 +327,181 @@ public class PropertyService : IPropertyService
         if (hasOccupyingLease)
         {
             throw new DomainValidationException(
-                "This property has an active lease; end or reassign it first.");
+                "This property has an active lease; end or reassign it first.",
+                statusCode: 409);
         }
+
+        await EnsurePropertyHasNoHistoryAsync(portfolioId, id, ct);
 
         entity.DeletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    private async Task<Unit?> EnsureCanonicalUnitAsync(
+        Property property,
+        string previousCanonicalUnitNumber,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (!IsPropertyUnitType(property.PropertyType))
+        {
+            return null;
+        }
+
+        var liveUnits = await _db.Units
+            .Where(u => u.PropertyId == property.Id)
+            .OrderBy(u => u.Id)
+            .Take(2)
+            .ToListAsync(ct);
+
+        if (liveUnits.Count == 0)
+        {
+            var created = NewCanonicalUnit(property, now);
+            _db.Units.Add(created);
+            return created;
+        }
+
+        if (liveUnits.Count != 1)
+        {
+            return null;
+        }
+
+        var unit = liveUnits[0];
+        if (!string.Equals(unit.UnitNumber, previousCanonicalUnitNumber, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var nextUnitNumber = CanonicalUnitNumber(property.Name);
+        if (string.Equals(unit.UnitNumber, nextUnitNumber, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        unit.UnitNumber = nextUnitNumber;
+        unit.UpdatedAt = now;
+        return unit;
+    }
+
+    private static Unit NewCanonicalUnit(Property property, DateTime now) => new()
+    {
+        Property = property,
+        PropertyId = property.Id,
+        UnitNumber = CanonicalUnitNumber(property.Name),
+        Status = UnitStatus.Vacant,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static bool IsPropertyUnitType(PropertyType type) =>
+        type is PropertyType.SingleFamily or PropertyType.Condo or PropertyType.Townhome;
+
+    private static string CanonicalUnitNumber(string propertyName)
+    {
+        var value = propertyName.Trim();
+        if (value.Length == 0)
+        {
+            return "Property";
+        }
+
+        return value.Length <= UnitNumberMaxLength ? value : value[..UnitNumberMaxLength];
+    }
+
+    private async Task EnsurePropertyHasNoHistoryAsync(int portfolioId, int propertyId, CancellationToken ct)
+    {
+        if (await _db.Leases
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(l => l.PortfolioId == portfolioId && l.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has lease history. Archive or end the lease history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.WorkOrders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(w => w.PortfolioId == portfolioId && w.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has work order history. Archive the work order history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Appointments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has appointment history. Archive the appointment history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Inspections
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(i => i.PortfolioId == portfolioId && i.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has inspection history. Archive the inspection history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Expenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has expense history. Archive the expense history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.RentalApplications
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has application history. Archive the applications instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.RecurringExpenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has recurring expense history. Archive the recurring expense history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Loans
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(l => l.PortfolioId == portfolioId && l.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has loan history. Archive the loan history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.StoredFiles
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(f => f.PortfolioId == portfolioId
+                && f.EntityType == EntityType
+                && f.EntityId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has document history. Archive the documents instead of deleting the property.",
+                statusCode: 409);
+        }
     }
 }

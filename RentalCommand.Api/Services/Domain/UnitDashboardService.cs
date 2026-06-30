@@ -426,7 +426,7 @@ public class UnitDashboardService : IUnitDashboardService
         var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
 
         return rows
-            .Select(a => AuditEntryResponse.FromEntity(a, _auditDescriber, _auditDiff, userNames))
+            .Select(a => AuditEntryResponse.FromEntity(a, _auditDescriber, _auditDiff, userNames, unitId))
             .ToList();
     }
 

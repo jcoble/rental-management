@@ -50,6 +50,7 @@ export interface ScanDraftResponse {
 	confirmedAt: string | null;
 	createdEntityType: string | null;
 	createdEntityId: number | null;
+	createdUnitId: number | null;
 	/**
 	 * Lease-import property/unit proposal (link-existing vs create-new). Populated by the API only for
 	 * Lease drafts; null otherwise. The review screen renders this so the empty-portfolio create path is
@@ -70,6 +71,7 @@ export interface ScanConfirmResponse {
 	workOrderId?: number | null;
 	leaseId?: number | null;
 	applicationId?: number | null;
+	unitId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;
 }

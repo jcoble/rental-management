@@ -89,7 +89,7 @@ export interface Property {
 	id: number;
 	portfolioId: number;
 	ownerId?: number;
-	ownerEntityId?: number;
+	ownerEntityId?: number | null;
 	name: string;
 	// Wire field is `type` (PropertyResponse maps PropertyType → "type"); the grid column,
 	// type filter, and create/edit forms all read/write this single name.
@@ -1112,6 +1112,8 @@ export interface DashboardActivity {
 	type: string;
 	/** Primary key of the touched entity, for deep-linking to its detail page. */
 	entityId: number;
+	/** Owning unit when the touched entity belongs to a unit. */
+	unitId?: number | null;
 	action?: string;
 	description?: string;
 	/** Human label naming the specific record this row touched (null when the type has no cheap label). */
