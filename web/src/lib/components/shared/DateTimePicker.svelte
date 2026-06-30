@@ -81,11 +81,11 @@
 	}
 
 	const timeInputClass =
-		'm3-field-surface h-11 px-3 py-2 text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:dark]';
+		'm3-field-surface h-11 w-full px-3 py-2 text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto [color-scheme:dark]';
 </script>
 
-<div class="flex items-center gap-2">
-	<div class="flex-1">
+<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+	<div class="w-full sm:flex-1">
 		<DatePicker
 			{id}
 			value={datePart}
