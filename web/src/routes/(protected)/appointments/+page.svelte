@@ -11,12 +11,14 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import { ArrowLeft, ArrowRight, Check, Plus, CalendarDays, List as ListIcon } from '@lucide/svelte';
+	import { Plus, CalendarDays, List as ListIcon } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -36,29 +38,16 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const APPT_TYPES = ['Showing', 'MoveIn', 'MoveOut', 'Inspection', 'MaintenanceVisit', 'OwnerMeeting'];
 	const APPT_STATUSES = ['Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'NoShow'];
-	const FORM_STEPS = [
-		{
-			key: 'details',
-			label: 'Details',
-			helper: 'Name the appointment and set the type.'
-		},
-		{
-			key: 'schedule',
-			label: 'Schedule',
-			helper: 'Pick the date and time window.'
-		},
-		{
-			key: 'people',
-			label: 'People',
-			helper: 'Connect it to a property, tenant, or prospect.'
-		},
+	const appointmentSteps: FormStepperStep[] = [
+		{ id: 'details', label: 'Details', description: 'Title and type' },
+		{ id: 'schedule', label: 'Schedule', description: 'Date and time' },
+		{ id: 'people', label: 'People', description: 'Property and contacts' },
+	];
+	const appointmentStepFields = [
+		['title', 'type', 'status'],
+		['scheduledStart', 'scheduledEnd'],
+		['propertyId', 'tenantId', 'assignedTo', 'prospectName', 'prospectEmail'],
 	] as const;
-	type AppointmentFormStep = typeof FORM_STEPS[number]['key'];
-	const STEP_FIELDS: Record<AppointmentFormStep, string[]> = {
-		details: ['title', 'type', 'status'],
-		schedule: ['scheduledStart', 'scheduledEnd'],
-		people: ['propertyId', 'tenantId', 'assignedTo', 'prospectName', 'prospectEmail'],
-	};
 
 	// ── View toggle: Calendar (default) / List ──────────────────────────────────
 	type AppointmentView = 'calendar' | 'list';
@@ -122,10 +111,9 @@
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
-	let formStep = $state<AppointmentFormStep>('details');
+	let appointmentStep = $state(0);
+	let completedAppointmentSteps = $state<number[]>([]);
 	let deleteTarget = $state<Appointment | null>(null);
-	const formStepIndex = $derived(FORM_STEPS.findIndex((step) => step.key === formStep));
-	const currentFormStep = $derived(FORM_STEPS[formStepIndex] ?? FORM_STEPS[0]);
 
 	function clearFormError(field: string) {
 		if (!formErrors[field]) return;
@@ -151,48 +139,46 @@
 		invalidateAppointmentQueries(queryClient, portfolioId);
 	}
 
-	function firstStepWithErrors(errors: Record<string, string>): AppointmentFormStep {
-		for (const step of FORM_STEPS) {
-			if (STEP_FIELDS[step.key].some((field) => errors[field])) return step.key;
-		}
-		return 'details';
+	function appointmentStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(appointmentStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
 	}
 
-	function stepHasError(step: AppointmentFormStep): boolean {
-		return STEP_FIELDS[step].some((field) => Boolean(formErrors[field]));
+	function firstAppointmentErrorStep(errors: Record<string, string>) {
+		return appointmentStepFields.findIndex((fields) => fields.some((field) => errors[field]));
 	}
 
-	function filterStepErrors(errors: Record<string, string>, step: AppointmentFormStep): Record<string, string> {
-		const fields = new Set(STEP_FIELDS[step]);
-		return Object.fromEntries(Object.entries(errors).filter(([field]) => fields.has(field)));
+	function markAppointmentStepInvalid(step: number) {
+		completedAppointmentSteps = completedAppointmentSteps.filter((completedStep) => completedStep < step);
 	}
 
-	function replaceStepErrors(step: AppointmentFormStep, errors: Record<string, string>) {
-		const fields = new Set(STEP_FIELDS[step]);
-		const next = Object.fromEntries(Object.entries(formErrors).filter(([field]) => !fields.has(field)));
-		formErrors = { ...next, ...errors };
-	}
-
-	function validateStep(step: AppointmentFormStep): boolean {
+	function validateAppointmentStep(step: number): boolean {
 		const result = parseForm(appointmentSchema, form);
-		const errors = filterStepErrors(result.errors ?? {}, step);
-		replaceStepErrors(step, errors);
-		return Object.keys(errors).length === 0;
+		const currentErrors = result.errors
+			? Object.fromEntries(appointmentStepErrorFields(step, result.errors))
+			: {};
+		const currentFields = new Set<string>(appointmentStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(formErrors).filter(([field]) => !currentFields.has(field)));
+		formErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markAppointmentStepInvalid(step);
+		return isValid;
 	}
 
-	function goToFormStep(step: AppointmentFormStep) {
-		formStep = step;
+	function nextAppointmentStep() {
+		if (!validateAppointmentStep(appointmentStep)) return;
+		if (completedAppointmentSteps.includes(appointmentStep)) {
+			appointmentStep = Math.min(appointmentStep + 1, appointmentSteps.length - 1);
+			return;
+		}
+		completedAppointmentSteps = [...completedAppointmentSteps, appointmentStep];
+		window.setTimeout(() => {
+			appointmentStep = Math.min(appointmentStep + 1, appointmentSteps.length - 1);
+		}, 260);
 	}
 
-	function nextFormStep() {
-		if (!validateStep(formStep)) return;
-		const nextStep = FORM_STEPS[Math.min(formStepIndex + 1, FORM_STEPS.length - 1)];
-		formStep = nextStep.key;
-	}
-
-	function previousFormStep() {
-		const previousStep = FORM_STEPS[Math.max(formStepIndex - 1, 0)];
-		formStep = previousStep.key;
+	function previousAppointmentStep() {
+		appointmentStep = Math.max(appointmentStep - 1, 0);
 	}
 
 	const saveMutation = createMutation(() => ({
@@ -233,7 +219,8 @@
 		editingId = null;
 		form = { ...empty };
 		formErrors = {};
-		formStep = 'details';
+		appointmentStep = 0;
+		completedAppointmentSteps = [];
 		showForm = true;
 	}
 	// Calendar: clicked an empty day/slot → create prefilled with that local time.
@@ -241,7 +228,8 @@
 		editingId = null;
 		form = { ...empty, scheduledStart: localWallClockIso };
 		formErrors = {};
-		formStep = 'details';
+		appointmentStep = 0;
+		completedAppointmentSteps = [];
 		showForm = true;
 	}
 	function openEdit(a: Appointment) {
@@ -256,20 +244,26 @@
 			prospectName: a.prospectName ?? '', prospectEmail: a.prospectEmail ?? '', assignedTo: a.assignedTo ?? '',
 		};
 		formErrors = {};
-		formStep = 'details';
+		appointmentStep = 0;
+		completedAppointmentSteps = [];
 		showForm = true;
 	}
 	function closeForm() {
 		showForm = false;
 		editingId = null;
 		formErrors = {};
-		formStep = 'details';
+		appointmentStep = 0;
+		completedAppointmentSteps = [];
 	}
 	function submit() {
 		const result = parseForm(appointmentSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
-			formStep = firstStepWithErrors(result.errors);
+			const firstErrorStep = firstAppointmentErrorStep(result.errors);
+			if (firstErrorStep >= 0) {
+				appointmentStep = firstErrorStep;
+				markAppointmentStepInvalid(firstErrorStep);
+			}
 			return;
 		}
 		formErrors = {};
@@ -483,155 +477,139 @@
 	open={showForm}
 	onOpenChange={(v) => { if (!v) closeForm(); }}
 >
-	<Dialog.Content class="max-w-4xl gap-0 overflow-hidden p-0">
-		<Dialog.Header class="border-b border-border px-6 pb-4 pt-6">
+	<Dialog.Content class="!flex max-h-[90dvh] max-w-3xl flex-col overflow-hidden [background:var(--m3c-surface-container-highest)]">
+		<Dialog.Header class="shrink-0">
 			<Dialog.Title>{editingId == null ? 'New Appointment' : 'Edit Appointment'}</Dialog.Title>
 			<p class="max-w-2xl text-sm text-muted-foreground">
-				Walk through the appointment in a few pieces so the schedule, people, and details stay clear.
+				Add the appointment in a few focused steps so the date, people, and status stay clear.
 			</p>
 		</Dialog.Header>
-		<div class="border-b border-border px-6 py-4">
-			<ol class="grid gap-2 sm:grid-cols-3" data-testid="appointment-form-steps">
-				{#each FORM_STEPS as step, index}
-					<li>
-						<button
-							type="button"
-							class="flex min-h-16 w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition hover:border-primary/60 {formStep === step.key ? 'border-primary bg-primary/10 text-foreground' : stepHasError(step.key) ? 'border-destructive/50 bg-destructive/10 text-foreground' : index < formStepIndex ? 'border-emerald-500/50 bg-emerald-500/10 text-foreground' : 'border-border bg-muted/30 text-muted-foreground'}"
-							aria-current={formStep === step.key ? 'step' : undefined}
-							data-testid={`appointment-step-${step.key}`}
-							onclick={() => goToFormStep(step.key)}
-						>
-							<span class="flex size-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold {formStep === step.key ? 'border-primary bg-primary text-primary-foreground' : index < formStepIndex ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-border bg-background'}">
-								{#if index < formStepIndex && !stepHasError(step.key)}
-									<Check class="size-4" />
-								{:else}
-									{index + 1}
-								{/if}
-							</span>
-							<span class="min-w-0">
-								<span class="block text-sm font-semibold">{step.label}</span>
-								<span class="block text-xs leading-snug text-muted-foreground">{step.helper}</span>
-							</span>
-						</button>
-					</li>
-				{/each}
-			</ol>
+		<div class="min-h-0 flex-1 overflow-y-auto pr-1">
+			<FormStepper
+				steps={appointmentSteps}
+				bind:currentStep={appointmentStep}
+				completedSteps={completedAppointmentSteps}
+				testid="appointment-stepper"
+			>
+				<div class="min-h-72 space-y-4" data-testid="appointment-form">
+					{#if appointmentStep === 0}
+						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+							Start with what kind of appointment this is. The date comes next.
+						</div>
+						<div class="space-y-4">
+							<div>
+								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-title">Appointment title</label>
+								<Input id="appointment-title" data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" />
+								{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
+							</div>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<div>
+									<span class="mb-2 block text-sm font-medium text-muted-foreground">Type</span>
+									<Select.Root type="single" bind:value={form.type}>
+										<Select.Trigger class="w-full" data-testid="appointment-type-input">
+											{form.type ? labelForType(form.type) : 'Select type'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
+										</Select.Content>
+									</Select.Root>
+								</div>
+								<div>
+									<span class="mb-2 block text-sm font-medium text-muted-foreground">Status</span>
+									<Select.Root type="single" bind:value={form.status}>
+										<Select.Trigger class="w-full" data-testid="appointment-status-input">
+											{form.status ? form.status : 'Select status'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+										</Select.Content>
+									</Select.Root>
+								</div>
+							</div>
+						</div>
+					{:else if appointmentStep === 1}
+						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+							Choose the start time first. End time can stay blank for a single-point appointment.
+						</div>
+						<div class="grid gap-4">
+							<div>
+								<span class="mb-2 block text-sm font-medium text-muted-foreground">Start</span>
+								<DateTimePicker bind:value={form.scheduledStart} testid="appointment-start-input" />
+								{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
+							</div>
+							<div>
+								<span class="mb-2 block text-sm font-medium text-muted-foreground">End</span>
+								<DateTimePicker bind:value={form.scheduledEnd} testid="appointment-end-input" />
+							</div>
+						</div>
+					{:else}
+						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+							Link this to a property, tenant, prospect, or staff member when you have that context.
+						</div>
+						<div class="grid gap-4 sm:grid-cols-2">
+							<div>
+								<span class="mb-2 block text-sm font-medium text-muted-foreground">Property</span>
+								<Select.Root type="single" bind:value={form.propertyId}>
+									<Select.Trigger class="w-full" data-testid="appointment-property-input">
+										{form.propertyId ? (propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? form.propertyId) : 'No property'}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label="No property">No property</Select.Item>
+										{#each propertiesQuery.data || [] as property}<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
+								<span class="mb-2 block text-sm font-medium text-muted-foreground">Tenant</span>
+								<Select.Root type="single" bind:value={form.tenantId}>
+									<Select.Trigger class="w-full" data-testid="appointment-tenant-input">
+										{#if form.tenantId}
+											{tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName || (() => { const t = tenantsQuery.data?.find((t) => String(t.id) === form.tenantId); return t ? `${t.firstName} ${t.lastName}` : form.tenantId; })()}
+										{:else}
+											No tenant
+										{/if}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label="No tenant">No tenant</Select.Item>
+										{#each tenantsQuery.data || [] as tenant}<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
+								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-assigned">Assigned to</label>
+								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
+							</div>
+							<div>
+								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-name">Prospect name</label>
+								<Input id="appointment-prospect-name" data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" />
+							</div>
+							<div class="sm:col-span-2">
+								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-email">Prospect email</label>
+								<Input id="appointment-prospect-email" data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" />
+								{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
+			</FormStepper>
 		</div>
-
-		<div class="max-h-[calc(100dvh-19rem)] overflow-y-auto px-6 py-5" data-testid="appointment-form">
-			<div class="mb-5">
-				<p class="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Step {formStepIndex + 1} of {FORM_STEPS.length}</p>
-				<h3 class="mt-1 text-lg font-semibold text-foreground">{currentFormStep.label}</h3>
-				<p class="text-sm text-muted-foreground">{currentFormStep.helper}</p>
-			</div>
-
-			{#if formStep === 'details'}
-				<div class="grid gap-4 sm:grid-cols-2">
-					<div class="sm:col-span-2">
-						<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-title">Appointment title</label>
-						<Input id="appointment-title" data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" />
-						{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
-					</div>
-					<div>
-						<span class="mb-2 block text-sm font-medium text-muted-foreground">Type</span>
-						<Select.Root type="single" bind:value={form.type}>
-							<Select.Trigger class="w-full" data-testid="appointment-type-input">
-								{form.type ? labelForType(form.type) : 'Select type'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					<div>
-						<span class="mb-2 block text-sm font-medium text-muted-foreground">Status</span>
-						<Select.Root type="single" bind:value={form.status}>
-							<Select.Trigger class="w-full" data-testid="appointment-status-input">
-								{form.status ? form.status : 'Select status'}
-							</Select.Trigger>
-							<Select.Content>
-								{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				</div>
-			{:else if formStep === 'schedule'}
-				<div class="grid gap-4 lg:grid-cols-2">
-					<div>
-						<span class="mb-2 block text-sm font-medium text-muted-foreground">Start</span>
-						<DateTimePicker bind:value={form.scheduledStart} testid="appointment-start-input" />
-						{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
-					</div>
-					<div>
-						<span class="mb-2 block text-sm font-medium text-muted-foreground">End</span>
-						<DateTimePicker bind:value={form.scheduledEnd} testid="appointment-end-input" />
-					</div>
-				</div>
-			{:else}
-				<div class="grid gap-4 sm:grid-cols-2">
-					<div>
-						<span class="mb-2 block text-sm font-medium text-muted-foreground">Property</span>
-						<Select.Root type="single" bind:value={form.propertyId}>
-							<Select.Trigger class="w-full" data-testid="appointment-property-input">
-								{form.propertyId ? (propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? form.propertyId) : 'No property'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="No property">No property</Select.Item>
-								{#each propertiesQuery.data || [] as property}<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					<div>
-						<span class="mb-2 block text-sm font-medium text-muted-foreground">Tenant</span>
-						<Select.Root type="single" bind:value={form.tenantId}>
-							<Select.Trigger class="w-full" data-testid="appointment-tenant-input">
-								{#if form.tenantId}
-									{tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName || (() => { const t = tenantsQuery.data?.find((t) => String(t.id) === form.tenantId); return t ? `${t.firstName} ${t.lastName}` : form.tenantId; })()}
-								{:else}
-									No tenant
-								{/if}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="No tenant">No tenant</Select.Item>
-								{#each tenantsQuery.data || [] as tenant}<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					<div>
-						<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-assigned">Assigned to</label>
-						<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
-					</div>
-					<div>
-						<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-name">Prospect name</label>
-						<Input id="appointment-prospect-name" data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" />
-					</div>
-					<div class="sm:col-span-2">
-						<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-email">Prospect email</label>
-						<Input id="appointment-prospect-email" data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" />
-						{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
-					</div>
-				</div>
+		<div class="mt-4 flex shrink-0 flex-wrap justify-end gap-2 border-t border-border pt-4">
+			<Button data-testid="appointment-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
+			{#if appointmentStep > 0}
+				<Button data-testid="appointment-step-back" variant="outline" onclick={previousAppointmentStep}>Back</Button>
 			{/if}
-		</div>
-
-		<Dialog.Footer class="flex-row items-center justify-between gap-3 border-t border-border px-6 py-4">
-			{#if formStep === 'details'}
-				<Button variant="outline" class="min-w-24" data-testid="appointment-form-cancel" onclick={closeForm}>Cancel</Button>
+			{#if appointmentStep < appointmentSteps.length - 1}
+				<StepperNextButton
+					testid="appointment-step-next"
+					onclick={nextAppointmentStep}
+					complete={completedAppointmentSteps.includes(appointmentStep)}
+				/>
 			{:else}
-				<Button variant="outline" class="min-w-24" data-testid="appointment-form-back" onclick={previousFormStep}>
-					<ArrowLeft class="size-4" />
-					Back
+				<Button data-testid="appointment-form-save" onclick={submit} disabled={saveMutation.isPending}>
+					{saveMutation.isPending ? 'Saving...' : 'Save appointment'}
 				</Button>
 			{/if}
-			{#if formStep === 'people'}
-				<Button class="min-w-36" data-testid="appointment-form-save" onclick={submit} disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save appointment'}</Button>
-			{:else}
-				<Button class="min-w-28" data-testid="appointment-form-next" onclick={nextFormStep}>
-					Next
-					<ArrowRight class="size-4" />
-				</Button>
-			{/if}
-		</Dialog.Footer>
+		</div>
 	</Dialog.Content>
 </Dialog.Root>
 
