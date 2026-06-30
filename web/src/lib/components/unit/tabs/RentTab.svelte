@@ -23,9 +23,13 @@
 	let {
 		dashboard,
 		onScan,
+		tabQuery = 'rent',
+		ledgerQuery,
 	}: {
 		dashboard: UnitDashboard;
 		onScan: () => void;
+		tabQuery?: string;
+		ledgerQuery?: string;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -35,14 +39,26 @@
 	// A selected payment folds its full detail inline (?payment=<id> on the unit URL); otherwise the list shows.
 	const selectedPayment = $derived(Number(page.url.searchParams.get('payment')) || null);
 
+	function unitUrl(params: Record<string, string | number | null | undefined> = {}) {
+		const url = new URL(`/units/${dashboard.unit.id}`, page.url.origin);
+		url.searchParams.set('tab', tabQuery);
+		if (ledgerQuery) url.searchParams.set('ledger', ledgerQuery);
+		for (const [key, value] of Object.entries(params)) {
+			if (value !== null && value !== undefined && value !== '') {
+				url.searchParams.set(key, String(value));
+			}
+		}
+		return `${url.pathname}${url.search}`;
+	}
+
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openPayment(id: number) {
-		goto('/units/' + dashboard.unit.id + '?tab=rent&payment=' + id, { keepFocus: true, noScroll: true });
+		goto(unitUrl({ payment: id }), { keepFocus: true, noScroll: true });
 	}
 
 	// Clearing the selection drops ?payment= (replaceState — peer of the list, not a new history step).
 	function clearSelection() {
-		goto('/units/' + dashboard.unit.id + '?tab=rent', { replaceState: true, keepFocus: true, noScroll: true });
+		goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];

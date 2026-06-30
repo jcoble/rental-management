@@ -92,6 +92,15 @@ void main() {
     final listing = parseUnitCommandCenterRoute('/units/42?tab=listing');
     expect(listing?.initialTab, UnitCommandCenterTab.listing);
 
+    final ledger = parseUnitCommandCenterRoute('/units/42?tab=ledger');
+    expect(ledger?.initialTab, UnitCommandCenterTab.ledger);
+
+    final oldRent = parseUnitCommandCenterRoute('/units/42?tab=rent');
+    expect(oldRent?.initialTab, UnitCommandCenterTab.ledger);
+
+    final oldExpenses = parseUnitCommandCenterRoute('/units/42?tab=expenses');
+    expect(oldExpenses?.initialTab, UnitCommandCenterTab.ledger);
+
     expect(parseUnitCommandCenterRoute('/units/0?tab=lease'), isNull);
     expect(parseUnitCommandCenterRoute('/work-orders/42'), isNull);
   });

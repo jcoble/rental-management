@@ -66,19 +66,19 @@ public class AuditEntryResponse
         AuditDiffBuilder? diff = null,
         IReadOnlyDictionary<int, string>? userNames = null,
         int? unitId = null) => new()
-    {
-        Id = e.Id,
-        PortfolioId = e.PortfolioId,
-        Operation = e.Operation,
-        OperationName = e.Operation.ToString(),
-        EntityType = e.EntityType,
-        EntityId = e.EntityId,
-        Actor = ResolveActor(e, userNames),
-        Description = describer.Describe(e),
-        DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
-        Timestamp = e.Timestamp,
-        Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
-    };
+        {
+            Id = e.Id,
+            PortfolioId = e.PortfolioId,
+            Operation = e.Operation,
+            OperationName = e.Operation.ToString(),
+            EntityType = e.EntityType,
+            EntityId = e.EntityId,
+            Actor = ResolveActor(e, userNames),
+            Description = describer.Describe(e),
+            DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
+            Timestamp = e.Timestamp,
+            Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
+        };
 
     /// <summary>
     /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AuditLog.ActorLabel"/>
@@ -112,9 +112,9 @@ public class AuditEntryResponse
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
     internal static string? BuildDetailHref(string entityType, int entityId, int? unitId = null) => entityType switch
     {
-        "Payment" when unitId is > 0 => $"/units/{unitId}?tab=rent&payment={entityId}",
+        "Payment" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=rent&payment={entityId}",
         "Payment" => $"/accounting/payments/{entityId}",
-        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=expenses&expense={entityId}",
+        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=expenses&expense={entityId}",
         "Expense" => $"/accounting/expenses/{entityId}",
         "Lease" when unitId is > 0 => $"/units/{unitId}?tab=lease&lease={entityId}",
         "Lease" => $"/leases/{entityId}",
@@ -170,22 +170,22 @@ public sealed class AdminAuditEntryResponse
         AuditLog e,
         AuditDescriber describer,
         IReadOnlyDictionary<int, string>? userNames = null) => new()
-    {
-        Id = e.Id,
-        PortfolioId = e.PortfolioId,
-        Operation = e.Operation,
-        OperationName = e.Operation.ToString(),
-        EntityType = e.EntityType,
-        EntityId = e.EntityId,
-        Actor = AuditEntryResponse.ResolveActor(e, userNames),
-        UserId = e.UserId,
-        ActorLabel = e.ActorLabel,
-        Description = describer.Describe(e),
-        DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId),
-        Timestamp = e.Timestamp,
-        IpAddress = e.IpAddress,
-        OldValues = e.OldValues,
-        NewValues = e.NewValues,
-        ChangeReason = e.ChangeReason,
-    };
+        {
+            Id = e.Id,
+            PortfolioId = e.PortfolioId,
+            Operation = e.Operation,
+            OperationName = e.Operation.ToString(),
+            EntityType = e.EntityType,
+            EntityId = e.EntityId,
+            Actor = AuditEntryResponse.ResolveActor(e, userNames),
+            UserId = e.UserId,
+            ActorLabel = e.ActorLabel,
+            Description = describer.Describe(e),
+            DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId),
+            Timestamp = e.Timestamp,
+            IpAddress = e.IpAddress,
+            OldValues = e.OldValues,
+            NewValues = e.NewValues,
+            ChangeReason = e.ChangeReason,
+        };
 }

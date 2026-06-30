@@ -61,10 +61,15 @@ class MoneyRepository {
     }
   }
 
-  Future<List<Expense>> listExpenses({int? propertyId, int take = 100}) async {
+  Future<List<Expense>> listExpenses({
+    int? propertyId,
+    int? unitId,
+    int take = 100,
+  }) async {
     try {
       final params = <String, dynamic>{'take': take, 'sort': '-incurredAt'};
       if (propertyId != null) params['propertyId'] = propertyId;
+      if (unitId != null) params['unitId'] = unitId;
       final response = await _dio.get<List<dynamic>>(
         '/expenses',
         queryParameters: params,
@@ -171,6 +176,14 @@ final moneyRepositoryProvider = Provider<MoneyRepository>((ref) {
 final expensesListProvider = FutureProvider.autoDispose<List<Expense>>((ref) {
   return ref.watch(moneyRepositoryProvider).listExpenses();
 });
+
+/// Unit-scoped operating costs, filtered and capped by the API.
+final unitExpensesProvider = FutureProvider.autoDispose
+    .family<List<Expense>, int>((ref, unitId) {
+      return ref
+          .watch(moneyRepositoryProvider)
+          .listExpenses(unitId: unitId, take: 20);
+    });
 
 /// A single expense (with line items), keyed by id.
 final expenseDetailProvider = FutureProvider.autoDispose.family<Expense, int>((

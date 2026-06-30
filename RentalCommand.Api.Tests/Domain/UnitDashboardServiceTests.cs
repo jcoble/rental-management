@@ -510,6 +510,77 @@ public class UnitDashboardServiceTests : IDisposable
         dashboard.Header.RentState.Should().Be("Due");
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_DoesNotPromoteEndedLeaseToCurrentLease()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Historical Flats",
+            AddressLine1 = "210 Archive Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43201",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "2",
+            Status = UnitStatus.Vacant,
+            MarketRent = 1100m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Former",
+            LastName = "Resident",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var endedLease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-HIST",
+            Status = LeaseStatus.Expired,
+            StartDate = now.AddYears(-1),
+            EndDate = now.AddMonths(-1),
+            MonthlyRent = 1100m,
+            SecurityDeposit = 1100m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var leftoverCharge = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = endedLease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 1100m,
+            DueDate = now.AddMonths(-2),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, tenant, endedLease, leftoverCharge);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.CurrentLease.Should().BeNull("ended leases should remain historical and not overwrite the unit's current lease slot");
+        dashboard.CurrentTenant.Should().BeNull();
+        dashboard.CurrentTenants.Should().BeEmpty();
+        dashboard.Header.RentState.Should().Be("NoLease");
+        dashboard.Header.OutstandingRentBalance.Should().Be(0m);
+    }
+
     private static bool IsChildIdPreload(string command)
         => IsBareIdSelect(command, "Leases")
             || IsBareIdSelect(command, "Payments")

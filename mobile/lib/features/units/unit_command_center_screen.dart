@@ -16,6 +16,9 @@ import '../leases/leases_list_screen.dart';
 import '../leases/leases_repository.dart';
 import '../maintenance/create_work_order_sheet.dart';
 import '../maintenance/work_order_detail_screen.dart';
+import '../money/expense_detail_screen.dart';
+import '../money/expense_models.dart';
+import '../money/money_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'unit_command_center_tabs.dart';
 import 'units_repository.dart';
@@ -113,6 +116,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
         Tab(text: 'Listing'),
         Tab(text: 'Lease'),
         Tab(text: 'Apps'),
+        Tab(text: 'Ledger'),
         Tab(text: 'Tenants'),
         Tab(text: 'Work'),
       ],
@@ -123,6 +127,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
         _UnitListingTab(dashboard: dashboard),
         _UnitLeaseTab(dashboard: dashboard, selectedLease: initialLease),
         _UnitApplicationsTab(application: initialApplication),
+        _UnitLedgerTab(dashboard: dashboard),
         _UnitTenantsTab(
           dashboard: dashboard,
           selectedTenantId: selectedTenantId,
@@ -927,6 +932,87 @@ class _UnitApplicationsTab extends StatelessWidget {
   }
 }
 
+class _UnitLedgerTab extends ConsumerWidget {
+  const _UnitLedgerTab({required this.dashboard});
+
+  final UnitDashboard dashboard;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lease = dashboard.currentLease;
+    final expensesAsync = ref.watch(unitExpensesProvider(dashboard.unit.id));
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        _SurfacePanel(
+          children: [
+            _MetricRow(
+              icon: Symbols.account_balance_wallet_rounded,
+              label: 'Tenant balance',
+              value: _formatCurrency(dashboard.header.outstandingRentBalance),
+            ),
+            _MetricRow(
+              icon: Symbols.payments_rounded,
+              label: 'Market rent',
+              value: '${_formatCurrency(dashboard.unit.marketRent)}/mo',
+            ),
+            if (lease != null)
+              _MetricRow(
+                icon: Symbols.description_rounded,
+                label: 'Tenant account',
+                value: lease.leaseNumber,
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _PaymentsSection(items: dashboard.overview.recentPayments),
+        const SizedBox(height: 14),
+        expensesAsync.when(
+          loading: () => const _LoadingSection(title: 'Operating costs'),
+          error: (e, _) => _RetrySection(
+            title: 'Operating costs',
+            message: e is ApiException ? e.message : e.toString(),
+            onRetry: () =>
+                ref.invalidate(unitExpensesProvider(dashboard.unit.id)),
+          ),
+          data: (expenses) => _UnitExpensesSection(items: expenses),
+        ),
+      ],
+    );
+  }
+}
+
+class _UnitExpensesSection extends StatelessWidget {
+  const _UnitExpensesSection({required this.items});
+
+  final List<Expense> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'Operating costs',
+      empty: 'No unit expenses',
+      children: [
+        for (final item in items)
+          _CompactRow(
+            icon: Symbols.receipt_long_rounded,
+            title: item.description.isEmpty
+                ? 'Expense #${item.id}'
+                : item.description,
+            subtitle:
+                '${item.status.label} · ${item.category.label} · ${_formatDate(item.incurredAt)} · ${_formatCurrency(item.amount)}',
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => ExpenseDetailScreen(expenseId: item.id),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _UnitTenantsTab extends StatelessWidget {
   const _UnitTenantsTab({required this.dashboard, this.selectedTenantId});
 
@@ -1238,6 +1324,63 @@ class _SurfacePanel extends StatelessWidget {
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: Column(children: children),
+    );
+  }
+}
+
+class _LoadingSection extends StatelessWidget {
+  const _LoadingSection({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: title,
+      empty: '',
+      children: const [
+        Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ],
+    );
+  }
+}
+
+class _RetrySection extends StatelessWidget {
+  const _RetrySection({
+    required this.title,
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String title;
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: title,
+      empty: '',
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(message, style: Theme.of(context).textTheme.bodyMedium),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+                onPressed: onRetry,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
