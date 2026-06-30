@@ -7,6 +7,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -201,8 +202,14 @@
 
 	function nextLoanStep() {
 		if (!validateLoanStep(loanStep)) return;
-		if (!completedLoanSteps.includes(loanStep)) completedLoanSteps = [...completedLoanSteps, loanStep];
-		loanStep = Math.min(loanStep + 1, loanSteps.length - 1);
+		if (completedLoanSteps.includes(loanStep)) {
+			loanStep = Math.min(loanStep + 1, loanSteps.length - 1);
+			return;
+		}
+		completedLoanSteps = [...completedLoanSteps, loanStep];
+		window.setTimeout(() => {
+			loanStep = Math.min(loanStep + 1, loanSteps.length - 1);
+		}, 260);
 	}
 
 	const columns: ColumnDef<Loan>[] = [
@@ -372,7 +379,11 @@
 				<Button variant="outline" onclick={() => (loanStep = Math.max(loanStep - 1, 0))} data-testid="loan-step-back">Back</Button>
 			{/if}
 			{#if loanStep < loanSteps.length - 1}
-				<Button onclick={nextLoanStep} data-testid="loan-step-next">Next</Button>
+				<StepperNextButton
+					testid="loan-step-next"
+					complete={completedLoanSteps.includes(loanStep)}
+					onclick={nextLoanStep}
+				/>
 			{:else}
 				<Button onclick={submit} disabled={createMut.isPending || updateMut.isPending} data-testid="loan-save-button">
 					{(createMut.isPending || updateMut.isPending) ? 'Saving…' : editingLoanId == null ? 'Add Loan' : 'Save Loan'}

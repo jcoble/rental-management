@@ -35,7 +35,7 @@
 				class="group min-w-0 rounded-lg border px-3 py-2 text-left transition duration-200 {index === currentStep
 					? 'border-primary/60 bg-primary/10 text-foreground shadow-sm'
 					: completedSteps.includes(index)
-						? 'border-success/40 bg-success/10 text-foreground'
+						? 'animate-step-complete border-success/40 bg-success/10 text-foreground'
 						: 'border-border bg-muted/20 text-muted-foreground'}"
 				disabled={!canSelect(index)}
 				aria-current={index === currentStep ? 'step' : undefined}
@@ -70,15 +70,43 @@
 		{/each}
 	</div>
 
-	<div class="transition duration-200" data-testid={`${testid}-panel`}>
+	<div class="animate-step-panel transition duration-200" data-testid={`${testid}-panel`}>
 		{@render children()}
 	</div>
 </div>
 
 <style>
-	@media (min-width: 640px) {
-		.form-stepper-grid {
-			grid-template-columns: repeat(var(--step-count), minmax(0, 1fr));
+	.form-stepper-grid {
+		grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+	}
+	@keyframes step-complete-pop {
+		0% {
+			transform: scale(1);
 		}
+		45% {
+			transform: scale(1.025);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	@keyframes step-panel-in {
+		0% {
+			opacity: 0;
+			transform: translateY(4px);
+		}
+		100% {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.animate-step-complete {
+		animation: step-complete-pop 220ms ease-out;
+	}
+
+	.animate-step-panel {
+		animation: step-panel-in 180ms ease-out;
 	}
 </style>

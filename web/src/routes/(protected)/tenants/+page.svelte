@@ -15,6 +15,7 @@
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
@@ -187,10 +188,14 @@
 
 	function nextTenantStep() {
 		if (!validateTenantStep(tenantStep)) return;
-		if (!completedTenantSteps.includes(tenantStep)) {
-			completedTenantSteps = [...completedTenantSteps, tenantStep];
+		if (completedTenantSteps.includes(tenantStep)) {
+			tenantStep = Math.min(tenantStep + 1, tenantSteps.length - 1);
+			return;
 		}
-		tenantStep = Math.min(tenantStep + 1, tenantSteps.length - 1);
+		completedTenantSteps = [...completedTenantSteps, tenantStep];
+		window.setTimeout(() => {
+			tenantStep = Math.min(tenantStep + 1, tenantSteps.length - 1);
+		}, 260);
 	}
 
 	function submit() {
@@ -385,10 +390,14 @@
 			<Button data-testid="tenant-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
 			{#if tenantStep > 0}
 				<Button data-testid="tenant-step-back" variant="outline" onclick={() => (tenantStep = Math.max(tenantStep - 1, 0))}>Back</Button>
-			{/if}
-			{#if tenantStep < tenantSteps.length - 1}
-				<Button data-testid="tenant-step-next" onclick={nextTenantStep}>Next</Button>
-			{:else}
+				{/if}
+				{#if tenantStep < tenantSteps.length - 1}
+					<StepperNextButton
+						testid="tenant-step-next"
+						onclick={nextTenantStep}
+						complete={completedTenantSteps.includes(tenantStep)}
+					/>
+				{:else}
 				<Button data-testid="tenant-form-save" onclick={submit} disabled={saveMutation.isPending}>
 					{saveMutation.isPending ? 'Saving…' : 'Save tenant'}
 				</Button>

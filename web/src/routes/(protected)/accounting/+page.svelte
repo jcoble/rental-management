@@ -32,6 +32,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -347,17 +348,22 @@
 	let editingReceipt = $state<Record<string, any> | null>(null);
 
 	const expenseSteps: FormStepperStep[] = [
-		{ id: 'basics', label: 'Basics', description: 'Amount and dates' },
-		{ id: 'context', label: 'Context', description: 'Category and links' },
-		{ id: 'receipt', label: 'Receipt', description: 'Optional details' }
+		{ id: 'source', label: 'Source', description: 'Links and defaults' },
+		{ id: 'details', label: 'Details', description: 'Description and amount' },
+		{ id: 'dates', label: 'Dates', description: 'Incurred and paid' },
+		{ id: 'context', label: 'Context', description: 'Category and notes' },
+		{ id: 'vendor', label: 'Vendor', description: 'Receipt contact' },
+		{ id: 'receipt', label: 'Receipt', description: 'Payment proof' },
+		{ id: 'adjustments', label: 'Adjustments', description: 'Tax and extras' }
 	];
 	const expenseStepFields = [
-		['workOrderId', 'description', 'amount', 'subtotal', 'taxAmount', 'incurredAt', 'dueDate', 'paidAt'],
-		['category', 'status', 'propertyId', 'vendorId', 'billableToOwner', 'notes'],
-		[
-			'vendorAddress', 'vendorPhone', 'vendorWebsite', 'vendorTaxId', 'receiptNumber',
-			'paymentMethod', 'cardLast4', 'taxRate', 'tip', 'discount', 'shipping'
-		]
+		['workOrderId', 'propertyId', 'vendorId'],
+		['description', 'amount', 'subtotal', 'taxAmount'],
+		['incurredAt', 'dueDate', 'paidAt'],
+		['category', 'status', 'billableToOwner', 'notes'],
+		['vendorAddress', 'vendorPhone', 'vendorWebsite', 'vendorTaxId'],
+		['receiptNumber', 'paymentMethod', 'cardLast4'],
+		['taxRate', 'tip', 'discount', 'shipping']
 	] as const;
 
 	function clearExpenseError(field: string) {
@@ -534,8 +540,14 @@
 	}
 	function nextExpenseStep() {
 		if (!validateExpenseStep(expenseStep)) return;
-		if (!completedExpenseSteps.includes(expenseStep)) completedExpenseSteps = [...completedExpenseSteps, expenseStep];
-		expenseStep = Math.min(expenseStep + 1, expenseSteps.length - 1);
+		if (completedExpenseSteps.includes(expenseStep)) {
+			expenseStep = Math.min(expenseStep + 1, expenseSteps.length - 1);
+			return;
+		}
+		completedExpenseSteps = [...completedExpenseSteps, expenseStep];
+		window.setTimeout(() => {
+			expenseStep = Math.min(expenseStep + 1, expenseSteps.length - 1);
+		}, 260);
 	}
 	function submitExpense() {
 		const result = parseForm(expenseSchema, expenseForm);
@@ -1443,149 +1455,151 @@
 			completedSteps={completedExpenseSteps}
 			testid="expense-stepper"
 		>
-			<div class="space-y-4" data-testid="expense-form">
-				{#if expenseStep === 0}
-					<div>
-						<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
-						<Select.Root
-							type="single"
-							value={expenseForm.workOrderId}
-							onValueChange={(value) => {
-								expenseForm.workOrderId = value;
-								autofillExpenseFromWorkOrderId(value);
-							}}
-						>
-							<Select.Trigger class="w-full" data-testid="expense-workorder-input">
-								{selectedWorkOrderLabel ?? 'No work order'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="No work order">No work order</Select.Item>
-								{#each workOrdersQuery.data || [] as wo}
-									<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					<div>
-						<span class="mb-1 block text-xs text-muted-foreground">Description</span>
-						<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="Description" />
-						{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
-					</div>
-					<div class="grid gap-2 sm:grid-cols-3">
+				<div class="space-y-4" data-testid="expense-form">
+					{#if expenseStep === 0}
 						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
-							<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
-							{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Subtotal</span>
-							<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
-							{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Tax</span>
-							<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
-							{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
-						</div>
-					</div>
-					<div class="grid gap-2 sm:grid-cols-3">
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Incurred</span>
-							<DatePicker testid="expense-incurred-input" bind:value={expenseForm.incurredAt} placeholder="Incurred date" />
-							{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
-							<DatePicker testid="expense-due-input" bind:value={expenseForm.dueDate} placeholder="Due date" />
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
-							<DatePicker testid="expense-paid-input" bind:value={expenseForm.paidAt} placeholder="Paid date" />
-						</div>
-					</div>
-				{:else if expenseStep === 1}
-					<div class="grid gap-2 sm:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Category</span>
-							<Select.Root type="single" bind:value={expenseForm.category}>
-								<Select.Trigger class="w-full" data-testid="expense-category-input">
-									{expenseForm.category ? formatExpenseCategory(expenseForm.category) : 'Select category'}
-								</Select.Trigger>
-								<Select.Content>
-									{#each EXPENSE_CATEGORY_OPTIONS as option}
-										<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Status</span>
-							<Select.Root type="single" bind:value={expenseForm.status}>
-								<Select.Trigger class="w-full" data-testid="expense-status-input">
-									{expenseForm.status || 'Select status'}
-								</Select.Trigger>
-								<Select.Content>
-									{#each EXPENSE_STATUSES as s}
-										<Select.Item value={s} label={s}>{s}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-					</div>
-					<div class="grid gap-2 sm:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Property</span>
-							<Select.Root type="single" bind:value={expenseForm.propertyId}>
-								<Select.Trigger class="w-full" data-testid="expense-property-input">
-									{selectedPropertyLabel ?? 'No property'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No property">No property</Select.Item>
-									{#each propertiesQuery.data || [] as property}
-										<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
+							<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
 							<Select.Root
 								type="single"
-								value={expenseForm.vendorId}
+								value={expenseForm.workOrderId}
 								onValueChange={(value) => {
-									expenseForm.vendorId = value;
-									autofillExpenseFromVendorId(value);
+									expenseForm.workOrderId = value;
+									autofillExpenseFromWorkOrderId(value);
 								}}
 							>
-								<Select.Trigger class="w-full" data-testid="expense-vendor-input">
-									{selectedVendorLabel ?? 'No vendor'}
+								<Select.Trigger class="w-full" data-testid="expense-workorder-input">
+									{selectedWorkOrderLabel ?? 'No work order'}
 								</Select.Trigger>
 								<Select.Content>
-									<Select.Item value="" label="No vendor">No vendor</Select.Item>
-									{#each vendorsQuery.data || [] as vendor}
-										<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
+									<Select.Item value="" label="No work order">No work order</Select.Item>
+									{#each workOrdersQuery.data || [] as wo}
+										<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
 									{/each}
 								</Select.Content>
 							</Select.Root>
 						</div>
-					</div>
-					<label class="flex items-center gap-2 text-sm">
-						<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
-						Billable to owner
+						<div class="grid gap-3 sm:grid-cols-2">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Property</span>
+								<Select.Root type="single" bind:value={expenseForm.propertyId}>
+									<Select.Trigger class="w-full" data-testid="expense-property-input">
+										{selectedPropertyLabel ?? 'No property'}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label="No property">No property</Select.Item>
+										{#each propertiesQuery.data || [] as property}
+											<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
+								<Select.Root
+									type="single"
+									value={expenseForm.vendorId}
+									onValueChange={(value) => {
+										expenseForm.vendorId = value;
+										autofillExpenseFromVendorId(value);
+									}}
+								>
+									<Select.Trigger class="w-full" data-testid="expense-vendor-input">
+										{selectedVendorLabel ?? 'No vendor'}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label="No vendor">No vendor</Select.Item>
+										{#each vendorsQuery.data || [] as vendor}
+											<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+						</div>
+					{:else if expenseStep === 1}
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Description</span>
+							<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="Description" />
+							{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
+						</div>
+						<div class="grid gap-3 sm:grid-cols-3">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
+								<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
+								{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Subtotal</span>
+								<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
+								{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Tax</span>
+								<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
+								{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
+							</div>
+						</div>
+					{:else if expenseStep === 2}
+						<div class="grid gap-3 sm:grid-cols-3">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Incurred</span>
+								<DatePicker testid="expense-incurred-input" bind:value={expenseForm.incurredAt} placeholder="Incurred date" />
+								{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
+								<DatePicker testid="expense-due-input" bind:value={expenseForm.dueDate} placeholder="Due date" />
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
+								<DatePicker testid="expense-paid-input" bind:value={expenseForm.paidAt} placeholder="Paid date" />
+							</div>
+						</div>
+					{:else if expenseStep === 3}
+						<div class="grid gap-3 sm:grid-cols-2">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Category</span>
+								<Select.Root type="single" bind:value={expenseForm.category}>
+									<Select.Trigger class="w-full" data-testid="expense-category-input">
+										{expenseForm.category ? formatExpenseCategory(expenseForm.category) : 'Select category'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each EXPENSE_CATEGORY_OPTIONS as option}
+											<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Status</span>
+								<Select.Root type="single" bind:value={expenseForm.status}>
+									<Select.Trigger class="w-full" data-testid="expense-status-input">
+										{expenseForm.status || 'Select status'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each EXPENSE_STATUSES as s}
+											<Select.Item value={s} label={s}>{s}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+						</div>
+						<label class="flex items-center gap-2 text-sm">
+							<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
+							Billable to owner
 					</label>
 					<div>
-						<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
-						<textarea data-testid="expense-notes-input" bind:value={expenseForm.notes} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"></textarea>
-					</div>
-				{:else}
-					<div>
-						<span class="mb-1 block text-xs text-muted-foreground">Vendor address</span>
-						<Input data-testid="expense-vendor-address-input" bind:value={expenseForm.vendorAddress} />
-					</div>
-					<div class="grid gap-2 sm:grid-cols-3">
+							<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+							<textarea data-testid="expense-notes-input" bind:value={expenseForm.notes} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"></textarea>
+						</div>
+					{:else if expenseStep === 4}
 						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
-							<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor address</span>
+							<Input data-testid="expense-vendor-address-input" bind:value={expenseForm.vendorAddress} />
+						</div>
+						<div class="grid gap-3 sm:grid-cols-3">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
+								<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Vendor website</span>
@@ -1593,13 +1607,14 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Vendor tax ID</span>
-							<Input data-testid="expense-vendor-taxid-input" bind:value={expenseForm.vendorTaxId} />
+								<Input data-testid="expense-vendor-taxid-input" bind:value={expenseForm.vendorTaxId} />
+							</div>
 						</div>
-					</div>
-					<div class="grid gap-2 sm:grid-cols-3">
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Receipt #</span>
-							<Input data-testid="expense-receipt-number-input" bind:value={expenseForm.receiptNumber} />
+					{:else if expenseStep === 5}
+						<div class="grid gap-3 sm:grid-cols-3">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Receipt #</span>
+								<Input data-testid="expense-receipt-number-input" bind:value={expenseForm.receiptNumber} />
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Payment method</span>
@@ -1607,13 +1622,14 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Card last 4</span>
-							<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} inputmode="numeric" maxlength={4} mask="cardLast4" />
+								<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} inputmode="numeric" maxlength={4} mask="cardLast4" />
+							</div>
 						</div>
-					</div>
-					<div class="grid gap-2 sm:grid-cols-4">
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
-							<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} inputmode="decimal" mask="percentage" />
+					{:else}
+						<div class="grid gap-3 sm:grid-cols-4">
+							<div>
+								<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
+								<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} inputmode="decimal" mask="percentage" />
 							{#if expenseErrors.taxRate}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxRate}</p>{/if}
 						</div>
 						<div>
@@ -1636,10 +1652,14 @@
 			<Button data-testid="expense-form-cancel" variant="outline" onclick={closeExpenseForm}>Cancel</Button>
 			{#if expenseStep > 0}
 				<Button data-testid="expense-step-back" variant="outline" onclick={() => (expenseStep = Math.max(expenseStep - 1, 0))}>Back</Button>
-			{/if}
-			{#if expenseStep < expenseSteps.length - 1}
-				<Button data-testid="expense-step-next" onclick={nextExpenseStep}>Next</Button>
-			{:else}
+				{/if}
+				{#if expenseStep < expenseSteps.length - 1}
+					<StepperNextButton
+						testid="expense-step-next"
+						onclick={nextExpenseStep}
+						complete={completedExpenseSteps.includes(expenseStep)}
+					/>
+				{:else}
 				<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save expense'}</Button>
 			{/if}
 		</Dialog.Footer>
