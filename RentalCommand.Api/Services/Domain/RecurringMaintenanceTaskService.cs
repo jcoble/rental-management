@@ -68,15 +68,14 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
 
         var totalCount = await q.CountAsync(ct);
 
-        var items = await q
-            .Include(t => t.Property)
+        var items = await ProjectResponse(q)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
         return new RecurringMaintenanceTaskListResponse
         {
-            Items = items.Select(RecurringMaintenanceTaskResponse.FromEntity).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
@@ -85,11 +84,10 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
 
     public async Task<RecurringMaintenanceTaskResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.RecurringMaintenanceTasks
+        return await ProjectResponse(_db.RecurringMaintenanceTasks
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
-
-        return entity == null ? null : RecurringMaintenanceTaskResponse.FromEntity(entity);
+            .Where(t => t.Id == id && t.PortfolioId == portfolioId))
+            .FirstOrDefaultAsync(ct);
     }
 
     public async Task<RecurringMaintenanceTaskResponse?> CreateAsync(int portfolioId, CreateRecurringMaintenanceTaskRequest request, CancellationToken ct = default)
@@ -124,6 +122,8 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
             Category = request.Category,
             RecurrenceInterval = request.RecurrenceInterval,
             NextDueDate = NormalizeDate(request.NextDueDate),
+            ScheduledTime = request.ScheduledTime,
+            EstimatedCost = request.EstimatedCost,
             IsActive = request.IsActive,
             Priority = request.Priority,
             CreatedAt = now,
@@ -133,7 +133,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         _db.RecurringMaintenanceTasks.Add(entity);
         await _db.SaveChangesAsync(ct);
 
-        var response = RecurringMaintenanceTaskResponse.FromEntity(entity);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -167,13 +167,15 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         if (request.Category != null) entity.Category = request.Category;
         if (request.RecurrenceInterval.HasValue) entity.RecurrenceInterval = request.RecurrenceInterval.Value;
         if (request.NextDueDate.HasValue) entity.NextDueDate = NormalizeDate(request.NextDueDate.Value);
+        entity.ScheduledTime = request.ScheduledTime;
+        entity.EstimatedCost = request.EstimatedCost;
         if (request.IsActive.HasValue) entity.IsActive = request.IsActive.Value;
         if (request.Priority.HasValue) entity.Priority = request.Priority.Value;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
 
-        var response = RecurringMaintenanceTaskResponse.FromEntity(entity);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -191,7 +193,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
-        var response = RecurringMaintenanceTaskResponse.FromEntity(entity);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -221,4 +223,48 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
     /// </summary>
     private static DateTime NormalizeDate(DateTime value) =>
         DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);
+
+    private static IQueryable<RecurringMaintenanceTaskResponse> ProjectResponse(IQueryable<RecurringMaintenanceTask> query) =>
+        query.Select(t => new RecurringMaintenanceTaskResponse
+        {
+            Id = t.Id,
+            PortfolioId = t.PortfolioId,
+            PropertyId = t.PropertyId,
+            UnitId = t.UnitId,
+            VendorId = t.VendorId,
+            PropertyName = t.Property == null ? null : t.Property.Name,
+            UnitNumber = t.Unit == null ? null : t.Unit.UnitNumber,
+            VendorName = t.Vendor == null ? null : t.Vendor.Name,
+            Title = t.Title,
+            Description = t.Description,
+            Category = t.Category,
+            RecurrenceInterval = t.RecurrenceInterval,
+            NextDueDate = t.NextDueDate,
+            ScheduledTime = t.ScheduledTime,
+            EstimatedCost = t.EstimatedCost,
+            MonthlyEstimatedCost = t.EstimatedCost == null
+                ? null
+                : t.RecurrenceInterval == Core.Enums.RecurrenceInterval.Weekly
+                    ? t.EstimatedCost.Value * 52m / 12m
+                    : t.RecurrenceInterval == Core.Enums.RecurrenceInterval.Monthly
+                        ? t.EstimatedCost.Value
+                        : t.RecurrenceInterval == Core.Enums.RecurrenceInterval.Quarterly
+                            ? t.EstimatedCost.Value / 3m
+                            : t.RecurrenceInterval == Core.Enums.RecurrenceInterval.SemiAnnually
+                                ? t.EstimatedCost.Value / 6m
+                                : t.RecurrenceInterval == Core.Enums.RecurrenceInterval.Annually
+                                    ? t.EstimatedCost.Value / 12m
+                                    : t.EstimatedCost.Value,
+            GeneratedWorkOrderCount = t.WorkOrders.Count,
+            LastGeneratedWorkOrderId = t.WorkOrders
+                .OrderByDescending(w => w.RequestedAt)
+                .ThenByDescending(w => w.Id)
+                .Select(w => (int?)w.Id)
+                .FirstOrDefault(),
+            LastGeneratedAtUtc = t.LastGeneratedAtUtc,
+            IsActive = t.IsActive,
+            Priority = t.Priority,
+            CreatedAt = t.CreatedAt,
+            UpdatedAt = t.UpdatedAt,
+        });
 }

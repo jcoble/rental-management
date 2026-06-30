@@ -29,6 +29,7 @@ class _RecurringMaintenanceFormScreenState
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleCtrl;
   late final TextEditingController _descCtrl;
+  late final TextEditingController _estimatedCostCtrl;
 
   int? _propertyId;
   int? _unitId;
@@ -37,6 +38,7 @@ class _RecurringMaintenanceFormScreenState
   late String _interval;
   late String _priority;
   DateTime? _nextDueDate;
+  TimeOfDay? _scheduledTime;
   late bool _isActive;
 
   bool _saving = false;
@@ -48,6 +50,11 @@ class _RecurringMaintenanceFormScreenState
     final t = widget.task;
     _titleCtrl = TextEditingController(text: t?.title ?? '');
     _descCtrl = TextEditingController(text: t?.description ?? '');
+    _estimatedCostCtrl = TextEditingController(
+      text: t?.estimatedCost == null
+          ? ''
+          : t!.estimatedCost!.toStringAsFixed(2),
+    );
     _propertyId = t?.propertyId;
     _unitId = t?.unitId;
     _vendorId = t?.vendorId;
@@ -55,6 +62,7 @@ class _RecurringMaintenanceFormScreenState
     _interval = t?.recurrenceInterval ?? 'Monthly';
     _priority = t?.priority ?? 'Normal';
     _nextDueDate = t?.nextDueDate;
+    _scheduledTime = _parseApiTime(t?.scheduledTime);
     _isActive = t?.isActive ?? true;
   }
 
@@ -62,6 +70,7 @@ class _RecurringMaintenanceFormScreenState
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _estimatedCostCtrl.dispose();
     super.dispose();
   }
 
@@ -75,6 +84,15 @@ class _RecurringMaintenanceFormScreenState
     );
     if (picked == null || !mounted) return;
     setState(() => _nextDueDate = picked);
+  }
+
+  Future<void> _pickScheduledTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _scheduledTime ?? const TimeOfDay(hour: 9, minute: 0),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _scheduledTime = picked);
   }
 
   void _onPropertyChanged(int? value) {
@@ -99,6 +117,7 @@ class _RecurringMaintenanceFormScreenState
 
     final category = _category;
     final desc = _descCtrl.text.trim();
+    final estimatedCost = _parseOptionalAmount(_estimatedCostCtrl.text);
     final body = <String, dynamic>{
       'propertyId': _propertyId,
       'unitId': ?_unitId,
@@ -108,6 +127,10 @@ class _RecurringMaintenanceFormScreenState
       if (category != null && category.isNotEmpty) 'category': category,
       'recurrenceInterval': _interval,
       'nextDueDate': _fmtIso(_nextDueDate!),
+      'scheduledTime': _scheduledTime == null
+          ? null
+          : _fmtApiTime(_scheduledTime!),
+      'estimatedCost': estimatedCost,
       'isActive': _isActive,
       'priority': _priority,
     };
@@ -196,8 +219,7 @@ class _RecurringMaintenanceFormScreenState
                     )
                     .toList(),
                 onChanged: _onPropertyChanged,
-                validator: (v) =>
-                    v == null ? 'Please select a property' : null,
+                validator: (v) => v == null ? 'Please select a property' : null,
               ),
             ),
             const SizedBox(height: 16),
@@ -219,8 +241,9 @@ class _RecurringMaintenanceFormScreenState
               data: (vendors) => DropdownButtonFormField<int?>(
                 initialValue: _vendorId,
                 isExpanded: true,
-                decoration:
-                    const InputDecoration(labelText: 'Vendor (optional)'),
+                decoration: const InputDecoration(
+                  labelText: 'Vendor (optional)',
+                ),
                 items: [
                   const DropdownMenuItem<int?>(
                     value: null,
@@ -240,11 +263,13 @@ class _RecurringMaintenanceFormScreenState
 
             // Category (optional)
             DropdownButtonFormField<String?>(
-              initialValue:
-                  recurringCategories.contains(_category) ? _category : null,
+              initialValue: recurringCategories.contains(_category)
+                  ? _category
+                  : null,
               isExpanded: true,
-              decoration:
-                  const InputDecoration(labelText: 'Category (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Category (optional)',
+              ),
               items: [
                 const DropdownMenuItem<String?>(
                   value: null,
@@ -265,8 +290,7 @@ class _RecurringMaintenanceFormScreenState
                   child: DropdownButtonFormField<String>(
                     initialValue: _interval,
                     isExpanded: true,
-                    decoration:
-                        const InputDecoration(labelText: 'Repeats'),
+                    decoration: const InputDecoration(labelText: 'Repeats'),
                     items: recurrenceIntervals
                         .map(
                           (i) => DropdownMenuItem(
@@ -288,12 +312,9 @@ class _RecurringMaintenanceFormScreenState
                   child: DropdownButtonFormField<String>(
                     initialValue: _priority,
                     isExpanded: true,
-                    decoration:
-                        const InputDecoration(labelText: 'Priority'),
+                    decoration: const InputDecoration(labelText: 'Priority'),
                     items: recurringPriorities
-                        .map(
-                          (p) => DropdownMenuItem(value: p, child: Text(p)),
-                        )
+                        .map((p) => DropdownMenuItem(value: p, child: Text(p)))
                         .toList(),
                     onChanged: (v) {
                       if (v != null) setState(() => _priority = v);
@@ -310,7 +331,50 @@ class _RecurringMaintenanceFormScreenState
               date: _nextDueDate,
               onTap: _pickDueDate,
             ),
+            const SizedBox(height: 16),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _TimeField(
+                    label: 'Scheduled time (optional)',
+                    time: _scheduledTime,
+                    onTap: _pickScheduledTime,
+                    onClear: _scheduledTime == null
+                        ? null
+                        : () => setState(() => _scheduledTime = null),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _estimatedCostCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Expected cost',
+                      prefixText: r'$',
+                    ),
+                    validator: _validateOptionalAmount,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
+
+            if (widget.isEditing) ...[
+              Text(
+                widget.task!.generatedWorkOrderCount > 0
+                    ? '${widget.task!.generatedWorkOrderCount} generated work order${widget.task!.generatedWorkOrderCount == 1 ? '' : 's'} linked to this schedule.'
+                    : 'No work orders have been generated from this schedule yet.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
 
             // Active switch
             SwitchListTile(
@@ -331,8 +395,10 @@ class _RecurringMaintenanceFormScreenState
             if (_error != null) ...[
               const SizedBox(height: 8),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: colorScheme.errorContainer,
                   borderRadius: BorderRadius.circular(8),
@@ -363,6 +429,37 @@ class _RecurringMaintenanceFormScreenState
       ),
     );
   }
+}
+
+TimeOfDay? _parseApiTime(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final parts = raw.split(':');
+  if (parts.length < 2) return null;
+  final hour = int.tryParse(parts[0]);
+  final minute = int.tryParse(parts[1]);
+  if (hour == null || minute == null) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return TimeOfDay(hour: hour, minute: minute);
+}
+
+String _fmtApiTime(TimeOfDay time) =>
+    '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:00';
+
+double? _parseOptionalAmount(String raw) {
+  final normalized = raw.replaceAll(',', '').replaceAll(r'$', '').trim();
+  if (normalized.isEmpty) return null;
+  return double.parse(normalized);
+}
+
+String? _validateOptionalAmount(String? raw) {
+  final normalized = (raw ?? '')
+      .replaceAll(',', '')
+      .replaceAll(r'$', '')
+      .trim();
+  if (normalized.isEmpty) return null;
+  final parsed = double.tryParse(normalized);
+  if (parsed == null || parsed < 0) return 'Enter a non-negative amount';
+  return null;
 }
 
 // ── Unit picker (scoped to a property) ────────────────────────────────────────
@@ -441,6 +538,50 @@ class _DateField extends StatelessWidget {
           date != null ? fmtDueDate(date!) : 'Select date',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: date != null
+                ? colorScheme.onSurface
+                : colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TimeField extends StatelessWidget {
+  const _TimeField({
+    required this.label,
+    required this.time,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final String label;
+  final TimeOfDay? time;
+  final VoidCallback onTap;
+  final VoidCallback? onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: onClear == null
+              ? const Icon(Icons.schedule_outlined, size: 18)
+              : IconButton(
+                  icon: const Icon(Icons.clear, size: 18),
+                  onPressed: onClear,
+                  tooltip: 'Clear time',
+                ),
+        ),
+        child: Text(
+          time != null ? time!.format(context) : 'No time set',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: time != null
                 ? colorScheme.onSurface
                 : colorScheme.onSurfaceVariant,
           ),

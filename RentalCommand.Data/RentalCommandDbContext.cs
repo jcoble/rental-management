@@ -1252,6 +1252,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.TenantId);
             entity.HasIndex(e => e.LeaseId);
             entity.HasIndex(e => e.VendorId);
+            entity.HasIndex(e => e.RecurringMaintenanceTaskId);
             entity.HasIndex(e => e.Priority);
             entity.HasIndex(e => e.Status);
             entity.HasQueryFilter(e => e.DeletedAt == null);
@@ -1279,6 +1280,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(v => v.WorkOrders)
                 .HasForeignKey(e => e.VendorId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.RecurringMaintenanceTask)
+                .WithMany(t => t.WorkOrders)
+                .HasForeignKey(e => e.RecurringMaintenanceTaskId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<WorkOrderStatusEvent>(entity =>
@@ -1303,6 +1308,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Description).HasMaxLength(4000);
             entity.Property(e => e.Category).HasMaxLength(120);
             entity.Property(e => e.IsActive).HasDefaultValue(true);
+            entity.Property(e => e.EstimatedCost).HasPrecision(18, 2);
             // Stored as the string enum name to match the app-wide string-enum convention.
             entity.Property(e => e.RecurrenceInterval).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.Priority).HasConversion<int>();
