@@ -169,8 +169,7 @@ public class UnitDashboardServiceTests : IDisposable
         dashboard.Should().NotBeNull();
         dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Ready.ToString());
         dashboard.NextBestAction.Label.Should().Be("List this unit");
-        dashboard.NextBestAction.Href.Should()
-            .Be($"/applications?action=list-unit&propertyId={property.Id}&unitId={unit.Id}");
+        dashboard.NextBestAction.Href.Should().Be($"/units/{unit.Id}?tab=listing");
     }
 
     [Fact]

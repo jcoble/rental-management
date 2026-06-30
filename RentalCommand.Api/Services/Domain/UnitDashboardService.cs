@@ -533,7 +533,7 @@ public class UnitDashboardService : IUnitDashboardService
     /// <summary>Deep link for a stage's next-best-action: the relevant unit tab (drawer flows attach there).</summary>
     private static string NextBestActionHref(UnitLifecycleStage stage, int unitId, int propertyId, int? tenantId) => stage switch
     {
-        UnitLifecycleStage.Ready => $"/applications?action=list-unit&propertyId={propertyId}&unitId={unitId}",
+        UnitLifecycleStage.Ready => $"/units/{unitId}?tab=listing",
         UnitLifecycleStage.Listed => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Applicant => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Lease => $"/units/{unitId}?tab=lease",
