@@ -13,6 +13,7 @@
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
@@ -78,8 +79,21 @@
 	let editingVendorId = $state<number | null>(null);
 	let vendorForm = $state({ ...emptyVendor });
 	let vendorErrors = $state<Record<string, string>>({});
+	let vendorStep = $state(0);
+	let completedVendorSteps = $state<number[]>([]);
 	let vendorDeleteTarget = $state<Vendor | null>(null);
 	let createParamHandled = $state(false);
+
+	const vendorSteps: FormStepperStep[] = [
+		{ id: 'basics', label: 'Basics', description: 'Name and service' },
+		{ id: 'contact', label: 'Contact', description: 'Address and contact' },
+		{ id: 'compliance', label: 'Compliance', description: '1099 and W-9' },
+	];
+	const vendorStepFields = [
+		['name', 'serviceType'],
+		['email', 'phone', 'addressLine1', 'city', 'state', 'postalCode'],
+		['is1099Eligible', 'w9OnFile', 'preferred'],
+	] as const;
 
 	function clearVendorError(field: string) {
 		const next = clearFieldError(vendorErrors, field);
@@ -125,6 +139,8 @@
 		editingVendorId = null;
 		vendorForm = { ...emptyVendor };
 		vendorErrors = {};
+		vendorStep = 0;
+		completedVendorSteps = [];
 		showVendorForm = true;
 	}
 
@@ -150,17 +166,51 @@
 			preferred: v.preferred
 		};
 		vendorErrors = {};
+		vendorStep = 0;
+		completedVendorSteps = [];
 		showVendorForm = true;
 	}
 	function closeVendorForm() {
 		showVendorForm = false;
 		editingVendorId = null;
 		vendorErrors = {};
+		vendorStep = 0;
+		completedVendorSteps = [];
+	}
+	function vendorStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(vendorStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+	function firstVendorErrorStep(errors: Record<string, string>) {
+		return vendorStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+	function markVendorStepInvalid(step: number) {
+		completedVendorSteps = completedVendorSteps.filter((completedStep) => completedStep < step);
+	}
+	function validateVendorStep(step: number) {
+		const result = parseForm(vendorSchema, vendorForm);
+		const currentErrors = result.errors ? Object.fromEntries(vendorStepErrorFields(step, result.errors)) : {};
+		const currentFields = new Set<string>(vendorStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(vendorErrors).filter(([field]) => !currentFields.has(field)));
+		vendorErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markVendorStepInvalid(step);
+		return isValid;
+	}
+	function nextVendorStep() {
+		if (!validateVendorStep(vendorStep)) return;
+		if (!completedVendorSteps.includes(vendorStep)) completedVendorSteps = [...completedVendorSteps, vendorStep];
+		vendorStep = Math.min(vendorStep + 1, vendorSteps.length - 1);
 	}
 	function submitVendor() {
 		const result = parseForm(vendorSchema, vendorForm);
 		if (result.errors) {
 			vendorErrors = result.errors;
+			const firstErrorStep = firstVendorErrorStep(result.errors);
+			if (firstErrorStep >= 0) {
+				vendorStep = firstErrorStep;
+				markVendorStepInvalid(firstErrorStep);
+			}
 			return;
 		}
 		vendorErrors = {};
@@ -305,54 +355,80 @@
 </div>
 
 <Dialog.Root open={showVendorForm} onOpenChange={(v) => { if (!v) closeVendorForm(); }}>
-	<Dialog.Content class="max-w-lg">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto [background:var(--m3c-surface-container-highest)]">
 		<Dialog.Header>
 			<Dialog.Title>{editingVendorId == null ? 'New Vendor' : 'Edit Vendor'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="space-y-2" data-testid="vendor-form">
-			<div>
-				<Input data-testid="vendor-name-input" bind:value={vendorForm.name} placeholder="Vendor name" />
-				{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
+		<FormStepper
+			steps={vendorSteps}
+			bind:currentStep={vendorStep}
+			completedSteps={completedVendorSteps}
+			testid="vendor-stepper"
+		>
+			<div class="space-y-3" data-testid="vendor-form">
+				{#if vendorStep === 0}
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Vendor name</span>
+						<Input data-testid="vendor-name-input" bind:value={vendorForm.name} placeholder="Vendor name" />
+						{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Service type</span>
+						<Input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} placeholder="Service type" />
+						{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
+					</div>
+				{:else if vendorStep === 1}
+					<div class="grid gap-3 md:grid-cols-2">
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
+							<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" type="email" autocomplete="email" />
+							{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
+						</div>
+						<div>
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
+							<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+						</div>
+					</div>
+					<div class="space-y-2">
+						<AddressAutocomplete
+							testid="vendor-address-input"
+							bind:value={vendorForm.addressLine1}
+							placeholder="Vendor address"
+							onresolved={(a) => {
+								if (a.city) vendorForm.city = a.city;
+								if (a.state) vendorForm.state = a.state;
+								if (a.zip) vendorForm.postalCode = a.zip;
+							}}
+						/>
+						<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_8rem_9rem]">
+							<Input data-testid="vendor-city-input" bind:value={vendorForm.city} placeholder="City" />
+							<StateSelect
+								testid="vendor-state-input"
+								bind:value={vendorForm.state}
+								placeholder="State"
+							/>
+							<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
+						</div>
+					</div>
+				{:else}
+					<div class="flex flex-wrap gap-4 text-sm">
+						<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
+						<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
+						<label class="flex items-center gap-1.5"><input data-testid="vendor-preferred-input" type="checkbox" bind:checked={vendorForm.preferred} /> Preferred</label>
+					</div>
+				{/if}
 			</div>
-			<div>
-				<Input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} placeholder="Service type" />
-				{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" type="email" autocomplete="email" />
-				{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
-			</div>
-			<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
-			<div class="space-y-2">
-				<AddressAutocomplete
-					testid="vendor-address-input"
-					bind:value={vendorForm.addressLine1}
-					placeholder="Vendor address"
-					onresolved={(a) => {
-						if (a.city) vendorForm.city = a.city;
-						if (a.state) vendorForm.state = a.state;
-						if (a.zip) vendorForm.postalCode = a.zip;
-					}}
-				/>
-				<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_8rem_9rem]">
-					<Input data-testid="vendor-city-input" bind:value={vendorForm.city} placeholder="City" />
-					<StateSelect
-						testid="vendor-state-input"
-						bind:value={vendorForm.state}
-						placeholder="State"
-					/>
-					<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
-				</div>
-			</div>
-			<div class="flex flex-wrap gap-4 text-sm">
-				<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
-				<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
-				<label class="flex items-center gap-1.5"><input data-testid="vendor-preferred-input" type="checkbox" bind:checked={vendorForm.preferred} /> Preferred</label>
-			</div>
-		</div>
+		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="vendor-form-cancel" variant="outline" onclick={closeVendorForm}>Cancel</Button>
-			<Button data-testid="vendor-form-save" onclick={submitVendor} disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save vendor'}</Button>
+			{#if vendorStep > 0}
+				<Button data-testid="vendor-step-back" variant="outline" onclick={() => (vendorStep = Math.max(vendorStep - 1, 0))}>Back</Button>
+			{/if}
+			{#if vendorStep < vendorSteps.length - 1}
+				<Button data-testid="vendor-step-next" onclick={nextVendorStep}>Next</Button>
+			{:else}
+				<Button data-testid="vendor-form-save" onclick={submitVendor} disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save vendor'}</Button>
+			{/if}
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
