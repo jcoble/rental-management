@@ -5,6 +5,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../notices/create_tenant_notice.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_repository.dart';
 import '../payments/record_payment_sheet.dart';
@@ -211,6 +212,27 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     } finally {
       if (mounted) setState(() => _updatingStatus = false);
     }
+  }
+
+  Future<void> _createNotice() async {
+    if (_lease.tenantId <= 0) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('This lease has no tenant to notify.')),
+        );
+      return;
+    }
+
+    final tenantName = (_lease.tenantName ?? '').trim();
+    await showCreateTenantNoticeFlow(
+      context,
+      ref,
+      tenantId: _lease.tenantId,
+      tenantName: tenantName.isEmpty
+          ? 'tenant #${_lease.tenantId}'
+          : tenantName,
+    );
   }
 
   Future<void> _askLease() async {
@@ -501,6 +523,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
               loading: _updatingStatus,
               error: _statusError,
               onSetStatus: _updateStatus,
+              onCreateNotice: _createNotice,
               theme: theme,
               colorScheme: colorScheme,
             ),
@@ -1156,6 +1179,7 @@ class _StatusActions extends StatelessWidget {
     required this.currentStatus,
     required this.loading,
     required this.onSetStatus,
+    required this.onCreateNotice,
     required this.theme,
     required this.colorScheme,
     this.error,
@@ -1165,12 +1189,13 @@ class _StatusActions extends StatelessWidget {
   final bool loading;
   final String? error;
   final Future<void> Function(String) onSetStatus;
+  final Future<void> Function() onCreateNotice;
   final ThemeData theme;
   final ColorScheme colorScheme;
 
   static const _transitions = {
     'Draft': ['Active'],
-    'Active': ['NoticeGiven', 'Terminated'],
+    'Active': ['Terminated'],
     'NoticeGiven': ['Expired', 'Terminated'],
     'Expired': <String>[],
     'Terminated': <String>[],
@@ -1179,8 +1204,9 @@ class _StatusActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final available = _transitions[currentStatus] ?? <String>[];
+    final canCreateNotice = currentStatus == 'Active';
 
-    if (available.isEmpty && error == null) {
+    if (available.isEmpty && !canCreateNotice && error == null) {
       return const SizedBox.shrink();
     }
 
@@ -1194,22 +1220,30 @@ class _StatusActions extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        if (available.isNotEmpty)
+        if (available.isNotEmpty || canCreateNotice)
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: available.map((status) {
-              return OutlinedButton(
-                onPressed: loading ? null : () => onSetStatus(status),
-                child: loading
-                    ? const SizedBox(
-                        height: 16,
-                        width: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text('Mark $status'),
-              );
-            }).toList(),
+            children: [
+              if (canCreateNotice)
+                OutlinedButton.icon(
+                  onPressed: loading ? null : onCreateNotice,
+                  icon: const Icon(Icons.notifications_active_outlined),
+                  label: const Text('Create / Send notice'),
+                ),
+              ...available.map((status) {
+                return OutlinedButton(
+                  onPressed: loading ? null : () => onSetStatus(status),
+                  child: loading
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(_statusActionLabel(status)),
+                );
+              }),
+            ],
           ),
         if (error != null) ...[
           const SizedBox(height: 8),
@@ -1220,6 +1254,15 @@ class _StatusActions extends StatelessWidget {
         ],
       ],
     );
+  }
+
+  String _statusActionLabel(String status) {
+    return switch (status) {
+      'Active' => 'Set Active',
+      'Expired' => 'Mark expired',
+      'Terminated' => 'Terminate',
+      _ => 'Mark $status',
+    };
   }
 }
 
