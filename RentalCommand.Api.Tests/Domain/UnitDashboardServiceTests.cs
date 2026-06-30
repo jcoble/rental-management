@@ -311,6 +311,205 @@ public class UnitDashboardServiceTests : IDisposable
         dashboard.NextBestAction.Label.Should().Be("Rent on track");
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_PartialPaymentContributesOnlyItsRemainderToOutstanding()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Birch Lane",
+            AddressLine1 = "300 Birch",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "101",
+            Status = UnitStatus.Occupied,
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Quincy",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-101",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1),
+            EndDate = now.AddYears(1),
+            MonthlyRent = 1000m,
+            SecurityDeposit = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // One rent paid in full, one rent partially paid ($700 collected of $1,000 → $300 still owed).
+        var paid = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1000m,
+            DueDate = now.AddDays(-30),
+            PaidDate = now.AddDays(-30),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var partial = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Partial,
+            Amount = 1000m,
+            AmountPaid = 700m,
+            DueDate = now.AddDays(-1),
+            PaidDate = now.AddDays(-1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, tenant, lease, paid, partial);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        // The Paid rent contributes $0 and the Partial contributes only its $300 remainder (not its full
+        // $1,000) — so the Unit Rent tab reconciles with the lease ledger Balance and the Accounting
+        // Outstanding KPI instead of over-counting the already-collected $700.
+        dashboard!.Header.OutstandingRentBalance.Should().Be(300m);
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_ExcludesLeftoverChargesFromEndedPriorLeaseFromOutstanding()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Cedar Court",
+            AddressLine1 = "400 Cedar",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "5C",
+            Status = UnitStatus.Occupied,
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Pat",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // Prior lease ended six months ago but still carries unresolved owed charges on the SAME unit.
+        var priorLease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-5C-OLD",
+            Status = LeaseStatus.Expired,
+            StartDate = now.AddMonths(-18),
+            EndDate = now.AddMonths(-6),
+            MonthlyRent = 950m,
+            SecurityDeposit = 950m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // Current, active lease with one future-due scheduled charge.
+        var currentLease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-5C",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1),
+            EndDate = now.AddYears(1),
+            MonthlyRent = 1000m,
+            SecurityDeposit = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // Leftover owed charges on the ended lease ($800 Late + $200 past-due Scheduled = $1,000).
+        var priorLate = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = priorLease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 800m,
+            DueDate = now.AddMonths(-7),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var priorScheduled = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = priorLease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 200m,
+            DueDate = now.AddMonths(-7),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // Current lease legitimately owes $500 (a future-due scheduled rent).
+        var currentScheduled = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = currentLease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 500m,
+            DueDate = now.AddDays(10),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, tenant, priorLease, currentLease, priorLate, priorScheduled, currentScheduled);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        // Only the current lease's $500 counts — the $1,000 of leftover Scheduled/Late charges on the
+        // ended prior lease is excluded (ForCurrentLeaseAttention), reconciling with the Accounting KPI.
+        dashboard!.Header.OutstandingRentBalance.Should().Be(500m);
+        dashboard.Header.OutstandingRentBalance.Should().NotBe(1500m, "leftover charges on the ended prior lease must not be summed");
+        // The prior lease's Late charge must not drive the unit's rent state; only the current lease's
+        // future-due charge does, so the unit reads "Due", not "Overdue".
+        dashboard.Header.RentState.Should().Be("Due");
+    }
+
     private static bool IsChildIdPreload(string command)
         => IsBareIdSelect(command, "Leases")
             || IsBareIdSelect(command, "Payments")

@@ -18,20 +18,24 @@
 		errors = {},
 		autoFilled,
 		confidence,
+		section = 'all',
 		testidPrefix = 'property'
 	}: {
 		form: { name: string; type: string; addressLine1: string; addressLine2: string; city: string; state: string; postalCode: string; ownerEntityId: string };
 		errors?: Record<string, string>;
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
+		section?: 'all' | 'identity' | 'address';
 		testidPrefix?: string;
 	} = $props();
 
 	const filled = (key: string) => !!autoFilled?.has(key);
 	const conf = (key: string) => confidence?.[STEP_FIELD_TO_EXTRACTION[key] ?? ''];
+	const show = (target: 'identity' | 'address') => section === 'all' || section === target;
 </script>
 
 <div class="grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-fields`}>
+	{#if show('identity')}
 	<div class="md:col-span-2">
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Name</span>
@@ -40,7 +44,9 @@
 		<Input data-testid={`${testidPrefix}-name-input`} bind:value={form.name} placeholder="Property name" />
 		{#if errors.name}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-name-error`}>{errors.name}</p>{/if}
 	</div>
+	{/if}
 
+	{#if show('address')}
 	<div class="md:col-span-2">
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Address</span>
@@ -82,11 +88,21 @@
 				<span class="text-xs font-medium text-muted-foreground">ZIP</span>
 				<AutoFilledBadge show={filled('postalCode')} confidence={conf('postalCode')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-postal-input`} bind:value={form.postalCode} placeholder="ZIP" />
+			<Input
+				data-testid={`${testidPrefix}-postal-input`}
+				bind:value={form.postalCode}
+				placeholder="ZIP"
+				inputmode="numeric"
+				autocomplete="postal-code"
+				maxlength={10}
+				mask="zip"
+			/>
 			{#if errors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-postal-error`}>{errors.postalCode}</p>{/if}
 		</div>
 	</div>
+	{/if}
 
+	{#if show('identity')}
 	<div class="md:col-span-2">
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Type</span>
 		<Select.Root type="single" bind:value={form.type}>
@@ -98,4 +114,5 @@
 			</Select.Content>
 		</Select.Root>
 	</div>
+	{/if}
 </div>

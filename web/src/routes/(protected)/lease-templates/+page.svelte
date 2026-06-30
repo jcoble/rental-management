@@ -9,7 +9,6 @@
 		Signature,
 		CheckCircle2,
 		AlertCircle,
-		Library,
 	} from '@lucide/svelte';
 	import {
 		documentTemplates,
@@ -24,6 +23,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import LeaseTemplateDesigner from '$lib/components/document-templates/LeaseTemplateDesigner.svelte';
 	import * as Card from '$lib/components/ui/card';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 
@@ -190,26 +190,25 @@
 	<title>Lease Templates - Rental Command</title>
 </svelte:head>
 
+{#snippet headerActions()}
+	<Button href="/leases" variant="outline" class="gap-1.5" data-testid="lease-templates-back-to-leases">
+		<FileText class="h-4 w-4" />
+		Leases
+	</Button>
+{/snippet}
+
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="lease-templates-page">
-	<header class="mb-6 flex flex-wrap items-start justify-between gap-4">
-		<div class="max-w-3xl">
-			<div class="flex items-center gap-2">
-				<span class="inline-grid h-9 w-9 place-items-center rounded-lg border border-border bg-muted/40 text-primary">
-					<Library class="h-4 w-4" />
-				</span>
-				<div>
-					<h1 class="text-2xl font-bold tracking-tight">Lease Templates</h1>
-					<p class="text-sm text-muted-foreground">
-						Upload landlord lease PDFs and prepare them for auto-fill fields and e-signature.
-					</p>
-				</div>
-			</div>
-		</div>
-		<Button href="/leases" variant="outline" class="gap-1.5" data-testid="lease-templates-back-to-leases">
-			<FileText class="h-4 w-4" />
-			Leases
-		</Button>
-	</header>
+	<PageHeader
+		class="mb-6"
+		band
+		art={5}
+		tone="amber"
+		eyebrow="Rentals"
+		title="Lease Templates"
+		description="Upload landlord lease PDFs and prepare them for auto-fill fields and e-signature."
+		actions={headerActions}
+		data-testid="lease-templates-header"
+	/>
 
 	<div class="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
 		<Card.Root class="h-fit" data-testid="lease-template-upload-card">

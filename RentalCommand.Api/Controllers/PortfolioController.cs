@@ -54,6 +54,19 @@ public class PortfolioController : ManagementControllerBase
         return dashboard == null ? NotFound(new { error = "Portfolio not found" }) : Ok(dashboard);
     }
 
+    /// <summary>
+    /// Server-shaped completion facts for the getting-started checklist. Scoped to the caller's JWT
+    /// portfolio so web/mobile do not need to download list pages just to count/sum them.
+    /// </summary>
+    [HttpGet("getting-started")]
+    [ProducesResponseType(typeof(GettingStartedSignalsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<GettingStartedSignalsResponse>> GettingStarted(CancellationToken ct)
+    {
+        var signals = await _service.GetGettingStartedSignalsAsync(GetPortfolioId(), ct);
+        return signals == null ? NotFound(new { error = "Portfolio not found" }) : Ok(signals);
+    }
+
     [HttpPost]
     [ProducesResponseType(typeof(PortfolioResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<PortfolioResponse>> Create([FromBody] CreatePortfolioRequest request, CancellationToken ct)

@@ -1,3 +1,5 @@
+import { recordHref } from '../navigation/record-href.ts';
+
 export function isTerminalScanReview(status: string | null | undefined, hasInSessionConfirmedRecord: boolean): boolean {
 	return status === 'Rejected' || status === 'Confirmed' || hasInSessionConfirmedRecord;
 }
@@ -22,14 +24,18 @@ export function createdRecordLabel(type: string | null | undefined): string {
 	}
 }
 
-export function createdRecordHref(type: string | null | undefined, id: number | null | undefined): string {
+export function createdRecordHref(
+	type: string | null | undefined,
+	id: number | null | undefined,
+	unitId?: number | null
+): string {
 	if (!type || !id) return '/accounting';
-	if (type === 'Payment') return `/accounting/payments/${id}`;
-	if (type === 'WorkOrder') return `/maintenance/${id}`;
-	if (type === 'Lease') return `/leases/${id}`;
-	if (type === 'Application') return `/applications/${id}`;
-	// A Loan has no standalone detail page — it lives under its property — so the confirm flow navigates
-	// to the property instead. There is no per-id loan route to link to here.
+	if (type === 'Payment') return recordHref('payment', { id, unitId });
+	if (type === 'WorkOrder') return recordHref('workOrder', { id, unitId });
+	if (type === 'Lease') return recordHref('lease', { id, unitId });
+	if (type === 'Application' || type === 'RentalApplication') return recordHref('application', { id, unitId });
+	// A Loan has no standalone detail page; the fallback takes the user back to the accounting hub.
+	// The scan confirmation screen may navigate with richer context when it has the property id.
 	if (type === 'Loan') return '/accounting';
-	return `/accounting/expenses/${id}`;
+	return recordHref('expense', { id, unitId });
 }

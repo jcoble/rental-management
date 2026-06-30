@@ -17,7 +17,8 @@ export const owners = {
 	get: (id: number) => api.get<Owner>(`/owner-entities/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Owner>('/owner-entities', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Owner>(`/owner-entities/${id}`, data),
-	delete: (id: number) => api.delete(`/owner-entities/${id}`),
+	delete: (id: number, options?: { clearPropertyAssignments?: boolean }) =>
+		api.delete(`/owner-entities/${id}${options?.clearPropertyAssignments ? '?clearPropertyAssignments=true' : ''}`),
 	emailStatement: (ownerId: number, year: number) =>
 		api.post<void>(`/accounting/owner-statements/${ownerId}/email?year=${year}`, {}),
 };

@@ -18,7 +18,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
+	import { AlertTriangle, FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 
@@ -32,6 +32,12 @@
 
 	const deposit = $derived(depositQuery.data);
 
+	// Cumulative deductions can exceed the held amount (the server has no cumulative cap; it only
+	// clamps the net refund at $0). Surface that overage so it isn't misread as a $0 refund alone.
+	const overDeduction = $derived(
+		deposit ? Math.max(0, deposit.totalDeductions - deposit.amount) : 0
+	);
+
 	function invalidateDeposit() {
 		queryClient.invalidateQueries({ queryKey: ['deposit', depositId] });
 		queryClient.invalidateQueries({ queryKey: ['deposits'] });
@@ -43,6 +49,14 @@
 	let deductionNotes = $state('');
 	let deductionErrors = $state<Record<string, string>>({});
 	let showDeductionForm = $state(false);
+
+	// Live preview while typing: how much this new deduction would push cumulative deductions
+	// past the held amount (0 when it still fits within the deposit).
+	const deductionProjectedOver = $derived(
+		deposit && deductionAmount.trim() !== '' && Number.isFinite(Number(deductionAmount)) && Number(deductionAmount) > 0
+			? Math.max(0, deposit.totalDeductions + Number(deductionAmount) - deposit.amount)
+			: 0
+	);
 
 	function openDeduction() {
 		if (deposit?.status !== 'Held') return;
@@ -130,6 +144,8 @@
 		Held: { class: 'm3-tone-chip border m3-tone--info' },
 		PartiallyReturned: { label: 'Partially Returned', class: 'm3-tone-chip border m3-tone--warning' },
 		Returned: { class: 'm3-tone-chip border m3-tone--success' },
+		// Whole deposit consumed by deductions — nothing returned. Red, distinct from the amber partial.
+		Withheld: { class: 'm3-tone-chip border m3-tone--error' },
 	};
 
 	// --- Move-out statement PDF (authed blob download) ---
@@ -325,6 +341,22 @@
 			</Card.Content>
 		</Card.Root>
 
+		<!-- Over-deduction notice: deductions have exceeded the deposit held, so the net refund is
+		     clamped to $0 and the remainder is owed by the tenant (not auto-collected here). -->
+		{#if overDeduction > 0}
+			<div
+				class="m3-warning-surface mb-6 flex items-start gap-2 rounded-lg px-4 py-3 text-sm"
+				data-testid="deposit-over-deduction-warning"
+			>
+				<AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
+				<p>
+					Deductions exceed the deposit held by
+					<span class="font-semibold">{money(overDeduction)}</span> — the net refund is
+					{money(0)} and the tenant will owe the difference.
+				</p>
+			</div>
+		{/if}
+
 		<!-- Photos — attach move-out condition photos so the statement can include them -->
 		<Card.Root class="mb-6" data-testid="deposit-photos">
 			<Card.Header class="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -443,12 +475,24 @@
 				<Input
 					data-testid="deduction-amount-input"
 					bind:value={deductionAmount}
-					type="number"
-					min="0"
-					step="0.01"
+					type="text"
+					inputmode="decimal"
+					mask="currency"
 					placeholder="0.00"
 				/>
 				{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="deduction-amount-error">{deductionErrors.amount}</p>{/if}
+				{#if deductionProjectedOver > 0}
+					<div
+						class="m3-warning-surface mt-2 flex items-start gap-2 rounded-md px-2.5 py-1.5 text-xs"
+						data-testid="deduction-exceeds-warning"
+					>
+						<AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+						<span>
+							Deductions exceed the deposit held — the tenant will owe the difference
+							({money(deductionProjectedOver)} over).
+						</span>
+					</div>
+				{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>

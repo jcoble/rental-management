@@ -42,7 +42,7 @@ export interface Portfolio {
 	timeZone: string;
 	status: PortfolioStatus;
 	settings?: string;
-	/** Account-wide sandbox/live state. True = seeded demo sandbox (real outbound suppressed). */
+		/** Account-wide sandbox/live state. True = seeded example data. */
 	isSandbox?: boolean;
 	propertyCount?: number;
 	unitCount?: number;
@@ -64,6 +64,21 @@ export interface SandboxState {
 	onboardingChoicePending?: boolean;
 }
 
+/** Server-shaped checklist facts for the getting-started card. */
+export interface GettingStartedSignalsResponse {
+	portfolioId: number;
+	portfolioNamed: boolean;
+	ownerCount: number;
+	propertyCount: number;
+	unitCount: number;
+	tenantCount: number;
+	leaseCount: number;
+	hasNotificationEmail: boolean;
+	hasTexting: boolean;
+	hasAutomations: boolean;
+	isSandbox: boolean;
+}
+
 export type OwnerEntityType = 'Person' | 'LLC' | 'Trust';
 
 export interface Owner {
@@ -81,6 +96,7 @@ export interface Owner {
 	address?: string;
 	phone?: string;
 	email?: string;
+	assignedPropertyCount?: number;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -89,7 +105,7 @@ export interface Property {
 	id: number;
 	portfolioId: number;
 	ownerId?: number;
-	ownerEntityId?: number;
+	ownerEntityId?: number | null;
 	name: string;
 	// Wire field is `type` (PropertyResponse maps PropertyType → "type"); the grid column,
 	// type filter, and create/edit forms all read/write this single name.
@@ -313,6 +329,8 @@ export interface Tenant {
 	dateOfBirth?: string;
 	notes?: string;
 	activeLeaseCount?: number;
+	/** Portal-login state: 'none' (no login), 'active' (can sign in), 'disabled' (login turned off). Only set on the single-tenant GET. */
+	portalAccess?: 'none' | 'active' | 'disabled';
 	createdAt: string;
 	updatedAt: string;
 }
@@ -373,6 +391,8 @@ export interface Payment {
 	notes?: string;
 	tenantName?: string;
 	leaseNumber?: string;
+	propertyName?: string;
+	unitNumber?: string;
 	hasScan?: boolean;
 	scanIsImage?: boolean;
 	createdAt: string;
@@ -881,6 +901,20 @@ export interface UpdateNoticeDraftRequest {
 	body?: string;
 }
 
+export interface NoticeTemplateResponse {
+	noticeType: string;
+	subject: string;
+	body: string;
+	hasTemplate: boolean;
+	availableFields: string[];
+	updatedAt?: string | null;
+}
+
+export interface UpsertNoticeTemplateRequest {
+	subject: string;
+	body: string;
+}
+
 export interface LeaseQuestionResponse {
 	answer: string;
 	llmEnhanced: boolean;
@@ -994,6 +1028,8 @@ export interface WorkOrderTimelineEntry {
 /** A single work order plus its status timeline (returned by GET /work-orders/{id} and the portal detail). */
 export interface WorkOrderDetail extends WorkOrder {
 	timeline?: WorkOrderTimelineEntry[];
+	/** True when an open vendor dispatch exists (texted, awaiting DONE) — drives the dispatched banner. */
+	hasActiveDispatch?: boolean;
 }
 
 export interface Appointment {
@@ -1065,6 +1101,17 @@ export interface InspectionTemplateItem {
 	sortOrder: number;
 }
 
+export interface InspectionTemplateItemInput {
+	area: string;
+	label: string;
+}
+
+export interface InspectionTemplateInput {
+	name: string;
+	inspectionType: InspectionType;
+	items: InspectionTemplateItemInput[];
+}
+
 export interface InspectionTemplate {
 	/** Built-in templates have NEGATIVE ids (e.g. -1, -2). Pass them back to create as-is. */
 	id: number;
@@ -1133,6 +1180,8 @@ export interface DashboardActivity {
 	type: string;
 	/** Primary key of the touched entity, for deep-linking to its detail page. */
 	entityId: number;
+	/** Owning unit when the touched entity belongs to a unit. */
+	unitId?: number | null;
 	action?: string;
 	description?: string;
 	/** Human label naming the specific record this row touched (null when the type has no cheap label). */
@@ -1206,7 +1255,7 @@ export interface AuthUser {
 	lastLoginAt?: string;
 }
 
-export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned';
+export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
 
 export interface DepositDeduction {
 	reason: string;

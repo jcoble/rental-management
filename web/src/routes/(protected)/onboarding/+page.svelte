@@ -24,7 +24,6 @@
 		parseForm,
 	} from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { formatPhoneInput } from '$lib/utils/phone';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
@@ -38,14 +37,20 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import WizardStepScaffold from '$lib/components/onboarding/WizardStepScaffold.svelte';
 	import LeasePhotoPrefill from '$lib/components/onboarding/LeasePhotoPrefill.svelte';
+	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import {
 		WIZARD_STEPS,
 		CORE_WIZARD_STEPS,
-		ONBOARDING_SETUP_SHORTCUTS,
-		wizardStep,
 		type WizardStepKey,
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
+	import {
+		ONBOARDING_IMPORT_PHASES,
+		onboardingImportPhaseProgress,
+		onboardingResumePhase,
+		type OnboardingImportPhaseKey,
+	} from '$lib/onboarding/onboarding-import-plan';
 	import {
 		resolveInitialOnboardingState,
 		shouldFinishAfterOptionalStep,
@@ -54,8 +59,20 @@
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
-	import { ownerEntityIdForOnboarding } from '$lib/onboarding/owner-selection';
-	import { buildOnboardingPropertyPayload } from '$lib/onboarding/property-payload';
+	import {
+		NEW_ONBOARDING_OWNER_VALUE,
+		onboardingOwnerFormFromOwner,
+		onboardingOwnerRecordOptions,
+		ownerEntityIdForOnboarding,
+	} from '$lib/onboarding/owner-selection';
+	import {
+		NEW_ONBOARDING_PROPERTY_VALUE,
+		buildOnboardingPropertyPayload,
+		onboardingPropertyFormFromProperty,
+		onboardingPropertyRecordOptions,
+	} from '$lib/onboarding/property-payload';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
+	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
 	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
 	import {
 		Check,
@@ -65,7 +82,6 @@
 		Trash2,
 		PartyPopper,
 		Sparkles,
-		ScanLine,
 		FileSpreadsheet,
 		FileText,
 		CheckCircle2,
@@ -164,23 +180,14 @@
 		queryFn: () => notifications.getSettings(),
 	}));
 
-	// Onboarding is for LIVE accounts only. A Sandbox account is pre-seeded demo data — the user
-	// should "Go Live" first (which wipes the demo data), so we bounce them to the dashboard.
+	// Sandbox/example-data state still matters for copy and progress framing, but it must not block
+	// re-entering Guided Setup. Users need to test the setup/import flow before going live.
 	const sandboxQuery = createQuery(() => ({
 		queryKey: ['sandbox-state', portfolioId],
 		enabled: portfolioId > 0,
 		queryFn: () => portfolios.sandboxState(),
 		staleTime: 60_000,
 	}));
-	let redirectedFromSandbox = $state(false);
-	$effect(() => {
-		if (redirectedFromSandbox) return;
-		if (sandboxQuery.data?.isSandbox === true) {
-			redirectedFromSandbox = true;
-			showError('Setup runs on a live account. Go live first to set up your real portfolio.');
-			goto('/');
-		}
-	});
 
 	const hasExistingOwners = $derived((ownersQuery.data?.length ?? 0) > 0);
 	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
@@ -225,7 +232,6 @@
 	);
 	$effect(() => {
 		if (autoAdvanced || finished || !detectionReady) return;
-		if (sandboxQuery.data?.isSandbox === true) return;
 		autoAdvanced = true;
 
 		fromParam = page.url.searchParams.get('from');
@@ -300,6 +306,65 @@
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 	let ownerForm = $state({ name: '', ownerEntityType: 'Person' as OwnerEntityType, email: '', taxId: '' });
 	let ownerErrors = $state<Record<string, string>>({});
+	let selectedOwnerId = $state(NEW_ONBOARDING_OWNER_VALUE);
+	let ownerDeleteTarget = $state<Owner | null>(null);
+	let ownerSelectionPrefilled = false;
+	const ownerRecordOptions = $derived(onboardingOwnerRecordOptions({
+		createdOwner,
+		existingOwners: ownersQuery.data ?? []
+	}));
+
+	function ownerById(id: string): Owner | null {
+		return (ownerRecordOptions.find((owner) => String(owner.id) === id) as Owner | undefined) ?? null;
+	}
+
+	function ownerOptionLabel(owner: { name?: string | null }): string {
+		return owner.name?.trim() || 'Unnamed owner';
+	}
+
+	function ownerIdFromSelection(): number | null {
+		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) return null;
+		const id = Number(selectedOwnerId);
+		return Number.isFinite(id) && id > 0 ? id : null;
+	}
+
+	function selectOwnerRecord(value: string | undefined) {
+		selectedOwnerId = value || NEW_ONBOARDING_OWNER_VALUE;
+		ownerErrors = {};
+		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) {
+			ownerForm = { name: '', ownerEntityType: 'Person', email: '', taxId: '' };
+			return;
+		}
+		const owner = ownerById(selectedOwnerId);
+		if (owner) {
+			ownerForm = onboardingOwnerFormFromOwner(owner);
+		}
+	}
+
+	const ownerSelectionLabel = $derived.by(() => {
+		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) {
+			return ownerRecordOptions.length > 0 ? 'Add a new owner' : 'Add first owner';
+		}
+		return ownerById(selectedOwnerId)?.name ?? 'Choose owner';
+	});
+	const selectedOwnerRecord = $derived.by(() =>
+		selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE ? null : ownerById(selectedOwnerId)
+	);
+	function ownerAssignedPropertyCount(owner: Owner | null): number {
+		return owner?.assignedPropertyCount ?? 0;
+	}
+	const ownerDeleteAssignedCount = $derived.by(() =>
+		ownerAssignedPropertyCount(ownerDeleteTarget)
+	);
+
+	$effect(() => {
+		if (ownerSelectionPrefilled) return;
+		const owner = createdOwner ?? ownerRecordOptions[0] ?? null;
+		if (!owner) return;
+		ownerSelectionPrefilled = true;
+		selectedOwnerId = String(owner.id);
+		ownerForm = onboardingOwnerFormFromOwner(owner);
+	});
 
 	// TSK-209: the landlord IS the first owner, so confirm-don't-retype — pre-fill name + email from
 	// their account. Editable (they might own through an LLC). Only when they don't already have an owner
@@ -316,15 +381,54 @@
 		if (!ownerForm.email.trim() && me.email?.trim()) ownerForm.email = me.email.trim();
 	});
 
-	const saveOwnerMutation = createMutation(() => ({
-		mutationFn: (data: Record<string, unknown>) => owners.create(data),
-		onSuccess: (owner) => {
-			createdOwner = owner;
-			showSuccess('Owner added.');
+	type SaveOwnerVariables = {
+		ownerId: number | null;
+		data: Record<string, unknown>;
+	};
+
+	const saveOwnerMutation = createMutation<Owner, Error, SaveOwnerVariables>(() => ({
+		mutationFn: ({ ownerId, data }: SaveOwnerVariables) =>
+			ownerId == null ? owners.create(data) : owners.update(ownerId, data),
+		onSuccess: (owner, vars) => {
+			if (vars.ownerId == null) {
+				createdOwner = owner;
+			}
+			selectedOwnerId = String(owner.id);
+			if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE && !propertyForm.ownerEntityId) {
+				propertyForm.ownerEntityId = String(owner.id);
+			}
+			ownerForm = onboardingOwnerFormFromOwner(owner);
+			showSuccess(vars.ownerId == null ? 'Owner added.' : 'Owner saved.');
 			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+	type DeleteOwnerVariables = {
+		id: number;
+		clearPropertyAssignments: boolean;
+	};
+	const deleteOwnerMutation = createMutation<void, Error, DeleteOwnerVariables>(() => ({
+		mutationFn: ({ id, clearPropertyAssignments }) =>
+			owners.delete(id, { clearPropertyAssignments }),
+		onSuccess: (_result, vars) => {
+			const { id, clearPropertyAssignments } = vars;
+			showSuccess(
+				clearPropertyAssignments
+					? 'Owner deleted. Assigned properties are now unassigned.'
+					: 'Owner deleted.'
+			);
+			ownerDeleteTarget = null;
+			if (createdOwner?.id === id) createdOwner = null;
+			if (selectedOwnerId === String(id)) selectOwnerRecord(NEW_ONBOARDING_OWNER_VALUE);
+			if (propertyForm.ownerEntityId === String(id)) propertyForm.ownerEntityId = '';
+			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+		},
+		onError: (err) => {
+			ownerDeleteTarget = null;
+			showError(apiErrorMessage(err, 'Owner could not be deleted.'));
+		},
 	}));
 
 	function submitOwner() {
@@ -341,7 +445,10 @@
 			return;
 		}
 		ownerErrors = {};
-		saveOwnerMutation.mutate({ portfolioId, ...result.data });
+		saveOwnerMutation.mutate({
+			ownerId: ownerIdFromSelection(),
+			data: { portfolioId, ...result.data }
+		});
 	}
 
 	// ---------------------------------------------------------------------------
@@ -359,8 +466,117 @@
 		city: '',
 		state: '',
 		postalCode: '',
+		ownerEntityId: '',
 	});
 	let propertyErrors = $state<Record<string, string>>({});
+	let selectedPropertyId = $state(NEW_ONBOARDING_PROPERTY_VALUE);
+	let propertyDeleteTarget = $state<Property | null>(null);
+	let unitDeleteTarget = $state<Unit | null>(null);
+	let propertySelectionPrefilled = false;
+	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
+		createdProperty,
+		existingProperties: propertiesQuery.data ?? []
+	}));
+
+	function propertyById(id: string): Property | null {
+		return (propertyRecordOptions.find((property) => String(property.id) === id) as Property | undefined) ?? null;
+	}
+
+	function propertyOptionLabel(property: { name?: string | null }): string {
+		return property.name?.trim() || 'Unnamed property';
+	}
+
+	function propertyIdFromSelection(): number | null {
+		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) return null;
+		const id = Number(selectedPropertyId);
+		return Number.isFinite(id) && id > 0 ? id : null;
+	}
+
+	function defaultPropertyOwnerEntityId(): string {
+		return ownerEntityIdForOnboarding({
+			selectedOwnerId,
+			createdOwner,
+			existingOwners: ownerRecordOptions
+		});
+	}
+
+	function selectPropertyRecord(value: string | undefined) {
+		selectedPropertyId = value || NEW_ONBOARDING_PROPERTY_VALUE;
+		propertyErrors = {};
+		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
+			propertyForm = {
+				name: '',
+				type: 'SingleFamily',
+				addressLine1: '',
+				addressLine2: '',
+				city: '',
+				state: '',
+				postalCode: '',
+				ownerEntityId: defaultPropertyOwnerEntityId(),
+			};
+			unitRows = [emptyUnit()];
+			unitRowErrors = [{}];
+			propertySub = 'address';
+			return;
+		}
+		const property = propertyById(selectedPropertyId);
+		if (property) {
+			propertyForm = onboardingPropertyFormFromProperty(property);
+			unitRows = [emptyUnit()];
+			unitRowErrors = [{}];
+			propertySub = 'address';
+		}
+	}
+
+	const propertySelectionLabel = $derived.by(() => {
+		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
+			return propertyRecordOptions.length > 0 ? 'Add a new property' : 'Add first property';
+		}
+		return propertyById(selectedPropertyId)?.name ?? 'Choose property';
+	});
+	const selectedPropertyRecord = $derived.by(() =>
+		selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE ? null : propertyById(selectedPropertyId)
+	);
+
+	$effect(() => {
+		if (propertySelectionPrefilled) return;
+		const property = createdProperty ?? propertyRecordOptions[0] ?? null;
+		if (!property) return;
+		propertySelectionPrefilled = true;
+		selectedPropertyId = String(property.id);
+		propertyForm = onboardingPropertyFormFromProperty(property);
+	});
+
+	const selectedPropertyUnitsQuery = createQuery(() => {
+		const propertyId = propertyIdFromSelection();
+		return {
+			queryKey: ['onboarding-property-units', propertyId],
+			enabled: propertyId != null && propertyId > 0,
+			queryFn: () => properties.listUnits(propertyId!),
+		};
+	});
+
+	const selectedPropertyUnits = $derived(selectedPropertyUnitsQuery.data ?? []);
+	let propertyOwnerDefaulted = false;
+
+	$effect(() => {
+		if (propertyOwnerDefaulted || currentStep.key !== 'property') return;
+		if (selectedPropertyId !== NEW_ONBOARDING_PROPERTY_VALUE || propertyForm.ownerEntityId) return;
+		const defaultOwnerId = defaultPropertyOwnerEntityId();
+		if (!defaultOwnerId) return;
+		propertyOwnerDefaulted = true;
+		propertyForm.ownerEntityId = defaultOwnerId;
+	});
+
+	function unitSummary(unit: Unit): string {
+		const compactNumber = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+		const rent = new Intl.NumberFormat('en-US', {
+			style: 'currency',
+			currency: 'USD',
+			maximumFractionDigits: 0,
+		}).format(unit.marketRent ?? 0);
+		return `${compactNumber.format(unit.bedrooms ?? 0)} bd · ${compactNumber.format(unit.bathrooms ?? 0)} ba · ${rent}/mo`;
+	}
 
 	const emptyUnit = () => ({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let unitRows = $state<ReturnType<typeof emptyUnit>[]>([emptyUnit()]);
@@ -375,28 +591,80 @@
 		unitRowErrors = unitRowErrors.filter((_, idx) => idx !== i);
 	}
 
-	const savePropertyMutation = createMutation(() => ({
-		mutationFn: async (vars: { property: Record<string, unknown>; units: Record<string, unknown>[] }) => {
-			const property = await properties.create(vars.property);
+	type SavePropertyVariables = {
+		propertyId: number | null;
+		property: Record<string, unknown>;
+		units: Record<string, unknown>[];
+	};
+
+	const savePropertyMutation = createMutation<
+		{ property: Property; units: Unit[]; updated: boolean },
+		Error,
+		SavePropertyVariables
+	>(() => ({
+		mutationFn: async (vars: SavePropertyVariables) => {
+			const property =
+				vars.propertyId == null
+					? await properties.create(vars.property)
+					: await properties.update(vars.propertyId, vars.property);
 			const units: Unit[] = [];
 			for (const u of vars.units) {
 				units.push(await properties.createUnit(property.id, u));
 			}
-			return { property, units };
+			return { property, units, updated: vars.propertyId != null };
 		},
-		onSuccess: ({ property, units }) => {
+		onSuccess: ({ property, units, updated }) => {
 			createdProperty = property;
 			createdUnits = units;
+			selectedPropertyId = String(property.id);
+			propertyForm = onboardingPropertyFormFromProperty(property);
 			showSuccess(
 				units.length > 0
 					? `Property and ${units.length} unit${units.length === 1 ? '' : 's'} added.`
-					: 'Property added.'
+					: updated
+						? 'Property saved.'
+						: 'Property added.'
 			);
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 			propertySub = 'address';
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+	const deletePropertyMutation = createMutation(() => ({
+		mutationFn: (id: number) => properties.delete(id),
+		onSuccess: (_result, id) => {
+			showSuccess('Property deleted.');
+			propertyDeleteTarget = null;
+			if (createdProperty?.id === id) {
+				createdProperty = null;
+				createdUnits = [];
+			}
+			if (selectedPropertyId === String(id)) selectPropertyRecord(NEW_ONBOARDING_PROPERTY_VALUE);
+			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['units'] });
+			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
+		},
+		onError: (err) => {
+			propertyDeleteTarget = null;
+			showError(apiErrorMessage(err, 'Property could not be deleted.'));
+		},
+	}));
+	const deleteUnitMutation = createMutation(() => ({
+		mutationFn: (id: number) => properties.deleteUnit(id),
+		onSuccess: (_result, id) => {
+			showSuccess('Unit deleted.');
+			unitDeleteTarget = null;
+			createdUnits = createdUnits.filter((unit) => unit.id !== id);
+			queryClient.invalidateQueries({ queryKey: ['onboarding-property-units', propertyIdFromSelection()] });
+			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['units'] });
+			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
+		},
+		onError: (err) => {
+			unitDeleteTarget = null;
+			showError(apiErrorMessage(err, 'Unit could not be deleted.'));
+		},
 	}));
 
 	// Validate just the address fields before advancing the property sub-step.
@@ -412,13 +680,15 @@
 	}
 
 	function submitProperty() {
+		const propertyPayload = buildOnboardingPropertyPayload({
+			propertyForm,
+			selectedOwnerId,
+			createdOwner,
+			existingOwners: ownerRecordOptions
+		});
 		const propResult = parseForm(
 			propertySchema,
-			buildOnboardingPropertyPayload({
-				propertyForm,
-				createdOwner,
-				existingOwners: ownersQuery.data ?? []
-			})
+			propertyPayload
 		);
 		if (propResult.errors) {
 			propertyErrors = propResult.errors;
@@ -444,7 +714,11 @@
 		unitRowErrors = errors;
 		if (hasUnitError) return;
 
-		savePropertyMutation.mutate({ property: { portfolioId, ...propResult.data }, units: validUnits });
+		savePropertyMutation.mutate({
+			propertyId: propertyIdFromSelection(),
+			property: { portfolioId, ...propResult.data, clearOwnerEntity: propertyPayload.clearOwnerEntity },
+			units: validUnits
+		});
 	}
 
 	// ---------------------------------------------------------------------------
@@ -528,7 +802,7 @@
 		monthlyRent: '',
 		securityDeposit: '',
 		lateFeeAmount: '0',
-		leaseNumber: '',
+		leaseNumber: defaultLeaseNumber(today),
 		rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
@@ -635,9 +909,8 @@
 	}));
 
 	function submitLease() {
-		const unit = (leaseUnitsQuery.data ?? []).find((u) => String(u.id) === leaseForm.unitId);
-		const stamp = leaseForm.startDate.replace(/-/g, '');
-		const leaseNumber = leaseForm.leaseNumber.trim() || `L-${unit?.unitNumber ?? leaseForm.unitId}-${stamp}`;
+		const leaseNumber =
+			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
 		const result = parseForm(leaseSchema, {
 			leaseNumber,
 			propertyId: leaseForm.propertyId,
@@ -734,6 +1007,9 @@
 				smsCredentialA: textingForm.projectId.trim() || undefined,
 				smsCredentialB: textingToken.length > 0 ? textingToken : undefined,
 				smsCredentialC: textingForm.spaceUrl.trim() || undefined,
+				autoSendRentReminder: d.autoSendRentReminder,
+				autoSendLateRent: d.autoSendLateRent,
+				leaseEndAutoAction: d.leaseEndAutoAction,
 				channelPreferences: d.channelPreferences ?? [],
 			});
 		},
@@ -812,11 +1088,19 @@
 		finished = false;
 		goToStep(key);
 	}
+	function openImportCenterFromFinished() {
+		returnToFinishAfterOptional = false;
+		finished = false;
+		goToStep(activeImportTarget ?? 'property');
+	}
 
 	const anyPending = $derived(
 		savePortfolioMutation.isPending ||
 			saveOwnerMutation.isPending ||
+			deleteOwnerMutation.isPending ||
 			savePropertyMutation.isPending ||
+			deletePropertyMutation.isPending ||
+			deleteUnitMutation.isPending ||
 			saveTenantsMutation.isPending ||
 			saveLeaseMutation.isPending ||
 			saveNotificationEmailMutation.isPending ||
@@ -840,6 +1124,91 @@
 	// but are visually marked as optional.
 	const coreCount = $derived(CORE_WIZARD_STEPS.length);
 	const leaseBlocked = $derived(leaseProperties.length === 0 || leaseTenants.length === 0);
+	const importPhaseCompletion = $derived<Record<OnboardingImportPhaseKey, boolean>>({
+		welcome: true,
+		portfolio: stepDone.portfolio && stepDone.owner,
+		properties: stepDone.property,
+		people: stepDone.tenants,
+		leases: stepDone.lease,
+		money: false,
+		automation: stepDone.notifications || stepDone.texting,
+		review: finished && coreSpineComplete,
+	});
+	const completedImportPhaseKeys = $derived(
+		ONBOARDING_IMPORT_PHASES
+			.filter((phase) => importPhaseCompletion[phase.key])
+			.map((phase) => phase.key)
+	);
+	const importProgress = $derived(onboardingImportPhaseProgress({
+		completedPhaseKeys: completedImportPhaseKeys,
+		totalPhaseCount: ONBOARDING_IMPORT_PHASES.length
+	}));
+	const activeImportPhaseKey = $derived(onboardingResumePhase(importPhaseCompletion));
+	const activeImportPhase = $derived(
+		ONBOARDING_IMPORT_PHASES.find((phase) => phase.key === activeImportPhaseKey) ?? ONBOARDING_IMPORT_PHASES[0]
+	);
+	const activeImportTarget = $derived(wizardTargetForImportPhase(activeImportPhase.key));
+	const activeImportHref = $derived(manualHrefForImportPhase(activeImportPhase.key));
+
+	function wizardTargetForImportPhase(key: OnboardingImportPhaseKey): WizardStepKey | null {
+		switch (key) {
+			case 'welcome':
+				return 'portfolio';
+			case 'portfolio':
+				return stepDone.portfolio ? 'owner' : 'portfolio';
+			case 'properties':
+				return 'property';
+			case 'people':
+				return 'tenants';
+			case 'leases':
+				return 'lease';
+			case 'automation':
+				return stepDone.notifications ? 'texting' : 'notifications';
+			case 'money':
+			case 'review':
+			default:
+				return null;
+		}
+	}
+
+	function manualHrefForImportPhase(key: OnboardingImportPhaseKey): string | null {
+		switch (key) {
+			case 'money':
+				return '/deposits';
+			case 'review':
+				return '/get-started?view=checklist';
+			default:
+				return null;
+		}
+	}
+
+	function openImportPhase(key: OnboardingImportPhaseKey) {
+		const target = wizardTargetForImportPhase(key);
+		if (!target) return;
+		finished = false;
+		goToStep(target);
+	}
+
+	function scanTypeForImportPhase(key: OnboardingImportPhaseKey): ScanDocType | undefined {
+		switch (key) {
+			case 'properties':
+			case 'leases':
+				return 'Lease';
+			case 'people':
+				return 'Application';
+			case 'money':
+				return 'Expense';
+			default:
+				return undefined;
+		}
+	}
+
+	const activeImportScanContext = $derived.by<ScanContext>(() => {
+		const type = scanTypeForImportPhase(activeImportPhaseKey);
+		const context: ScanContext = { returnTo: `/onboarding?step=${currentStep.key}` };
+		if (type) context.type = type;
+		return context;
+	});
 </script>
 
 <svelte:head>
@@ -847,7 +1216,7 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto bg-muted/30 p-6 pb-20" data-testid="onboarding-page">
-	<div class="mx-auto max-w-2xl">
+	<div class="mx-auto max-w-5xl">
 		{#if finished}
 			<Card.Root class="mt-10" data-testid="onboarding-complete">
 				<Card.Content class="flex flex-col items-center gap-4 px-8 py-12 text-center">
@@ -896,6 +1265,10 @@
 					{/if}
 					<!-- Optional add-ons the user can still set up, clearly marked optional. -->
 					<div class="mt-2 flex flex-col items-stretch gap-2 sm:flex-row">
+						<Button variant="outline" class="gap-2" data-testid="onboarding-return-import" onclick={openImportCenterFromFinished}>
+							<FileSpreadsheet class="h-4 w-4" />
+							Import more records
+						</Button>
 						{#if !stepDone.notifications}
 							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => openOptionalStepFromFinished('notifications')}>
 								<Bell class="h-4 w-4" />
@@ -924,34 +1297,118 @@
 				</p>
 			</div>
 
-			<!-- Scan/import shortcuts -->
-			<div
-				class="mb-4 grid gap-3 rounded-md border border-border bg-muted/40 p-3 sm:grid-cols-2"
-				data-testid="onboarding-setup-shortcuts"
+			<section
+				class="mb-5 overflow-hidden rounded-lg border border-border bg-background"
+				data-testid="onboarding-import-center"
 			>
-				{#each ONBOARDING_SETUP_SHORTCUTS as shortcut (shortcut.key)}
-					<div class="flex items-center justify-between gap-3">
-						<div class="min-w-0">
-							<p class="text-sm font-semibold text-foreground">{shortcut.label}</p>
-							<p class="text-xs leading-relaxed text-muted-foreground">{shortcut.description}</p>
+				<div class="grid gap-0 lg:grid-cols-[1.1fr_0.9fr]">
+					<div class="border-b border-border p-5 lg:border-b-0 lg:border-r">
+						<div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+							<div>
+								<p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Guided import</p>
+								<h2 class="mt-1 text-lg font-semibold">Bring records in one phase at a time</h2>
+								<p class="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+									Each phase asks for only the records needed next. Save a step, scan a document, come back later,
+									or import more records without restarting the setup flow.
+								</p>
+							</div>
+							<div class="shrink-0 rounded-md border border-border bg-muted/40 px-3 py-2 text-right">
+								<p class="text-xl font-semibold tabular-nums">{importProgress.percent}%</p>
+								<p class="text-[11px] text-muted-foreground">{importProgress.completed} of {importProgress.total} phases</p>
+							</div>
 						</div>
-						<Button
-							variant={shortcut.primary ? 'default' : 'outline'}
-							size="sm"
-							class="shrink-0 gap-1.5"
-							href={shortcut.href}
-							data-testid={`onboarding-${shortcut.key}`}
-						>
-							{#if shortcut.key === 'scan-new-rental'}
-								<ScanLine class="h-4 w-4" />
-							{:else}
-								<FileSpreadsheet class="h-4 w-4" />
-							{/if}
-							{shortcut.label}
-						</Button>
+						<Progress value={importProgress.completed} max={importProgress.total} class="mb-4" />
+						<div class="grid gap-2 sm:grid-cols-2">
+							{#each ONBOARDING_IMPORT_PHASES as phase (phase.key)}
+								{@const done = importPhaseCompletion[phase.key]}
+								{@const active = phase.key === activeImportPhaseKey}
+								{@const target = wizardTargetForImportPhase(phase.key)}
+								<div class="relative">
+									<button
+										type="button"
+										class="relative flex min-h-16 w-full items-start gap-3 rounded-md border px-3 py-2.5 pr-9 text-left transition-colors
+											{active
+												? 'border-primary bg-primary/10 text-foreground'
+												: done
+													? 'phase-complete border-success/50 bg-success/10 text-foreground'
+													: 'border-border bg-muted/20 text-muted-foreground hover:bg-muted/40'}
+											{!target && !done ? 'cursor-default' : ''}"
+										disabled={!target && !done}
+										onclick={() => openImportPhase(phase.key)}
+										data-testid="onboarding-import-phase-{phase.key}"
+									>
+										<span
+											class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs
+												{done
+													? 'border-success bg-success text-success-foreground'
+													: active
+														? 'border-primary bg-primary text-primary-foreground'
+														: 'border-border bg-background'}"
+										>
+											{#if done}
+												<Check class="h-4 w-4" />
+											{:else}
+												{ONBOARDING_IMPORT_PHASES.indexOf(phase) + 1}
+											{/if}
+										</span>
+										<span class="min-w-0">
+											<span class="block text-sm font-semibold">{phase.label}</span>
+											<span class="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+												{done ? phase.rewardLabel : phase.title}
+											</span>
+										</span>
+										{#if done}
+											<span class="reward-burst" aria-hidden="true">
+												<span></span><span></span><span></span>
+											</span>
+										{/if}
+									</button>
+									<div class="absolute right-2 top-2">
+										<HelpPopover title={phase.label} summary={phase.tooltip} side="top" testid="onboarding-help-{phase.key}" />
+									</div>
+								</div>
+							{/each}
+						</div>
 					</div>
-				{/each}
-			</div>
+
+					<div class="p-5" data-testid="onboarding-active-import-phase">
+						<p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Next best phase</p>
+						<div class="mt-2 flex items-start justify-between gap-3">
+							<div>
+								<h2 class="text-lg font-semibold">{activeImportPhase.title}</h2>
+								<p class="mt-2 text-sm leading-relaxed text-muted-foreground">{activeImportPhase.explanation}</p>
+							</div>
+							<HelpPopover title={activeImportPhase.label} summary={activeImportPhase.tooltip} side="left" testid="onboarding-active-import-help" />
+						</div>
+						<div class="mt-5 flex flex-col gap-2">
+							{#if activeImportTarget}
+								<Button class="justify-start gap-2" data-testid="onboarding-active-manual" onclick={() => openImportPhase(activeImportPhase.key)}>
+									<ListChecks class="h-4 w-4" />
+									{activeImportPhase.manualAction}
+								</Button>
+							{:else if activeImportHref}
+								<Button class="justify-start gap-2" data-testid="onboarding-active-manual" href={activeImportHref}>
+									<ListChecks class="h-4 w-4" />
+									{activeImportPhase.manualAction}
+								</Button>
+							{/if}
+							{#if activeImportPhase.scanAction !== 'Skip scans for this phase'}
+								<ScanLauncher
+									context={activeImportScanContext}
+									triggerLabel={activeImportPhase.scanAction}
+									triggerVariant="outline"
+									triggerClass="justify-start gap-2"
+									testid="onboarding-active-scan"
+								/>
+							{/if}
+							<Button variant="outline" class="justify-start gap-2" href="/import" data-testid="onboarding-active-spreadsheet">
+								<FileSpreadsheet class="h-4 w-4" />
+								Import a spreadsheet
+							</Button>
+						</div>
+					</div>
+				</div>
+			</section>
 
 			<!-- Step indicator (core steps + optional add-ons) -->
 			<div class="mb-4" data-testid="onboarding-steps">
@@ -1019,11 +1476,51 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingOwners && !createdOwner}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-existing">
-									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. You can add another or skip ahead.
+									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. Choose one to review, add another, or skip ahead.
 								</div>
 							{:else if ownerPrefilled}
 								<div class="mb-4 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-prefilled">
 									We filled this in from your account — just confirm it's right. Own through an LLC or trust? Change the name and type below.
+								</div>
+							{/if}
+							{#if ownerRecordOptions.length > 0}
+								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-owner-selector-panel">
+									<label for="ob-owner-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Owner record</label>
+									<div class="flex items-center gap-2">
+										<div class="min-w-0 flex-1">
+											<Select.Root type="single" bind:value={selectedOwnerId} onValueChange={selectOwnerRecord}>
+												<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-record-select">
+													{ownerSelectionLabel}
+												</Select.Trigger>
+												<Select.Content>
+													{#each ownerRecordOptions as owner (owner.id)}
+														<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
+													{/each}
+													<Select.Item value={NEW_ONBOARDING_OWNER_VALUE} label="Add a new owner">
+														<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new owner</span>
+													</Select.Item>
+												</Select.Content>
+											</Select.Root>
+										</div>
+										{#if selectedOwnerRecord}
+											<Button
+												variant="outline"
+												size="icon"
+												class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+												aria-label={`Delete owner ${ownerOptionLabel(selectedOwnerRecord)}`}
+												title="Delete owner"
+												data-testid="onboarding-owner-delete"
+												disabled={deleteOwnerMutation.isPending}
+												onclick={() => (ownerDeleteTarget = selectedOwnerRecord)}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										{/if}
+									</div>
+									<p class="mt-1 text-xs text-muted-foreground">
+										Pick an owner to edit these fields, or start a fresh owner record. Owners assigned
+										to properties must be reassigned or cleared before they can be deleted.
+									</p>
 								</div>
 							{/if}
 							<div class="grid gap-4 sm:grid-cols-2">
@@ -1045,7 +1542,7 @@
 								</div>
 								<div>
 									<label for="ob-owner-email" class="mb-1 block text-xs font-medium text-muted-foreground">Email <span class="font-normal">(optional)</span></label>
-									<Input id="ob-owner-email" data-testid="onboarding-owner-email" bind:value={ownerForm.email} placeholder="owner@example.com" />
+									<Input id="ob-owner-email" type="email" autocomplete="email" data-testid="onboarding-owner-email" bind:value={ownerForm.email} placeholder="owner@example.com" />
 									{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive">{ownerErrors.email}</p>{/if}
 								</div>
 								<div class="sm:col-span-2">
@@ -1060,7 +1557,44 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingProperties && !createdProperty}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-property-existing">
-									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Add another or skip ahead.
+									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Choose one to review, add another, or skip ahead.
+								</div>
+							{/if}
+							{#if propertyRecordOptions.length > 0}
+								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-property-selector-panel">
+									<label for="ob-property-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Property record</label>
+									<div class="flex items-center gap-2">
+										<div class="min-w-0 flex-1">
+											<Select.Root type="single" bind:value={selectedPropertyId} onValueChange={selectPropertyRecord}>
+												<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-record-select">
+													{propertySelectionLabel}
+												</Select.Trigger>
+												<Select.Content>
+													{#each propertyRecordOptions as property (property.id)}
+														<Select.Item value={String(property.id)} label={propertyOptionLabel(property)}>{propertyOptionLabel(property)}</Select.Item>
+													{/each}
+													<Select.Item value={NEW_ONBOARDING_PROPERTY_VALUE} label="Add a new property">
+														<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new property</span>
+													</Select.Item>
+												</Select.Content>
+											</Select.Root>
+										</div>
+										{#if selectedPropertyRecord}
+											<Button
+												variant="outline"
+												size="icon"
+												class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+												aria-label={`Delete property ${propertyOptionLabel(selectedPropertyRecord)}`}
+												title="Delete property"
+												data-testid="onboarding-property-delete"
+												disabled={deletePropertyMutation.isPending}
+												onclick={() => (propertyDeleteTarget = selectedPropertyRecord)}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										{/if}
+									</div>
+									<p class="mt-1 text-xs text-muted-foreground">Pick a property to edit these fields, or start a fresh property record.</p>
 								</div>
 							{/if}
 
@@ -1099,13 +1633,33 @@
 										</div>
 										<div>
 											<label for="ob-prop-zip" class="mb-1 block text-xs font-medium text-muted-foreground">ZIP</label>
-											<Input id="ob-prop-zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
+											<Input id="ob-prop-zip" type="text" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
 											{#if propertyErrors.postalCode}<p class="mt-1 text-xs text-destructive">{propertyErrors.postalCode}</p>{/if}
 										</div>
 									</div>
 								</div>
 							{:else if propertySub === 'details'}
 								<div class="grid gap-4" data-testid="onboarding-property-sub-details">
+									<div>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
+										<Select.Root type="single" bind:value={propertyForm.ownerEntityId}>
+											<Select.Trigger class="w-full" data-testid="onboarding-property-owner">
+												{propertyForm.ownerEntityId
+													? (ownerRecordOptions.find((owner) => String(owner.id) === propertyForm.ownerEntityId)?.name ?? 'Choose owner')
+													: 'No owner assigned'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
+												{#each ownerRecordOptions as owner (owner.id)}
+													<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											You can leave this unassigned during onboarding. Assign an owner before reports
+											or owner statements need to be correct.
+										</p>
+									</div>
 									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">What kind of property is it?</span>
 										<Select.Root type="single" bind:value={propertyForm.type}>
@@ -1125,7 +1679,58 @@
 							{:else}
 								<div data-testid="onboarding-property-sub-units">
 									<h3 class="mb-1 text-sm font-semibold">Units</h3>
-									<p class="mb-3 text-xs text-muted-foreground">A house is one unit; a duplex is two. Add a row per unit — or leave blank and add them later.</p>
+									<p class="mb-3 text-xs text-muted-foreground">A house is one unit; a duplex is two. Add a row per unit — or leave blank and add them later. Units with leases, applications, work orders, expenses, inspections, appointments, or documents are preserved and cannot be deleted from onboarding.</p>
+									{#if selectedPropertyRecord}
+										<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-existing-units">
+											<div class="mb-2 flex items-center justify-between gap-3">
+												<div>
+													<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saved units</p>
+													<p class="text-xs text-muted-foreground">
+														Delete only draft units that have no history; otherwise leave them in place.
+													</p>
+												</div>
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() => selectedPropertyUnitsQuery.refetch()}
+													disabled={selectedPropertyUnitsQuery.isFetching}
+													data-testid="onboarding-existing-units-refresh"
+												>
+													Refresh
+												</Button>
+											</div>
+											{#if selectedPropertyUnitsQuery.isLoading}
+												<p class="text-sm text-muted-foreground">Loading units…</p>
+											{:else if selectedPropertyUnits.length === 0}
+												<p class="text-sm text-muted-foreground">No saved units on this property yet.</p>
+											{:else}
+												<div class="divide-y divide-border rounded-md border border-border bg-background">
+													{#each selectedPropertyUnits as unit (unit.id)}
+														<div class="flex items-center justify-between gap-3 px-3 py-2" data-testid="onboarding-existing-unit-{unit.id}">
+															<div class="min-w-0">
+																<p class="truncate text-sm font-medium">Unit {unit.unitNumber}</p>
+																<p class="text-xs text-muted-foreground">
+																	{unitSummary(unit)}
+																</p>
+															</div>
+															<Button
+																variant="outline"
+																size="icon"
+																class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+																aria-label={`Delete unit ${unit.unitNumber}`}
+																title="Delete unit"
+																data-testid="onboarding-existing-unit-delete-{unit.id}"
+																disabled={deleteUnitMutation.isPending}
+																onclick={() => (unitDeleteTarget = unit)}
+															>
+																<Trash2 class="h-4 w-4" />
+															</Button>
+														</div>
+													{/each}
+												</div>
+											{/if}
+										</div>
+									{/if}
 									<div class="space-y-3" data-testid="onboarding-units">
 										{#each unitRows as row, i (i)}
 											<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
@@ -1137,18 +1742,18 @@
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
-														<Input type="number" min="0" step="1" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
+														<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
 														{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
-														<Input type="number" min="0" step="0.5" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
+														<Input type="text" inputmode="decimal" mask="decimal" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
 														{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Market rent</span>
 														<div class="flex items-center gap-1">
-															<Input type="number" min="0" step="0.01" data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
+															<Input type="text" inputmode="decimal" mask="currency" data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
 															{#if unitRows.length > 1}
 																<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove unit" data-testid="onboarding-unit-remove-{i}" onclick={() => removeUnitRow(i)}>
 																	<Trash2 class="h-4 w-4" />
@@ -1193,13 +1798,13 @@
 											</div>
 											<div>
 												<span class="mb-1 block text-[11px] text-muted-foreground">Email (optional)</span>
-												<Input data-testid="onboarding-tenant-email-{i}" bind:value={row.email} placeholder="tenant@example.com" />
+												<Input type="email" autocomplete="email" data-testid="onboarding-tenant-email-{i}" bind:value={row.email} placeholder="tenant@example.com" />
 												{#if tenantRowErrors[i]?.email}<p class="mt-1 text-[11px] text-destructive">{tenantRowErrors[i].email}</p>{/if}
 											</div>
 											<div>
 												<span class="mb-1 block text-[11px] text-muted-foreground">Phone (optional)</span>
 												<div class="flex items-center gap-1">
-													<Input data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" oninput={(e) => { row.phone = formatPhoneInput((e.target as HTMLInputElement).value); }} />
+													<Input type="tel" autocomplete="tel" inputmode="tel" mask="phone" data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" />
 													{#if tenantRows.length > 1}
 														<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove tenant" data-testid="onboarding-tenant-remove-{i}" onclick={() => removeTenantRow(i)}>
 															<Trash2 class="h-4 w-4" />
@@ -1277,7 +1882,7 @@
 									</div>
 									<div>
 										<label for="ob-lease-rent" class="mb-1 block text-xs font-medium text-muted-foreground">Monthly rent</label>
-										<Input id="ob-lease-rent" data-testid="onboarding-lease-rent" bind:value={leaseForm.monthlyRent} placeholder="1500" />
+										<Input id="ob-lease-rent" type="text" inputmode="decimal" mask="currency" data-testid="onboarding-lease-rent" bind:value={leaseForm.monthlyRent} placeholder="1500" />
 										{#if leaseErrors.monthlyRent}<p class="mt-1 text-xs text-destructive">{leaseErrors.monthlyRent}</p>{/if}
 									</div>
 									<div>
@@ -1292,12 +1897,12 @@
 									</div>
 									<div>
 										<label for="ob-lease-deposit" class="mb-1 block text-xs font-medium text-muted-foreground">Security deposit</label>
-										<Input id="ob-lease-deposit" data-testid="onboarding-lease-deposit" bind:value={leaseForm.securityDeposit} placeholder="1500" />
+										<Input id="ob-lease-deposit" type="text" inputmode="decimal" mask="currency" data-testid="onboarding-lease-deposit" bind:value={leaseForm.securityDeposit} placeholder="1500" />
 										{#if leaseErrors.securityDeposit}<p class="mt-1 text-xs text-destructive">{leaseErrors.securityDeposit}</p>{/if}
 									</div>
 									<div>
 										<label for="ob-lease-dueday" class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent due day<HelpPopover title="Rent due day" summary="The day of the month rent is expected — e.g. 1 means the 1st of each month. The system posts rent charges and calculates late fees based on this date." testid="help-rent-due-day" /></label>
-										<Input id="ob-lease-dueday" data-testid="onboarding-lease-dueday" bind:value={leaseForm.rentDueDay} placeholder="1" />
+										<Input id="ob-lease-dueday" type="text" inputmode="numeric" maxlength={2} mask="integer" data-testid="onboarding-lease-dueday" bind:value={leaseForm.rentDueDay} placeholder="1" />
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
 									<div class={leaseForm.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
@@ -1327,7 +1932,7 @@
 						<WizardStepScaffold step={currentStep}>
 							<div>
 								<label for="ob-notif-email" class="mb-1 block text-xs font-medium text-muted-foreground">Alert email <span class="font-normal">(optional)</span></label>
-								<Input id="ob-notif-email" type="email" data-testid="onboarding-notification-email" bind:value={notificationEmail} placeholder="your-email@example.com" />
+								<Input id="ob-notif-email" type="email" autocomplete="email" data-testid="onboarding-notification-email" bind:value={notificationEmail} placeholder="your-email@example.com" />
 								<p class="mt-1 text-xs text-muted-foreground">Leave blank to use your login email.</p>
 							</div>
 						</WizardStepScaffold>
@@ -1351,7 +1956,7 @@
 								</div>
 								<div>
 									<label for="ob-sw-from" class="mb-1 block text-xs font-medium text-muted-foreground">From number</label>
-									<Input id="ob-sw-from" autocomplete="off" data-testid="onboarding-texting-from" bind:value={textingForm.fromNumber} placeholder="+13302933081" />
+									<Input id="ob-sw-from" type="tel" inputmode="tel" autocomplete="off" data-testid="onboarding-texting-from" bind:value={textingForm.fromNumber} placeholder="+13302933081" />
 								</div>
 								<div>
 									<label for="ob-sw-token" class="mb-1 block text-xs font-medium text-muted-foreground">
@@ -1442,3 +2047,114 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	open={ownerDeleteTarget !== null}
+	title="Delete owner"
+	message={ownerDeleteTarget
+		? ownerDeleteAssignedCount > 0
+			? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This will set ${ownerDeleteAssignedCount} propert${ownerDeleteAssignedCount === 1 ? 'y' : 'ies'} to No owner assigned. You can assign another owner later, but owner reports and statements need an owner before they are final.`
+			: `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This owner is not assigned to any properties.`
+		: ''}
+	confirmLabel={ownerDeleteAssignedCount > 0 ? 'Clear owner & delete' : 'Delete owner'}
+	busy={deleteOwnerMutation.isPending}
+	testid="onboarding-owner-delete-confirm"
+	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate({
+		id: ownerDeleteTarget.id,
+		clearPropertyAssignments: ownerDeleteAssignedCount > 0
+	})}
+	oncancel={() => (ownerDeleteTarget = null)}
+/>
+
+<ConfirmDialog
+	open={propertyDeleteTarget !== null}
+	title="Delete property"
+	message={propertyDeleteTarget
+		? `Delete "${propertyOptionLabel(propertyDeleteTarget)}"? Only draft properties with no real units or history can be deleted. Empty single-family properties delete their generated unit too. Properties with leases, applications, work orders, expenses, loans, inspections, appointments, or documents stay preserved.`
+		: ''}
+	confirmLabel="Delete property"
+	busy={deletePropertyMutation.isPending}
+	testid="onboarding-property-delete-confirm"
+	onconfirm={() => propertyDeleteTarget && deletePropertyMutation.mutate(propertyDeleteTarget.id)}
+	oncancel={() => (propertyDeleteTarget = null)}
+/>
+
+<ConfirmDialog
+	open={unitDeleteTarget !== null}
+	title="Delete unit"
+	message={unitDeleteTarget
+		? `Delete Unit ${unitDeleteTarget.unitNumber}? Only draft units with no leases, applications, work orders, expenses, inspections, appointments, or documents can be deleted. Historical units stay preserved.`
+		: ''}
+	confirmLabel="Delete unit"
+	busy={deleteUnitMutation.isPending}
+	testid="onboarding-unit-delete-confirm"
+	onconfirm={() => unitDeleteTarget && deleteUnitMutation.mutate(unitDeleteTarget.id)}
+	oncancel={() => (unitDeleteTarget = null)}
+/>
+
+<style>
+	@keyframes phase-complete-pop {
+		0% {
+			transform: scale(0.98);
+		}
+		55% {
+			transform: scale(1.015);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	@keyframes reward-rise {
+		0% {
+			opacity: 0;
+			transform: translateY(4px) scaleY(0.4);
+		}
+		35% {
+			opacity: 1;
+		}
+		100% {
+			opacity: 0;
+			transform: translateY(-18px) scaleY(1);
+		}
+	}
+
+	.phase-complete {
+		animation: phase-complete-pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+	}
+
+	.reward-burst {
+		position: absolute;
+		right: 0.75rem;
+		top: 0.75rem;
+		display: inline-flex;
+		gap: 0.125rem;
+		pointer-events: none;
+	}
+
+	.reward-burst span {
+		display: block;
+		width: 0.1875rem;
+		height: 0.625rem;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--success) 75%, white);
+		animation: reward-rise 900ms ease-out infinite;
+	}
+
+	.reward-burst span:nth-child(2) {
+		animation-delay: 110ms;
+		background: color-mix(in srgb, var(--primary) 70%, white);
+	}
+
+	.reward-burst span:nth-child(3) {
+		animation-delay: 220ms;
+		background: color-mix(in srgb, var(--accent) 70%, white);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.phase-complete,
+		.reward-burst span {
+			animation: none;
+		}
+	}
+</style>

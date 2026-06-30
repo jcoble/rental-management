@@ -86,6 +86,14 @@ public class WorkOrderService : IWorkOrderService
             q = q.Where(w => w.VendorId == query.VendorId.Value);
         }
 
+        if (query.OpenOnly)
+        {
+            q = q.Where(w =>
+                w.Status != WorkOrderStatus.Completed &&
+                w.Status != WorkOrderStatus.Cancelled &&
+                w.Status != WorkOrderStatus.Archived);
+        }
+
         if (query.Status.HasValue)
         {
             q = q.Where(w => w.Status == query.Status.Value);
@@ -163,6 +171,7 @@ public class WorkOrderService : IWorkOrderService
         PropertyId = propertyId,
         UnitId = unitId,
         VendorId = vendorId,
+        OpenOnly = query is WorkOrderListQuery workOrderQuery && workOrderQuery.OpenOnly,
     };
 
     private sealed record WorkOrderListRow(
@@ -200,6 +209,17 @@ public class WorkOrderService : IWorkOrderService
             .ToListAsync(ct);
 
         var response = WorkOrderDetailResponse.FromEntity(entity, events);
+
+        // Whether an OPEN vendor dispatch (texted, still awaiting the vendor's DONE) exists for this work
+        // order — a single EXISTS computed DB-side, never loaded-then-counted. Drives the detail page's
+        // "vendor has the job … will close on DONE" banner so it reflects a real dispatch rather than a
+        // mere vendor assignment. "Open" = Dispatched/Acknowledged, matching VendorDispatchService.
+        response.HasActiveDispatch = await _db.VendorDispatches
+            .AnyAsync(d => d.WorkOrderId == id
+                && d.PortfolioId == portfolioId
+                && (d.Status == VendorDispatchStatus.Dispatched
+                    || d.Status == VendorDispatchStatus.Acknowledged), ct);
+
         var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, id, ct);
         if (scan is not null)
         {
@@ -462,18 +482,22 @@ public class WorkOrderService : IWorkOrderService
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
         if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
 
-        // A supplied completion timestamp can't sit unreasonably far in the future, and an explicitly
-        // inverted pair (the client sends BOTH RequestedAt and CompletedAt with completed < requested in
-        // the same request) is rejected. We deliberately do NOT compare a lone CompletedAt PATCH against
-        // the stored RequestedAt: RequestedAt auto-defaults to creation time, so back-dating only the
-        // completion date on an existing/closed order (a supported edit — there is no reopen workflow) is
-        // legitimate and must not be blocked. ScheduledFor is different: a stored or submitted scheduled
-        // visit is user-authored timeline data, so a completion before that effective visit date is invalid.
-        // An out-of-order pair corrupts age/SLA reporting; the future bound catches typo'd far-future dates.
+        // A CLIENT-SUPPLIED completion timestamp can't sit unreasonably far in the future, and an
+        // explicitly inverted pair (the client sends BOTH RequestedAt and CompletedAt with completed <
+        // requested in the same request) is rejected. We deliberately do NOT compare a lone CompletedAt
+        // PATCH against the stored RequestedAt: RequestedAt auto-defaults to creation time, so back-dating
+        // only the completion date on an existing/closed order (a supported edit — there is no reopen
+        // workflow) is legitimate and must not be blocked. ScheduledFor is different: a stored or submitted
+        // scheduled visit is user-authored timeline data, so a completion before that effective visit date
+        // is invalid. Every one of these guards is gated on a date the USER typed: the completion time
+        // AUTO-STAMPED by the status→Completed button (no client CompletedAt) is exempt, so a work order
+        // scheduled for later today/the future can still be one-click Completed early — the vendor came
+        // early — without the auto-stamped "now" tripping the before-scheduled guard. An out-of-order typed
+        // pair corrupts age/SLA reporting; the future bound catches typo'd far-future dates.
         EnsureCompletedAtInRange(
             request.RequestedAt.HasValue, entity.RequestedAt,
             request.ScheduledFor.HasValue, entity.ScheduledFor,
-            request.CompletedAt.HasValue || completedAtStampedFromStatus, entity.CompletedAt,
+            request.CompletedAt.HasValue, entity.CompletedAt,
             now);
 
         entity.UpdatedAt = now;
@@ -513,11 +537,15 @@ public class WorkOrderService : IWorkOrderService
         }
     }
 
-    // Validates the (RequestedAt, CompletedAt) pair on an update. A supplied CompletedAt must not be far
-    // in the future. The "completed before requested" check only fires when the SAME request explicitly
-    // sets BOTH dates — an inverted pair the user actually typed — so back-dating a lone CompletedAt
-    // against an auto-defaulted RequestedAt (a supported edit on a completed order) is never blocked.
-    // Throws a 400.
+    // Validates the (RequestedAt, ScheduledFor, CompletedAt) timing on an update. A supplied CompletedAt
+    // must not be far in the future. The "completed before requested" check only fires when the SAME
+    // request explicitly sets BOTH dates — an inverted pair the user actually typed — so back-dating a
+    // lone CompletedAt against an auto-defaulted RequestedAt (a supported edit on a completed order) is
+    // never blocked. The "completed before scheduled visit" check fires when the user typed EITHER the
+    // scheduled date or the completion date. Every comparison is gated on a user-typed value via the
+    // *Provided flags: the caller passes completedProvided=false for a completion time auto-stamped by a
+    // status→Completed transition, so that auto-stamp is exempt from these guards (a future-scheduled work
+    // order can still be one-click Completed). Throws a 400.
     private static void EnsureCompletedAtInRange(
         bool requestedProvided, DateTime effectiveRequestedAt,
         bool scheduledProvided, DateTime? effectiveScheduledFor,

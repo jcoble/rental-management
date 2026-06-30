@@ -105,6 +105,52 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_BlankLeaseNumber_GeneratesNextShortNumberForStartYear()
+    {
+        var start = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-2026-001",
+            Status = LeaseStatus.Draft,
+            StartDate = start.AddMonths(-12),
+            EndDate = start.AddMonths(-1),
+            MonthlyRent = 1000m,
+            SecurityDeposit = 1000m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "   ",
+            Status = LeaseStatus.Draft,
+            StartDate = start,
+            EndDate = start.AddMonths(12),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        result.Should().NotBeNull();
+        result!.LeaseNumber.Should().Be("L-2026-002");
+
+        var persisted = await _ctx.Db.Leases.AsNoTracking().SingleAsync(l => l.Id == result.Id);
+        persisted.LeaseNumber.Should().Be("L-2026-002");
+    }
+
+    [Fact]
     public async Task CreateAsync_WithMultipleTenants_PersistsLeaseTenantMembershipsAndKeepsPrimaryTenant()
     {
         var today = DateTime.UtcNow.Date;

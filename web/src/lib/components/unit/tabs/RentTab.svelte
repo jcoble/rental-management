@@ -45,7 +45,10 @@
 	}
 
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
-	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
+	// 'Partial' is intentionally omitted here: this quick form has no "Amount paid" field, so a Partial
+	// can never satisfy the payment schema's 0 < amountPaid < amount rule and would fail silently. Record
+	// partial payments from the Money page's New Payment dialog, which has the "Amount paid" input.
+	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Late', 'Waived', 'Failed', 'Refunded'];
 	const PAYMENT_PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
 
@@ -170,7 +173,12 @@
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list">
 		<ArrowLeft class="h-4 w-4" /> Back to payments
 	</Button>
-	<PaymentDetail paymentId={selectedPayment} onDeleted={clearSelection} />
+	<PaymentDetail
+		paymentId={selectedPayment}
+		onDeleted={clearSelection}
+		expectedUnitId={dashboard.unit.id}
+		onUnitMismatch={clearSelection}
+	/>
 {:else}
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
 		<div>
@@ -196,7 +204,7 @@
 			<div class="grid gap-3 sm:grid-cols-2">
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-amount">Amount</label>
-					<Input id="rent-amount" data-testid="rent-amount-input" type="number" step="0.01" bind:value={createForm.amount} placeholder="0.00" />
+					<Input id="rent-amount" data-testid="rent-amount-input" type="text" inputmode="decimal" mask="currency" bind:value={createForm.amount} placeholder="0.00" />
 					{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="rent-amount-error">{createErrors.amount}</p>{/if}
 				</div>
 				<div>

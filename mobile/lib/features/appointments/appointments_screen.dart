@@ -5,6 +5,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../properties/properties_repository.dart';
 import 'appointments_repository.dart';
 import 'appointments_shared.dart';
@@ -86,7 +87,10 @@ class _AppointmentsScreenState extends ConsumerState<AppointmentsScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Appointments')),
+      appBar: mobileDomainRootAppBar(
+        context,
+        title: const Text('Appointments'),
+      ),
       floatingActionButton: FloatingActionButton(
         heroTag: 'appointments-fab',
         onPressed: () => _showCreateSheet(context),

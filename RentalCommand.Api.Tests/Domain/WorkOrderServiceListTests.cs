@@ -69,6 +69,35 @@ public class WorkOrderServiceListTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_OpenOnlyFiltersClosedStatusesInSql()
+    {
+        SeedWorkOrder("Open new", "Cedar Point Flats", WorkOrderStatus.New, WorkOrderPriority.Normal);
+        SeedWorkOrder("Open scheduled", "Elm Ridge Homes", WorkOrderStatus.Scheduled, WorkOrderPriority.Normal);
+        SeedWorkOrder("Closed complete", "Harbor View Apartments", WorkOrderStatus.Completed, WorkOrderPriority.Normal);
+        SeedWorkOrder("Closed cancelled", "West Market Lofts", WorkOrderStatus.Cancelled, WorkOrderPriority.Normal);
+        SeedWorkOrder("Closed archived", "York House", WorkOrderStatus.Archived, WorkOrderPriority.Normal);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        {
+            OpenOnly = true,
+            Sort = "title",
+            Take = 10,
+        });
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Select(w => w.Title).Should().Equal("Open new", "Open scheduled");
+        result.Items.Should().OnlyContain(w =>
+            w.Status != WorkOrderStatus.Completed &&
+            w.Status != WorkOrderStatus.Cancelled &&
+            w.Status != WorkOrderStatus.Archived);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"WorkOrders\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("NOT IN", StringComparison.OrdinalIgnoreCase));
+    }
+
     private void SeedWorkOrder(string title, string propertyName, WorkOrderStatus status, WorkOrderPriority priority)
     {
         var now = DateTime.UtcNow;

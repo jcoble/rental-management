@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'application_detail_screen.dart';
@@ -71,26 +72,27 @@ class _ApplicationsListScreenState
   @override
   Widget build(BuildContext context) {
     final applicationsAsync = ref.watch(applicationsProvider(_statusFilter));
+    final shareButton = IconButton(
+      tooltip: 'Share application link',
+      icon: _sharing
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.ios_share),
+      onPressed: _sharing ? null : _shareLink,
+    );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: mobileDomainRootAppBar(
+        context,
         title: const Text('Applications'),
-        actions: [
-          IconButton(
-            tooltip: 'Share application link',
-            icon: _sharing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.ios_share),
-            onPressed: _sharing ? null : _shareLink,
-          ),
-        ],
+        actions: [shareButton],
       ),
       body: Column(
         children: [
+          MobileDomainEmbeddedToolbar(children: [shareButton]),
           _StatusFilterBar(
             selected: _statusFilter,
             onChanged: (value) => setState(() => _statusFilter = value),

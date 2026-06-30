@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'analytics_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ class _InsightsScreenState extends ConsumerState<InsightsScreen> {
     final asyncState = ref.watch(analyticsOverviewProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Insights')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Insights')),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: asyncState.when(
@@ -124,7 +125,8 @@ class _KpiGrid extends StatelessWidget {
               child: _KpiCard(
                 label: 'Occupancy',
                 value: _fmtPct(overview.occupancyRate),
-                subtitle: '${overview.occupiedUnits}/${overview.totalUnits} units',
+                subtitle:
+                    '${overview.occupiedUnits}/${overview.totalUnits} units',
                 color: cs.primaryContainer,
                 textColor: cs.onPrimaryContainer,
               ),
@@ -149,7 +151,8 @@ class _KpiGrid extends StatelessWidget {
               child: _KpiCard(
                 label: 'Overdue',
                 value: _fmtCurrency(overview.overdueAmount),
-                subtitle: '${overview.overdueCount} payment${overview.overdueCount == 1 ? '' : 's'}',
+                subtitle:
+                    '${overview.overdueCount} payment${overview.overdueCount == 1 ? '' : 's'}',
                 color: cs.errorContainer,
                 textColor: cs.onErrorContainer,
               ),
@@ -236,9 +239,9 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       title,
-      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
+      style: Theme.of(
+        context,
+      ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
     );
   }
 }
@@ -305,11 +308,12 @@ class _LegendDot extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
-        Text(label,
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
       ],
     );
   }
@@ -345,8 +349,11 @@ class _BarChartPainter extends CustomPainter {
     const chartPadRight = 4.0;
     final chartHeight = size.height - labelHeight;
     final groupWidth =
-        (size.width - chartPadLeft - chartPadRight - gapBetweenGroups * (n - 1)) /
-            n;
+        (size.width -
+            chartPadLeft -
+            chartPadRight -
+            gapBetweenGroups * (n - 1)) /
+        n;
     final barWidth = (groupWidth - barGap) / 2;
 
     final incomePaint = Paint()
@@ -362,18 +369,12 @@ class _BarChartPainter extends CustomPainter {
 
     for (var i = 0; i < n; i++) {
       final point = trend[i];
-      final groupX =
-          chartPadLeft + i * (groupWidth + gapBetweenGroups);
+      final groupX = chartPadLeft + i * (groupWidth + gapBetweenGroups);
 
       // Income bar
       final incomeH = maxVal > 0 ? (point.income / maxVal) * chartHeight : 0.0;
       final incomeRect = RRect.fromRectAndCorners(
-        Rect.fromLTWH(
-          groupX,
-          chartHeight - incomeH,
-          barWidth,
-          incomeH,
-        ),
+        Rect.fromLTWH(groupX, chartHeight - incomeH, barWidth, incomeH),
         topLeft: const Radius.circular(3),
         topRight: const Radius.circular(3),
       );
@@ -403,10 +404,7 @@ class _BarChartPainter extends CustomPainter {
       )..layout(maxWidth: groupWidth);
       tp.paint(
         canvas,
-        Offset(
-          groupX + (groupWidth - tp.width) / 2,
-          chartHeight + 2,
-        ),
+        Offset(groupX + (groupWidth - tp.width) / 2, chartHeight + 2),
       );
     }
   }
@@ -556,14 +554,13 @@ class _WorkOrderPriorityList extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(
-                      wo.priority,
-                      style: theme.textTheme.bodyMedium,
-                    ),
+                    child: Text(wo.priority, style: theme.textTheme.bodyMedium),
                   ),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 3),
+                      horizontal: 10,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: cs.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(20),
@@ -601,8 +598,8 @@ class _EmptyCard extends StatelessWidget {
           child: Text(
             message,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ),
@@ -633,10 +630,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: cs.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),

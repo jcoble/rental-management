@@ -21,6 +21,9 @@ public class OwnerEntityResponse
     public string? Phone { get; set; }
     public string? Email { get; set; }
 
+    /// <summary>Number of active properties assigned to this owner, computed DB-side.</summary>
+    public int AssignedPropertyCount { get; set; }
+
     /// <summary>True for the self-owner auto-created from the landlord's own account at onboarding.</summary>
     public bool IsPrimary { get; set; }
 
@@ -30,7 +33,7 @@ public class OwnerEntityResponse
     /// <summary>Stable selector for frontend tests, e.g. <c>owner-entity-1</c>.</summary>
     public string TestId => $"owner-entity-{Id}";
 
-    public static OwnerEntityResponse FromEntity(OwnerEntity e) => new()
+    public static OwnerEntityResponse FromEntity(OwnerEntity e, int assignedPropertyCount = 0) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
@@ -45,6 +48,7 @@ public class OwnerEntityResponse
         Address = e.Address,
         Phone = e.Phone,
         Email = e.Email,
+        AssignedPropertyCount = assignedPropertyCount,
         IsPrimary = e.IsPrimary,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
@@ -57,6 +61,15 @@ public class OwnerEntityListResponse
     public int TotalCount { get; set; }
     public int Skip { get; set; }
     public int Take { get; set; }
+}
+
+public class DeleteOwnerEntityOptions
+{
+    /// <summary>
+    /// When true, clears this owner from assigned properties before soft-deleting the owner. This is
+    /// intended for Guided Setup cleanup where a property may be temporarily ownerless.
+    /// </summary>
+    public bool ClearPropertyAssignments { get; set; }
 }
 
 public class CreateOwnerEntityRequest

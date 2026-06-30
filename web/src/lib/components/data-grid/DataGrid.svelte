@@ -457,7 +457,19 @@
 								aria-label={onRowClick
 									? `Open row ${i + 1}`
 									: undefined}
-								onclick={onRowClick ? () => onRowClick(item) : undefined}
+								onclick={onRowClick
+									? (e) => {
+											// Container transform (TSK-596): tag the clicked row as the shared
+											// `rc-hero` element so a matching header on the destination morphs from
+											// it. Skip when the current page already owns an `.rc-hero` (e.g. a
+											// detail page's own header) so a sub-grid click can't create a duplicate
+											// view-transition-name (which would make the browser skip the transition).
+											if (typeof document !== 'undefined' && !document.querySelector('.rc-hero')) {
+												(e.currentTarget as HTMLElement).style.viewTransitionName = 'rc-hero';
+											}
+											onRowClick(item);
+										}
+									: undefined}
 								onkeydown={onRowClick ? (e) => handleRowKeydown(e, item) : undefined}
 								data-testid={getRowTestId ? getRowTestId(item) : 'datagrid-row'}
 							>

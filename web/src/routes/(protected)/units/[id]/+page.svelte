@@ -9,6 +9,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
+	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
@@ -23,7 +24,7 @@
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
 	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
-	import { scanHref, type ScanContext } from '$lib/scan/scan-context';
+	import type { ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import type { UnitLeaseSummary } from '$lib/types';
@@ -37,6 +38,8 @@
 	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
 	let showEditUnit = $state(false);
 	let showMoveInDialog = $state(false);
+	let showScanLauncher = $state(false);
+	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
 	let unitForm = $state({ ...emptyUnitForm });
 	let unitFormErrors = $state<Record<string, string>>({});
@@ -164,21 +167,21 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// Scan / Upload routes into the existing scan -> draft -> confirm flow while preserving
-	// the unit context the user started from.
+	// Scan / Upload opens an in-place launcher while preserving the unit context the user started from.
 	function goScan(context: Partial<ScanContext> = {}) {
 		if (!dashboard) {
 			goto('/scan');
 			return;
 		}
 		const unit = dashboard.unit;
-		goto(scanHref({
+		scanLauncherContext = {
 			...context,
 			type: context.type ?? 'Expense',
 			propertyId: context.propertyId ?? unit.propertyId,
 			unitId: context.unitId ?? unit.id,
 			returnTo: context.returnTo ?? `/units/${unit.id}?tab=${activeTab}`
-		}));
+		};
+		showScanLauncher = true;
 	}
 </script>
 
@@ -205,11 +208,10 @@
 			<UnitHeader {dashboard} onEdit={openEditUnit} onScan={() => goScan()} />
 			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
 
-			<div class="grid gap-4 lg:grid-cols-[1fr_320px]">
-				<!-- Work tabs -->
-				<div class="min-w-0">
-					<Tabs.Root value={activeTab} onValueChange={setTab}>
-						<Tabs.List class="flex w-full flex-wrap" data-testid="unit-tabs">
+			<div class="min-w-0">
+				<Tabs.Root value={activeTab} onValueChange={setTab}>
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+						<Tabs.List class="flex w-full flex-wrap sm:flex-1" data-testid="unit-tabs">
 							<Tabs.Trigger value="overview" data-testid="tab-overview">Overview</Tabs.Trigger>
 							<Tabs.Trigger value="listing" data-testid="tab-listing">Listing</Tabs.Trigger>
 							<Tabs.Trigger value="lease" data-testid="tab-lease">Lease</Tabs.Trigger>
@@ -220,46 +222,42 @@
 							<Tabs.Trigger value="expenses" data-testid="tab-expenses">Expenses</Tabs.Trigger>
 							<Tabs.Trigger value="timeline" data-testid="tab-timeline">Timeline</Tabs.Trigger>
 						</Tabs.List>
+						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
+					</div>
 
-						<Tabs.Content value="overview" class="mt-4">
-							<OverviewTab {dashboard} onOpenTab={setTab} />
-						</Tabs.Content>
-						<Tabs.Content value="listing" class="mt-4">
-							<ListingTab {dashboard} />
-						</Tabs.Content>
-						<Tabs.Content value="lease" class="mt-4">
-							<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
-						</Tabs.Content>
-						<Tabs.Content value="applications" class="mt-4">
-							<ApplicationsTab {dashboard} />
-						</Tabs.Content>
-						<Tabs.Content value="rent" class="mt-4">
-							<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
-						</Tabs.Content>
-						<Tabs.Content value="maintenance" class="mt-4">
-							<MaintenanceTab {dashboard} onScan={goScan} />
-						</Tabs.Content>
-						<Tabs.Content value="documents" class="mt-4">
-							<DocumentsTab
-								unitId={dashboard.unit.id}
-								docs={dashboard.overview.pendingDocs}
-								onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
-								onDocumentsChanged={refreshUnitDashboard}
-							/>
-						</Tabs.Content>
-						<Tabs.Content value="expenses" class="mt-4">
-							<ExpensesTab {dashboard} onScan={goScan} />
-						</Tabs.Content>
-						<Tabs.Content value="timeline" class="mt-4">
-							<TimelineTab unitId={id} />
-						</Tabs.Content>
-					</Tabs.Root>
-				</div>
-
-				<!-- Persistent timeline rail (visible across tabs). -->
-				<div class="lg:sticky lg:top-4 lg:self-start">
-					<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
-				</div>
+					<Tabs.Content value="overview" class="mt-4">
+						<OverviewTab {dashboard} onOpenTab={setTab} />
+					</Tabs.Content>
+					<Tabs.Content value="listing" class="mt-4">
+						<ListingTab {dashboard} />
+					</Tabs.Content>
+					<Tabs.Content value="lease" class="mt-4">
+						<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
+					</Tabs.Content>
+					<Tabs.Content value="applications" class="mt-4">
+						<ApplicationsTab {dashboard} />
+					</Tabs.Content>
+					<Tabs.Content value="rent" class="mt-4">
+						<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
+					</Tabs.Content>
+					<Tabs.Content value="maintenance" class="mt-4">
+						<MaintenanceTab {dashboard} onScan={goScan} />
+					</Tabs.Content>
+					<Tabs.Content value="documents" class="mt-4">
+						<DocumentsTab
+							unitId={dashboard.unit.id}
+							docs={dashboard.overview.pendingDocs}
+							onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
+							onDocumentsChanged={refreshUnitDashboard}
+						/>
+					</Tabs.Content>
+					<Tabs.Content value="expenses" class="mt-4">
+						<ExpensesTab {dashboard} onScan={goScan} />
+					</Tabs.Content>
+					<Tabs.Content value="timeline" class="mt-4">
+						<TimelineTab unitId={id} />
+					</Tabs.Content>
+				</Tabs.Root>
 			</div>
 		</div>
 	{/if}
@@ -318,6 +316,8 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<ScanLauncher bind:open={showScanLauncher} context={scanLauncherContext} showTrigger={false} />
 
 <Dialog.Root open={showEditUnit} onOpenChange={(v) => { if (!v) closeEditUnit(); }}>
 	<Dialog.Content class="max-w-sm" data-testid="unit-detail-edit-dialog">

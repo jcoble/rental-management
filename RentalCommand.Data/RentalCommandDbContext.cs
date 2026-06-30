@@ -49,6 +49,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<BankConnection> BankConnections => Set<BankConnection>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
+    public DbSet<NoticeTemplate> NoticeTemplates => Set<NoticeTemplate>();
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
     public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
     public DbSet<AdverseActionNotice> AdverseActionNotices => Set<AdverseActionNotice>();
@@ -341,6 +342,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
             entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
             entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
+            // Lease-end auto-send action, stored as the string enum name (app-wide string-enum convention).
+            entity.Property(e => e.LeaseEndAutoAction).HasConversion<string>().HasMaxLength(40);
             // Per-portfolio now (was a single global row). One settings row per portfolio.
             entity.HasIndex(e => e.PortfolioId).IsUnique();
         });
@@ -582,6 +585,23 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.Unit)
                 .WithMany(u => u.UnitListings)
                 .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NoticeTemplate>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.NoticeType).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(4000);
+            entity.HasIndex(e => e.PortfolioId);
+            // One active template per (portfolio, type) — enforced by a filtered unique index.
+            entity.HasIndex(e => new { e.PortfolioId, e.NoticeType })
+                .HasFilter("\"IsActive\" = true")
+                .IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -866,8 +886,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.Status);
-            // Unique unit number within a property.
-            entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique();
+            // Unique unit number within a property — filtered to live rows so a soft-deleted unit
+            // (DeletedAt set) frees its number for reuse instead of permanently occupying the slot.
+            entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique().HasFilter("\"DeletedAt\" IS NULL");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.Units)

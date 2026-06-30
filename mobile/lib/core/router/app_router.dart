@@ -8,6 +8,7 @@ import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
+import '../../features/auth/verify_email_screen.dart';
 import '../../features/home/home_shell.dart';
 import '../../features/home/mobile_domain_hub.dart';
 import '../../features/onboarding/onboarding_choice_screen.dart';
@@ -25,6 +26,7 @@ const _loginPath = '/login';
 const _registerPath = '/register';
 const _forgotPasswordPath = '/forgot-password';
 const _resetPasswordPath = '/reset-password';
+const _verifyEmailPath = '/verify-email';
 const _homePath = '/';
 const _chooseSetupPath = '/choose-setup';
 const _settingUpPath = '/setting-up';
@@ -37,6 +39,7 @@ const _publicAuthPaths = <String>{
   _registerPath,
   _forgotPasswordPath,
   _resetPasswordPath,
+  _verifyEmailPath,
 };
 
 /// First-login onboarding gate routes — an authenticated-but-undecided user is
@@ -128,6 +131,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         // from in-app navigation). The screen handles a missing/blank pair.
         path: _resetPasswordPath,
         builder: (context, state) => ResetPasswordScreen(
+          userId: state.uri.queryParameters['userId'] ?? '',
+          token: state.uri.queryParameters['token'] ?? '',
+        ),
+      ),
+      GoRoute(
+        // Reached from the emailed verification link's userId+token query params.
+        path: _verifyEmailPath,
+        builder: (context, state) => VerifyEmailScreen(
           userId: state.uri.queryParameters['userId'] ?? '',
           token: state.uri.queryParameters['token'] ?? '',
         ),

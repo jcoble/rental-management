@@ -13,5 +13,9 @@ public interface IOwnerEntityService
     Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default);
     Task<OwnerEntityResponse?> UpdateAsync(int portfolioId, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<bool> DeleteAsync(
+        int portfolioId,
+        int id,
+        DeleteOwnerEntityOptions? options = null,
+        CancellationToken ct = default);
 }

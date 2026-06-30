@@ -164,7 +164,7 @@
 		</div>
 	{:else}
 		<!-- Header -->
-		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+		<div class="rc-hero mb-6 flex flex-wrap items-start justify-between gap-4">
 			<div class="space-y-1">
 				<div class="flex flex-wrap items-center gap-2">
 					<h1 class="text-2xl font-bold" data-testid="appointment-detail-title">{appt.title}</h1>

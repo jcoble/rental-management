@@ -35,3 +35,10 @@ test('staff money navigation exposes security deposits as a first-class section'
 	assert.match(moneyGroup, /\{ href: '\/reports', label: 'Reports', icon: BarChart3, roles: \['Admin', 'Manager'\] \}/);
 	assert.match(source, /'\/deposits': 'savings'/);
 });
+
+test('staff users can return to setup/import from pinned nav and account menu', () => {
+	assert.match(source, /\{ href: '\/onboarding', label: 'Guided Setup', icon: ClipboardList \}/);
+	assert.match(source, /data-testid="user-menu-guided-setup-collapsed"/);
+	assert.match(source, /data-testid="user-menu-guided-setup"/);
+	assert.equal(source.match(/href="\/onboarding\?from=account-menu"/g)?.length, 2);
+});

@@ -38,7 +38,8 @@
 		return new Intl.NumberFormat('en-US', {
 			style: 'currency',
 			currency: 'USD',
-			maximumFractionDigits: 0
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2
 		}).format(value || 0);
 	}
 
@@ -87,6 +88,12 @@
 			<p class="mt-1 text-sm text-muted-foreground">
 				Owner statement — for reference, not a tax document. Share with property owners to
 				summarize income, expenses, and net distributions.
+			</p>
+			<p class="mt-1 max-w-xl text-xs text-muted-foreground" data-testid="owners-report-basis-note">
+				Cash basis: only <span class="font-medium">paid</span> expenses count, by the date paid.
+				The <a href="/tax" class="underline underline-offset-2">Tax (Schedule E)</a> page uses
+				accrual basis (all incurred expenses), so the same property can show a different expense
+				total there.
 			</p>
 		</div>
 		<div class="flex items-center gap-2">

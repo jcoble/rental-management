@@ -222,12 +222,16 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   }
 
   Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      throw StateError('Work order form validation failed.');
+    }
 
     final scheduledFor = _combine(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
-    if (!_validateArrivalWindow()) return;
+    if (!_validateArrivalWindow()) {
+      throw StateError('Work order arrival window validation failed.');
+    }
 
     setState(() {
       _saving = true;
@@ -267,6 +271,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+      rethrow;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -440,14 +445,17 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         onSave: _submit,
         tabs: [
           WorkOrderFormTabSpec(
-            label: 'Details',
+            label: 'Location',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [propertyField, gap, unitField],
+            ),
+          ),
+          WorkOrderFormTabSpec(
+            label: 'Issue',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                propertyField,
-                gap,
-                unitField,
-                gap,
                 TextFormField(
                   key: const Key('work-order-title-field'),
                   controller: _titleCtrl,

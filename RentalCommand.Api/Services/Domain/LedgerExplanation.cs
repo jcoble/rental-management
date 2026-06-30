@@ -80,6 +80,32 @@ public static class LedgerExplanation
     }
 
     /// <summary>
+    /// Explanation for the companion payment line shown alongside a Partial charge — the cash collected
+    /// so far against a partially-paid charge. The charge line carries the full bill; this line is a
+    /// receipt for what has come in, and names the remainder still owed so the two read together.
+    /// </summary>
+    public static string ForPartialCollected(
+        PaymentType paymentType,
+        decimal amountPaid,
+        decimal fullAmount,
+        DateTime? paidDate,
+        DateTime dueDate,
+        string? method)
+    {
+        var collected = Money(amountPaid);
+        var remaining = Money(fullAmount - amountPaid);
+        var when = paidDate ?? dueDate;
+        var byMethod = string.IsNullOrWhiteSpace(method) ? "" : $" by {method.Trim().ToLowerInvariant()}";
+        return paymentType switch
+        {
+            PaymentType.SecurityDeposit => $"Security deposit of {collected} received{byMethod} on {ShortDate(when)} — {remaining} still owed.",
+            PaymentType.LateFee => $"Late fee of {collected} paid{byMethod} on {ShortDate(when)} — {remaining} still owed.",
+            PaymentType.Utility => $"Utility payment of {collected} received{byMethod} on {ShortDate(when)} — {remaining} still owed.",
+            _ => $"Payment of {collected} received{byMethod} on {ShortDate(when)} — {remaining} still owed.",
+        };
+    }
+
+    /// <summary>
     /// Explanation for an expense ledger entry (money the landlord paid out — vendors, repairs, etc.).
     /// </summary>
     public static string ForExpense(

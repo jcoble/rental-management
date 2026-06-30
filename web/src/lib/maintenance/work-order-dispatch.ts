@@ -38,11 +38,15 @@ export function workOrderStatusActionTargets(
 	return USER_ASSIGNABLE_WORK_ORDER_STATUSES.filter((status) => status !== currentStatus);
 }
 
+// The "{Vendor} has the job — they'll text back DONE" banner asserts a real, in-flight dispatch, so it
+// must be driven by actual dispatch state, NOT by merely assigning a vendor in the form. Show it only
+// when the work order has an OPEN VendorDispatch (`hasActiveDispatch`, computed server-side) or one was
+// just dispatched in this session (`wasJustDispatched`), and the order isn't already terminal.
 export function shouldShowActiveDispatchHint(
 	status: string | null | undefined,
-	hasAssignedVendor: boolean,
+	hasActiveDispatch: boolean,
 	wasJustDispatched: boolean
 ): boolean {
 	if (status === 'Completed' || status === 'Cancelled') return false;
-	return Boolean(wasJustDispatched || hasAssignedVendor);
+	return Boolean(wasJustDispatched || hasActiveDispatch);
 }
