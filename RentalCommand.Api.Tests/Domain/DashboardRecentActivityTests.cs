@@ -72,10 +72,14 @@ public class DashboardRecentActivityTests : IDisposable
         byKey[("Tenant", seeded.Tenant3.Id)].Label.Should().Be("Noah Lessee");
         byKey[("Unit", seeded.Unit.Id)].Label.Should().Be("Maple · Unit 1A");
         byKey[("Lease", seeded.Lease.Id)].Label.Should().Be("L-1A");
+        byKey[("Lease", seeded.Lease.Id)].UnitId.Should().Be(seeded.Unit.Id);
         byKey[("WorkOrder", seeded.WorkOrder.Id)].Label.Should().Be("Fix sink");
+        byKey[("WorkOrder", seeded.WorkOrder.Id)].UnitId.Should().Be(seeded.Unit.Id);
         byKey[("Property", seeded.Property.Id)].Label.Should().Be("Maple");
         byKey[("Payment", seeded.Payment.Id)].Label.Should().Be("Rent · $1,200.00");
+        byKey[("Payment", seeded.Payment.Id)].UnitId.Should().Be(seeded.Unit.Id);
         byKey[("Expense", seeded.Expense.Id)].Label.Should().Be("Plumbing parts");
+        byKey[("Expense", seeded.Expense.Id)].UnitId.Should().Be(seeded.Unit.Id);
 
         // Every row still carries the touched entity's id so the web can deep-link to it.
         dashboard.RecentActivity.Should().OnlyContain(r => r.EntityId > 0);
