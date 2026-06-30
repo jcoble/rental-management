@@ -41,10 +41,16 @@ describe('unit lifecycle next action handoff', () => {
 			new URL('../../../routes/(protected)/tenants/[id]/+page.svelte', import.meta.url),
 			'utf8'
 		);
+		const tenantNoticeDialogSource = readFileSync(
+			new URL('../notices/TenantNoticeDialog.svelte', import.meta.url),
+			'utf8'
+		);
 
 		assert.match(tenantPageSource, /readTenantNoticeAction\(page\.url\.searchParams\)/);
 		assert.match(tenantPageSource, /openNoticeDialog\(action\.noticeType\)/);
-		assert.match(tenantPageSource, /data-testid="tenant-notice-dialog"/);
+		assert.match(tenantPageSource, /<TenantNoticeDialog[\s\S]*bind:open=\{showNoticeDialog\}/);
+		assert.match(tenantPageSource, /<TenantNoticeDialog[\s\S]*initialNoticeType=\{noticeDialogType\}/);
+		assert.match(tenantNoticeDialogSource, /data-testid="tenant-notice-dialog"/);
 	});
 
 	test('tenant renewal notice deep links can be handled more than once', () => {
@@ -58,5 +64,18 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(tenantPageSource, /clearTenantNoticeActionUrl\(page\.url\)/);
 		assert.doesNotMatch(tenantPageSource, /noticeActionHandled/);
 		assert.doesNotMatch(tenantPageSource, /tenantLeases\.filter\(\(lease\) => lease\.status === 'Active'\)/);
+	});
+
+	test('move-out and turnover stages open the dedicated turnover workspace', () => {
+		const railSource = readFileSync(new URL('./LifecycleRail.svelte', import.meta.url), 'utf8');
+		const pageSource = readFileSync(
+			new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(railSource, /key: 'MoveOut'[\s\S]*tab: 'turnover'/);
+		assert.match(railSource, /key: 'Turnover'[\s\S]*tab: 'turnover'/);
+		assert.match(pageSource, /data-testid="tab-turnover"/);
+		assert.match(pageSource, /<TurnoverTab \{dashboard\} onScan=\{goScan\} \/>/);
 	});
 });

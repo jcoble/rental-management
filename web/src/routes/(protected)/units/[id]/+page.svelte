@@ -18,6 +18,7 @@
 	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
 	import LedgerTab from '$lib/components/unit/tabs/LedgerTab.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
+	import TurnoverTab from '$lib/components/unit/tabs/TurnoverTab.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
@@ -217,6 +218,7 @@
 							<Tabs.Trigger value="applications" data-testid="tab-applications">Applications</Tabs.Trigger>
 							<Tabs.Trigger value="ledger" data-testid="tab-ledger">Ledger</Tabs.Trigger>
 							<Tabs.Trigger value="maintenance" data-testid="tab-maintenance">Maintenance</Tabs.Trigger>
+							<Tabs.Trigger value="turnover" data-testid="tab-turnover">Turnover</Tabs.Trigger>
 							<Tabs.Trigger value="documents" data-testid="tab-documents">Documents</Tabs.Trigger>
 							<Tabs.Trigger value="timeline" data-testid="tab-timeline">Timeline</Tabs.Trigger>
 						</Tabs.List>
@@ -240,6 +242,9 @@
 					</Tabs.Content>
 					<Tabs.Content value="maintenance" class="mt-4">
 						<MaintenanceTab {dashboard} onScan={goScan} />
+					</Tabs.Content>
+					<Tabs.Content value="turnover" class="mt-4">
+						<TurnoverTab {dashboard} onScan={goScan} />
 					</Tabs.Content>
 					<Tabs.Content value="documents" class="mt-4">
 						<DocumentsTab
