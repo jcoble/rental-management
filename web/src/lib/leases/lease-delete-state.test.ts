@@ -15,7 +15,7 @@ describe('lease delete state', () => {
 			{
 				title: 'Remove active lease',
 				message:
-					'RC-2A-2026 is active for Riverside Courtyard - Unit 2A. Removing it will terminate this lease record, release the unit from active occupancy, and hide it from active lease workflows. Use Give Notice for a normal move-out; remove only duplicate or mistaken leases.',
+					'RC-2A-2026 is active for Riverside Courtyard - Unit 2A. Removing it will terminate this lease record, release the unit from active occupancy, and hide it from active lease workflows. Use Create / Send notice for a normal move-out; remove only duplicate or mistaken leases.',
 				confirmLabel: 'Remove active lease',
 			}
 		);
