@@ -42,6 +42,55 @@ export interface AskResponse {
 	citations?: DocCitation[] | null;
 }
 
+export type AssistantActionKind = 'Unsupported' | 'CreateExpense';
+export type AssistantActionRisk = 'Low' | 'Medium' | 'High';
+export type AssistantActionStatus =
+	| 'DraftReady'
+	| 'MissingRequiredFields'
+	| 'WriteModeRequired'
+	| 'Unsupported'
+	| 'NotConfirmed'
+	| 'InvalidDraft'
+	| 'Created';
+
+export interface AssistantExpenseDraft {
+	propertyId?: number | null;
+	propertyName?: string | null;
+	category: string;
+	status: string;
+	description: string;
+	amount?: number | null;
+	incurredAt: string;
+	paidAt?: string | null;
+	notes?: string | null;
+}
+
+export interface AssistantActionDraft {
+	kind: AssistantActionKind;
+	risk: AssistantActionRisk;
+	summary: string;
+	expense?: AssistantExpenseDraft | null;
+}
+
+export interface AssistantActionDraftResponse {
+	status: AssistantActionStatus;
+	message: string;
+	requiresWriteMode: boolean;
+	canExecute: boolean;
+	draft?: AssistantActionDraft | null;
+	missingFields: string[];
+	options: Array<{ field: string; id: number; label: string }>;
+}
+
+export interface AssistantActionExecuteResponse {
+	status: AssistantActionStatus;
+	message: string;
+	kind: AssistantActionKind;
+	entityId?: number | null;
+	detailHref?: string | null;
+	expense?: unknown;
+}
+
 /** Optional "text me / email me this answer" delivery options for POST /ai/ask. */
 export interface AskDelivery {
 	deliverViaEmail?: boolean;
@@ -80,6 +129,17 @@ export const ai = {
 			method: 'POST',
 			body: JSON.stringify({ question, history, ...delivery }),
 			timeoutMs: AI_ASK_TIMEOUT_MS
+		}),
+	draftAction: (command: string, writeModeEnabled: boolean) =>
+		api.post<AssistantActionDraftResponse>('/ai/actions/draft', {
+			command,
+			writeModeEnabled
+		}),
+	executeAction: (draft: AssistantActionDraft, writeModeEnabled: boolean) =>
+		api.post<AssistantActionExecuteResponse>('/ai/actions/execute', {
+			draft,
+			writeModeEnabled,
+			confirmed: true
 		}),
 	chat: (message: string) => api.post<AiChatResponse>('/ai/chat', { message }),
 	fairHousingCheck: (text: string) =>

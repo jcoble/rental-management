@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'payment_detail_screen.dart';
 import 'payment_lease_labels.dart';
 import 'payments_repository.dart';
@@ -127,11 +129,16 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Payments')),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'payments-fab',
-        onPressed: () => _showCreateSheet(context),
-        tooltip: 'Record payment',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'Record payment',
+          icon: Icons.add,
+          onPressed: () => _showCreateSheet(context),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
