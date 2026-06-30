@@ -1443,6 +1443,14 @@ public class ScanServiceTests : IDisposable
         public Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
+        public Task<ApplicationResponse?> UpdateAsync(
+            int portfolioId,
+            int id,
+            UpdateApplicationRequest request,
+            int userId,
+            CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
         public Task<ApproveApplicationResult?> ApproveAsync(
             int portfolioId, int id, int userId, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");

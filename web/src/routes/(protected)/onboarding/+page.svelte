@@ -350,6 +350,12 @@
 	const selectedOwnerRecord = $derived.by(() =>
 		selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE ? null : ownerById(selectedOwnerId)
 	);
+	function ownerAssignedPropertyCount(owner: Owner | null): number {
+		return owner?.assignedPropertyCount ?? 0;
+	}
+	const ownerDeleteAssignedCount = $derived.by(() =>
+		ownerAssignedPropertyCount(ownerDeleteTarget)
+	);
 
 	$effect(() => {
 		if (ownerSelectionPrefilled) return;
@@ -398,13 +404,24 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
-	const deleteOwnerMutation = createMutation(() => ({
-		mutationFn: (id: number) => owners.delete(id),
-		onSuccess: (_result, id) => {
-			showSuccess('Owner deleted.');
+	type DeleteOwnerVariables = {
+		id: number;
+		clearPropertyAssignments: boolean;
+	};
+	const deleteOwnerMutation = createMutation<void, Error, DeleteOwnerVariables>(() => ({
+		mutationFn: ({ id, clearPropertyAssignments }) =>
+			owners.delete(id, { clearPropertyAssignments }),
+		onSuccess: (_result, vars) => {
+			const { id, clearPropertyAssignments } = vars;
+			showSuccess(
+				clearPropertyAssignments
+					? 'Owner deleted. Assigned properties are now unassigned.'
+					: 'Owner deleted.'
+			);
 			ownerDeleteTarget = null;
 			if (createdOwner?.id === id) createdOwner = null;
 			if (selectedOwnerId === String(id)) selectOwnerRecord(NEW_ONBOARDING_OWNER_VALUE);
+			if (propertyForm.ownerEntityId === String(id)) propertyForm.ownerEntityId = '';
 			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 		},
@@ -2035,12 +2052,17 @@
 	open={ownerDeleteTarget !== null}
 	title="Delete owner"
 	message={ownerDeleteTarget
-		? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? Owners assigned to active properties cannot be deleted. Reassign the properties or set them to No owner assigned first.`
+		? ownerDeleteAssignedCount > 0
+			? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This will set ${ownerDeleteAssignedCount} propert${ownerDeleteAssignedCount === 1 ? 'y' : 'ies'} to No owner assigned. You can assign another owner later, but owner reports and statements need an owner before they are final.`
+			: `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This owner is not assigned to any properties.`
 		: ''}
-	confirmLabel="Delete owner"
+	confirmLabel={ownerDeleteAssignedCount > 0 ? 'Clear owner & delete' : 'Delete owner'}
 	busy={deleteOwnerMutation.isPending}
 	testid="onboarding-owner-delete-confirm"
-	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate(ownerDeleteTarget.id)}
+	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate({
+		id: ownerDeleteTarget.id,
+		clearPropertyAssignments: ownerDeleteAssignedCount > 0
+	})}
 	oncancel={() => (ownerDeleteTarget = null)}
 />
 

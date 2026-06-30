@@ -356,6 +356,178 @@ public sealed class ApplicationService : IApplicationService
         return response;
     }
 
+    public async Task<ApplicationResponse?> UpdateAsync(
+        int portfolioId,
+        int id,
+        UpdateApplicationRequest request,
+        int userId,
+        CancellationToken ct = default)
+    {
+        var entity = await _db.RentalApplications
+            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        if (entity == null)
+            return null;
+
+        if (entity.Status is not (ApplicationStatus.Submitted or ApplicationStatus.UnderReview))
+        {
+            throw new DomainValidationException(
+                "Only submitted or under-review applications can be edited.",
+                statusCode: 409);
+        }
+
+        if (request.ClearProperty)
+        {
+            entity.PropertyId = null;
+            entity.UnitId = null;
+        }
+
+        if (request.PropertyId is > 0)
+        {
+            var propertyExists = await _db.Properties
+                .AsNoTracking()
+                .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
+            if (!propertyExists)
+            {
+                throw new DomainValidationException("Selected property was not found in this portfolio.");
+            }
+
+            entity.PropertyId = request.PropertyId;
+
+            if (entity.UnitId is > 0)
+            {
+                var unitStillMatches = await _db.Units
+                    .AsNoTracking()
+                    .AnyAsync(u => u.Id == entity.UnitId
+                        && u.PropertyId == request.PropertyId
+                        && u.Property != null
+                        && u.Property.PortfolioId == portfolioId, ct);
+                if (!unitStillMatches)
+                {
+                    entity.UnitId = null;
+                }
+            }
+        }
+
+        if (request.ClearUnit)
+        {
+            entity.UnitId = null;
+        }
+
+        if (request.UnitId is > 0)
+        {
+            var unit = await _db.Units
+                .AsNoTracking()
+                .Where(u => u.Id == request.UnitId
+                    && u.Property != null
+                    && u.Property.PortfolioId == portfolioId)
+                .Select(u => new { u.Id, u.PropertyId })
+                .FirstOrDefaultAsync(ct);
+            if (unit == null)
+            {
+                throw new DomainValidationException("Selected unit was not found in this portfolio.");
+            }
+
+            if (entity.PropertyId is > 0 && entity.PropertyId != unit.PropertyId)
+            {
+                throw new DomainValidationException("Selected unit does not belong to the selected property.");
+            }
+
+            entity.PropertyId = unit.PropertyId;
+            entity.UnitId = unit.Id;
+        }
+
+        if (request.FirstName != null)
+        {
+            entity.FirstName = RequireNonBlank(request.FirstName, "First name");
+        }
+        if (request.LastName != null)
+        {
+            entity.LastName = RequireNonBlank(request.LastName, "Last name");
+        }
+        if (request.Email != null) entity.Email = TrimToNull(request.Email);
+        if (request.Phone != null) entity.Phone = TrimToNull(request.Phone);
+
+        if (request.ClearDateOfBirth)
+        {
+            entity.DateOfBirth = null;
+        }
+        else if (request.DateOfBirth.HasValue)
+        {
+            entity.DateOfBirth = request.DateOfBirth.ToUtc();
+        }
+
+        var structuredAddressChanged =
+            request.CurrentAddressLine1 != null ||
+            request.CurrentAddressLine2 != null ||
+            request.CurrentCity != null ||
+            request.CurrentState != null ||
+            request.CurrentPostalCode != null;
+
+        if (request.CurrentAddressLine1 != null) entity.CurrentAddressLine1 = TrimToNull(request.CurrentAddressLine1);
+        if (request.CurrentAddressLine2 != null) entity.CurrentAddressLine2 = TrimToNull(request.CurrentAddressLine2);
+        if (request.CurrentCity != null) entity.CurrentCity = TrimToNull(request.CurrentCity);
+        if (request.CurrentState != null) entity.CurrentState = TrimToNull(request.CurrentState);
+        if (request.CurrentPostalCode != null) entity.CurrentPostalCode = TrimToNull(request.CurrentPostalCode);
+
+        if (structuredAddressChanged)
+        {
+            entity.CurrentAddress = AddressComposer.Compose(
+                entity.CurrentAddressLine1,
+                entity.CurrentAddressLine2,
+                entity.CurrentCity,
+                entity.CurrentState,
+                entity.CurrentPostalCode);
+        }
+        else if (request.CurrentAddress != null)
+        {
+            entity.CurrentAddressLine1 = null;
+            entity.CurrentAddressLine2 = null;
+            entity.CurrentCity = null;
+            entity.CurrentState = null;
+            entity.CurrentPostalCode = null;
+            entity.CurrentAddress = TrimToNull(request.CurrentAddress);
+        }
+
+        if (request.Employer != null) entity.Employer = TrimToNull(request.Employer);
+
+        if (request.ClearMonthlyIncome)
+        {
+            entity.MonthlyIncome = null;
+        }
+        else if (request.MonthlyIncome.HasValue)
+        {
+            entity.MonthlyIncome = request.MonthlyIncome;
+        }
+
+        if (request.ClearDesiredMoveInDate)
+        {
+            entity.DesiredMoveInDate = null;
+        }
+        else if (request.DesiredMoveInDate.HasValue)
+        {
+            entity.DesiredMoveInDate = request.DesiredMoveInDate.ToUtc();
+        }
+
+        if (request.Notes != null) entity.Notes = TrimToNull(request.Notes);
+
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(
+            portfolioId,
+            EntityType,
+            entity.Id,
+            AuditLogOperation.Updated,
+            userId: userId,
+            changeReason: "Application corrected by landlord",
+            ct: ct);
+
+        var response = await GetAsync(portfolioId, entity.Id, ct)
+            ?? ApplicationResponse.FromEntity(entity);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        return response;
+    }
+
     public async Task<ApproveApplicationResult?> ApproveAsync(
         int portfolioId, int id, int userId, CancellationToken ct = default)
     {
@@ -560,6 +732,22 @@ public sealed class ApplicationService : IApplicationService
             .OrderBy(a => a.Id)
             .Select(a => (int?)a.Id)
             .FirstOrDefaultAsync(ct);
+    }
+
+    private static string RequireNonBlank(string value, string fieldName)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            throw new DomainValidationException($"{fieldName} is required.");
+        }
+        return trimmed;
+    }
+
+    private static string? TrimToNull(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length == 0 ? null : trimmed;
     }
 
     private sealed class ApplicationHomeProjection

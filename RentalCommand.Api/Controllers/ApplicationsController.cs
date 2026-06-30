@@ -60,6 +60,20 @@ public class ApplicationsController : ManagementControllerBase
         return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
     }
 
+    /// <summary>Corrects landlord-editable details on a submitted/under-review application.</summary>
+    [HttpPatch("{id:int}")]
+    [ProducesResponseType(typeof(ApplicationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<ApplicationResponse>> Update(
+        int id,
+        [FromBody] UpdateApplicationRequest request,
+        CancellationToken ct)
+    {
+        var item = await _service.UpdateAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
+    }
+
     /// <summary>Streams the original scanned application document.</summary>
     [HttpGet("{id:int}/scan")]
     [ProducesResponseType(StatusCodes.Status200OK)]
