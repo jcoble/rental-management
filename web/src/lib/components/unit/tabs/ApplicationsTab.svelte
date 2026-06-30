@@ -159,17 +159,19 @@
 		onUnitMismatch={clearSelection}
 	/>
 {:else}
-	<div class="flex flex-wrap justify-end gap-2">
-		<Button
-			class="gap-2"
-			onclick={createApplicationLink}
-			disabled={!canCreateApplicationLink || linkMutation.isPending}
-			data-testid="unit-application-create-link"
-		>
-			<Link2 class="h-4 w-4" />
-			{linkMutation.isPending ? 'Creating…' : 'Create application link'}
-		</Button>
-	</div>
+	{#if !applicationsQuery.isLoading && appList.length > 0}
+		<div class="flex flex-wrap justify-end gap-2">
+			<Button
+				class="gap-2"
+				onclick={createApplicationLink}
+				disabled={!canCreateApplicationLink || linkMutation.isPending}
+				data-testid="unit-application-create-link"
+			>
+				<Link2 class="h-4 w-4" />
+				{linkMutation.isPending ? 'Creating…' : 'Create application link'}
+			</Button>
+		</div>
+	{/if}
 
 	{#if applicationsQuery.isLoading}
 		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading applications…</p>
