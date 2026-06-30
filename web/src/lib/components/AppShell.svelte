@@ -101,7 +101,7 @@
 	// "Scan / Edit" action, one tap away and outside any group.
 	const pinnedNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
-		{ href: '/onboarding', label: 'Setup & Import', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList },
 		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
 	];
 
