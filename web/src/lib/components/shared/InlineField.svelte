@@ -2,6 +2,8 @@
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import * as Select from '$lib/components/ui/select';
 	import { maskInputValue, type InputMask } from '$lib/forms/input-masks';
+	import DatePicker from './DatePicker.svelte';
+	import DateTimePicker from './DateTimePicker.svelte';
 
 	type Option = {
 		value: string;
@@ -142,6 +144,10 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
+		{:else if type === 'date'}
+			<DatePicker id={fieldId} testid={fieldId} bind:value {placeholder} />
+		{:else if type === 'datetime-local'}
+			<DateTimePicker id={fieldId} testid={fieldId} bind:value />
 		{:else if type === 'textarea'}
 			<textarea
 				id={fieldId}

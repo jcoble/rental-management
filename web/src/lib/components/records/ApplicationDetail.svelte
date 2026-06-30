@@ -20,6 +20,7 @@
 	import { leaseCreateHrefForApprovedTenant } from '$lib/leases/lease-create-prefill';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -728,11 +729,11 @@
 			</div>
 			<div>
 				<label for="application-edit-dob" class="mb-1 block text-sm font-medium text-foreground">Date of birth</label>
-				<Input id="application-edit-dob" type="date" bind:value={editForm.dateOfBirth} data-testid="application-edit-date-of-birth" />
+				<DatePicker id="application-edit-dob" bind:value={editForm.dateOfBirth} testid="application-edit-date-of-birth" />
 			</div>
 			<div>
 				<label for="application-edit-movein" class="mb-1 block text-sm font-medium text-foreground">Desired move-in</label>
-				<Input id="application-edit-movein" type="date" bind:value={editForm.desiredMoveInDate} data-testid="application-edit-desired-move-in" />
+				<DatePicker id="application-edit-movein" bind:value={editForm.desiredMoveInDate} testid="application-edit-desired-move-in" />
 			</div>
 			<div>
 				<label for="application-edit-employer" class="mb-1 block text-sm font-medium text-foreground">Employer</label>

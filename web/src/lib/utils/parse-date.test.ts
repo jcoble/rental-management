@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { formatIsoToUsInput, parseCompleteLooseDate, parseLooseDate } from './parse-date.ts';
+import {
+	addCalendarYear,
+	formatIsoToUsInput,
+	maskDateInput,
+	parseCompleteLooseDate,
+	parseLooseDate
+} from './parse-date.ts';
 
 describe('parseLooseDate', () => {
 	it('parses supported typed date formats to canonical ISO dates', () => {
@@ -36,5 +42,35 @@ describe('parseCompleteLooseDate', () => {
 describe('formatIsoToUsInput', () => {
 	it('formats canonical ISO dates for the visible text input', () => {
 		assert.equal(formatIsoToUsInput('2027-07-31'), '07/31/2027');
+	});
+});
+
+describe('maskDateInput', () => {
+	it('formats typed digits as a bounded MM/DD/YYYY mask', () => {
+		assert.equal(maskDateInput('1'), '1');
+		assert.equal(maskDateInput('12'), '12');
+		assert.equal(maskDateInput('123'), '12/3');
+		assert.equal(maskDateInput('1231'), '12/31');
+		assert.equal(maskDateInput('12/345'), '12/34/5');
+		assert.equal(maskDateInput('12312026'), '12/31/2026');
+		assert.equal(maskDateInput('12/31/2026123'), '12/31/2026');
+	});
+
+	it('strips non-digits before applying the mask', () => {
+		assert.equal(maskDateInput('a1b2/3c1-2026'), '12/31/2026');
+	});
+});
+
+describe('addCalendarYear', () => {
+	it('returns the same month and day in the next calendar year', () => {
+		assert.equal(addCalendarYear('2026-07-01'), '2027-07-01');
+	});
+
+	it('clamps leap day to February 28 when the next year is not leap', () => {
+		assert.equal(addCalendarYear('2024-02-29'), '2025-02-28');
+	});
+
+	it('returns null for invalid ISO dates', () => {
+		assert.equal(addCalendarYear('2026-13-01'), null);
 	});
 });

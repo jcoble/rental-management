@@ -19,6 +19,7 @@
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -907,15 +908,15 @@
 						<div class="grid gap-3 sm:grid-cols-2">
 							<div>
 								<label for="work-order-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled start</label>
-							<Input id="work-order-scheduled" data-testid="work-order-scheduled-input" type="datetime-local" bind:value={woForm.scheduledFor} />
-							{#if woErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="work-order-scheduled-error">{woErrors.scheduledFor}</p>{/if}
+								<DateTimePicker id="work-order-scheduled" testid="work-order-scheduled-input" bind:value={woForm.scheduledFor} />
+								{#if woErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="work-order-scheduled-error">{woErrors.scheduledFor}</p>{/if}
+							</div>
+							<div>
+								<label for="work-order-window-end" class="mb-1 block text-xs font-medium text-muted-foreground">Arrival window end</label>
+								<DateTimePicker id="work-order-window-end" testid="work-order-window-end-input" bind:value={woForm.scheduledWindowEnd} />
+								{#if woErrors.scheduledWindowEnd}<p class="mt-1 text-xs text-destructive" data-testid="work-order-window-end-error">{woErrors.scheduledWindowEnd}</p>{/if}
+							</div>
 						</div>
-						<div>
-							<label for="work-order-window-end" class="mb-1 block text-xs font-medium text-muted-foreground">Arrival window end</label>
-							<Input id="work-order-window-end" data-testid="work-order-window-end-input" type="datetime-local" bind:value={woForm.scheduledWindowEnd} />
-							{#if woErrors.scheduledWindowEnd}<p class="mt-1 text-xs text-destructive" data-testid="work-order-window-end-error">{woErrors.scheduledWindowEnd}</p>{/if}
-						</div>
-					</div>
 				{:else}
 					<div class="grid gap-3 sm:grid-cols-2">
 						<div>
@@ -1060,7 +1061,7 @@
 				{:else}
 					<div>
 						<label for="inspection-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled for</label>
-						<Input id="inspection-scheduled" data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} />
+						<DateTimePicker id="inspection-scheduled" testid="inspection-scheduled-input" bind:value={inspectionForm.scheduledFor} />
 						{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
 					</div>
 				{/if}
