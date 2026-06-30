@@ -5,6 +5,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'deposits_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -99,11 +101,16 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
         context,
         title: const Text('Security Deposits'),
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'deposits-fab',
-        onPressed: _showCreateSheet,
-        tooltip: 'Add deposit',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'Add deposit',
+          icon: Icons.add,
+          onPressed: _showCreateSheet,
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,

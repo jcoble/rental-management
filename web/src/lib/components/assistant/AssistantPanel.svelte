@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Send, Trash2, X } from '@lucide/svelte';
+	import { Send, ShieldCheck, Trash2, X } from '@lucide/svelte';
 	import { assistantChat } from '$lib/stores/assistantChat.svelte';
 	import AssistantMessage from './AssistantMessage.svelte';
 
@@ -28,6 +28,10 @@
 			event.preventDefault();
 			send();
 		}
+	}
+
+	function toggleWriteMode(event: Event) {
+		assistantChat.setWriteMode((event.currentTarget as HTMLInputElement).checked);
 	}
 </script>
 
@@ -83,6 +87,23 @@
 	{/if}
 
 	<div class="border-t border-border px-3 py-3">
+		<label
+			class="mb-2 flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
+			data-testid="assistant-action-mode"
+		>
+			<span class="inline-flex items-center gap-2 font-medium">
+				<ShieldCheck class="h-3.5 w-3.5 text-primary" />
+				Action mode
+			</span>
+			<input
+				type="checkbox"
+				class="h-4 w-4 accent-primary"
+				checked={assistantChat.writeModeEnabled}
+				onchange={toggleWriteMode}
+				aria-label="Enable assistant action mode"
+				data-testid="assistant-action-mode-toggle"
+			/>
+		</label>
 		<div class="flex items-end gap-2">
 			<textarea
 				bind:value={input}

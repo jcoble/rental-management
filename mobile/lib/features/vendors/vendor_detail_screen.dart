@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'rate_vendor_sheet.dart';
 import 'star_rating.dart';
 import 'vendors_models.dart';
@@ -37,8 +39,9 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _requestingW9 = true);
     try {
-      final result =
-          await ref.read(vendorsRepositoryProvider).requestW9(_vendor.id);
+      final result = await ref
+          .read(vendorsRepositoryProvider)
+          .requestW9(_vendor.id);
       if (!mounted) return;
       final to = result.sentTo;
       messenger
@@ -104,18 +107,24 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
   }
 
   void _callVendor() {
-    _launch(Uri(scheme: 'tel', path: _vendor.phone!.trim()),
-        'Could not start a call.');
+    _launch(
+      Uri(scheme: 'tel', path: _vendor.phone!.trim()),
+      'Could not start a call.',
+    );
   }
 
   void _textVendor() {
-    _launch(Uri(scheme: 'sms', path: _vendor.phone!.trim()),
-        'Could not open messaging.');
+    _launch(
+      Uri(scheme: 'sms', path: _vendor.phone!.trim()),
+      'Could not open messaging.',
+    );
   }
 
   void _emailVendor() {
-    _launch(Uri(scheme: 'mailto', path: _vendor.email!.trim()),
-        'Could not open email.');
+    _launch(
+      Uri(scheme: 'mailto', path: _vendor.email!.trim()),
+      'Could not open email.',
+    );
   }
 
   @override
@@ -127,14 +136,20 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
 
     return Scaffold(
       appBar: AppBar(title: Text(vendor.name)),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => showRateVendorSheet(
-          context,
-          vendorId: vendor.id,
-          vendorName: vendor.name,
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'vendor-detail-fab',
+        primaryAction: MobileQuickAction(
+          label: 'Rate vendor',
+          icon: Icons.star_rounded,
+          onPressed: () => showRateVendorSheet(
+            context,
+            vendorId: vendor.id,
+            vendorName: vendor.name,
+          ),
         ),
-        icon: const Icon(Icons.star_rounded),
-        label: const Text('Rate vendor'),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: () async =>
@@ -152,8 +167,11 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
                     color: cs.tertiary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(Icons.handyman_outlined,
-                      color: cs.tertiary, size: 26),
+                  child: Icon(
+                    Icons.handyman_outlined,
+                    color: cs.tertiary,
+                    size: 26,
+                  ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -165,21 +183,26 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
                           Flexible(
                             child: Text(
                               vendor.name,
-                              style: theme.textTheme.titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w700),
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                           if (vendor.preferred) ...[
                             const SizedBox(width: 6),
-                            Icon(Icons.star_rounded,
-                                size: 18, color: Colors.amber.shade600),
+                            Icon(
+                              Icons.star_rounded,
+                              size: 18,
+                              color: Colors.amber.shade600,
+                            ),
                           ],
                         ],
                       ),
                       Text(
                         vendor.serviceType,
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(color: cs.onSurfaceVariant),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),
@@ -256,37 +279,35 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
               child: Column(
                 children: [
                   SwitchListTile.adaptive(
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 16),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                     title: const Text('W-9 on file'),
                     subtitle: Text(
                       vendor.w9OnFile
                           ? 'A signed W-9 has been collected.'
                           : 'No W-9 collected yet.',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                     value: vendor.w9OnFile,
-                    onChanged:
-                        _savingW9OnFile ? null : (v) => _setW9OnFile(v),
+                    onChanged: _savingW9OnFile ? null : (v) => _setW9OnFile(v),
                   ),
                   Divider(height: 1, color: cs.outlineVariant),
                   ListTile(
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 16),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                     leading: Icon(Icons.sms_outlined, color: cs.primary),
                     title: const Text('Text W-9 request'),
                     subtitle: Text(
                       'Send the vendor a text asking for their W-9.',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                     trailing: _requestingW9
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.chevron_right),
                     onTap: _requestingW9 ? null : _requestW9,
@@ -330,16 +351,18 @@ class _ScorecardCard extends StatelessWidget {
                   children: [
                     Text(
                       avg == null ? '—' : avg.toStringAsFixed(1),
-                      style: theme.textTheme.displaySmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     if (avg != null)
                       StarRatingDisplay(rating: avg, size: 18)
                     else
                       Text(
                         'Not rated yet',
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: cs.onSurfaceVariant),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
                       ),
                   ],
                 ),
@@ -350,8 +373,9 @@ class _ScorecardCard extends StatelessWidget {
                         ? '1 rating'
                         : '${card.ratingCount} ratings',
                     textAlign: TextAlign.right,
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ],
@@ -420,14 +444,16 @@ class _StatRow extends StatelessWidget {
           Expanded(
             child: Text(
               label,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
           ),
           Text(
             value,
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -508,8 +534,11 @@ class _ScorecardError extends StatelessWidget {
         children: [
           Icon(Icons.error_outline, size: 32, color: cs.error),
           const SizedBox(height: 8),
-          Text(message,
-              textAlign: TextAlign.center, style: TextStyle(color: cs.error)),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: cs.error),
+          ),
           const SizedBox(height: 12),
           FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
         ],

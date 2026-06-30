@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'guided_rental_flow.dart';
 import 'scan_capture.dart';
 import 'scan_models.dart';
@@ -24,8 +26,9 @@ class _ScanFilterNotifier extends Notifier<_ScanFilter?> {
   void setFilter(_ScanFilter? v) => state = v;
 }
 
-final _scanFilterProvider =
-    NotifierProvider<_ScanFilterNotifier, _ScanFilter?>(_ScanFilterNotifier.new);
+final _scanFilterProvider = NotifierProvider<_ScanFilterNotifier, _ScanFilter?>(
+  _ScanFilterNotifier.new,
+);
 
 // Re-export the public provider under a local alias for readability.
 final _scanListProvider = scanListFamilyProvider;
@@ -155,8 +158,7 @@ class ScanListScreen extends ConsumerWidget {
           // List
           Expanded(
             child: draftsAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => _ErrorView(
                 message: e is ApiException ? e.message : e.toString(),
                 onRetry: () => ref.invalidate(_scanListProvider(status)),
@@ -166,56 +168,51 @@ class ScanListScreen extends ConsumerWidget {
                     ? allDrafts
                     : allDrafts.where(clientFilter).toList();
                 return drafts.isEmpty
-                  ? _EmptyView(
-                      onCapture: () => _startCapture(context, ref),
-                    )
-                  : RefreshIndicator(
-                      onRefresh: () async =>
-                          ref.invalidate(_scanListProvider(status)),
-                      child: ListView.separated(
-                        padding: const EdgeInsets.only(bottom: 96),
-                        itemCount: drafts.length,
-                        separatorBuilder: (context, index) =>
-                            const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final draft = drafts[index];
-                          return _DraftTile(
-                            draft: draft,
-                            onTap: () async {
-                              // Lease drafts open the guided New-rental flow;
-                              // everything else uses the standard review screen.
-                              if (draft.isLease) {
-                                await GuidedRentalFlow.open(context, draft.id);
-                              } else {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        ScanReviewScreen(draftId: draft.id),
-                                  ),
-                                );
-                              }
-                              ref.invalidate(_scanListProvider(status));
-                            },
-                          );
-                        },
-                      ),
-                    );
+                    ? _EmptyView(onCapture: () => _startCapture(context, ref))
+                    : RefreshIndicator(
+                        onRefresh: () async =>
+                            ref.invalidate(_scanListProvider(status)),
+                        child: ListView.separated(
+                          padding: const EdgeInsets.only(bottom: 96),
+                          itemCount: drafts.length,
+                          separatorBuilder: (context, index) =>
+                              const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final draft = drafts[index];
+                            return _DraftTile(
+                              draft: draft,
+                              onTap: () async {
+                                // Lease drafts open the guided New-rental flow;
+                                // everything else uses the standard review screen.
+                                if (draft.isLease) {
+                                  await GuidedRentalFlow.open(
+                                    context,
+                                    draft.id,
+                                  );
+                                } else {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) =>
+                                          ScanReviewScreen(draftId: draft.id),
+                                    ),
+                                  );
+                                }
+                                ref.invalidate(_scanListProvider(status));
+                              },
+                            );
+                          },
+                        ),
+                      );
               },
             ),
           ),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.extended(
-            heroTag: 'scan_camera',
-            icon: const Icon(Icons.camera_alt_outlined),
-            label: const Text('Scan'),
-            onPressed: () => _startCapture(context, ref),
-          ),
-        ],
+      floatingActionButton: MobileQuickActionFab(
+        heroTag: 'scan-list-quick-action-fab',
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => _startCapture(context, ref),
       ),
     );
   }
@@ -239,7 +236,10 @@ class _DraftTile extends StatelessWidget {
     return ListTile(
       onTap: onTap,
       leading: CircleAvatar(
-        backgroundColor: _statusColor(draft.status, colorScheme).withValues(alpha: 0.12),
+        backgroundColor: _statusColor(
+          draft.status,
+          colorScheme,
+        ).withValues(alpha: 0.12),
         child: Icon(
           _statusIcon(draft.status),
           color: _statusColor(draft.status, colorScheme),
@@ -408,8 +408,11 @@ class _ErrorView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline,
-                color: Theme.of(context).colorScheme.error, size: 48),
+            Icon(
+              Icons.error_outline,
+              color: Theme.of(context).colorScheme.error,
+              size: 48,
+            ),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),

@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'create_work_order_sheet.dart';
@@ -150,11 +152,16 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'work-orders-fab',
-        onPressed: () => _showCreateSheet(context),
-        tooltip: 'New work order',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'New work order',
+          icon: Icons.add,
+          onPressed: () => _showCreateSheet(context),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: Column(
         children: [

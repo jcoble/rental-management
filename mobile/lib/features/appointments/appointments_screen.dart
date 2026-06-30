@@ -6,6 +6,8 @@ import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../properties/properties_repository.dart';
 import 'appointments_repository.dart';
 import 'appointments_shared.dart';
@@ -91,11 +93,16 @@ class _AppointmentsScreenState extends ConsumerState<AppointmentsScreen> {
         context,
         title: const Text('Appointments'),
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'appointments-fab',
-        onPressed: () => _showCreateSheet(context),
-        tooltip: 'New appointment',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'New appointment',
+          icon: Icons.add,
+          onPressed: () => _showCreateSheet(context),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
