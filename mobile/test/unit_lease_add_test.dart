@@ -64,6 +64,13 @@ void main() {
     expect(find.text('New Lease'), findsOneWidget);
     expect(find.text('Maple Ridge'), findsAtLeastNWidgets(1));
     expect(find.text('Unit 4B'), findsAtLeastNWidgets(1));
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Tenants'), findsAtLeastNWidgets(1));
+    expect(find.text('Avery Available'), findsNothing);
+
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Avery Available'), findsOneWidget);
   });
 }
