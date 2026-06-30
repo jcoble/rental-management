@@ -310,6 +310,11 @@ services:
       - PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       # NOTE: Google Places address autocomplete is served by the API (GooglePlaces__ApiKey on the
       # api service); the web app calls /api/v1/places/*. No Places key is needed on the web tier.
+      # Mobile Universal Links/App Links association files. Missing values make the .well-known
+      # routes return 404 instead of serving placeholder app-link metadata.
+      - MOBILE_APPLE_APP_ID=${MOBILE_APPLE_APP_ID:-}
+      - MOBILE_ANDROID_PACKAGE_NAME=${MOBILE_ANDROID_PACKAGE_NAME:-com.rentalcommand.rental_command}
+      - MOBILE_ANDROID_SHA256_CERT_FINGERPRINTS=${MOBILE_ANDROID_SHA256_CERT_FINGERPRINTS:-}
     depends_on:
       - api
     networks:
