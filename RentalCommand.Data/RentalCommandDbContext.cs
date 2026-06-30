@@ -19,6 +19,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
+    public DbSet<UnitListing> UnitListings => Set<UnitListing>();
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Lease> Leases => Set<Lease>();
     public DbSet<LeaseTenant> LeaseTenants => Set<LeaseTenant>();
@@ -542,6 +543,46 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.ConversationId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<UnitListing>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Channel).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Headline).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(4000);
+            entity.Property(e => e.Rent).HasPrecision(18, 2);
+            entity.Property(e => e.SecurityDeposit).HasPrecision(18, 2);
+            entity.Property(e => e.Bedrooms).HasPrecision(5, 2);
+            entity.Property(e => e.Bathrooms).HasPrecision(5, 2);
+            entity.Property(e => e.LeaseTerms).HasMaxLength(1000);
+            entity.Property(e => e.PetPolicy).HasMaxLength(1000);
+            entity.Property(e => e.Utilities).HasMaxLength(1000);
+            entity.Property(e => e.Parking).HasMaxLength(1000);
+            entity.Property(e => e.Amenities).HasMaxLength(2000);
+            entity.Property(e => e.PhotoNotes).HasMaxLength(2000);
+            entity.Property(e => e.ZillowListingUrl).HasMaxLength(1000);
+            entity.Property(e => e.ZillowApplicationUrl).HasMaxLength(1000);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.UnitId);
+            entity.HasIndex(e => new { e.PortfolioId, e.UnitId, e.Channel })
+                .IsUnique()
+                .HasFilter("\"DeletedAt\" IS NULL");
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Unit)
+                .WithMany(u => u.UnitListings)
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<RentalApplication>(entity =>

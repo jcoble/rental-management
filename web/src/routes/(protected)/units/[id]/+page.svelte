@@ -12,6 +12,7 @@
 	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
+	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
 	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
 	import RentTab from '$lib/components/unit/tabs/RentTab.svelte';
@@ -210,6 +211,7 @@
 					<Tabs.Root value={activeTab} onValueChange={setTab}>
 						<Tabs.List class="flex w-full flex-wrap" data-testid="unit-tabs">
 							<Tabs.Trigger value="overview" data-testid="tab-overview">Overview</Tabs.Trigger>
+							<Tabs.Trigger value="listing" data-testid="tab-listing">Listing</Tabs.Trigger>
 							<Tabs.Trigger value="lease" data-testid="tab-lease">Lease</Tabs.Trigger>
 							<Tabs.Trigger value="applications" data-testid="tab-applications">Applications</Tabs.Trigger>
 							<Tabs.Trigger value="rent" data-testid="tab-rent">Rent</Tabs.Trigger>
@@ -221,6 +223,9 @@
 
 						<Tabs.Content value="overview" class="mt-4">
 							<OverviewTab {dashboard} onOpenTab={setTab} />
+						</Tabs.Content>
+						<Tabs.Content value="listing" class="mt-4">
+							<ListingTab {dashboard} />
 						</Tabs.Content>
 						<Tabs.Content value="lease" class="mt-4">
 							<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
