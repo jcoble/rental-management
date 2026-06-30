@@ -496,7 +496,7 @@
 	// Step: Property + Units. Split into sub-steps so the user sees 1–2 fields at a
 	// time instead of one dense form: address → details → units.
 	// ---------------------------------------------------------------------------
-	const PROPERTY_SUBSTEPS = ['address', 'details', 'units'] as const;
+	const PROPERTY_SUBSTEPS = ['address', 'units'] as const;
 	type PropertySubstep = (typeof PROPERTY_SUBSTEPS)[number];
 	let propertySub = $state<PropertySubstep>('address');
 	let propertyForm = $state({
@@ -1745,6 +1745,26 @@
 							{#if propertySub === 'address'}
 								<div class="grid gap-4" data-testid="onboarding-property-sub-address">
 									<div>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
+										<Select.Root type="single" bind:value={propertyForm.ownerEntityId}>
+											<Select.Trigger class="w-full" data-testid="onboarding-property-owner">
+												{propertyForm.ownerEntityId
+													? (ownerRecordOptions.find((owner) => String(owner.id) === propertyForm.ownerEntityId)?.name ?? 'Choose owner')
+													: 'No owner assigned'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
+												{#each ownerRecordOptions as owner (owner.id)}
+													<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											You can leave this unassigned during onboarding. Assign an owner before reports
+											or owner statements need to be correct.
+										</p>
+									</div>
+									<div>
 										<label for="ob-prop-name" class="mb-1 block text-xs font-medium text-muted-foreground">Property name</label>
 										<Input id="ob-prop-name" data-testid="onboarding-property-name" bind:value={propertyForm.name} placeholder="e.g. 123 Main St Duplex" />
 										{#if propertyErrors.name}<p class="mt-1 text-xs text-destructive">{propertyErrors.name}</p>{/if}
@@ -1780,29 +1800,6 @@
 											<Input id="ob-prop-zip" type="text" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
 											{#if propertyErrors.postalCode}<p class="mt-1 text-xs text-destructive">{propertyErrors.postalCode}</p>{/if}
 										</div>
-									</div>
-								</div>
-							{:else if propertySub === 'details'}
-								<div class="grid gap-4" data-testid="onboarding-property-sub-details">
-									<div>
-										<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
-										<Select.Root type="single" bind:value={propertyForm.ownerEntityId}>
-											<Select.Trigger class="w-full" data-testid="onboarding-property-owner">
-												{propertyForm.ownerEntityId
-													? (ownerRecordOptions.find((owner) => String(owner.id) === propertyForm.ownerEntityId)?.name ?? 'Choose owner')
-													: 'No owner assigned'}
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
-												{#each ownerRecordOptions as owner (owner.id)}
-													<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
-												{/each}
-											</Select.Content>
-										</Select.Root>
-										<p class="mt-1 text-xs text-muted-foreground">
-											You can leave this unassigned during onboarding. Assign an owner before reports
-											or owner statements need to be correct.
-										</p>
 									</div>
 									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">What kind of property is it?</span>
@@ -2197,11 +2194,7 @@
 						</Button>
 					{:else if currentStep.key === 'property'}
 						{#if propertySub === 'address'}
-							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { if (propertyAddressValid()) propertySub = 'details'; }}>
-								Next <ArrowRight class="h-4 w-4" />
-							</Button>
-						{:else if propertySub === 'details'}
-							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { seedUnitsForType(); propertySub = 'units'; }}>
+							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { if (propertyAddressValid()) { seedUnitsForType(); propertySub = 'units'; } }}>
 								Next <ArrowRight class="h-4 w-4" />
 							</Button>
 						{:else}
