@@ -21,6 +21,7 @@
 	import type { OwnerEntityType } from '$lib/types';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -208,10 +209,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="owners-page">
-	<div class="mb-4">
-		<h1 class="text-2xl font-bold">Owners</h1>
-		<p class="text-sm text-muted-foreground">Ownership entities consumed by owner statements. Looking for service providers? They're under Vendors.</p>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={9}
+		tone="violet"
+		eyebrow="Settings"
+		title="Owners"
+		description="Ownership entities consumed by owner statements. Service providers live under Vendors."
+		data-testid="owners-header"
+	/>
 
 	<DataGrid
 		data={ownersList}

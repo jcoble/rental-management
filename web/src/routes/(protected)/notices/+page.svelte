@@ -15,6 +15,7 @@
 	import FairHousingReviewDialog from '$lib/components/shared/FairHousingReviewDialog.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { AlertTriangle, CheckCircle2, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -203,44 +204,47 @@
 
 </script>
 
+{#snippet headerActions()}
+	<div class="flex flex-wrap items-center gap-2">
+		<Select.Root type="single" bind:value={statusFilter}>
+			<Select.Trigger class="w-36" data-testid="notice-status-filter">
+				{statusFilterLabel}
+			</Select.Trigger>
+			<Select.Content>
+				{#each statusFilterOptions as option}
+					<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+		<HelpPopover
+			title="Generate drafts"
+			summary="Scans your leases and auto-creates notice drafts — renewal, late-rent, and move-out reminders — that are due."
+			detail="Nothing is sent automatically: each draft waits for you to review, edit, and approve before it goes out."
+			learnMoreUrl={undefined}
+		/>
+		<Button onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending} data-testid="generate-notices">
+			<RefreshCw class="mr-1.5 h-4 w-4" />
+			{generateMutation.isPending ? 'Generating...' : 'Generate drafts'}
+		</Button>
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>Tenant notices - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="notices-page">
-	<div class="mb-5 flex flex-wrap items-start justify-between gap-4">
-		<div>
-			<h1 class="flex items-center gap-2 text-2xl font-bold">
-				<FileText class="h-6 w-6 text-primary" />
-				Tenant notices
-			</h1>
-			<p class="mt-1 text-sm text-muted-foreground">
-				Lease lifecycle drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send.
-			</p>
-		</div>
-		<div class="flex flex-wrap items-center gap-2">
-			<Select.Root type="single" bind:value={statusFilter}>
-				<Select.Trigger class="w-36" data-testid="notice-status-filter">
-					{statusFilterLabel}
-				</Select.Trigger>
-				<Select.Content>
-					{#each statusFilterOptions as option}
-						<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<HelpPopover
-				title="Generate drafts"
-				summary="Scans your leases and auto-creates notice drafts — renewal, late-rent, and move-out reminders — that are due."
-				detail="Nothing is sent automatically: each draft waits for you to review, edit, and approve before it goes out."
-				learnMoreUrl={undefined}
-			/>
-			<Button onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending} data-testid="generate-notices">
-				<RefreshCw class="mr-1.5 h-4 w-4" />
-				{generateMutation.isPending ? 'Generating...' : 'Generate drafts'}
-			</Button>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-5"
+		band
+		art={4}
+		tone="rose"
+		eyebrow="Inbox"
+		title="Tenant notices"
+		description="Lease lifecycle drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send."
+		actions={headerActions}
+		data-testid="notices-header"
+	/>
 
 	{#if draftsQuery.isLoading}
 		<p class="py-12 text-center text-sm text-muted-foreground">Loading notice drafts...</p>
