@@ -27,12 +27,7 @@ export type OnboardingPropertyForm = {
 	status?: string | null;
 };
 
-export function buildOnboardingPropertyPayload({
-	propertyForm,
-	selectedOwnerId,
-	createdOwner,
-	existingOwners
-}: {
+export function buildOnboardingPropertyPayload(input: {
 	propertyForm: OnboardingPropertyForm;
 	selectedOwnerId?: string | null;
 	createdOwner: OwnerLike | null | undefined;
@@ -42,12 +37,16 @@ export function buildOnboardingPropertyPayload({
 	ownerEntityId: number | null;
 	clearOwnerEntity: boolean;
 } {
+	const { propertyForm, selectedOwnerId, createdOwner, existingOwners } = input;
 	const selectedOwnerEntityId = propertyForm.ownerEntityId?.trim();
-	const fallbackOwnerEntityId = ownerEntityIdForOnboarding({ selectedOwnerId, createdOwner, existingOwners });
+	const fallbackOwnerEntityId =
+		propertyForm.ownerEntityId == null
+			? ownerEntityIdForOnboarding({ selectedOwnerId, createdOwner, existingOwners })
+			: '';
 	const ownerEntityId = selectedOwnerEntityId
 		? Number(selectedOwnerEntityId)
-		: propertyForm.ownerEntityId == null
-			? Number(fallbackOwnerEntityId || NaN)
+		: fallbackOwnerEntityId
+			? Number(fallbackOwnerEntityId)
 			: NaN;
 	const hasOwnerEntity = Number.isFinite(ownerEntityId) && ownerEntityId > 0;
 
