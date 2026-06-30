@@ -473,6 +473,161 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_CorrectsOpenApplicationAndAuditsUpdate()
+    {
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Jesse",
+            LastName = "Coble",
+            Email = "old@example.test",
+            Phone = "555-0000",
+            DateOfBirth = new DateTime(1990, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CurrentAddress = "Old address",
+            Employer = "Old Employer",
+            MonthlyIncome = 2500m,
+            DesiredMoveInDate = DateTime.UtcNow.AddDays(15),
+            Notes = "Original note",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = DateTime.UtcNow.AddDays(-2),
+            CreatedAt = DateTime.UtcNow.AddDays(-2),
+            UpdatedAt = DateTime.UtcNow.AddDays(-2),
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.UpdateAsync(
+            PortfolioId,
+            app.Id,
+            new UpdateApplicationRequest
+            {
+                FirstName = "JESSE",
+                LastName = "NATHANIEL COBLE",
+                Email = "updated@example.test",
+                Phone = "555-0101",
+                DateOfBirth = new DateTime(1988, 5, 4),
+                CurrentAddress = "123 Updated Ave",
+                Employer = "Updated Employer",
+                MonthlyIncome = 6100m,
+                ClearDesiredMoveInDate = true,
+                Notes = "Corrected by landlord",
+            },
+            userId: 7);
+
+        result.Should().NotBeNull();
+        result!.FirstName.Should().Be("JESSE");
+        result.LastName.Should().Be("NATHANIEL COBLE");
+        result.Email.Should().Be("updated@example.test");
+        result.Phone.Should().Be("555-0101");
+        result.DateOfBirth.Should().Be(new DateTime(1988, 5, 4, 0, 0, 0, DateTimeKind.Utc));
+        result.CurrentAddress.Should().Be("123 Updated Ave");
+        result.Employer.Should().Be("Updated Employer");
+        result.MonthlyIncome.Should().Be(6100m);
+        result.DesiredMoveInDate.Should().BeNull();
+        result.Notes.Should().Be("Corrected by landlord");
+
+        var reloaded = await _db.RentalApplications.SingleAsync(a => a.Id == app.Id);
+        reloaded.Status.Should().Be(ApplicationStatus.Submitted);
+        reloaded.UpdatedAt.Should().BeAfter(app.CreatedAt);
+        _audit.Calls.Should().Contain(c => c.entityType == "RentalApplication" && c.entityId == app.Id
+            && c.operation == AuditLogOperation.Updated);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_CorrectsUnderReviewApplication()
+    {
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Under",
+            LastName = "Review",
+            Status = ApplicationStatus.UnderReview,
+            SubmittedAtUtc = DateTime.UtcNow.AddDays(-3),
+            CreatedAt = DateTime.UtcNow.AddDays(-3),
+            UpdatedAt = DateTime.UtcNow.AddDays(-2),
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.UpdateAsync(
+            PortfolioId,
+            app.Id,
+            new UpdateApplicationRequest { LastName = "Corrected" },
+            userId: 7);
+
+        result.Should().NotBeNull();
+        result!.Status.Should().Be(ApplicationStatus.UnderReview.ToString());
+        result.LastName.Should().Be("Corrected");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RejectsForeignProperty()
+    {
+        var foreignProperty = new Property
+        {
+            PortfolioId = OtherPortfolioId,
+            Name = "Foreign Property",
+            AddressLine1 = "1 Foreign St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(foreignProperty);
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Local",
+            LastName = "Applicant",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var act = async () => await _sut.UpdateAsync(
+            PortfolioId,
+            app.Id,
+            new UpdateApplicationRequest { PropertyId = foreignProperty.Id },
+            userId: 7);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("Selected property was not found");
+        (await _db.RentalApplications.SingleAsync(a => a.Id == app.Id)).PropertyId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RejectsApprovedApplications()
+    {
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Already",
+            LastName = "Approved",
+            Status = ApplicationStatus.Approved,
+            SubmittedAtUtc = DateTime.UtcNow.AddDays(-5),
+            ReviewedAtUtc = DateTime.UtcNow.AddDays(-4),
+            CreatedAt = DateTime.UtcNow.AddDays(-5),
+            UpdatedAt = DateTime.UtcNow.AddDays(-4),
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var act = async () => await _sut.UpdateAsync(
+            PortfolioId,
+            app.Id,
+            new UpdateApplicationRequest { FirstName = "Changed" },
+            userId: 7);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("Only submitted or under-review applications");
+        (await _db.RentalApplications.SingleAsync(a => a.Id == app.Id)).FirstName.Should().Be("Already");
+    }
+
+    [Fact]
     public async Task GetAsync_ExposesAttachedScannedApplicationImage()
     {
         var app = new RentalApplication
