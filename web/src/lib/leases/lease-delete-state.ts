@@ -31,7 +31,7 @@ export function getLeaseDeleteState(lease: LeaseDeleteTarget | null | undefined)
 		case 'Active':
 			return {
 				title: 'Remove active lease',
-				message: `${leaseLabel} is active${homeLabel}. Removing it will terminate this lease record, release the unit from active occupancy, and hide it from active lease workflows. Use Give Notice for a normal move-out; remove only duplicate or mistaken leases.`,
+				message: `${leaseLabel} is active${homeLabel}. Removing it will terminate this lease record, release the unit from active occupancy, and hide it from active lease workflows. Use Create / Send notice for a normal move-out; remove only duplicate or mistaken leases.`,
 				confirmLabel: 'Remove active lease',
 			};
 		case 'NoticeGiven':
