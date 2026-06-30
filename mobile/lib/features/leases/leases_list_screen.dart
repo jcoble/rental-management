@@ -5,6 +5,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
@@ -103,11 +105,16 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Leases')),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'leases-fab',
-        onPressed: () => _showAddSheet(context),
-        tooltip: 'Create lease',
-        child: const Icon(Icons.add),
+        primaryAction: MobileQuickAction(
+          label: 'Create lease',
+          icon: Icons.add,
+          onPressed: () => _showAddSheet(context),
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,

@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ai, type QaTurn, type BriefingBullet, type DocCitation } from '$lib/api/endpoints/ai';
+	import {
+		ai,
+		type AssistantActionDraft,
+		type AssistantActionDraftResponse,
+		type QaTurn,
+		type BriefingBullet,
+		type DocCitation
+	} from '$lib/api/endpoints/ai';
+	import AssistantActionDraftCard from '$lib/components/assistant/AssistantActionDraftCard.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
@@ -8,7 +16,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
-	import { RefreshCw, Sparkles, Send, BookOpen, ArrowUpRight } from '@lucide/svelte';
+	import { RefreshCw, Sparkles, Send, BookOpen, ArrowUpRight, ShieldCheck } from '@lucide/svelte';
+	import { looksLikeAssistantActionCommand } from '$lib/assistant/actions';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -66,10 +75,21 @@
 	let history = $state<QaTurn[]>([]);
 	let question = $state('');
 	let llmUnavailable = $state(false);
+	let writeModeEnabled = $state(false);
+	let actionDraftPending = $state(false);
+	let executingActionTurn = $state<number | null>(null);
+
+	type ActionTurnState = {
+		draft?: AssistantActionDraft | null;
+		status?: AssistantActionDraftResponse['status'] | null;
+		missingFields: string[];
+		note?: string | null;
+	};
 
 	// Docs citations to show under an assistant turn, keyed by that turn's index in
 	// `history`. Kept separate so we don't pollute the QaTurn payload sent to the API.
 	let citationsByTurn = $state<Record<number, DocCitation[]>>({});
+	let actionDraftsByTurn = $state<Record<number, ActionTurnState>>({});
 
 	const EXAMPLE_PROMPTS = [
 		"Who's late on rent?",
@@ -97,12 +117,35 @@
 		},
 	}));
 
-	function submitQuestion() {
+	async function submitQuestion() {
 		const q = question.trim();
-		if (!q || askMutation.isPending) return;
+		if (!q || askMutation.isPending || actionDraftPending || executingActionTurn !== null) return;
 		history = [...history, { role: 'user', content: q }];
 		const historyBeforeThisQuestion = history.slice(0, -1);
 		question = '';
+		if (looksLikeAssistantActionCommand(q)) {
+			const assistantIndex = history.length;
+			actionDraftPending = true;
+			try {
+				const response = await ai.draftAction(q, writeModeEnabled);
+				history = [...history, { role: 'assistant', content: response.message }];
+				actionDraftsByTurn = {
+					...actionDraftsByTurn,
+					[assistantIndex]: {
+						draft: response.draft,
+						status: response.status,
+						missingFields: response.missingFields,
+						note: null
+					}
+				};
+			} catch (err) {
+				history = history.slice(0, -1);
+				showError(apiErrorMessage(err));
+			} finally {
+				actionDraftPending = false;
+			}
+			return;
+		}
 		askMutation.mutate({ q, hist: historyBeforeThisQuestion });
 	}
 
@@ -115,6 +158,43 @@
 
 	function useExamplePrompt(prompt: string) {
 		question = prompt;
+	}
+
+	async function executeAction(turnIndex: number) {
+		const current = actionDraftsByTurn[turnIndex];
+		if (!current?.draft || executingActionTurn !== null) return;
+
+		executingActionTurn = turnIndex;
+		actionDraftsByTurn = {
+			...actionDraftsByTurn,
+			[turnIndex]: { ...current, note: null }
+		};
+
+		try {
+			const response = await ai.executeAction(current.draft, writeModeEnabled);
+			history = history.map((turn, index) =>
+				index === turnIndex ? { ...turn, content: response.message } : turn
+			);
+			actionDraftsByTurn = {
+				...actionDraftsByTurn,
+				[turnIndex]: {
+					...current,
+					status: response.status,
+					note: response.detailHref ? `Open: ${response.detailHref}` : null,
+					draft: response.status === 'Created' ? null : current.draft
+				}
+			};
+		} catch (err) {
+			actionDraftsByTurn = {
+				...actionDraftsByTurn,
+				[turnIndex]: {
+					...current,
+					note: apiErrorMessage(err)
+				}
+			};
+		} finally {
+			executingActionTurn = null;
+		}
 	}
 
 	/** Turn a raw tool name like `get_financial_summary` into "financial summary". */
@@ -246,6 +326,24 @@
 					/>
 				</div>
 				<p class="text-xs text-muted-foreground mt-0.5">Ask anything about your properties, tenants, or finances.</p>
+				<label
+					class="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs"
+					data-testid="ai-action-mode"
+				>
+					<span class="flex min-w-0 items-center gap-2">
+						<ShieldCheck class="h-4 w-4 shrink-0 text-primary" />
+						<span class="min-w-0">
+							<span class="block font-medium text-foreground">Action mode</span>
+							<span class="block text-muted-foreground">Opt in before the assistant can create records.</span>
+						</span>
+					</span>
+					<input
+						type="checkbox"
+						class="h-4 w-4 accent-primary"
+						bind:checked={writeModeEnabled}
+						data-testid="ai-action-mode-toggle"
+					/>
+				</label>
 			</Card.Header>
 
 			<!-- Chat history -->
@@ -307,6 +405,17 @@
 												</ul>
 											</div>
 										{/if}
+										{#if actionDraftsByTurn[i]}
+											<AssistantActionDraftCard
+												draft={actionDraftsByTurn[i].draft}
+												status={actionDraftsByTurn[i].status}
+												missingFields={actionDraftsByTurn[i].missingFields}
+												writeModeEnabled={writeModeEnabled}
+												isExecuting={executingActionTurn === i}
+												note={actionDraftsByTurn[i].note}
+												onConfirm={() => executeAction(i)}
+											/>
+										{/if}
 										{#if i === history.length - 1 && askMutation.data && (askMutation.data.toolsUsed?.length ?? 0) > 0}
 											<p class="px-1 text-xs text-muted-foreground" data-testid="tools-used">
 												Looked at: {askMutation.data.toolsUsed.map(friendlyToolName).join(', ')}
@@ -320,7 +429,7 @@
 							{/if}
 						{/each}
 
-						{#if askMutation.isPending}
+						{#if askMutation.isPending || actionDraftPending}
 							<div class="flex justify-start" data-testid="chat-typing">
 								<div class="rounded-2xl rounded-bl-sm border border-border bg-muted/40 px-4 py-3">
 									<span class="flex gap-1">
@@ -355,14 +464,14 @@
 						bind:value={question}
 						placeholder="Ask anything about your properties…"
 						onkeydown={handleKeydown}
-						disabled={askMutation.isPending}
+						disabled={askMutation.isPending || actionDraftPending || executingActionTurn !== null}
 						aria-label="Question input"
 						data-testid="question-input"
 						class="flex-1"
 					/>
 					<Button
 						onclick={submitQuestion}
-						disabled={askMutation.isPending || !question.trim()}
+						disabled={askMutation.isPending || actionDraftPending || executingActionTurn !== null || !question.trim()}
 						aria-label="Send question"
 						data-testid="ask-button"
 						size="icon"

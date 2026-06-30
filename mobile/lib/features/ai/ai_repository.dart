@@ -10,6 +10,8 @@ import 'ai_models.dart';
 /// Endpoints:
 ///   GET  /api/v1/ai/briefing
 ///   POST /api/v1/ai/ask
+///   POST /api/v1/ai/actions/draft
+///   POST /api/v1/ai/actions/execute
 class AiRepository {
   const AiRepository(this._dio);
 
@@ -18,8 +20,7 @@ class AiRepository {
   /// Fetches the daily briefing for the authenticated user's portfolio.
   Future<BriefingResponse> briefing() async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/ai/briefing');
+      final response = await _dio.get<Map<String, dynamic>>('/ai/briefing');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -59,6 +60,54 @@ class AiRepository {
         );
       }
       return AskResponse.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<AssistantActionDraftResponse> draftAction(
+    String command,
+    bool writeModeEnabled,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/ai/actions/draft',
+        data: {'command': command, 'writeModeEnabled': writeModeEnabled},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AssistantActionDraftResponse.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<AssistantActionExecuteResponse> executeAction(
+    AssistantActionDraft draft,
+    bool writeModeEnabled,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/ai/actions/execute',
+        data: {
+          'draft': draft.toJson(),
+          'writeModeEnabled': writeModeEnabled,
+          'confirmed': true,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AssistantActionExecuteResponse.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

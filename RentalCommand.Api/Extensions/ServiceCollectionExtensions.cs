@@ -145,6 +145,7 @@ public static class ServiceCollectionExtensions
         // --- AI (phase 3) ---
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
         services.AddScoped<IPortfolioQaService, PortfolioQaService>();
+        services.AddScoped<IAssistantActionService, AssistantActionService>();
         services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
         // Knowledge base: markdown docs loaded + cached in memory once, shared by the public docs
         // endpoints and the chatbot how-to path. Pure file-load + in-memory retrieval (no DB, no

@@ -17,17 +17,20 @@ public class AiController : ManagementControllerBase
 {
     private readonly IDailyBriefingService _briefing;
     private readonly IPortfolioQaService _qa;
+    private readonly IAssistantActionService _actions;
     private readonly IFairHousingReviewService _fairHousing;
     private readonly ILlmProvider _llm;
 
     public AiController(
         IDailyBriefingService briefing,
         IPortfolioQaService qa,
+        IAssistantActionService actions,
         IFairHousingReviewService fairHousing,
         ILlmProvider llm)
     {
         _briefing = briefing;
         _qa = qa;
+        _actions = actions;
         _fairHousing = fairHousing;
         _llm = llm;
     }
@@ -52,6 +55,39 @@ public class AiController : ManagementControllerBase
 
         var delivery = BuildDelivery(req);
         return Ok(await _qa.AskAsync(GetPortfolioId(), req.Question, req.History, delivery, ct));
+    }
+
+    /// <summary>
+    /// Drafts a consequential assistant action without changing data. Execution is a separate call
+    /// that requires write mode and explicit confirmation.
+    /// </summary>
+    [HttpPost("actions/draft")]
+    [ProducesResponseType(typeof(AssistantActionDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<AssistantActionDraftResponse>> DraftAction(
+        [FromBody] AssistantActionDraftRequest req,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Command)) return BadRequest("Command is required.");
+        if (req.Command.Length > 2000) return BadRequest("Command is too long (max 2000 characters).");
+
+        return Ok(await _actions.DraftAsync(GetPortfolioId(), req, ct));
+    }
+
+    /// <summary>
+    /// Executes a reviewed assistant action. This endpoint deliberately requires both explicit write
+    /// mode and confirmation on every request; a previously-generated draft is never enough by itself.
+    /// </summary>
+    [HttpPost("actions/execute")]
+    [ProducesResponseType(typeof(AssistantActionExecuteResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<AssistantActionExecuteResponse>> ExecuteAction(
+        [FromBody] AssistantActionExecuteRequest req,
+        CancellationToken ct)
+    {
+        if (req.Draft is null) return BadRequest("Draft is required.");
+
+        return Ok(await _actions.ExecuteAsync(GetPortfolioId(), req, ct));
     }
 
     /// <summary>

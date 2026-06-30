@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'team_repository.dart';
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -27,10 +29,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
   Future<void> _refresh() => ref.read(teamProvider.notifier).refresh();
 
   void _showInviteDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (_) => const _InviteDialog(),
-    );
+    showDialog<void>(context: context, builder: (_) => const _InviteDialog());
   }
 
   @override
@@ -39,11 +38,16 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Team')),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: MobileQuickActionFab(
         heroTag: 'team-fab',
-        onPressed: _showInviteDialog,
-        tooltip: 'Invite member',
-        child: const Icon(Icons.person_add_outlined),
+        primaryAction: MobileQuickAction(
+          label: 'Invite member',
+          icon: Icons.person_add_outlined,
+          onPressed: _showInviteDialog,
+        ),
+        onChat: () => openMobileAssistant(context),
+        onRecord: () => openMobileRecord(context),
+        onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
@@ -57,9 +61,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
             if (list.isEmpty) {
               return CustomScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
-                  const SliverFillRemaining(child: _EmptyBody()),
-                ],
+                slivers: [const SliverFillRemaining(child: _EmptyBody())],
               );
             }
             return ListView.separated(
@@ -103,9 +105,7 @@ class _MemberCard extends ConsumerWidget {
                   ? cs.primaryContainer
                   : cs.surfaceContainerHighest,
               child: Text(
-                member.label.isNotEmpty
-                    ? member.label[0].toUpperCase()
-                    : '?',
+                member.label.isNotEmpty ? member.label[0].toUpperCase() : '?',
                 style: TextStyle(
                   color: member.isActive
                       ? cs.onPrimaryContainer
@@ -133,16 +133,18 @@ class _MemberCard extends ConsumerWidget {
                   if (member.displayName != null)
                     Text(
                       member.email,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   if (!member.isActive)
                     Text(
                       'Inactive',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(color: cs.error),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: cs.error,
+                      ),
                     ),
                 ],
               ),
@@ -216,7 +218,9 @@ class _InviteDialogState extends ConsumerState<_InviteDialog> {
       _error = null;
     });
     try {
-      final result = await ref.read(teamProvider.notifier).invite(
+      final result = await ref
+          .read(teamProvider.notifier)
+          .invite(
             email: _emailCtrl.text.trim(),
             displayName: _nameCtrl.text.trim().isEmpty
                 ? null
@@ -306,16 +310,16 @@ class _InviteDialogState extends ConsumerState<_InviteDialog> {
             TextFormField(
               controller: _nameCtrl,
               textInputAction: TextInputAction.next,
-              decoration:
-                  const InputDecoration(labelText: 'Display name (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Display name (optional)',
+              ),
             ),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               initialValue: _role,
               decoration: const InputDecoration(labelText: 'Role'),
               items: _roles
-                  .map((r) =>
-                      DropdownMenuItem(value: r, child: Text(r)))
+                  .map((r) => DropdownMenuItem(value: r, child: Text(r)))
                   .toList(),
               onChanged: (v) {
                 if (v != null) setState(() => _role = v);
@@ -332,10 +336,7 @@ class _InviteDialogState extends ConsumerState<_InviteDialog> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: TextStyle(color: cs.error, fontSize: 13),
-              ),
+              Text(_error!, style: TextStyle(color: cs.error, fontSize: 13)),
             ],
           ],
         ),
@@ -376,9 +377,9 @@ class _EmptyBody extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             'No team members yet',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 4),
           Text(
@@ -414,10 +415,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: cs.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
