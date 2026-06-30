@@ -134,15 +134,15 @@ describe('appointment create/edit modal wiring', () => {
 	const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 
 	it('uses a guided stepper instead of a dense single-screen dialog form', () => {
-		assert.match(source, /const FORM_STEPS = \[/);
-		assert.match(source, /data-testid="appointment-form-steps"/);
-		assert.match(source, /data-testid=\{`appointment-step-\$\{step\.key\}`\}/);
+		assert.match(source, /const appointmentSteps: FormStepperStep\[\] = \[/);
+		assert.match(source, /testid="appointment-stepper"/);
+		assert.match(source, /testid="appointment-step-next"/);
 		assert.doesNotMatch(source, /grid gap-3 md:grid-cols-3/);
 	});
 
 	it('keeps Save on the final step and jumps validation back to the first problem step', () => {
-		assert.match(source, /formStep === 'people'/);
+		assert.match(source, /appointmentStep < appointmentSteps\.length - 1/);
 		assert.match(source, /data-testid="appointment-form-save"/);
-		assert.match(source, /formStep = firstStepWithErrors\(result\.errors\)/);
+		assert.match(source, /appointmentStep = firstErrorStep/);
 	});
 });
