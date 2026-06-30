@@ -297,6 +297,7 @@ public sealed class LeaseSignatureQueueItemResponse
 {
     public long Id { get; init; }
     public string RecipientEmail { get; init; } = string.Empty;
+    public int? TenantId { get; init; }
     public string? Subject { get; init; }
     public string Status { get; init; } = "Queued";
     public DateTime QueuedAt { get; init; }
