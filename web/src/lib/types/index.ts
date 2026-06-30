@@ -303,6 +303,22 @@ export interface UnitDashboardOverview {
 	upcomingAppointments: UnitAppointmentSummary[];
 }
 
+export type UnitTurnoverStatus = 'NotStarted' | 'AwaitingVacancy' | 'MoveOut' | 'InProgress' | 'RentReady';
+
+export interface UnitTurnoverSummary {
+	status: UnitTurnoverStatus | string;
+	totalTaskCount: number;
+	openTaskCount: number;
+	completedTaskCount: number;
+	receiptCount: number;
+	estimatedCost: number;
+	actualCost: number;
+	startedAt?: string | null;
+	targetReadyDate?: string | null;
+	lastActivityAt?: string | null;
+	daysInTurnover?: number | null;
+}
+
 /** The Unit Command Center at-a-glance aggregate (GET /units/{id}/dashboard). */
 export interface UnitDashboard {
 	unit: Unit;
@@ -314,6 +330,7 @@ export interface UnitDashboard {
 	currentTenant?: UnitTenantSummary;
 	currentTenants?: UnitTenantSummary[];
 	overview: UnitDashboardOverview;
+	turnover: UnitTurnoverSummary;
 	recentTimeline: AuditEntry[];
 }
 

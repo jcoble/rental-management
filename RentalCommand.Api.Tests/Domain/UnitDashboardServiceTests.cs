@@ -138,6 +138,127 @@ public class UnitDashboardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetDashboardAsync_ReturnsTurnoverSummaryFromSqlAggregates()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Turnover Flats",
+            AddressLine1 = "12 Make Ready",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "7",
+            Status = UnitStatus.Offline,
+            MarketRent = 1400m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var openWork = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Title = "Paint bedrooms",
+            Description = "Patch and paint",
+            Status = WorkOrderStatus.InProgress,
+            EstimatedCost = 200m,
+            RequestedAt = now.AddDays(-4),
+            ScheduledFor = now.AddDays(3),
+            UpdatedAt = now.AddDays(-1),
+        };
+        var completedWork = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Title = "Trash-out",
+            Description = "Remove items",
+            Status = WorkOrderStatus.Completed,
+            EstimatedCost = 100m,
+            ActualCost = 120m,
+            RequestedAt = now.AddDays(-6),
+            CompletedAt = now.AddDays(-2),
+            UpdatedAt = now.AddDays(-2),
+        };
+        var linkedReceipt = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            WorkOrder = openWork,
+            Description = "Paint supplies",
+            Amount = 75m,
+            IncurredAt = now.AddDays(-1),
+            CreatedAt = now.AddDays(-1),
+            UpdatedAt = now.AddDays(-1),
+        };
+        var directReceipt = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Description = "Key copies",
+            Amount = 25m,
+            IncurredAt = now.AddDays(-3),
+            CreatedAt = now.AddDays(-3),
+            UpdatedAt = now.AddDays(-3),
+        };
+        var foreignUnit = new Unit
+        {
+            Property = property,
+            UnitNumber = "8",
+            MarketRent = 900m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var foreignReceipt = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = foreignUnit,
+            Description = "Other unit",
+            Amount = 999m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, openWork, completedWork, linkedReceipt, directReceipt, foreignUnit, foreignReceipt);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Turnover.Status.Should().Be("InProgress");
+        dashboard.Turnover.TotalTaskCount.Should().Be(2);
+        dashboard.Turnover.OpenTaskCount.Should().Be(1);
+        dashboard.Turnover.CompletedTaskCount.Should().Be(1);
+        dashboard.Turnover.ReceiptCount.Should().Be(2);
+        dashboard.Turnover.EstimatedCost.Should().Be(300m);
+        dashboard.Turnover.ActualCost.Should().Be(220m);
+        dashboard.Turnover.TargetReadyDate.Should().Be(openWork.ScheduledFor);
+        dashboard.Turnover.StartedAt.Should().Be(completedWork.RequestedAt);
+        dashboard.Turnover.DaysInTurnover.Should().BeGreaterThan(0);
+
+        _executedSql.Should().Contain(command =>
+            command.Contains("FROM \"WorkOrders\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("SUM", StringComparison.OrdinalIgnoreCase));
+        _executedSql.Should().Contain(command =>
+            command.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("SUM", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GetDashboardAsync_LinksReadyNextActionToUnitApplicationLinkFlow()
     {
         var now = DateTime.UtcNow;

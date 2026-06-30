@@ -24,8 +24,8 @@
 		{ key: 'MoveIn', label: 'Move-In', tab: 'lease' },
 		{ key: 'Active', label: 'Active', tab: 'ledger' },
 		{ key: 'Renewal', label: 'Renewal', tab: 'lease' },
-		{ key: 'MoveOut', label: 'Move-Out', tab: 'maintenance' },
-		{ key: 'Turnover', label: 'Turnover', tab: 'maintenance' },
+		{ key: 'MoveOut', label: 'Move-Out', tab: 'turnover' },
+		{ key: 'Turnover', label: 'Turnover', tab: 'turnover' },
 	];
 
 	const currentIndex = $derived(Math.max(0, STAGES.findIndex((s) => s.key === stage)));

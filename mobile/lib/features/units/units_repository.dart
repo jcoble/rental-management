@@ -86,6 +86,7 @@ class UnitDashboard {
     this.currentLease,
     this.currentTenant,
     this.currentTenants = const [],
+    this.turnover = const UnitTurnoverSummary(),
   });
 
   final Unit unit;
@@ -97,6 +98,7 @@ class UnitDashboard {
   final UnitTenantSummary? currentTenant;
   final List<UnitTenantSummary> currentTenants;
   final UnitDashboardOverview overview;
+  final UnitTurnoverSummary turnover;
 
   factory UnitDashboard.fromJson(Map<String, dynamic> json) {
     final leaseJson = _jsonObjectOrNull(json['currentLease']);
@@ -121,6 +123,51 @@ class UnitDashboard {
           : UnitTenantSummary.fromJson(tenantJson),
       currentTenants: tenants,
       overview: UnitDashboardOverview.fromJson(_jsonObject(json['overview'])),
+      turnover: UnitTurnoverSummary.fromJson(_jsonObject(json['turnover'])),
+    );
+  }
+}
+
+class UnitTurnoverSummary {
+  const UnitTurnoverSummary({
+    this.status = 'NotStarted',
+    this.totalTaskCount = 0,
+    this.openTaskCount = 0,
+    this.completedTaskCount = 0,
+    this.receiptCount = 0,
+    this.estimatedCost = 0,
+    this.actualCost = 0,
+    this.startedAt,
+    this.targetReadyDate,
+    this.lastActivityAt,
+    this.daysInTurnover,
+  });
+
+  final String status;
+  final int totalTaskCount;
+  final int openTaskCount;
+  final int completedTaskCount;
+  final int receiptCount;
+  final double estimatedCost;
+  final double actualCost;
+  final DateTime? startedAt;
+  final DateTime? targetReadyDate;
+  final DateTime? lastActivityAt;
+  final int? daysInTurnover;
+
+  factory UnitTurnoverSummary.fromJson(Map<String, dynamic> json) {
+    return UnitTurnoverSummary(
+      status: json['status'] as String? ?? 'NotStarted',
+      totalTaskCount: (json['totalTaskCount'] as num?)?.toInt() ?? 0,
+      openTaskCount: (json['openTaskCount'] as num?)?.toInt() ?? 0,
+      completedTaskCount: (json['completedTaskCount'] as num?)?.toInt() ?? 0,
+      receiptCount: (json['receiptCount'] as num?)?.toInt() ?? 0,
+      estimatedCost: (json['estimatedCost'] as num?)?.toDouble() ?? 0,
+      actualCost: (json['actualCost'] as num?)?.toDouble() ?? 0,
+      startedAt: _parseOptionalDate(json['startedAt']),
+      targetReadyDate: _parseOptionalDate(json['targetReadyDate']),
+      lastActivityAt: _parseOptionalDate(json['lastActivityAt']),
+      daysInTurnover: (json['daysInTurnover'] as num?)?.toInt(),
     );
   }
 }
