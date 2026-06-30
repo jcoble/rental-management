@@ -147,8 +147,8 @@ public class PropertyService : IPropertyService
 
         // When no owner is supplied, link the property to the portfolio's primary (self) owner so it shows up
         // in the owners report. If the portfolio has no primary owner yet, leave it null rather than failing.
-        var ownerEntityId = request.OwnerEntityId;
-        if (!ownerEntityId.HasValue)
+        var ownerEntityId = request.ClearOwnerEntity ? null : request.OwnerEntityId;
+        if (!ownerEntityId.HasValue && !request.ClearOwnerEntity)
         {
             ownerEntityId = await _db.OwnerEntities
                 .Where(oe => oe.PortfolioId == portfolioId && oe.IsPrimary)
@@ -234,7 +234,14 @@ public class PropertyService : IPropertyService
         var now = DateTime.UtcNow;
 
         if (request.OwnerId.HasValue) entity.OwnerId = request.OwnerId;
-        if (request.OwnerEntityId.HasValue) entity.OwnerEntityId = request.OwnerEntityId;
+        if (request.ClearOwnerEntity)
+        {
+            entity.OwnerEntityId = null;
+        }
+        else if (request.OwnerEntityId.HasValue)
+        {
+            entity.OwnerEntityId = request.OwnerEntityId;
+        }
         if (request.Name != null) entity.Name = request.Name;
         if (request.PropertyType.HasValue) entity.PropertyType = request.PropertyType.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
@@ -452,6 +459,16 @@ public class PropertyService : IPropertyService
         {
             throw new DomainValidationException(
                 "This property has expense history. Archive the expense history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.RentalApplications
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has application history. Archive the applications instead of deleting the property.",
                 statusCode: 409);
         }
 

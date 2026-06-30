@@ -140,6 +140,38 @@ public class PropertyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_ClearOwnerEntity_AllowsAssignedOwnerToBeDeleted()
+    {
+        var now = DateTime.UtcNow;
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Owner To Clear",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.OwnerEntities.Add(owner);
+        _ctx.Db.SaveChanges();
+
+        var property = SeedProperty("Owner Linked Property", PropertyType.MultiFamily);
+        property.OwnerEntityId = owner.Id;
+        _ctx.Db.SaveChanges();
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            property.Id,
+            new UpdatePropertyRequest { ClearOwnerEntity = true });
+
+        updated.Should().NotBeNull();
+        updated!.OwnerEntityId.Should().BeNull();
+        _ctx.Db.Properties.Single(p => p.Id == property.Id).OwnerEntityId.Should().BeNull();
+
+        var ownerService = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        (await ownerService.DeleteAsync(PortfolioId, owner.Id)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task DeleteAsync_ThrowsWhenPropertyStillHasLiveUnits()
     {
         var property = SeedPropertyWithUnit(out _);
@@ -216,6 +248,30 @@ public class PropertyServiceTests : IDisposable
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("expense");
+        ex.Which.Message.Should().Contain("history");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasApplicationHistory()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        _ctx.Db.RentalApplications.Add(new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            FirstName = "Applied",
+            LastName = "Tenant",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("application");
         ex.Which.Message.Should().Contain("history");
     }
 

@@ -63,6 +63,7 @@
 		NEW_ONBOARDING_OWNER_VALUE,
 		onboardingOwnerFormFromOwner,
 		onboardingOwnerRecordOptions,
+		ownerEntityIdForOnboarding,
 	} from '$lib/onboarding/owner-selection';
 	import {
 		NEW_ONBOARDING_PROPERTY_VALUE,
@@ -387,6 +388,9 @@
 				createdOwner = owner;
 			}
 			selectedOwnerId = String(owner.id);
+			if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE && !propertyForm.ownerEntityId) {
+				propertyForm.ownerEntityId = String(owner.id);
+			}
 			ownerForm = onboardingOwnerFormFromOwner(owner);
 			showSuccess(vars.ownerId == null ? 'Owner added.' : 'Owner saved.');
 			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
@@ -445,10 +449,12 @@
 		city: '',
 		state: '',
 		postalCode: '',
+		ownerEntityId: '',
 	});
 	let propertyErrors = $state<Record<string, string>>({});
 	let selectedPropertyId = $state(NEW_ONBOARDING_PROPERTY_VALUE);
 	let propertyDeleteTarget = $state<Property | null>(null);
+	let unitDeleteTarget = $state<Unit | null>(null);
 	let propertySelectionPrefilled = false;
 	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
 		createdProperty,
@@ -469,6 +475,14 @@
 		return Number.isFinite(id) && id > 0 ? id : null;
 	}
 
+	function defaultPropertyOwnerEntityId(): string {
+		return ownerEntityIdForOnboarding({
+			selectedOwnerId,
+			createdOwner,
+			existingOwners: ownerRecordOptions
+		});
+	}
+
 	function selectPropertyRecord(value: string | undefined) {
 		selectedPropertyId = value || NEW_ONBOARDING_PROPERTY_VALUE;
 		propertyErrors = {};
@@ -481,6 +495,7 @@
 				city: '',
 				state: '',
 				postalCode: '',
+				ownerEntityId: defaultPropertyOwnerEntityId(),
 			};
 			unitRows = [emptyUnit()];
 			unitRowErrors = [{}];
@@ -514,6 +529,37 @@
 		selectedPropertyId = String(property.id);
 		propertyForm = onboardingPropertyFormFromProperty(property);
 	});
+
+	const selectedPropertyUnitsQuery = createQuery(() => {
+		const propertyId = propertyIdFromSelection();
+		return {
+			queryKey: ['onboarding-property-units', propertyId],
+			enabled: propertyId != null && propertyId > 0,
+			queryFn: () => properties.listUnits(propertyId!),
+		};
+	});
+
+	const selectedPropertyUnits = $derived(selectedPropertyUnitsQuery.data ?? []);
+	let propertyOwnerDefaulted = false;
+
+	$effect(() => {
+		if (propertyOwnerDefaulted || currentStep.key !== 'property') return;
+		if (selectedPropertyId !== NEW_ONBOARDING_PROPERTY_VALUE || propertyForm.ownerEntityId) return;
+		const defaultOwnerId = defaultPropertyOwnerEntityId();
+		if (!defaultOwnerId) return;
+		propertyOwnerDefaulted = true;
+		propertyForm.ownerEntityId = defaultOwnerId;
+	});
+
+	function unitSummary(unit: Unit): string {
+		const compactNumber = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+		const rent = new Intl.NumberFormat('en-US', {
+			style: 'currency',
+			currency: 'USD',
+			maximumFractionDigits: 0,
+		}).format(unit.marketRent ?? 0);
+		return `${compactNumber.format(unit.bedrooms ?? 0)} bd · ${compactNumber.format(unit.bathrooms ?? 0)} ba · ${rent}/mo`;
+	}
 
 	const emptyUnit = () => ({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let unitRows = $state<ReturnType<typeof emptyUnit>[]>([emptyUnit()]);
@@ -587,6 +633,22 @@
 			showError(apiErrorMessage(err, 'Property could not be deleted.'));
 		},
 	}));
+	const deleteUnitMutation = createMutation(() => ({
+		mutationFn: (id: number) => properties.deleteUnit(id),
+		onSuccess: (_result, id) => {
+			showSuccess('Unit deleted.');
+			unitDeleteTarget = null;
+			createdUnits = createdUnits.filter((unit) => unit.id !== id);
+			queryClient.invalidateQueries({ queryKey: ['onboarding-property-units', propertyIdFromSelection()] });
+			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['units'] });
+			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
+		},
+		onError: (err) => {
+			unitDeleteTarget = null;
+			showError(apiErrorMessage(err, 'Unit could not be deleted.'));
+		},
+	}));
 
 	// Validate just the address fields before advancing the property sub-step.
 	function propertyAddressValid(): boolean {
@@ -601,14 +663,15 @@
 	}
 
 	function submitProperty() {
+		const propertyPayload = buildOnboardingPropertyPayload({
+			propertyForm,
+			selectedOwnerId,
+			createdOwner,
+			existingOwners: ownerRecordOptions
+		});
 		const propResult = parseForm(
 			propertySchema,
-			buildOnboardingPropertyPayload({
-				propertyForm,
-				selectedOwnerId,
-				createdOwner,
-				existingOwners: ownerRecordOptions
-			})
+			propertyPayload
 		);
 		if (propResult.errors) {
 			propertyErrors = propResult.errors;
@@ -636,7 +699,7 @@
 
 		savePropertyMutation.mutate({
 			propertyId: propertyIdFromSelection(),
-			property: { portfolioId, ...propResult.data },
+			property: { portfolioId, ...propResult.data, clearOwnerEntity: propertyPayload.clearOwnerEntity },
 			units: validUnits
 		});
 	}
@@ -1020,6 +1083,7 @@
 			deleteOwnerMutation.isPending ||
 			savePropertyMutation.isPending ||
 			deletePropertyMutation.isPending ||
+			deleteUnitMutation.isPending ||
 			saveTenantsMutation.isPending ||
 			saveLeaseMutation.isPending ||
 			saveNotificationEmailMutation.isPending ||
@@ -1436,7 +1500,10 @@
 											</Button>
 										{/if}
 									</div>
-									<p class="mt-1 text-xs text-muted-foreground">Pick an owner to edit these fields, or start a fresh owner record.</p>
+									<p class="mt-1 text-xs text-muted-foreground">
+										Pick an owner to edit these fields, or start a fresh owner record. Owners assigned
+										to properties must be reassigned or cleared before they can be deleted.
+									</p>
 								</div>
 							{/if}
 							<div class="grid gap-4 sm:grid-cols-2">
@@ -1557,6 +1624,26 @@
 							{:else if propertySub === 'details'}
 								<div class="grid gap-4" data-testid="onboarding-property-sub-details">
 									<div>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
+										<Select.Root type="single" bind:value={propertyForm.ownerEntityId}>
+											<Select.Trigger class="w-full" data-testid="onboarding-property-owner">
+												{propertyForm.ownerEntityId
+													? (ownerRecordOptions.find((owner) => String(owner.id) === propertyForm.ownerEntityId)?.name ?? 'Choose owner')
+													: 'No owner assigned'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
+												{#each ownerRecordOptions as owner (owner.id)}
+													<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											You can leave this unassigned during onboarding. Assign an owner before reports
+											or owner statements need to be correct.
+										</p>
+									</div>
+									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">What kind of property is it?</span>
 										<Select.Root type="single" bind:value={propertyForm.type}>
 											<Select.Trigger class="w-full" data-testid="onboarding-property-type">{formatPropertyType(propertyForm.type)}</Select.Trigger>
@@ -1575,7 +1662,58 @@
 							{:else}
 								<div data-testid="onboarding-property-sub-units">
 									<h3 class="mb-1 text-sm font-semibold">Units</h3>
-									<p class="mb-3 text-xs text-muted-foreground">A house is one unit; a duplex is two. Add a row per unit — or leave blank and add them later.</p>
+									<p class="mb-3 text-xs text-muted-foreground">A house is one unit; a duplex is two. Add a row per unit — or leave blank and add them later. Units with leases, applications, work orders, expenses, inspections, appointments, or documents are preserved and cannot be deleted from onboarding.</p>
+									{#if selectedPropertyRecord}
+										<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-existing-units">
+											<div class="mb-2 flex items-center justify-between gap-3">
+												<div>
+													<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Saved units</p>
+													<p class="text-xs text-muted-foreground">
+														Delete only draft units that have no history; otherwise leave them in place.
+													</p>
+												</div>
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() => selectedPropertyUnitsQuery.refetch()}
+													disabled={selectedPropertyUnitsQuery.isFetching}
+													data-testid="onboarding-existing-units-refresh"
+												>
+													Refresh
+												</Button>
+											</div>
+											{#if selectedPropertyUnitsQuery.isLoading}
+												<p class="text-sm text-muted-foreground">Loading units…</p>
+											{:else if selectedPropertyUnits.length === 0}
+												<p class="text-sm text-muted-foreground">No saved units on this property yet.</p>
+											{:else}
+												<div class="divide-y divide-border rounded-md border border-border bg-background">
+													{#each selectedPropertyUnits as unit (unit.id)}
+														<div class="flex items-center justify-between gap-3 px-3 py-2" data-testid="onboarding-existing-unit-{unit.id}">
+															<div class="min-w-0">
+																<p class="truncate text-sm font-medium">Unit {unit.unitNumber}</p>
+																<p class="text-xs text-muted-foreground">
+																	{unitSummary(unit)}
+																</p>
+															</div>
+															<Button
+																variant="outline"
+																size="icon"
+																class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+																aria-label={`Delete unit ${unit.unitNumber}`}
+																title="Delete unit"
+																data-testid="onboarding-existing-unit-delete-{unit.id}"
+																disabled={deleteUnitMutation.isPending}
+																onclick={() => (unitDeleteTarget = unit)}
+															>
+																<Trash2 class="h-4 w-4" />
+															</Button>
+														</div>
+													{/each}
+												</div>
+											{/if}
+										</div>
+									{/if}
 									<div class="space-y-3" data-testid="onboarding-units">
 										{#each unitRows as row, i (i)}
 											<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
@@ -1897,7 +2035,7 @@
 	open={ownerDeleteTarget !== null}
 	title="Delete owner"
 	message={ownerDeleteTarget
-		? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? If this owner is assigned to properties, Rental Command will ask you to reassign or clear those properties first.`
+		? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? Owners assigned to active properties cannot be deleted. Reassign the properties or set them to No owner assigned first.`
 		: ''}
 	confirmLabel="Delete owner"
 	busy={deleteOwnerMutation.isPending}
@@ -1910,13 +2048,26 @@
 	open={propertyDeleteTarget !== null}
 	title="Delete property"
 	message={propertyDeleteTarget
-		? `Delete "${propertyOptionLabel(propertyDeleteTarget)}"? Properties with units, leases, work orders, expenses, loans, inspections, appointments, or documents must be archived or cleared first.`
+		? `Delete "${propertyOptionLabel(propertyDeleteTarget)}"? Only draft properties with no units or history can be deleted. Properties with units, leases, applications, work orders, expenses, loans, inspections, appointments, or documents stay preserved.`
 		: ''}
 	confirmLabel="Delete property"
 	busy={deletePropertyMutation.isPending}
 	testid="onboarding-property-delete-confirm"
 	onconfirm={() => propertyDeleteTarget && deletePropertyMutation.mutate(propertyDeleteTarget.id)}
 	oncancel={() => (propertyDeleteTarget = null)}
+/>
+
+<ConfirmDialog
+	open={unitDeleteTarget !== null}
+	title="Delete unit"
+	message={unitDeleteTarget
+		? `Delete Unit ${unitDeleteTarget.unitNumber}? Only draft units with no leases, applications, work orders, expenses, inspections, appointments, or documents can be deleted. Historical units stay preserved.`
+		: ''}
+	confirmLabel="Delete unit"
+	busy={deleteUnitMutation.isPending}
+	testid="onboarding-unit-delete-confirm"
+	onconfirm={() => unitDeleteTarget && deleteUnitMutation.mutate(unitDeleteTarget.id)}
+	oncancel={() => (unitDeleteTarget = null)}
 />
 
 <style>

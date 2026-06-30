@@ -5,6 +5,7 @@ type PropertyLike = {
 	id?: number | string;
 	name?: string | null;
 	type?: string | null;
+	ownerEntityId?: number | string | null;
 	addressLine1?: string | null;
 	addressLine2?: string | null;
 	city?: string | null;
@@ -22,6 +23,7 @@ export type OnboardingPropertyForm = {
 	city: string;
 	state: string;
 	postalCode: string;
+	ownerEntityId: string;
 	status?: string | null;
 };
 
@@ -35,11 +37,31 @@ export function buildOnboardingPropertyPayload({
 	selectedOwnerId?: string | null;
 	createdOwner: OwnerLike | null | undefined;
 	existingOwners: readonly OwnerLike[] | null | undefined;
-}): OnboardingPropertyForm & { status: string; ownerEntityId: string } {
+}): Omit<OnboardingPropertyForm, 'ownerEntityId'> & {
+	status: string;
+	ownerEntityId: number | null;
+	clearOwnerEntity: boolean;
+} {
+	const selectedOwnerEntityId = propertyForm.ownerEntityId?.trim();
+	const fallbackOwnerEntityId = ownerEntityIdForOnboarding({ selectedOwnerId, createdOwner, existingOwners });
+	const ownerEntityId = selectedOwnerEntityId
+		? Number(selectedOwnerEntityId)
+		: propertyForm.ownerEntityId == null
+			? Number(fallbackOwnerEntityId || NaN)
+			: NaN;
+	const hasOwnerEntity = Number.isFinite(ownerEntityId) && ownerEntityId > 0;
+
 	return {
-		...propertyForm,
+		name: propertyForm.name,
+		type: propertyForm.type,
+		addressLine1: propertyForm.addressLine1,
+		addressLine2: propertyForm.addressLine2,
+		city: propertyForm.city,
+		state: propertyForm.state,
+		postalCode: propertyForm.postalCode,
 		status: propertyForm.status?.trim() || 'Active',
-		ownerEntityId: ownerEntityIdForOnboarding({ selectedOwnerId, createdOwner, existingOwners })
+		ownerEntityId: hasOwnerEntity ? ownerEntityId : null,
+		clearOwnerEntity: !hasOwnerEntity
 	};
 }
 
@@ -70,5 +92,6 @@ export function onboardingPropertyFormFromProperty(property: PropertyLike): Onbo
 		city: property.city ?? '',
 		state: property.state ?? '',
 		postalCode: property.postalCode ?? '',
+		ownerEntityId: property.ownerEntityId == null ? '' : String(property.ownerEntityId),
 	};
 }
