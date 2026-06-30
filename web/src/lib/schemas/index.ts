@@ -199,10 +199,13 @@ export const leaseSchema = z.object({
 	// rentDueDay: server [Range(1, 31)]
 	rentDueDay: numericString('Due day').refine((v) => v >= 1 && v <= 31, 'Due day must be between 1 and 31'),
 	rentTrackingStartMode: z
-		.enum(['BackfillFromLeaseStart', 'ForwardOnly', 'CustomCutoffDate'])
+		.enum(['BackfillFromLeaseStart', 'ForwardOnly', 'CustomCutoffDate', 'OpeningBalanceOnly'])
 		.optional()
-		.default('BackfillFromLeaseStart'),
+		.default('ForwardOnly'),
 	rentTrackingStartDate: optionalText,
+	openingBalanceAmount: optionalNumeric('Opening balance'),
+	openingBalanceAsOfDate: optionalText,
+	openingBalanceNote: optionalTextMax('Opening balance note', 2000),
 	status: z.string(),
 	notes: optionalText,
 });
@@ -211,6 +214,9 @@ export function leaseRentTrackingErrors(value: {
 	status?: unknown;
 	rentTrackingStartMode?: unknown;
 	rentTrackingStartDate?: unknown;
+	openingBalanceAmount?: unknown;
+	openingBalanceAsOfDate?: unknown;
+	openingBalanceNote?: unknown;
 }): Record<string, string> {
 	if (
 		value.status === 'Active' &&
@@ -218,6 +224,18 @@ export function leaseRentTrackingErrors(value: {
 		!String(value.rentTrackingStartDate ?? '').trim()
 	) {
 		return { rentTrackingStartDate: 'Cutoff date is required' };
+	}
+
+	if (value.status === 'Active' && value.rentTrackingStartMode === 'OpeningBalanceOnly') {
+		const amount = String(value.openingBalanceAmount ?? '').trim();
+		const asOfDate = String(value.openingBalanceAsOfDate ?? '').trim();
+		const note = String(value.openingBalanceNote ?? '').trim();
+		if ((asOfDate || note) && !amount) {
+			return { openingBalanceAmount: 'Opening balance amount is required' };
+		}
+		if (amount && !asOfDate) {
+			return { openingBalanceAsOfDate: 'As-of date is required' };
+		}
 	}
 
 	return {};
