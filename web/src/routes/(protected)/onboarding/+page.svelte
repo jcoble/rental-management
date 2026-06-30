@@ -45,6 +45,7 @@
 		type WizardStepKey,
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
+	import { celebrateMilestone, bigFinale } from '$lib/onboarding/celebrations';
 	import {
 		ONBOARDING_IMPORT_PHASES,
 		onboardingImportPhaseProgress,
@@ -215,6 +216,13 @@
 	// Skip straight through, so we only show the "You're all set!" celebration when this is truly true;
 	// otherwise we tell the truth ("You can finish anytime") and point back to what's left.
 	const coreSpineComplete = $derived(stepDone.property && stepDone.tenants && stepDone.lease);
+
+	// Celebrations (TSK-599) fire ONLY on a genuine, first-time milestone completion — the
+	// user actually created records on a core step — never on a plain step advance or Skip,
+	// and at most once per step. (Previously next() fired confetti on every forward click,
+	// which is why it felt constant and disconnected from "I finished a phase".)
+	const MILESTONE_STEPS: WizardStepKey[] = ['owner', 'property', 'tenants', 'lease'];
+	const celebratedSteps = new Set<WizardStepKey>();
 
 	// ---------------------------------------------------------------------------
 	// Initial positioning. Priority:
@@ -1073,15 +1081,25 @@
 		}
 	}
 
-	function next() {
+	function next({ celebrate = true }: { celebrate?: boolean } = {}) {
 		// Deep-linked from a Settings section → return there once the step is handled.
 		if (fromParam === 'settings' && currentStep.settingsAnchor) {
 			goto(`/settings#${currentStep.settingsAnchor}`);
 			return;
 		}
-		// The last CORE step (lease) is the natural "done" point — show the celebration and offer the
+		// Did the user just finish a real milestone (records created on a core step) for the
+		// first time? Only then do we reward — once per step, and never via Skip.
+		const reachedMilestone =
+			celebrate &&
+			MILESTONE_STEPS.includes(currentStep.key) &&
+			stepDone[currentStep.key] &&
+			!celebratedSteps.has(currentStep.key);
+		if (reachedMilestone) celebratedSteps.add(currentStep.key);
+
+		// The last CORE step (lease) is the natural "done" point — show the finale and offer the
 		// optional provider steps from there rather than forcing the user through them.
 		if (currentStep.key === 'lease') {
+			bigFinale();
 			finishFlow();
 			return;
 		}
@@ -1089,12 +1107,15 @@
 			currentStepKey: currentStep.key,
 			returnToFinishAfterOptional,
 		})) {
+			bigFinale();
 			finishFlow();
 			return;
 		}
 		if (stepIndex < STEPS.length - 1) {
+			if (reachedMilestone) celebrateMilestone();
 			stepIndex += 1;
 		} else {
+			bigFinale();
 			finishFlow();
 		}
 	}
@@ -1113,7 +1134,7 @@
 		}
 	}
 	function skip() {
-		next();
+		next({ celebrate: false });
 	}
 	function goToStep(key: WizardStepKey) {
 		stepIndex = STEPS.findIndex((s) => s.key === key);
