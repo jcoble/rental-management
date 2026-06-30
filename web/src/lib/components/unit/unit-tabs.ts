@@ -1,4 +1,4 @@
-export const UNIT_TABS = ['overview', 'lease', 'applications', 'rent', 'maintenance', 'documents', 'expenses', 'timeline'] as const;
+export const UNIT_TABS = ['overview', 'listing', 'lease', 'applications', 'rent', 'maintenance', 'documents', 'expenses', 'timeline'] as const;
 
 export type UnitTab = (typeof UNIT_TABS)[number];
 

@@ -148,6 +148,58 @@ export interface Unit {
 	updatedAt: string;
 }
 
+export type UnitListingStatus = 'Draft' | 'ReadyToPost' | 'Posted' | 'Paused' | 'Filled' | 'Archived';
+
+export interface UnitListing {
+	id: number;
+	portfolioId: number;
+	propertyId: number;
+	unitId: number;
+	channel: 'ZillowManual';
+	status: UnitListingStatus;
+	headline: string;
+	description: string;
+	rent: number;
+	securityDeposit?: number | null;
+	bedrooms: number;
+	bathrooms: number;
+	squareFeet?: number | null;
+	availableOn?: string | null;
+	leaseTerms?: string | null;
+	petPolicy?: string | null;
+	utilities?: string | null;
+	parking?: string | null;
+	amenities?: string | null;
+	photoNotes?: string | null;
+	zillowListingUrl?: string | null;
+	zillowApplicationUrl?: string | null;
+	postedAtUtc?: string | null;
+	isPosted: boolean;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface SaveUnitListingRequest {
+	status?: UnitListingStatus;
+	headline?: string;
+	description?: string;
+	rent?: number | null;
+	securityDeposit?: number | null;
+	bedrooms?: number | null;
+	bathrooms?: number | null;
+	squareFeet?: number | null;
+	availableOn?: string | null;
+	leaseTerms?: string | null;
+	petPolicy?: string | null;
+	utilities?: string | null;
+	parking?: string | null;
+	amenities?: string | null;
+	photoNotes?: string | null;
+	zillowListingUrl?: string | null;
+	zillowApplicationUrl?: string | null;
+	postedAtUtc?: string | null;
+}
+
 /** A units-list row with health badges (GET /units/list-with-health). */
 export interface UnitHealth {
 	id: number;
