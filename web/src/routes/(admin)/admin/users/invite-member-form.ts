@@ -4,7 +4,6 @@ export interface InviteMemberForm {
 	email: string;
 	displayName: string;
 	role: UserRole;
-	tenantId: string;
 	temporaryPassword: string;
 }
 
@@ -12,7 +11,6 @@ export interface CreateTeamMemberBody {
 	email: string;
 	displayName?: string;
 	role: UserRole;
-	tenantId?: number;
 	temporaryPassword?: string;
 }
 
@@ -21,7 +19,6 @@ export function createEmptyInviteMemberForm(): InviteMemberForm {
 		email: '',
 		displayName: '',
 		role: 'Manager',
-		tenantId: '',
 		temporaryPassword: '',
 	};
 }
@@ -29,7 +26,6 @@ export function createEmptyInviteMemberForm(): InviteMemberForm {
 export function inviteMemberSubmitDisabled(form: InviteMemberForm, isPending: boolean): boolean {
 	if (isPending) return true;
 	if (!form.email.trim()) return true;
-	if (form.role === 'Tenant' && parseTenantId(form.tenantId) == null) return true;
 	return false;
 }
 
@@ -45,15 +41,5 @@ export function buildCreateTeamMemberBody(form: InviteMemberForm): CreateTeamMem
 	const temporaryPassword = form.temporaryPassword.trim();
 	if (temporaryPassword) body.temporaryPassword = temporaryPassword;
 
-	const tenantId = parseTenantId(form.tenantId);
-	if (form.role === 'Tenant' && tenantId != null) {
-		body.tenantId = tenantId;
-	}
-
 	return body;
-}
-
-function parseTenantId(value: string): number | null {
-	const parsed = Number(value);
-	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }

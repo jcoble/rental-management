@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -17,11 +18,19 @@ public class TenantService : ITenantService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly ITenantPortalProvisioningService _portalProvisioning;
+    private readonly ILogger<TenantService> _logger;
 
-    public TenantService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public TenantService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        ITenantPortalProvisioningService portalProvisioning,
+        ILogger<TenantService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _portalProvisioning = portalProvisioning;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
@@ -176,6 +185,13 @@ public class TenantService : ITenantService
             {
                 Entity = t,
                 ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
+                // Portal-login state: existence + lockout of the Identity user linked to this tenant,
+                // fetched DB-side as correlated subqueries in the SAME query (no follow-up round trip).
+                HasPortalUser = _db.Users.Any(u => u.TenantId == t.Id && u.PortfolioId == portfolioId),
+                PortalLockoutEnd = _db.Users
+                    .Where(u => u.TenantId == t.Id && u.PortfolioId == portfolioId)
+                    .Select(u => u.LockoutEnd)
+                    .FirstOrDefault(),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -186,6 +202,10 @@ public class TenantService : ITenantService
 
         var response = TenantResponse.FromEntity(row.Entity);
         response.ActiveLeaseCount = row.ActiveLeaseCount;
+        // Classify the single fetched row (no cross-row work): no user → none; locked-off → disabled.
+        response.PortalAccess = !row.HasPortalUser
+            ? "none"
+            : TenantPortalProvisioningService.IsPortalDisabled(row.PortalLockoutEnd) ? "disabled" : "active";
         return response;
     }
 
@@ -209,9 +229,33 @@ public class TenantService : ITenantService
         _db.Tenants.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        // A tenant is a first-class portal user: provision their Identity login the moment they're
+        // created. Silent — no email goes out here (staff send the invite on demand). Best-effort: a
+        // tenant with no email yet is a normal no-op (NoEmail), and a provisioning hiccup must never
+        // fail tenant creation.
+        await TryProvisionPortalAccessAsync(entity.Id, portfolioId, ct);
+
         var response = TenantResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+    }
+
+    /// <summary>
+    /// Best-effort: ensure a freshly created tenant has a portal login. A failure is logged and
+    /// swallowed so it can never fail the tenant creation that already succeeded.
+    /// </summary>
+    private async Task TryProvisionPortalAccessAsync(int tenantId, int portfolioId, CancellationToken ct)
+    {
+        try
+        {
+            await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to provision portal access for new tenant {TenantId} in portfolio {PortfolioId}; tenant creation still succeeds.",
+                tenantId, portfolioId);
+        }
     }
 
     public async Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)

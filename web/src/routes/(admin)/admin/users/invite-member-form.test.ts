@@ -8,33 +8,43 @@ import {
 } from './invite-member-form.ts';
 
 const baseForm: InviteMemberForm = {
-	email: 'tenant.portal@example.local',
-	displayName: 'Tenant Portal',
-	role: 'Tenant',
-	tenantId: '10',
+	email: 'manager@example.local',
+	displayName: 'Team Manager',
+	role: 'Manager',
 	temporaryPassword: '',
 };
 
 describe('admin user invite form', () => {
-	it('includes tenantId when creating a tenant portal user', () => {
+	it('builds a create body from the trimmed form fields', () => {
 		assert.deepEqual(buildCreateTeamMemberBody(baseForm), {
-			email: 'tenant.portal@example.local',
-			displayName: 'Tenant Portal',
-			role: 'Tenant',
-			tenantId: 10,
+			email: 'manager@example.local',
+			displayName: 'Team Manager',
+			role: 'Manager',
 		});
 	});
 
-	it('requires a tenant selection before submitting a tenant portal user', () => {
-		assert.equal(inviteMemberSubmitDisabled({ ...baseForm, tenantId: '' }, false), true);
+	it('omits a blank display name and temporary password', () => {
+		assert.deepEqual(
+			buildCreateTeamMemberBody({ ...baseForm, displayName: '   ', temporaryPassword: '  ' }),
+			{ email: 'manager@example.local', role: 'Manager' }
+		);
+	});
+
+	it('includes a supplied temporary password', () => {
+		assert.deepEqual(buildCreateTeamMemberBody({ ...baseForm, temporaryPassword: 'Secret123!' }), {
+			email: 'manager@example.local',
+			displayName: 'Team Manager',
+			role: 'Manager',
+			temporaryPassword: 'Secret123!',
+		});
+	});
+
+	it('requires an email before submitting', () => {
+		assert.equal(inviteMemberSubmitDisabled({ ...baseForm, email: '' }, false), true);
 		assert.equal(inviteMemberSubmitDisabled(baseForm, false), false);
 	});
 
-	it('does not submit stale tenant linkage for staff users', () => {
-		assert.deepEqual(buildCreateTeamMemberBody({ ...baseForm, role: 'Manager' }), {
-			email: 'tenant.portal@example.local',
-			displayName: 'Tenant Portal',
-			role: 'Manager',
-		});
+	it('is disabled while a submit is pending', () => {
+		assert.equal(inviteMemberSubmitDisabled(baseForm, true), true);
 	});
 });
