@@ -14,6 +14,7 @@ class VoiceTurn {
     required this.fields,
     required this.missingRequired,
     required this.complete,
+    required this.ambiguous,
     this.nextPrompt,
   });
 
@@ -31,6 +32,9 @@ class VoiceTurn {
 
   /// True when nothing required is missing — ready to confirm.
   final bool complete;
+
+  /// True when the server needs clarification before this can be saved.
+  final bool ambiguous;
 
   /// Short question for the next missing slot, or null when [complete].
   final String? nextPrompt;
@@ -55,6 +59,7 @@ class VoiceTurn {
           .map((e) => e.toString())
           .toList(),
       complete: (json['complete'] as bool?) ?? true,
+      ambiguous: (json['ambiguous'] as bool?) ?? false,
       nextPrompt: json['nextPrompt'] as String?,
     );
   }
@@ -108,4 +113,4 @@ enum VoicePhase { idle, listening, thinking, asking, review, saving, done, error
 /// Pure mapping from a server turn to the next UI phase: review when there's
 /// nothing left to ask, otherwise keep asking. Kept separate so it's unit-tested.
 VoicePhase phaseForTurn(VoiceTurn turn) =>
-    turn.complete ? VoicePhase.review : VoicePhase.asking;
+    turn.complete && !turn.ambiguous ? VoicePhase.review : VoicePhase.asking;

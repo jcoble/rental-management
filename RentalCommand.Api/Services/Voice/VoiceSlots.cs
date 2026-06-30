@@ -11,10 +11,9 @@ namespace RentalCommand.Api.Services.Voice;
 /// speaks <see cref="SlotEvaluation.NextPrompt"/> and stops when
 /// <see cref="SlotEvaluation.Complete"/> is true.
 ///
-/// Record types not listed in <see cref="RequiredByType"/> have no required
-/// slots, so a draft of that type is always "complete" — this preserves the
-/// prior single-shot voice-note behaviour for Payment/WorkOrder (and scanned
-/// documents) until they grow their own slot rules.
+/// V1 only supports voice-created expense drafts. Other detected intents are
+/// returned as ambiguous so the client keeps the user in the conversation and
+/// never offers a one-tap save for a deferred record type.
 /// </summary>
 public static class VoiceSlots
 {
@@ -23,7 +22,7 @@ public static class VoiceSlots
     // confirm step rejects when missing. A spoken property is attached when the
     // model resolves it (see the Expense prompt) but is optional, so the
     // conversation can complete without one (the receipt isn't always for a
-    // specific unit). Payment/WorkOrder have no slots yet (always complete).
+    // specific unit).
     private static readonly IReadOnlyDictionary<string, string[]> RequiredByType =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
@@ -43,13 +42,19 @@ public static class VoiceSlots
             ["amount"] = "How much was it?",
         };
 
+    private const string UnsupportedIntentPrompt =
+        "I can save expenses by voice right now. Tell me the expense amount and vendor, or review this draft manually.";
+
     public static SlotEvaluation Evaluate(
         string? recordType,
         IReadOnlyDictionary<string, string> fieldValues)
     {
-        var required = recordType is not null && RequiredByType.TryGetValue(recordType, out var slots)
-            ? slots
-            : [];
+        if (IsTruthy(fieldValues, "voice_ambiguous") ||
+            recordType is null ||
+            !RequiredByType.TryGetValue(recordType, out var required))
+        {
+            return new SlotEvaluation([], UnsupportedIntentPrompt, false, true);
+        }
 
         var missing = new List<string>();
         foreach (var slot in required)
@@ -61,7 +66,15 @@ public static class VoiceSlots
         }
 
         var nextPrompt = missing.Count > 0 ? PromptFor(missing[0]) : null;
-        return new SlotEvaluation(missing, nextPrompt, missing.Count == 0);
+        return new SlotEvaluation(missing, nextPrompt, missing.Count == 0, false);
+    }
+
+    private static bool IsTruthy(IReadOnlyDictionary<string, string> values, string key)
+    {
+        if (!values.TryGetValue(key, out var raw))
+            return false;
+
+        return raw.Trim().ToLowerInvariant() is "true" or "1" or "yes";
     }
 
     private static bool IsSatisfied(string slot, IReadOnlyDictionary<string, string> values)
@@ -105,7 +118,9 @@ public static class VoiceSlots
 /// <param name="Missing">Required slots still empty, in ask order.</param>
 /// <param name="NextPrompt">Short question for the first missing slot, or null when complete.</param>
 /// <param name="Complete">True when no required slots are missing.</param>
+/// <param name="Ambiguous">True when the voice turn needs clarification before it can be saved.</param>
 public sealed record SlotEvaluation(
     IReadOnlyList<string> Missing,
     string? NextPrompt,
-    bool Complete);
+    bool Complete,
+    bool Ambiguous);
