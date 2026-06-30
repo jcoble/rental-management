@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -253,6 +254,119 @@ public class InspectionChecklistServiceTests : IDisposable
 
         summary.Should().BeNull();
         error.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task CompletedInspection_BlocksChecklistItemEdits()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        });
+        created.Should().NotBeNull();
+
+        var item = created!.Items.OrderBy(i => i.SortOrder).First();
+        await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass, Note = "Walked before completion" });
+
+        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+
+        Func<Task> edit = () => _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Late edit" });
+
+        var ex = await edit.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("completed inspection");
+
+        var persisted = await _db.InspectionItems.AsNoTracking().SingleAsync(i => i.Id == item.Id);
+        persisted.Result.Should().Be(InspectionItemResult.Pass);
+        persisted.Note.Should().Be("Walked before completion");
+    }
+
+    [Fact]
+    public async Task CompletedInspection_BlocksChecklistPhotoAttachment()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        });
+        created.Should().NotBeNull();
+
+        var item = created!.Items.OrderBy(i => i.SortOrder).First();
+        await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+
+        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+
+        var file = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = "inspection-photo.jpg",
+            FilePath = "inspection-photo.jpg",
+            ContentType = "image/jpeg",
+            FileSize = 12,
+            EntityType = "Inspection",
+            EntityId = created.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+        _db.StoredFiles.Add(file);
+        await _db.SaveChangesAsync();
+
+        Func<Task> attachPhoto = () => _service.AttachItemPhotoAsync(PortfolioId, created.Id, item.Id, file.Id);
+
+        var ex = await attachPhoto.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("completed inspection");
+
+        var persisted = await _db.InspectionItems.AsNoTracking().SingleAsync(i => i.Id == item.Id);
+        persisted.PhotoStoredFileId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CompletedInspection_AttachMissingPhoto_ReturnsNull()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        });
+        created.Should().NotBeNull();
+
+        var item = created!.Items.OrderBy(i => i.SortOrder).First();
+        await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+
+        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+
+        var attached = await _service.AttachItemPhotoAsync(PortfolioId, created.Id, item.Id, storedFileId: 999_999);
+
+        attached.Should().BeNull();
+
+        var persisted = await _db.InspectionItems.AsNoTracking().SingleAsync(i => i.Id == item.Id);
+        persisted.PhotoStoredFileId.Should().BeNull();
     }
 
     private Property SeedProperty()
