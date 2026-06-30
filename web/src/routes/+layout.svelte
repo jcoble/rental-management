@@ -22,6 +22,7 @@
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { shouldRetryQuery } from '$lib/api/query-retry';
+	import { onNavigate } from '$app/navigation';
 	import { initAuth } from '$lib/stores/auth.svelte';
 	import type { LayoutData } from './$types';
 
@@ -40,10 +41,31 @@
 		}
 	});
 
-	// Page transitions intentionally disabled. The View Transitions cross-fade captured the whole
-	// `root` — including the persistent shell/sidebar — and drifted the incoming page up 12px on every
-	// navigation AND every URL-changing tab switch, which read as a flicker/jerk on partial loads.
-	// Plain instant swaps look clean; re-introduce only as a scoped (content-only) transition if ever.
+	// Scoped View Transitions (TSK-596). The prior attempt cross-faded the WHOLE root (shell
+	// included) and stacked with the route-enter animation → a 12px drift/flicker. Now the shell
+	// is pinned via stable view-transition-names (see AppShell + app.css) so only the content
+	// cross-fades, and the CSS route-enter is disabled where the API runs (app.css @supports), so
+	// the two never stack. A shared `rc-hero` name (clicked list row ↔ detail header) yields an M3
+	// container transform. Skips in-place ?tab= changes; no-ops where unsupported / reduced-motion.
+	onNavigate((navigation) => {
+		const doc = document as unknown as {
+			startViewTransition?: (cb: () => Promise<void> | void) => unknown;
+		};
+		if (
+			typeof document === 'undefined' ||
+			!doc.startViewTransition ||
+			window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+			navigation.from?.url.pathname === navigation.to?.url.pathname
+		) {
+			return;
+		}
+		return new Promise<void>((resolve) => {
+			doc.startViewTransition!(async () => {
+				resolve();
+				await navigation.complete;
+			});
+		});
+	});
 
 	// Seed the runes auth store from server-provided session data. Re-runs when
 	// the server data changes (e.g. after login/logout navigations).

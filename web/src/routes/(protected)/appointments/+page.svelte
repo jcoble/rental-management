@@ -244,7 +244,7 @@
 {#snippet headerActions()}
 	<div class="flex flex-wrap items-center gap-2">
 		<div
-			class="inline-flex items-center gap-1 rounded-lg border border-border bg-muted p-1"
+			class="m3-glass inline-flex items-center gap-1 rounded-lg p-1"
 			role="tablist"
 			aria-label="Appointment view"
 			data-testid="appointments-view-toggle"
