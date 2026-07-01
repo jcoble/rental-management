@@ -269,12 +269,40 @@ public class PaymentService : IPaymentService
 
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)
     {
-        // Verify the referenced lease belongs to the caller's portfolio — only when a lease is supplied.
-        // A lease-less payment (application/screening fee) carries an ApplicationId instead; gap5 (G5.2)
-        // adds the "exactly one of LeaseId / ApplicationId" validation + the application scope guard.
+        // Exactly one of LeaseId / ApplicationId identifies what the payment is charged against: a lease
+        // (rent/late-fee/utility) or a rental application (a lease-less application/screening fee). Both or
+        // neither is a validation failure (400).
+        if ((request.LeaseId is not null) == (request.ApplicationId is not null))
+        {
+            throw new DomainValidationException(
+                "A payment must reference exactly one of a lease or an application.");
+        }
+
+        // Every referenced FK must belong to the caller's portfolio (cross-tenant IDOR guard) → 404 on miss.
         if (request.LeaseId is { } leaseId && !await _db.EnsureLeaseInPortfolioAsync(portfolioId, leaseId, ct))
         {
             return null;
+        }
+        if (request.ApplicationId is { } applicationId && !await _db.EnsureApplicationInPortfolioAsync(portfolioId, applicationId, ct))
+        {
+            return null;
+        }
+        if (request.PropertyId is { } requestedPropertyId && !await _db.EnsurePropertyInPortfolioAsync(portfolioId, requestedPropertyId, ct))
+        {
+            return null;
+        }
+
+        // An application fee defaults its type to ApplicationFee and attributes to the application's property
+        // when the caller didn't pass one, so lease-less income lands on the right property's reports.
+        var paymentType = request.PaymentType;
+        var resolvedPropertyId = request.PropertyId;
+        if (request.ApplicationId is { } appId)
+        {
+            paymentType = PaymentType.ApplicationFee;
+            resolvedPropertyId ??= await _db.RentalApplications
+                .Where(a => a.Id == appId && a.PortfolioId == portfolioId)
+                .Select(a => a.PropertyId)
+                .FirstOrDefaultAsync(ct);
         }
 
         var now = _timeProvider.UtcNow();
@@ -282,7 +310,9 @@ public class PaymentService : IPaymentService
         {
             PortfolioId = portfolioId,
             LeaseId = request.LeaseId,
-            PaymentType = request.PaymentType,
+            ApplicationId = request.ApplicationId,
+            PropertyId = resolvedPropertyId,
+            PaymentType = paymentType,
             Status = request.Status,
             Amount = request.Amount,
             // Partial-aware split: validated + normalized for the final status/amount (Partial keeps the

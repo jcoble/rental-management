@@ -36,6 +36,10 @@ internal static class PortfolioScopeGuards
     public static Task<bool> EnsureLeaseInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int leaseId, CancellationToken ct)
         => db.Leases.AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
 
+    /// <summary>The referenced rental application must live in the caller's portfolio.</summary>
+    public static Task<bool> EnsureApplicationInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int applicationId, CancellationToken ct)
+        => db.RentalApplications.AnyAsync(a => a.Id == applicationId && a.PortfolioId == portfolioId, ct);
+
     /// <summary>The referenced vendor must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureVendorInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int vendorId, CancellationToken ct)
         => db.Vendors.AnyAsync(v => v.Id == vendorId && v.PortfolioId == portfolioId, ct);

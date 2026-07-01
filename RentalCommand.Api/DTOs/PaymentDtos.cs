@@ -144,6 +144,21 @@ public class CreatePaymentRequest
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
+    /// <summary>
+    /// The rental application to charge, for a lease-less application/screening fee. Exactly one of
+    /// <see cref="LeaseId"/> / <see cref="ApplicationId"/> must be set (validated in the service). When set,
+    /// <see cref="PaymentType"/> defaults to <see cref="PaymentType.ApplicationFee"/>.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int? ApplicationId { get; set; }
+
+    /// <summary>
+    /// The property to attribute the payment to when there is no lease (application fee). Optional; defaults
+    /// to the application's property so lease-less income still lands on the right property's reports.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+
     [EnumDataType(typeof(PaymentType))]
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
 
