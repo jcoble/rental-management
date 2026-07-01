@@ -242,6 +242,28 @@ class ApplicationsRepository {
     }
   }
 
+  /// Records a real application/screening fee as income — a lease-less payment
+  /// attributed to the application's property. Shows on accounting + Schedule E.
+  Future<void> recordFee(
+    int id, {
+    required double amount,
+    String? method,
+    DateTime? paidDate,
+  }) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/applications/$id/fee',
+        data: {
+          'amount': amount,
+          if (method != null && method.isNotEmpty) 'method': method,
+          if (paidDate != null) 'paidDate': paidDate.toUtc().toIso8601String(),
+        },
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Mint a shareable apply link.
   Future<ApplicationLink> createLink() async {
     try {
