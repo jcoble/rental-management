@@ -634,10 +634,10 @@ public class PortfolioQaService : IPortfolioQaService
     {
         var today = _timeProvider.UtcNow();
 
-        // Cap the tool result like every sibling list tool: fetch one extra to detect truncation, then
-        // surface a `truncated` flag instead of streaming an unbounded set into the LLM context.
+        // Cap the tool result like every sibling list tool; both the returned page and the truncation
+        // check stay DB-side so we do not materialize an unbounded overdue set into the LLM context.
         const int maxRows = 50;
-        var paymentRows = await _db.Payments
+        var overdueQuery = _db.Payments
             .AsNoTracking()
             .ForCurrentLeaseAttention(today)
             .Where(p =>
@@ -647,6 +647,7 @@ public class PortfolioQaService : IPortfolioQaService
                  p.Status == PaymentStatus.Late) &&
                 p.DueDate < today)
             .OrderBy(p => p.DueDate)
+            .ThenBy(p => p.Id)
             .Select(p => new
             {
                 leaseNumber  = p.Lease != null ? p.Lease.LeaseNumber : $"lease-{p.LeaseId}",
@@ -657,13 +658,16 @@ public class PortfolioQaService : IPortfolioQaService
                 amount       = p.Amount,
                 dueDate      = p.DueDate,
                 status       = p.Status,
-            })
-            .Take(maxRows + 1)
-            .ToListAsync(ct);
+            });
 
-        var truncated = paymentRows.Count > maxRows;
-        var rows = paymentRows
+        var paymentRows = await overdueQuery
             .Take(maxRows)
+            .ToListAsync(ct);
+        var truncated = await overdueQuery
+            .Skip(maxRows)
+            .AnyAsync(ct);
+
+        var rows = paymentRows
             .Select(p => new
             {
                 p.leaseNumber,
