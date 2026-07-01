@@ -8,7 +8,8 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for maintenance work orders within the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>.
+/// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>
+/// plus requested/scheduled/completed date windows.
 /// Create validates the referenced property/unit/tenant/lease/vendor are in the portfolio. Work orders
 /// have no soft-delete column, so removal is a hard delete.
 /// </summary>
@@ -33,7 +34,7 @@ public class WorkOrderController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<WorkOrderResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? unitId, [FromQuery] int? vendorId, CancellationToken ct)
+        [FromQuery] WorkOrderListQuery query, [FromQuery] int? propertyId, [FromQuery] int? unitId, [FromQuery] int? vendorId, CancellationToken ct)
     {
         var items = await _service.ListAsync(GetPortfolioId(), propertyId, unitId, vendorId, query, ct);
         return Ok(items);

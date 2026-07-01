@@ -48,6 +48,19 @@ public sealed class DebtServiceService : IDebtServiceService
             .Where(l => l.Status == LoanStatus.Active)
             .ToListAsync(ct);
 
+        var loanIds = loans.Select(l => l.Id).ToList();
+        var tailRowsByLoanId = loanIds.Count == 0
+            ? new Dictionary<int, LoanPaymentTail>()
+            : await _db.LoanPayments
+                .AsNoTracking()
+                .Where(p => loanIds.Contains(p.LoanId))
+                .GroupBy(p => p.LoanId)
+                .Select(g => g
+                    .OrderByDescending(p => p.PeriodKey)
+                    .Select(p => new LoanPaymentTail(p.LoanId, p.PeriodKey, p.BalanceAfter))
+                    .First())
+                .ToDictionaryAsync(x => x.LoanId, x => x, ct);
+
         var created = 0;
 
         foreach (var loan in loans)
@@ -71,10 +84,8 @@ public sealed class DebtServiceService : IDebtServiceService
             var lastPeriodToGenerate = Math.Min(currentPeriodIndex, loan.TermMonths);
 
             // Resume from the immutable schedule: the most recent existing row is the chain's tail.
-            var lastRow = await _db.LoanPayments
-                .Where(p => p.LoanId == loan.Id)
-                .OrderByDescending(p => p.PeriodKey)
-                .FirstOrDefaultAsync(ct);
+            // The tails for all active loans were loaded in one grouped SQL query above.
+            tailRowsByLoanId.TryGetValue(loan.Id, out var lastRow);
 
             var nextPeriodIndex = lastRow is null
                 ? 1
@@ -88,27 +99,10 @@ public sealed class DebtServiceService : IDebtServiceService
             var lastBalanceAfter = openingBalance;
             var paidOff = false;
 
-            // Preload the loan's existing (PeriodKey → BalanceAfter) once, so the per-period idempotency
-            // check + balance-advance are dictionary lookups instead of an AnyAsync (+ a FirstAsync) per
-            // period — 360 round-trips on a first-gen 30-year mortgage. Rows are saved only after the
-            // loop, so the DB set this snapshots is exactly what the in-loop query would have seen.
-            var existingBalanceByPeriodKey = await _db.LoanPayments
-                .Where(p => p.LoanId == loan.Id)
-                .Select(p => new { p.PeriodKey, p.BalanceAfter })
-                .ToDictionaryAsync(x => x.PeriodKey, x => x.BalanceAfter, ct);
-
             for (var period = nextPeriodIndex; period <= lastPeriodToGenerate; period++)
             {
                 var periodMonth = startMonth.AddMonths(period - 1);
                 var periodKey = $"{periodMonth.Year:D4}-{periodMonth.Month:D2}";
-
-                // Idempotency backstop (the unique (LoanId, PeriodKey) index is the race guard).
-                if (existingBalanceByPeriodKey.TryGetValue(periodKey, out var existingBalanceAfter))
-                {
-                    // Already present — advance the opening balance from it and continue the chain.
-                    openingBalance = existingBalanceAfter;
-                    continue;
-                }
 
                 var split = AmortizationCalculator.Split(
                     openingBalance, loan.AnnualInterestRatePct, loan.MonthlyPrincipalInterest, loan.MonthlyEscrow);
@@ -196,4 +190,6 @@ public sealed class DebtServiceService : IDebtServiceService
         }
         return 0;
     }
+
+    private sealed record LoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);
 }

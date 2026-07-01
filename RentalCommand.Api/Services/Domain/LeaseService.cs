@@ -578,6 +578,48 @@ public class LeaseService : ILeaseService
             q = q.Where(l => l.Status == query.Status.Value);
         }
 
+        if (query.StartFrom.HasValue)
+        {
+            var startFrom = query.StartFrom.Value.ToUtc();
+            q = q.Where(l => l.StartDate >= startFrom);
+        }
+
+        if (query.StartTo.HasValue)
+        {
+            var startToExclusive = ToExclusiveUpperBound(query.StartTo.Value);
+            q = q.Where(l => l.StartDate < startToExclusive);
+        }
+
+        if (query.EndFrom.HasValue)
+        {
+            var endFrom = query.EndFrom.Value.ToUtc();
+            q = q.Where(l => l.EndDate >= endFrom);
+        }
+
+        if (query.EndTo.HasValue)
+        {
+            var endToExclusive = ToExclusiveUpperBound(query.EndTo.Value);
+            q = q.Where(l => l.EndDate < endToExclusive);
+        }
+
+        if (query.ActiveOn.HasValue)
+        {
+            var activeOn = query.ActiveOn.Value.ToUtc();
+            q = q.Where(l => l.StartDate <= activeOn && l.EndDate >= activeOn);
+        }
+
+        if (query.ActiveFrom.HasValue)
+        {
+            var activeFrom = query.ActiveFrom.Value.ToUtc();
+            q = q.Where(l => l.EndDate >= activeFrom);
+        }
+
+        if (query.ActiveTo.HasValue)
+        {
+            var activeToExclusive = ToExclusiveUpperBound(query.ActiveTo.Value);
+            q = q.Where(l => l.StartDate < activeToExclusive);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
@@ -630,15 +672,34 @@ public class LeaseService : ILeaseService
         };
     }
 
-    private static LeaseListQuery ToLeaseListQuery(ListQuery query, int? tenantId, int? propertyId) => new()
+    private static LeaseListQuery ToLeaseListQuery(ListQuery query, int? tenantId, int? propertyId)
     {
-        Skip = query.Skip,
-        Take = query.Take,
-        Search = query.Search,
-        Sort = query.Sort,
-        TenantId = tenantId,
-        PropertyId = propertyId,
-    };
+        var leaseQuery = query as LeaseListQuery;
+        return new LeaseListQuery
+        {
+            Skip = query.Skip,
+            Take = query.Take,
+            Search = query.Search,
+            Sort = query.Sort,
+            TenantId = tenantId ?? leaseQuery?.TenantId,
+            PropertyId = propertyId ?? leaseQuery?.PropertyId,
+            UnitId = leaseQuery?.UnitId,
+            Status = leaseQuery?.Status,
+            StartFrom = leaseQuery?.StartFrom,
+            StartTo = leaseQuery?.StartTo,
+            EndFrom = leaseQuery?.EndFrom,
+            EndTo = leaseQuery?.EndTo,
+            ActiveOn = leaseQuery?.ActiveOn,
+            ActiveFrom = leaseQuery?.ActiveFrom,
+            ActiveTo = leaseQuery?.ActiveTo,
+        };
+    }
+
+    private static DateTime ToExclusiveUpperBound(DateTime value)
+    {
+        var utc = value.ToUtc();
+        return value.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1) : utc;
+    }
 
     private sealed record ProjectedLease(Lease Lease, string? TenantName, string? UnitNumber, string? PropertyName);
 

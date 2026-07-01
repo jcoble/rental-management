@@ -2,15 +2,14 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Auditing;
 
@@ -251,7 +250,7 @@ public sealed class AuditTrailTests : IDisposable
         _db.Expenses.Add(foreign);
         await _db.SaveChangesAsync();
 
-        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder(), new AppTimeZoneProvider(new ConfigurationBuilder().Build()));
+        var sut = NewAuditQueryService();
         var page = await sut.ListAsync(PortfolioId, null, null, null, new ListQuery());
 
         page.Should().OnlyContain(e => e.PortfolioId == PortfolioId);
@@ -269,7 +268,7 @@ public sealed class AuditTrailTests : IDisposable
         expense.Amount = 999m;
         await _db.SaveChangesAsync();
 
-        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder(), new AppTimeZoneProvider(new ConfigurationBuilder().Build()));
+        var sut = NewAuditQueryService();
 
         var created = await sut.ListAsync(PortfolioId, AuditLogOperation.Created, "Expense", null, new ListQuery());
         created.Should().ContainSingle();
@@ -310,7 +309,7 @@ public sealed class AuditTrailTests : IDisposable
             new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 73, Operation = AuditLogOperation.Created, UserId = null, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-1) });
         await _db.SaveChangesAsync();
 
-        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder(), new AppTimeZoneProvider(new ConfigurationBuilder().Build()));
+        var sut = NewAuditQueryService();
         var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
 
         // UserId present, no ActorLabel → resolved display name (NOT "User #7").
@@ -383,7 +382,7 @@ public sealed class AuditTrailTests : IDisposable
         _db.AddRange(property, unit, tenant, lease, payment);
         await _db.SaveChangesAsync();
 
-        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder(), new AppTimeZoneProvider(new ConfigurationBuilder().Build()));
+        var sut = NewAuditQueryService();
         var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
 
         page.Should().ContainSingle();
@@ -403,11 +402,19 @@ public sealed class AuditTrailTests : IDisposable
         sentence.Should().Be(expected);
     }
 
+    private AuditQueryService NewAuditQueryService() =>
+        new(_db, new AuditDescriber(), new AuditDiffBuilder(), new FakeTimeZoneProvider());
+
     private sealed class FakeActor : ICurrentActor
     {
         public int? UserId { get; init; }
         public string? ActorLabel { get; init; }
         public string? IpAddress { get; init; }
+    }
+
+    private sealed class FakeTimeZoneProvider : IAppTimeZoneProvider
+    {
+        public TimeZoneInfo BusinessTimeZone => TimeZoneInfo.Utc;
     }
 }
 

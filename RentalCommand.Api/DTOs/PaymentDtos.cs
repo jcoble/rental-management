@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -109,6 +110,21 @@ public class PaymentListResponse
     public int TotalCount { get; set; }
     public int Skip { get; set; }
     public int Take { get; set; }
+}
+
+public class PaymentListQuery : ListQuery
+{
+    [FromQuery(Name = "dueFrom")]
+    public DateTime? DueFrom { get; set; }
+
+    [FromQuery(Name = "dueTo")]
+    public DateTime? DueTo { get; set; }
+
+    [FromQuery(Name = "paidFrom")]
+    public DateTime? PaidFrom { get; set; }
+
+    [FromQuery(Name = "paidTo")]
+    public DateTime? PaidTo { get; set; }
 }
 
 public class CreatePaymentRequest

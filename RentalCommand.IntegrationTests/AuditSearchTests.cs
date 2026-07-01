@@ -1,13 +1,12 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -120,7 +119,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         SkipIfNoDocker();
 
         await using var db = NewContext(_ownerConnString);
-        var sut = new AuditQueryService(db, new AuditDescriber(), new AuditDiffBuilder(), new AppTimeZoneProvider(new ConfigurationBuilder().Build()));
+        var sut = new AuditQueryService(db, new AuditDescriber(), new AuditDiffBuilder(), new FakeTimeZoneProvider());
 
         async Task<List<int>> SearchIds(string term)
         {
@@ -152,4 +151,9 @@ public sealed class AuditSearchTests : IAsyncLifetime
 
     private static RentalCommandDbContext NewContext(string connString) =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connString).Options);
+
+    private sealed class FakeTimeZoneProvider : IAppTimeZoneProvider
+    {
+        public TimeZoneInfo BusinessTimeZone => TimeZoneInfo.Utc;
+    }
 }

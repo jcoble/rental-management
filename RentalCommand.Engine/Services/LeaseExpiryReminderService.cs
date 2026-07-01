@@ -27,6 +27,8 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
 {
+    private const int DefaultLeaseExpiryReminderDays = 60;
+
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
@@ -54,13 +56,23 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
     public async Task<int> RemindAsync(CancellationToken ct = default)
     {
         var today = _timeProvider.UtcNow().Date;
+        var defaultReminderCutoff = today.AddDays(DefaultLeaseExpiryReminderDays);
 
-        // Look-ahead can differ per portfolio (LeaseExpiryReminderDays is per-portfolio now). Load
-        // unsent active leases broadly, then filter/gate each against its own portfolio's settings.
-        var leases = await _db.Leases
-            .Where(l => l.Status == LeaseStatus.Active
-                        && l.ExpiryReminderSentAt == null
-                        && l.EndDate >= today)
+        // Look-ahead can differ per portfolio. Push the enabled/window gate into SQL by joining the
+        // persisted settings row; missing rows use the same runtime defaults GetRuntimeAsync would create.
+        var leases = await (
+            from lease in _db.Leases
+            join setting in _db.NotificationSettings.AsNoTracking()
+                on lease.PortfolioId equals setting.PortfolioId into settings
+            from setting in settings.DefaultIfEmpty()
+            where lease.Status == LeaseStatus.Active
+                  && lease.ExpiryReminderSentAt == null
+                  && lease.EndDate >= today
+                  && ((setting == null && lease.EndDate <= defaultReminderCutoff)
+                      || (setting != null
+                          && setting.EnableLeaseExpiryReminders
+                          && lease.EndDate <= today.AddDays(setting.LeaseExpiryReminderDays)))
+            select lease)
             .Include(l => l.Property)
                 .ThenInclude(p => p!.Owner)   // M3: load the owner with the lease (one JOIN) instead of a per-lease Owners.FindAsync; the Include also honors the soft-delete filter that FindAsync bypassed
             .Include(l => l.Tenant)
@@ -89,7 +101,7 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                     g.Key.PortfolioId,
                     Email = g.Min(u => u.Email),
                 })
-                .ToDictionaryAsync(x => (x.OwnerId, x.PortfolioId), x => x.Email, ct);
+                .ToDictionaryAsync(x => (x.OwnerId, x.PortfolioId), x => x.Email ?? string.Empty, ct);
 
         var notifier = new AutomationNotifier(_db, _publisher);
         var configCache = new Dictionary<int, NotificationsConfig>();
@@ -105,12 +117,6 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                 cfg = await _settings.GetRuntimeAsync(lease.PortfolioId, ct);
                 configCache[lease.PortfolioId] = cfg;
             }
-
-            // Per-portfolio master gate + look-ahead window.
-            if (!cfg.EnableLeaseExpiryReminders)
-                continue;
-            if (lease.EndDate > today.AddDays(cfg.LeaseExpiryReminderDays))
-                continue;
 
             var daysLeft = (lease.EndDate.Date - today).Days;
             var tenantName = lease.Tenant is { } t
