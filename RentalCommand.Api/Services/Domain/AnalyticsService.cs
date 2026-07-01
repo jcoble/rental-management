@@ -166,10 +166,10 @@ public class AnalyticsService : IAnalyticsService
                         && w.Status != WorkOrderStatus.Archived)
             .GroupBy(w => w.Priority)
             .Select(g => new { Priority = g.Key, Count = g.Count() })
+            .OrderBy(g => g.Priority)   // order DB-side; no in-memory sort over the GROUP BY output
             .ToListAsync(ct);
 
         var openWorkOrders = openWorkOrderGroups
-            .OrderBy(g => g.Priority)
             .Select(g => new PriorityCount(g.Priority.ToString(), g.Count))
             .ToList();
 

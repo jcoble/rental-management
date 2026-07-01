@@ -138,7 +138,7 @@ public class OpeningBalanceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetLedgerAsync_IncludesOpeningBalanceAsOldestEntry_AndFoldsIntoBalance()
+    public async Task GetLedgerAsync_ReturnsOpeningBalanceAsSeparateAnchor_AndFoldsIntoBalance()
     {
         var lease = SeedLease(PortfolioId);
 
@@ -169,16 +169,17 @@ public class OpeningBalanceServiceTests : IDisposable
         var ledger = await _leaseService.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
 
         ledger.Should().NotBeNull();
-        ledger!.Entries.Should().HaveCount(2);
+        // The opening balance is a SEPARATE anchor now (stable across paging), not mixed into the entries.
+        ledger!.Entries.Should().HaveCount(1);
+        ledger.Entries.Should().OnlyContain(e => e.Type != "Opening");
 
-        // Opening entry is present, typed "Opening", and is the OLDEST (last, since entries are newest-first).
-        var opening = ledger.Entries.Single(e => e.Type == "Opening");
-        opening.Amount.Should().Be(800m);
+        var opening = ledger.Opening;
+        opening.Should().NotBeNull();
+        opening!.Amount.Should().Be(800m);
         opening.Status.Should().Be("Opening");
         opening.Date.Should().Be(new DateTime(2026, 01, 01, 0, 0, 0, DateTimeKind.Utc));
         opening.Explanation.Should().Be(
             "Opening balance carried over from before Rental Command — $800 as of Jan 1, 2026.");
-        ledger.Entries.Last().Type.Should().Be("Opening");
 
         // $800 carried over + $1,200 rent charged = $2,000 charged; $1,200 paid → $800 still owed.
         ledger.TotalCharged.Should().Be(2000m);
@@ -207,8 +208,9 @@ public class OpeningBalanceServiceTests : IDisposable
         ledger.TotalPaid.Should().Be(150m);
         ledger.Balance.Should().Be(-150m);
 
-        var opening = ledger.Entries.Single(e => e.Type == "Opening");
-        opening.Amount.Should().Be(-150m);
+        var opening = ledger.Opening;
+        opening.Should().NotBeNull();
+        opening!.Amount.Should().Be(-150m);
         opening.Explanation.Should().Contain("Opening credit");
     }
 
@@ -227,8 +229,9 @@ public class OpeningBalanceServiceTests : IDisposable
         var ledger = await _leaseService.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
 
         ledger.Should().NotBeNull();
-        var opening = ledger!.Entries.Single(e => e.Type == "Opening");
-        opening.Explanation.Should().Be(
+        var opening = ledger!.Opening;
+        opening.Should().NotBeNull();
+        opening!.Explanation.Should().Be(
             "Opening balance carried over from before Rental Command — $225.30 as of Jan 1, 2026.");
     }
 

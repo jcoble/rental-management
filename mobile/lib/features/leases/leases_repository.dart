@@ -169,10 +169,17 @@ class LeasesRepository {
 
   /// Transparent ledger for a lease: every charge and payment, newest first,
   /// each with a plain-English explanation of what it is plus running totals.
-  Future<LeaseLedger> ledger(int id) async {
+  ///
+  /// The API pages the payment rows DB-side (default 50). This view has no pager
+  /// yet, so it requests a bounded recent window (the API's max page) — enough
+  /// for essentially every real lease. Full load-more paging is tracked as a
+  /// follow-up (see TSK deferral); the request stays bounded either way.
+  Future<LeaseLedger> ledger(int id, {int take = 200}) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/leases/$id/ledger');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/leases/$id/ledger',
+        queryParameters: {'take': take},
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(

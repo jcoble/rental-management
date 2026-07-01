@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RentalCommand.Data;
@@ -11,9 +12,11 @@ using RentalCommand.Data;
 namespace RentalCommand.Data.Migrations
 {
     [DbContext(typeof(RentalCommandDbContext))]
-    partial class RentalCommandDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260701162957_AddOutboxDedupKey")]
+    partial class AddOutboxDedupKey
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -224,9 +227,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PortfolioId", "Provider")
                         .IsUnique();
-
-                    b.HasIndex("Status", "TokenExpiresAt")
-                        .HasDatabaseName("IX_AccountingConnections_Status_TokenExpiresAt");
 
                     b.ToTable("AccountingConnections");
                 });
@@ -1384,15 +1384,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("WorkOrderId");
 
-                    b.HasIndex("PortfolioId", "IncurredAt")
-                        .HasDatabaseName("IX_Expenses_Portfolio_IncurredAt");
-
-                    b.HasIndex("PortfolioId", "PaidAt")
-                        .HasDatabaseName("IX_Expenses_Portfolio_PaidAt");
-
-                    b.HasIndex("PortfolioId", "PropertyId", "Category", "IncurredAt")
-                        .HasDatabaseName("IX_Expenses_Portfolio_Property_Category_IncurredAt");
-
                     b.ToTable("Expenses");
                 });
 
@@ -1730,10 +1721,6 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.HasIndex("UnitId");
-
-                    b.HasIndex("Status", "EndDate")
-                        .HasDatabaseName("IX_Leases_ExpirySweep")
-                        .HasFilter("\"ExpiryReminderSentAt\" IS NULL");
 
                     b.ToTable("Leases", t =>
                         {
@@ -2634,9 +2621,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("Status");
 
-                    b.HasIndex("PortfolioId", "PaidDate")
-                        .HasDatabaseName("IX_Payments_Portfolio_PaidDate");
-
                     b.HasIndex("LeaseId", "PaymentType", "PeriodKey")
                         .IsUnique()
                         .HasFilter("\"PeriodKey\" IS NOT NULL");
@@ -2644,12 +2628,6 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PaymentType", "Status", "DueDate")
                         .HasDatabaseName("IX_Payments_LateFeeSweep")
                         .HasFilter("\"PeriodKey\" IS NOT NULL");
-
-                    b.HasIndex("PortfolioId", "Status", "DueDate")
-                        .HasDatabaseName("IX_Payments_Portfolio_Status_DueDate");
-
-                    b.HasIndex("PortfolioId", "LeaseId", "PaidDate", "DueDate", "Id")
-                        .HasDatabaseName("IX_Payments_Portfolio_Lease_LedgerDates");
 
                     b.ToTable("Payments");
                 });
@@ -3156,9 +3134,6 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("UnitId");
 
                     b.HasIndex("VendorId");
-
-                    b.HasIndex("IsActive", "NextDueDate")
-                        .HasDatabaseName("IX_RecurringMaintenanceTasks_Active_NextDueDate");
 
                     b.HasIndex("PortfolioId", "IsActive", "NextDueDate");
 
@@ -3891,9 +3866,6 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("FilePath")
-                        .HasDatabaseName("IX_StoredFiles_FilePath");
 
                     b.HasIndex("PortfolioId");
 

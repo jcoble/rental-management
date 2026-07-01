@@ -75,9 +75,11 @@ public class LeaseController : ManagementControllerBase
     [HttpGet("{id:int}/ledger")]
     [ProducesResponseType(typeof(LeaseLedgerResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseLedgerResponse>> Ledger(int id, CancellationToken ct)
+    public async Task<ActionResult<LeaseLedgerResponse>> Ledger(
+        int id, CancellationToken ct, [FromQuery] int skip = 0, [FromQuery] int? take = null)
     {
-        var ledger = await _service.GetLedgerAsync(GetPortfolioId(), id, GetTenantIdOrNull(), ct);
+        // Payment history is paged DB-side (Skip/Take) so a multi-year tenancy never materializes whole.
+        var ledger = await _service.GetLedgerAsync(GetPortfolioId(), id, GetTenantIdOrNull(), skip, take, ct);
         return ledger == null ? NotFound(new { error = "Lease not found" }) : Ok(ledger);
     }
 

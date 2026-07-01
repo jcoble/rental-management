@@ -678,9 +678,17 @@ public class LeaseService : ILeaseService
         return response;
     }
 
+    private const int DefaultLedgerPageSize = 50;
+    private const int MaxLedgerPageSize = 200;
+
     public async Task<LeaseLedgerResponse?> GetLedgerAsync(
-        int portfolioId, int id, int? restrictToTenantId = null, CancellationToken ct = default)
+        int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default)
     {
+        // Clamp paging: a lease's payment history grows unbounded over a multi-year tenancy, so the rows
+        // are always paged DB-side (Skip/Take → SQL LIMIT/OFFSET) rather than materialized whole.
+        skip = Math.Max(0, skip);
+        var pageSize = Math.Clamp(take ?? DefaultLedgerPageSize, 1, MaxLedgerPageSize);
+
         var query = _db.Leases
             .AsNoTracking()
             .Include(l => l.Tenant)
@@ -706,9 +714,9 @@ public class LeaseService : ILeaseService
         }
 
         // The ledger ROWS are needed to render each transaction line, so the per-payment projection is
-        // loaded for display. The TOTALS, however, are computed SQL-side over the whole payment set (see
-        // below) rather than re-summed from these rows — keeping the headline figures a DB aggregate even
-        // if the page ever paginates the rows.
+        // loaded for display — but ONLY the requested page (Skip/Take DB-side), never the whole history.
+        // The TOTALS and the past-due count are computed SQL-side over the whole payment set (see below)
+        // rather than re-derived from this page, so the headline figures stay correct under paging.
         var paymentsQuery = _db.Payments
             .AsNoTracking()
             .Where(p => p.LeaseId == id && p.PortfolioId == portfolioId);
@@ -728,6 +736,8 @@ public class LeaseService : ILeaseService
             })
             .OrderByDescending(p => p.LedgerDate)
             .ThenByDescending(p => p.Id)
+            .Skip(skip)
+            .Take(pageSize)
             .ToListAsync(ct);
 
         // A lease may carry an opening balance migrated in from before Rental Command. It anchors the
@@ -807,11 +817,16 @@ public class LeaseService : ILeaseService
             })
             .ToList();
 
-        // Each payment row is a billed charge (rent, fee, deposit). "Charged" is every real charge;
-        // "Paid" is what's been collected. Balance (charged − paid) is exactly what's still owed.
-        // Waived/Failed/Refunded rows aren't money owed and weren't collected, so they're excluded
-        // from both totals and net to zero in the balance. Both totals are computed SQL-side as a single
-        // aggregate over the whole payment set.
+        // Business "today" as UTC-midnight (DueDates are stored UTC-midnight) for the past-due test.
+        var todayUtc = _timeProvider.UtcNow().Date;
+
+        // Headline figures over the WHOLE payment set as one SQL aggregate (unaffected by the page):
+        //  - Charged: every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
+        //  - Paid: full Amount of Paid charges + the collected-so-far of Partial charges (the Partial
+        //    remainder stays in the balance, so Balance = Charged − Paid).
+        //  - Total: payment count (the pageable unit) → drives "more history remains?".
+        //  - PastDue: count of Scheduled/Partial/Late charges whose DueDate is before today (the
+        //    "Settle past due" affordance) — computed DB-side, never from the paged rows.
         var ledgerTotals = await paymentsQuery
             .GroupBy(_ => 1)
             .Select(g => new
@@ -829,25 +844,33 @@ public class LeaseService : ILeaseService
                         : p.Status == PaymentStatus.Partial
                             ? p.AmountPaid ?? 0m
                             : 0m),
+                Total = g.Count(),
+                PastDue = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled ||
+                     p.Status == PaymentStatus.Partial ||
+                     p.Status == PaymentStatus.Late) &&
+                    p.DueDate < todayUtc
+                        ? 1
+                        : 0),
             })
             .SingleOrDefaultAsync(ct);
 
-        // Charged = every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
         var totalCharged = ledgerTotals?.Charged ?? 0m;
-        // Paid = the full Amount of Paid charges plus the collected-so-far of Partial charges; the
-        // Partial remainder stays in the balance (Balance = Charged − Paid).
         var totalPaid = ledgerTotals?.Paid ?? 0m;
+        var totalPayments = ledgerTotals?.Total ?? 0;
+        var pastDueCount = ledgerTotals?.PastDue ?? 0;
 
+        // The opening balance anchors pre-Rental-Command history. It's folded into the totals (a positive
+        // opening adds to "charged", a credit adds to "paid", keeping Balance = TotalCharged − TotalPaid
+        // exact) but returned as a SEPARATE anchor rather than mixed into the paged Entries, so it stays a
+        // stable one-row anchor no matter which page is loaded.
+        LedgerTransactionResponse? openingEntry = null;
         if (opening != null)
         {
-            // Anchor the ledger with the carried-over balance as its oldest entry. A positive amount
-            // (tenant owed) reads as a charge; a negative amount (credit) reads like a prepayment. Folded
-            // into the totals so the running balance reflects pre-app history: a positive opening adds to
-            // "charged", a credit adds to "paid", keeping Balance = TotalCharged − TotalPaid exact.
             totalCharged += Math.Max(opening.Amount, 0m);
             totalPaid += Math.Max(-opening.Amount, 0m);
 
-            entries.Add(new LedgerTransactionResponse
+            openingEntry = new LedgerTransactionResponse
             {
                 Date = opening.AsOfDate,
                 Type = "Opening",
@@ -861,7 +884,7 @@ public class LeaseService : ILeaseService
                 Status = "Opening",
                 SourceHref = $"/accounting/opening-balances/{opening.Id}",
                 Explanation = LedgerExplanation.ForOpeningBalance(opening.Amount, opening.AsOfDate),
-            });
+            };
         }
 
         return new LeaseLedgerResponse
@@ -873,7 +896,12 @@ public class LeaseService : ILeaseService
             TotalCharged = totalCharged,
             TotalPaid = totalPaid,
             Balance = totalCharged - totalPaid,
+            PastDueCount = pastDueCount,
+            Opening = openingEntry,
             Entries = entries,
+            TotalCount = totalPayments,
+            Skip = skip,
+            Take = pageSize,
         };
     }
 
