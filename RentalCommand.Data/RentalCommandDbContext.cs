@@ -97,10 +97,24 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<AccountingEntityMapping> AccountingEntityMappings => Set<AccountingEntityMapping>();
     public DbSet<AccountingSyncMap> AccountingSyncMaps => Set<AccountingSyncMap>();
 
+    /// <summary>Single-row (Id = 1) controllable simulation clock — non-prod only. Global (no RLS policy).</summary>
+    public DbSet<SimulationClock> SimulationClocks => Set<SimulationClock>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
         base.OnModelCreating(modelBuilder);
+
+        // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
+        // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
+        // session can still read it. Mode stored as a readable string (tiny table, low volume).
+        modelBuilder.Entity<SimulationClock>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedNever();
+            entity.Property(e => e.Mode).HasConversion<string>().HasMaxLength(16);
+            entity.Property(e => e.TimeZoneId).HasMaxLength(64);
+        });
 
         modelBuilder.Entity<ApplicationUser>(entity =>
         {
