@@ -100,6 +100,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     /// <summary>Single-row (Id = 1) controllable simulation clock — non-prod only. Global (no RLS policy).</summary>
     public DbSet<SimulationClock> SimulationClocks => Set<SimulationClock>();
 
+    /// <summary>Dev-only API→Engine command queue for on-demand scheduled-job runs. Global (no RLS policy).</summary>
+    public DbSet<SimWorkerCommand> SimWorkerCommands => Set<SimWorkerCommand>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
@@ -114,6 +117,19 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Id).ValueGeneratedNever();
             entity.Property(e => e.Mode).HasConversion<string>().HasMaxLength(16);
             entity.Property(e => e.TimeZoneId).HasMaxLength(64);
+        });
+
+        // Dev-only API→Engine command queue (dev/test only). Global — like SimulationClock, intentionally
+        // NOT added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so the Engine's
+        // admin session and the API's portfolio-scoped session can both read/write it. Guid PK is
+        // app-assigned (ValueGeneratedNever). Status is a readable string; indexed for the claim query.
+        modelBuilder.Entity<SimWorkerCommand>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedNever();
+            entity.Property(e => e.WorkerKey).HasMaxLength(64);
+            entity.Property(e => e.Status).HasMaxLength(16);
+            entity.HasIndex(e => e.Status);
         });
 
         modelBuilder.Entity<ApplicationUser>(entity =>
