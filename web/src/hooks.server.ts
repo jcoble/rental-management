@@ -11,10 +11,12 @@
 
 import type { Handle, HandleFetch, RequestEvent } from '@sveltejs/kit';
 import type { Cookies } from '@sveltejs/kit';
+import { env } from '$env/dynamic/public';
 import type { User } from '$lib/types/user';
 import { serverRefreshToken, applyRefreshCookies } from '$lib/server/token-refresh';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { userFromAccessToken } from '$lib/server/jwt-claims';
+import { SIM_CLOCK_SHIM_PLACEHOLDER, simClockShimScript } from '$lib/dev/sim-clock-shim';
 import {
 	deleteAccessCookies,
 	getAccessToken,
@@ -91,7 +93,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	}
 
-	return resolve(event);
+	// Dev-only: inline the master simulation-clock Date shim into <head> (replacing the app.html
+	// placeholder) so Date is patched before app boot. Gated on PUBLIC_SIMULATION_ENABLED via
+	// $env/dynamic/public (M2 — dynamic, so an unset var never breaks the build); replaced with '' in
+	// production so the served HTML is unchanged.
+	const simClockEnabled = env.PUBLIC_SIMULATION_ENABLED === 'true';
+	return resolve(event, {
+		transformPageChunk: ({ html }) =>
+			html.replace(SIM_CLOCK_SHIM_PLACEHOLDER, simClockEnabled ? simClockShimScript : '')
+	});
 };
 
 /**
