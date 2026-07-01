@@ -506,7 +506,7 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
     }
 
     private static AccountingService NewService(RentalCommandDbContext db) =>
-        new(db, new ScheduleEService(db), new YearEndPacketPdfGenerator());
+        new(db, new ScheduleEService(db), new YearEndPacketPdfGenerator(), TimeProvider.System);
 
     /// <summary>
     /// Seeds a property + unit + tenant ("Maria Tenant") + active lease + one Scheduled rent payment

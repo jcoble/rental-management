@@ -29,7 +29,7 @@ public class AuditLog
     public string? NewValues { get; set; }
 
     public string? ChangeReason { get; set; }
-    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    public DateTime Timestamp { get; set; }
     public string? IpAddress { get; set; }
 
     public ApplicationUser? User { get; set; }

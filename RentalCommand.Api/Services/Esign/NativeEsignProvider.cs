@@ -74,7 +74,10 @@ public sealed class NativeEsignProvider : IEsignProvider
             return new EsignResult { Status = "Error", Error = "Lease not found for this document." };
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
+        // The signing LINK's expiry stays on the REAL clock (never the simulation clock) so a
+        // time-travelling dev session can't wrongly expire — or revive — a real tenant's signing link.
+        var linkExpiresAtUtc = DateTime.UtcNow.Add(TokenLifetime);
 
         // Persist the original (unsigned) document so the signer can review the exact bytes that were sent.
         var originalFileId = await StoreDocumentAsync(
@@ -103,7 +106,7 @@ public sealed class NativeEsignProvider : IEsignProvider
                 Name = s.Name,
                 Email = s.Email,
                 Token = GenerateToken(),
-                ExpiresAtUtc = now.Add(TokenLifetime),
+                ExpiresAtUtc = linkExpiresAtUtc,
                 Status = SignatureSignerStatus.Pending,
             });
         }

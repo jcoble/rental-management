@@ -13,7 +13,7 @@ public class OutboxMessage
     public string Payload { get; set; } = string.Empty;
 
     public int RetryCount { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime? SentAt { get; set; }
     public DateTime? FailedAt { get; set; }
     public string? Error { get; set; }

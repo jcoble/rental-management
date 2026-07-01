@@ -38,8 +38,8 @@ public class DocumentTemplate : IAuditable, IPortfolioScoped
     /// <summary>Monotonic version incremented whenever template content or fields change.</summary>
     public int Version { get; set; } = 1;
 
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
     public DateTime? ArchivedAtUtc { get; set; }
 
     public Portfolio? Portfolio { get; set; }

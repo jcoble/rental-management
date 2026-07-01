@@ -39,7 +39,7 @@ public class ScanDraft
     /// why they chose not to keep it.
     /// </summary>
     public string? FailureReason { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedBy { get; set; }
     public DateTime? ConfirmedAt { get; set; }

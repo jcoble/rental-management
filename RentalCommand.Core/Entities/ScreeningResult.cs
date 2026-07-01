@@ -39,13 +39,13 @@ public class ScreeningResult
     /// <summary>Raw provider response (Postgres jsonb) for audit/troubleshooting. Never shown raw to the landlord.</summary>
     public string? RawResultJson { get; set; }
 
-    public DateTime RequestedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime RequestedAtUtc { get; set; }
 
     /// <summary>When the provider returned a terminal result (completed or failed); null while pending.</summary>
     public DateTime? CompletedAtUtc { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public RentalApplication? Application { get; set; }

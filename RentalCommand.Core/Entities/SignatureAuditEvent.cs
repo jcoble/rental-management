@@ -18,7 +18,7 @@ public class SignatureAuditEvent
 
     public SignatureAuditEventType Type { get; set; }
 
-    public DateTime AtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime AtUtc { get; set; }
 
     public string? IpAddress { get; set; }
     public string? UserAgent { get; set; }

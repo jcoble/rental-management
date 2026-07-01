@@ -48,7 +48,7 @@ public sealed class ExecutedLeaseData
     /// <summary>Frozen template field anchors for stamping signatures/date fields on the original PDF.</summary>
     public string? TemplateFieldSnapshotJson { get; init; }
 
-    public DateTime CompletedAtUtc { get; init; } = DateTime.UtcNow;
+    public DateTime CompletedAtUtc { get; init; }
 }
 
 /// <summary>

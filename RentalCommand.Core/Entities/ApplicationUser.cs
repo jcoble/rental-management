@@ -12,7 +12,7 @@ public class ApplicationUser : IdentityUser<int>
     public int? OwnerEntityId { get; set; }
     public int? TenantId { get; set; }
     public string DisplayName { get; set; } = string.Empty;
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }

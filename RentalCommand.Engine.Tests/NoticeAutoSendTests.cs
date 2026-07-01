@@ -103,7 +103,8 @@ public class NoticeAutoSendTests : IDisposable
             _ctx.Db,
             new NoopConversationService(),
             new NoopLlmProvider(),
-            NullLogger<NoticeDraftService>.Instance);
+            NullLogger<NoticeDraftService>.Instance,
+            TimeProvider.System);
 
         return new NoticeDraftGenerationService(
             _ctx.Db,

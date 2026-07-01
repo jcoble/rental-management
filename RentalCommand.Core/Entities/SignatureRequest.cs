@@ -55,7 +55,7 @@ public class SignatureRequest
 
     public SignatureRequestStatus Status { get; set; } = SignatureRequestStatus.Sent;
 
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAtUtc { get; set; }
 
     /// <summary>When every signer had signed and the executed document was produced; null until then.</summary>
     public DateTime? CompletedAtUtc { get; set; }

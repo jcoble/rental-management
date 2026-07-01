@@ -203,7 +203,7 @@ public sealed class LeaseSignatureQueueNullEnvelopeTests : IAsyncLifetime
             new NoopDataUpdateService(),
             storage,
             new LeaseAgreementPdfGenerator(),
-            new AuditTrailService(db, new RentalCommand.Data.Auditing.AuditScope()),
+            new AuditTrailService(db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             NullLogger<LeaseService>.Instance,
             TimeProvider.System,
             new LeaseAgreementRenderer(
@@ -218,8 +218,9 @@ public sealed class LeaseSignatureQueueNullEnvelopeTests : IAsyncLifetime
             new NoopEsignProvider(),
             storage,
             new NoopDataUpdateService(),
-            new AuditTrailService(db, new RentalCommand.Data.Auditing.AuditScope()),
+            new AuditTrailService(db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             config,
+            TimeProvider.System,
             NullLogger<LeaseEsignService>.Instance);
     }
 
