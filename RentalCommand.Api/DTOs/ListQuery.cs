@@ -26,6 +26,20 @@ public class ListQuery
     [FromQuery(Name = "sort")]
     public string? Sort { get; set; }
 
+    /// <summary>
+    /// Inclusive start of the grid date-range filter (the RangeDatePicker's "from"). Each list service
+    /// applies it to that entity's designated date column, half-open <c>[from, to)</c>, DB-side. Null = unbounded start.
+    /// </summary>
+    [FromQuery(Name = "from")]
+    public DateTime? From { get; set; }
+
+    /// <summary>
+    /// Inclusive end DAY of the grid date-range filter (the RangeDatePicker's "to"). Applied as the
+    /// exclusive upper bound <c>&lt; to + 1 day</c> so the whole "to" day is included. Null = unbounded end.
+    /// </summary>
+    [FromQuery(Name = "to")]
+    public DateTime? To { get; set; }
+
     /// <summary>Skip clamped to be non-negative.</summary>
     public int NormalizedSkip => Skip < 0 ? 0 : Skip;
 

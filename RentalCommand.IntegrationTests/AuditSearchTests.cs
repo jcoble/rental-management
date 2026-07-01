@@ -1,9 +1,11 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -118,7 +120,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         SkipIfNoDocker();
 
         await using var db = NewContext(_ownerConnString);
-        var sut = new AuditQueryService(db, new AuditDescriber(), new AuditDiffBuilder());
+        var sut = new AuditQueryService(db, new AuditDescriber(), new AuditDiffBuilder(), new AppTimeZoneProvider(new ConfigurationBuilder().Build()));
 
         async Task<List<int>> SearchIds(string term)
         {
