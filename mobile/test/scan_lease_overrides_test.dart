@@ -16,6 +16,7 @@ void main() {
         isWorkOrder: false,
         isLease: true,
         isApplication: false,
+        isLoan: false,
         applicationPropertyId: null,
         applicationUnitId: null,
         isPaid: false,
@@ -25,6 +26,7 @@ void main() {
         selectedPropertyId: 99,
         selectedUnitId: 42,
         selectedTenantId: null,
+        loanPropertyId: null,
         newPropertyName: 'Maple Court',
         newPropertyAddress: '123 Maple St',
         newPropertyCity: 'Austin',
@@ -46,6 +48,7 @@ void main() {
         isWorkOrder: false,
         isLease: true,
         isApplication: false,
+        isLoan: false,
         applicationPropertyId: null,
         applicationUnitId: null,
         isPaid: false,
@@ -54,6 +57,7 @@ void main() {
         selectedPropertyId: 7,
         selectedUnitId: 3,
         selectedTenantId: 5,
+        loanPropertyId: null,
       );
 
       expect(overrides['propertyId'], 7);

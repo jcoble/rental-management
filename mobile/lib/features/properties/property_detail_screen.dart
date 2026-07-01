@@ -6,11 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../scan/scan_capture.dart';
+import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'properties_repository.dart';
 import 'property_form_sheet.dart';
 import 'property_labels.dart';
+import 'property_loan_form_sheet.dart';
+import 'property_loans_repository.dart';
 
 String _formatCurrency(double amount) {
   final rounded = amount.round();
@@ -145,6 +149,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       ) {
         if (mounted) setState(() => _property = property);
       }),
+      ref.read(propertyLoansProvider(propertyId).notifier).refresh(),
     ]);
   }
 
@@ -255,6 +260,97 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     }
   }
 
+  Future<void> _showAddLoanSheet(BuildContext context) async {
+    final saved = await showPropertyLoanFormSheet(
+      context,
+      propertyId: _property.id,
+    );
+    if (saved && mounted) {
+      await ref.read(propertyLoansProvider(_property.id).notifier).refresh();
+    }
+  }
+
+  Future<void> _showEditLoanSheet(
+    BuildContext context,
+    PropertyLoan loan,
+  ) async {
+    final saved = await showPropertyLoanFormSheet(
+      context,
+      propertyId: _property.id,
+      loan: loan,
+    );
+    if (saved && mounted) {
+      await ref.read(propertyLoansProvider(_property.id).notifier).refresh();
+    }
+  }
+
+  Future<void> _startLoanScan(BuildContext context) async {
+    final draftId = await showScanCaptureSheet(
+      context,
+      initialTargetEntityType: 'Loan',
+      lockTargetEntityType: true,
+    );
+    if (draftId == null || !context.mounted) return;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            ScanReviewScreen(draftId: draftId, loanPropertyId: _property.id),
+      ),
+    );
+    if (mounted) {
+      unawaited(
+        ref.read(propertyLoansProvider(_property.id).notifier).refresh(),
+      );
+    }
+  }
+
+  Future<void> _confirmDeleteLoan(
+    BuildContext context,
+    PropertyLoan loan,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Remove ${loan.lender}?'),
+        content: const Text(
+          'This removes the loan and its amortization history from this property.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(propertyLoansRepositoryProvider).deleteLoan(loan.id);
+      await ref.read(propertyLoansProvider(_property.id).notifier).refresh();
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Loan removed.')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Could not remove loan.')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final property = _property;
@@ -262,6 +358,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final colorScheme = theme.colorScheme;
     final unitsAsync = ref.watch(unitsProvider(property.id));
     final leasesAsync = ref.watch(propertyLeasesProvider(property.id));
+    final loansAsync = ref.watch(propertyLoansProvider(property.id));
     final propertyIsUnit = isPropertyUnitType(property.type);
 
     return Scaffold(
@@ -344,6 +441,107 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                         ),
                       )
                       .toList(),
+                );
+              },
+            ),
+
+            const SizedBox(height: 24),
+
+            // ── Mortgage / Loans section ──────────────────────────────────
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Mortgage / Loans',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Scan mortgage statement',
+                  icon: const Icon(Icons.document_scanner_outlined),
+                  onPressed: () => _startLoanScan(context),
+                ),
+                IconButton(
+                  tooltip: 'Add loan',
+                  icon: const Icon(Icons.add),
+                  onPressed: () => _showAddLoanSheet(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            loansAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => _InlineError(
+                message: e is ApiException ? e.message : e.toString(),
+              ),
+              data: (page) {
+                final loans = page.loans;
+                if (loans.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'No mortgage or loan records on this property yet.',
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
+                    ),
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...loans.map(
+                      (loan) => _LoanTile(
+                        loan: loan,
+                        onEdit: () => _showEditLoanSheet(context, loan),
+                        onDelete: () => _confirmDeleteLoan(context, loan),
+                      ),
+                    ),
+                    if (page.loadMoreError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        child: Text(
+                          page.loadMoreError is ApiException
+                              ? (page.loadMoreError! as ApiException).message
+                              : 'Could not load more loans.',
+                          style: TextStyle(
+                            color: colorScheme.error,
+                            fontSize: 12,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    if (page.hasMore || page.isLoadingMore)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: OutlinedButton.icon(
+                          icon: page.isLoadingMore
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.expand_more),
+                          label: Text(
+                            page.isLoadingMore
+                                ? 'Loading loans...'
+                                : 'Load more loans',
+                          ),
+                          onPressed: page.isLoadingMore
+                              ? null
+                              : () => ref
+                                    .read(
+                                      propertyLoansProvider(
+                                        property.id,
+                                      ).notifier,
+                                    )
+                                    .loadMore(),
+                        ),
+                      ),
+                  ],
                 );
               },
             ),
@@ -678,6 +876,78 @@ class _LeaseTile extends StatelessWidget {
     );
   }
 }
+
+// ── Loan tile ────────────────────────────────────────────────────────────────
+
+class _LoanTile extends StatelessWidget {
+  const _LoanTile({
+    required this.loan,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final PropertyLoan loan;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final statusIsActive = loan.status.toLowerCase() == 'active';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          radius: 20,
+          backgroundColor: statusIsActive
+              ? colorScheme.primaryContainer
+              : colorScheme.surfaceContainerHighest,
+          child: Icon(
+            Icons.account_balance_outlined,
+            size: 18,
+            color: statusIsActive
+                ? colorScheme.onPrimaryContainer
+                : colorScheme.onSurfaceVariant,
+          ),
+        ),
+        title: Text(
+          loan.lender,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          '${_formatCurrency(loan.currentBalance)} balance  ·  '
+          '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/mo  ·  '
+          '${_loanStatusLabel(loan.status)}',
+          style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              onPressed: onEdit,
+              tooltip: 'Edit loan',
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 18),
+              onPressed: onDelete,
+              tooltip: 'Delete loan',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _loanStatusLabel(String status) => switch (status) {
+  'PaidOff' => 'Paid off',
+  _ => status,
+};
 
 // ── Inline error ──────────────────────────────────────────────────────────────
 
