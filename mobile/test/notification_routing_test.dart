@@ -4,6 +4,7 @@ import 'package:rental_command/core/push/notification_routing.dart';
 void main() {
   test('section roots used by mobile IA are allowed notification targets', () {
     expect(resolveNotificationRoute('/rentals'), '/rentals');
+    expect(resolveNotificationRoute('/owners'), '/owners');
     expect(resolveNotificationRoute('/units'), '/units');
     expect(resolveNotificationRoute('/money'), '/money');
     expect(resolveNotificationRoute('/work'), '/work');
