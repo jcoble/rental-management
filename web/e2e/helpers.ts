@@ -9,12 +9,89 @@ export const ADMIN_PASSWORD = process.env.PW_PASSWORD ?? 'Admin123!';
  * and wait for the post-login landing on the staff dashboard.
  */
 export async function login(page: Page, email = ADMIN_EMAIL, password = ADMIN_PASSWORD) {
-	await page.goto('/login');
+	await page.goto('/login', { waitUntil: 'domcontentloaded' });
+	await expect(page.getByTestId('login-email-input')).toBeVisible();
 	await page.getByTestId('login-email-input').fill(email);
 	await page.getByTestId('login-password-input').fill(password);
 	await page.getByTestId('login-submit').click();
 	// Staff land on the dashboard ('/'); wait until we leave the login route.
 	await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * Authenticate the browser context through the API when a spec needs a stable signed-in session
+ * but is not testing the login form itself. Mirrors the SvelteKit login action's cookie names.
+ */
+export async function loginWithApi(
+	page: Page,
+	request: APIRequestContext,
+	email = ADMIN_EMAIL,
+	password = ADMIN_PASSWORD
+) {
+	const res = await request.post('/api/v1/auth/login', {
+		headers: { 'X-Client-Type': 'mobile' },
+		data: { email, password }
+	});
+	expect(res.ok(), `API login failed: ${res.status()} ${await res.text()}`).toBeTruthy();
+	const body = (await res.json()) as {
+		accessToken?: string;
+		token?: string;
+		accessTokenExpiration?: string;
+		refreshToken?: string;
+		user?: { portfolioId?: number | null };
+	};
+	const accessToken = body.accessToken ?? body.token;
+	expect(accessToken, 'API login returned no access token').toBeTruthy();
+	expect(body.accessTokenExpiration, 'API login returned no access token expiration').toBeTruthy();
+
+	const origin = new URL(process.env.PW_BASE_URL ?? 'https://localhost:5667').origin;
+	const accessExpires = Math.floor(new Date(body.accessTokenExpiration!).getTime() / 1000);
+	const refreshExpires = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
+	let portfolioId = body.user?.portfolioId ?? 1;
+	if (!portfolioId) {
+		const portfoliosRes = await request.get('/api/v1/portfolios', { headers: bearer(accessToken!) });
+		if (portfoliosRes.ok()) {
+			const portfolioList = (await portfoliosRes.json()) as Array<{ id: number }>;
+			portfolioId = portfolioList[0]?.id ?? 1;
+		}
+	}
+
+	await page.context().addCookies([
+		{
+			name: 'rc_access_token',
+			value: accessToken!,
+			url: origin,
+			httpOnly: true,
+			secure: true,
+			sameSite: 'Lax',
+			expires: accessExpires
+		},
+		{
+			name: 'rc_access_token_expiration',
+			value: body.accessTokenExpiration!,
+			url: origin,
+			httpOnly: true,
+			secure: true,
+			sameSite: 'Lax',
+			expires: accessExpires
+		},
+		...(body.refreshToken
+			? [
+					{
+						name: 'rc_refresh_token',
+						value: body.refreshToken,
+						url: origin,
+						httpOnly: true,
+						secure: true,
+						sameSite: 'Lax' as const,
+						expires: refreshExpires
+					}
+				]
+			: [])
+	]);
+	await page.addInitScript((id: number) => {
+		localStorage.setItem('rental:currentPortfolioId', String(id));
+	}, portfolioId);
 }
 
 /** A reasonably unique suffix so repeated runs don't collide. */
