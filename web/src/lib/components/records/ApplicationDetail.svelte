@@ -7,9 +7,12 @@
 		type ScreeningResultResponse,
 		type AdverseActionNoticeResponse,
 		type UpdateApplicationRequest,
+		type RecordApplicationFeeRequest,
 	} from '$lib/api/endpoints/applications';
 	import { downloadDocument } from '$lib/api/endpoints/documents';
 	import { ApiError } from '$lib/api/client';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { parseForm, applicationFeeSchema } from '$lib/schemas';
 	import { showSuccess, showWarning, showError, apiErrorMessage } from '$lib/utils/toast';
 	import {
 		formatApplicationAddress,
@@ -43,6 +46,7 @@
 		Download,
 		User,
 		Edit3,
+		DollarSign,
 	} from '@lucide/svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
@@ -62,6 +66,7 @@
 
 	const queryClient = useQueryClient();
 	const id = $derived(applicationId);
+	const portfolioId = $derived(getCurrentPortfolioId());
 
 	const applicationQuery = createQuery(() => ({
 		queryKey: ['application', id],
@@ -134,6 +139,52 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	// ── Record application fee (lease-less income against the application's property) ──────────────
+	let showRecordFee = $state(false);
+	let feeAmount = $state('');
+	let feeMethod = $state('');
+	let feePaidDate = $state('');
+	let feeErrors = $state<Record<string, string>>({});
+
+	function openRecordFee() {
+		feeAmount = '';
+		feeMethod = '';
+		feePaidDate = '';
+		feeErrors = {};
+		showRecordFee = true;
+	}
+
+	const recordFeeMutation = createMutation(() => ({
+		mutationFn: (body: RecordApplicationFeeRequest) => applications.recordFee(id, body),
+		onSuccess: () => {
+			showRecordFee = false;
+			showSuccess('Application fee recorded.');
+			queryClient.invalidateQueries({ queryKey: ['application', id] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-transactions'] });
+			queryClient.invalidateQueries({ queryKey: ['payments'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function submitRecordFee() {
+		const result = parseForm(applicationFeeSchema, {
+			amount: feeAmount,
+			method: feeMethod,
+			paidDate: feePaidDate,
+		});
+		if (result.errors) {
+			feeErrors = result.errors;
+			return;
+		}
+		feeErrors = {};
+		recordFeeMutation.mutate({
+			amount: result.data.amount,
+			method: result.data.method ?? null,
+			paidDate: result.data.paidDate ?? null,
+		});
+	}
 
 	// ── Landlord corrections ─────────────────────────────────────────────────────
 	type ApplicationEditForm = {
@@ -397,6 +448,9 @@
 				<div class="flex flex-wrap items-center gap-2">
 					<Button variant="outline" class="gap-2" onclick={openEditApplication} data-testid="application-edit">
 						<Edit3 class="h-4 w-4" /> Edit
+					</Button>
+					<Button variant="outline" class="gap-2" onclick={openRecordFee} data-testid="application-record-fee">
+						<DollarSign class="h-4 w-4" /> Record fee
 					</Button>
 					<Button class="gap-2" onclick={() => (showApprove = true)} data-testid="application-approve">
 						<CheckCircle2 class="h-4 w-4" /> Approve
@@ -855,6 +909,57 @@
 				data-testid="application-adverse-action-confirm"
 			>
 				{adverseActionMutation.isPending ? 'Generating…' : 'Generate notice'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Record application fee (lease-less income against the application's property) -->
+<Dialog.Root open={showRecordFee} onOpenChange={(v) => { if (!v) showRecordFee = false; }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Record application fee</Dialog.Title>
+			<Dialog.Description>
+				Record a paid application/screening fee as income for {fullName}. It posts to the
+				application's property and shows on the accounting ledger and Schedule E — no lease required.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="application-fee-form">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
+				<Input
+					data-testid="application-fee-amount-input"
+					bind:value={feeAmount}
+					type="text"
+					inputmode="decimal"
+					mask="currency"
+					placeholder="0.00"
+				/>
+				{#if feeErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="application-fee-amount-error">{feeErrors.amount}</p>{/if}
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Method (optional)</span>
+				<Input
+					data-testid="application-fee-method-input"
+					bind:value={feeMethod}
+					placeholder="e.g. Card, Cash, Check"
+				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Paid date (optional)</span>
+				<DatePicker
+					id="application-fee-paid-date-input"
+					testid="application-fee-paid-date-input"
+					value={feePaidDate}
+					onchange={(v) => (feePaidDate = v)}
+					placeholder="Defaults to today"
+				/>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showRecordFee = false)} data-testid="application-fee-cancel">Cancel</Button>
+			<Button onclick={submitRecordFee} disabled={recordFeeMutation.isPending} data-testid="application-fee-save">
+				{recordFeeMutation.isPending ? 'Recording…' : 'Record fee'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

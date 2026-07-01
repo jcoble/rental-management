@@ -286,6 +286,16 @@ export const paymentSchema = z
 		}
 	});
 
+/**
+ * Record-application-fee form (a lease-less income entry against an application). Mirrors the server
+ * RecordApplicationFeeRequest: amount is required and > 0; method + paid date are optional.
+ */
+export const applicationFeeSchema = z.object({
+	amount: positiveNumeric('Amount'),
+	method: optionalText,
+	paidDate: optionalText,
+});
+
 export const expenseSchema = z.object({
 	description: required('Description'),
 	// amount: server [Range(0.01, 99999999)] (ExpenseDtos.cs Create/UpdateExpenseRequest.Amount)
