@@ -634,6 +634,9 @@ public class PortfolioQaService : IPortfolioQaService
     {
         var today = _timeProvider.UtcNow();
 
+        // Cap the tool result like every sibling list tool: fetch one extra to detect truncation, then
+        // surface a `truncated` flag instead of streaming an unbounded set into the LLM context.
+        const int maxRows = 50;
         var paymentRows = await _db.Payments
             .AsNoTracking()
             .ForCurrentLeaseAttention(today)
@@ -655,9 +658,12 @@ public class PortfolioQaService : IPortfolioQaService
                 dueDate      = p.DueDate,
                 status       = p.Status,
             })
+            .Take(maxRows + 1)
             .ToListAsync(ct);
 
+        var truncated = paymentRows.Count > maxRows;
         var rows = paymentRows
+            .Take(maxRows)
             .Select(p => new
             {
                 p.leaseNumber,
@@ -670,9 +676,8 @@ public class PortfolioQaService : IPortfolioQaService
             })
             .ToList();
 
-        return rows.Count == 0
-            ? "[]"
-            : JsonSerializer.Serialize(rows, _json);
+        var result = new { count = rows.Count, truncated, overdue = rows };
+        return JsonSerializer.Serialize(result, _json);
     }
 
     private async Task<string> ListActiveLeasesAsync(int portfolioId, CancellationToken ct)

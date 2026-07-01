@@ -57,6 +57,32 @@ public sealed class AutopayChargeService : IAutopayChargeService
             select new { Payment = p, Enrollment = e })
             .ToListAsync(ct);
 
+        // Preload every candidate payment's existing PaymentTransactions ONCE (tracked — a prior row is
+        // reused + mutated below), instead of an AnyAsync (in-flight guard) + a FirstOrDefaultAsync
+        // (crash-recovery guard) per candidate.
+        var candidatePaymentIds = candidates.Select(c => c.Payment.Id).Distinct().ToList();
+        var existingTransactions = candidatePaymentIds.Count == 0
+            ? []
+            : await _db.PaymentTransactions
+                .Where(t => candidatePaymentIds.Contains(t.PaymentId))
+                .ToListAsync(ct);
+
+        // Per-payment idempotency gate: a Pending/Succeeded row means never charge again.
+        var inFlightPaymentIds = existingTransactions
+            .Where(t => t.Status == PaymentTransactionStatus.Pending || t.Status == PaymentTransactionStatus.Succeeded)
+            .Select(t => t.PaymentId)
+            .ToHashSet();
+
+        // Per-key crash-recovery guard, keyed by IdempotencyKey. Prefer a non-failed row (so we skip)
+        // over a failed one (which we reuse for a retry) — deterministic, unlike the prior unordered
+        // FirstOrDefault which could return a failed row even when a succeeded one existed.
+        var priorTransactionByKey = existingTransactions
+            .Where(t => t.IdempotencyKey != null)
+            .GroupBy(t => t.IdempotencyKey!)
+            .ToDictionary(
+                g => g.Key,
+                g => g.FirstOrDefault(t => t.Status != PaymentTransactionStatus.Failed) ?? g.First());
+
         var charged = 0;
 
         foreach (var candidate in candidates)
