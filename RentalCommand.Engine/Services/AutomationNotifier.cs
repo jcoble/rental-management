@@ -28,6 +28,12 @@ public sealed class AutomationNotifier
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
 
+    // H2: the staff-user set is resolved via a 3-table join (Users⋈UserRoles⋈Roles) and callers reuse
+    // one notifier instance across a per-item loop (rent charges, late fees, expiry reminders). Memoize
+    // per portfolio so the join runs once per portfolio per sweep instead of once per notification.
+    // A worker's sweep is short-lived, so staff membership is effectively constant for its duration.
+    private readonly Dictionary<int, IReadOnlyList<int>> _staffUserIdCache = [];
+
     public AutomationNotifier(RentalCommandDbContext db, IMessagePublisher publisher)
     {
         _db = db;
@@ -147,8 +153,12 @@ public sealed class AutomationNotifier
             ct);
     }
 
-    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct) =>
-        await (
+    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct)
+    {
+        if (_staffUserIdCache.TryGetValue(portfolioId, out var cached))
+            return cached;
+
+        var ids = await (
                 from user in _db.Users.AsNoTracking()
                 join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
                 join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
@@ -156,6 +166,10 @@ public sealed class AutomationNotifier
                 select user.Id)
             .Distinct()
             .ToListAsync(ct);
+
+        _staffUserIdCache[portfolioId] = ids;
+        return ids;
+    }
 
     private async Task<int?> TenantUserIdAsync(int portfolioId, int tenantId, CancellationToken ct) =>
         await _db.Users

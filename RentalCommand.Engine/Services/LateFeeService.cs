@@ -75,6 +75,8 @@ public sealed class LateFeeService : ILateFeeService
                 p.DueDate < today)       // can't be past any grace window if not yet past due
             .Include(p => p.Lease)
                 .ThenInclude(l => l!.Property)
+            .Include(p => p.Lease)
+                .ThenInclude(l => l!.Tenant)   // H3: load tenants with the overdue set (one JOIN) instead of a per-payment FirstOrDefaultAsync
             .ToListAsync(ct);
 
         if (overdueRent.Count == 0)
@@ -200,10 +202,11 @@ public sealed class LateFeeService : ILateFeeService
                 // ---- Notification on the channels enabled for LateFee in this portfolio ----
                 if (cfg.NotifyTenants)
                 {
-                    // Fetch the tenant's contact details for this lease.
-                    // FirstOrDefaultAsync respects the soft-delete global query filter;
-                    // FindAsync bypasses it and would return deleted tenants.
-                    var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == rp.Lease.TenantId, ct);
+                    // Tenant contact came from the Include above (one JOIN with the overdue set), not a
+                    // per-payment query. The Include respects the soft-delete global query filter, so a
+                    // soft-deleted tenant surfaces as null here — same semantics as the prior
+                    // FirstOrDefaultAsync (and unlike FindAsync, which would bypass the filter).
+                    var tenant = rp.Lease.Tenant;
 
                     var channels = cfg.ResolveChannels(NotificationType.LateFee);
                     var emailBody = $"A late fee of ${fee:F2} has been assessed on your account for the {periodKey} billing period. "
