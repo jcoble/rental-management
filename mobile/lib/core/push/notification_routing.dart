@@ -29,6 +29,7 @@ const _allowedExact = <String>{
   '/money',
   '/work',
   '/rentals',
+  '/owners',
   '/units',
   '/inbox',
   '/notifications',

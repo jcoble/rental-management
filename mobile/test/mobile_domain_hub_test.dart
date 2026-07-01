@@ -19,6 +19,7 @@ void main() {
   test('rentals destinations place units next to properties', () {
     expect(rentalDestinations.map((destination) => destination.id), [
       MobileDestinationId.properties,
+      MobileDestinationId.owners,
       MobileDestinationId.units,
       MobileDestinationId.tenants,
       MobileDestinationId.leases,
@@ -320,6 +321,18 @@ void main() {
                     },
                     child: const Text('Open units'),
                   ),
+                  FilledButton(
+                    onPressed: () {
+                      const MobileDestination(
+                        id: MobileDestinationId.owners,
+                        icon: Symbols.account_balance_rounded,
+                        label: 'Owners',
+                        subtitle: 'Standalone fallback',
+                        builder: _standaloneBuilder,
+                      ).open(context);
+                    },
+                    child: const Text('Open owners'),
+                  ),
                 ],
               ),
             ),
@@ -348,6 +361,18 @@ void main() {
         destination: MobileDestinationId.moneyLedger,
       ),
       (tab: MobileShellTabId.rentals, destination: MobileDestinationId.units),
+    ]);
+
+    await tester.tap(find.text('Open owners'));
+    await tester.pumpAndSettle();
+
+    expect(calls, [
+      (
+        tab: MobileShellTabId.money,
+        destination: MobileDestinationId.moneyLedger,
+      ),
+      (tab: MobileShellTabId.rentals, destination: MobileDestinationId.units),
+      (tab: MobileShellTabId.rentals, destination: MobileDestinationId.owners),
     ]);
   });
 }

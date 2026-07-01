@@ -18,6 +18,7 @@ import '../../features/maintenance/work_order_unit_aware_loader.dart';
 import '../../features/messages/message_detail_screen.dart';
 import '../../features/money/expense_detail_screen.dart';
 import '../../features/notifications/notifications_inbox_screen.dart';
+import '../../features/owners/owners_list_screen.dart';
 import '../../features/payments/payment_detail_screen.dart';
 import '../../features/scan/scan_review_screen.dart';
 import '../../features/units/unit_command_center_screen.dart';
@@ -168,6 +169,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/rentals',
         builder: (context, state) => const RentalsHubScreen(),
+      ),
+      GoRoute(
+        path: '/owners',
+        builder: (context, state) => const OwnersListScreen(),
       ),
       GoRoute(
         path: '/work',
