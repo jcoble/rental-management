@@ -121,14 +121,16 @@
 		{ id: 'triage', label: 'Triage', description: 'Priority and type' },
 		{ id: 'location', label: 'Location', description: 'Property and unit' },
 		{ id: 'schedule', label: 'Schedule', description: 'Visit window' },
-		{ id: 'people', label: 'People', description: 'Tenant, vendor, cost' },
+		{ id: 'people', label: 'People', description: 'Tenant and vendor' },
+		{ id: 'budget', label: 'Budget', description: 'Estimated cost' },
 	];
 	const woStepFields = [
 		['title', 'description'],
 		['priority', 'category'],
 		['propertyId', 'unitId'],
 		['scheduledFor', 'scheduledWindowEnd'],
-		['tenantId', 'vendorId', 'estimatedCost'],
+		['tenantId', 'vendorId'],
+		['estimatedCost'],
 	] as const;
 
 	function clearWoError(field: string) {
@@ -915,7 +917,7 @@
 								{#if woErrors.scheduledWindowEnd}<p class="mt-1 text-xs text-destructive" data-testid="work-order-window-end-error">{woErrors.scheduledWindowEnd}</p>{/if}
 							</div>
 						</div>
-				{:else}
+				{:else if woStep === 4}
 					<div class="grid gap-3 sm:grid-cols-2">
 						<div>
 							<label for="work-order-tenant" class="mb-1 block text-xs font-medium text-muted-foreground">Tenant (optional)</label>
@@ -956,6 +958,7 @@
 							</Select.Root>
 						</div>
 					</div>
+				{:else}
 					<div>
 						<label for="work-order-est-cost" class="mb-1 block text-xs font-medium text-muted-foreground">Estimated cost (optional)</label>
 						<Input id="work-order-est-cost" data-testid="work-order-estimated-cost-input" type="text" inputmode="decimal" mask="currency" bind:value={woForm.estimatedCost} placeholder="0.00" />

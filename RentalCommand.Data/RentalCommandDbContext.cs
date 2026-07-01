@@ -1172,6 +1172,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ServiceType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.Website).HasMaxLength(500);
             entity.Property(e => e.TaxId).HasMaxLength(50);
             entity.Property(e => e.AddressLine1).HasMaxLength(250);
             entity.Property(e => e.City).HasMaxLength(120);

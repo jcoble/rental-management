@@ -25,6 +25,13 @@ const optionalEmail = z
 	.nullable()
 	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
 	.optional();
+const optionalUrl = z
+	.string()
+	.trim()
+	.transform((v) => (v.length ? v : null))
+	.nullable()
+	.refine((v) => v === null || z.string().url().safeParse(v).success, 'Enter a valid URL')
+	.optional();
 /**
  * Optional free text with an upper length bound mirroring a server MaxLength.
  * Behaves like {@link optionalText} ('' → null, missing key tolerated) but rejects
@@ -301,7 +308,7 @@ export const expenseSchema = z.object({
 	// Receipt detail (the accounting page nests these into receiptData JSON before submit).
 	vendorAddress: optionalText,
 	vendorPhone: optionalText,
-	vendorWebsite: optionalText,
+	vendorWebsite: optionalUrl,
 	vendorTaxId: optionalText,
 	receiptNumber: optionalText,
 	paymentMethod: optionalText,
@@ -488,6 +495,7 @@ export const vendorSchema = z.object({
 	// email: server [EmailAddress] optional
 	email: optionalEmail,
 	phone: optionalText,
+	website: optionalUrl,
 	is1099Eligible: z.boolean(),
 	w9OnFile: z.boolean(),
 	preferred: z.boolean(),

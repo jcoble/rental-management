@@ -72,6 +72,7 @@
 		postalCode: '',
 		email: '',
 		phone: '',
+		website: '',
 		is1099Eligible: true,
 		w9OnFile: false,
 		preferred: false
@@ -87,13 +88,13 @@
 
 	const vendorSteps: FormStepperStep[] = [
 		{ id: 'basics', label: 'Basics', description: 'Name and service' },
-		{ id: 'contact', label: 'Contact', description: 'Email and phone' },
+		{ id: 'contact', label: 'Contact', description: 'Email and website' },
 		{ id: 'address', label: 'Address', description: 'Mailing details' },
 		{ id: 'compliance', label: 'Compliance', description: '1099 and W-9' },
 	];
 	const vendorStepFields = [
 		['name', 'serviceType'],
-		['email', 'phone'],
+		['email', 'phone', 'website'],
 		['addressLine1', 'city', 'state', 'postalCode'],
 		['is1099Eligible', 'w9OnFile', 'preferred'],
 	] as const;
@@ -101,6 +102,16 @@
 	function clearVendorError(field: string) {
 		const next = clearFieldError(vendorErrors, field);
 		if (next !== vendorErrors) vendorErrors = next;
+	}
+
+	function isBlankOrValidUrl(value: string) {
+		if (!value.trim()) return true;
+		try {
+			new URL(value);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	$effect(() => {
@@ -111,6 +122,9 @@
 	});
 	$effect(() => {
 		if (!vendorForm.email.trim() || vendorForm.email.includes('@')) clearVendorError('email');
+	});
+	$effect(() => {
+		if (isBlankOrValidUrl(vendorForm.website)) clearVendorError('website');
 	});
 
 	function invalidateVendors() {
@@ -164,6 +178,7 @@
 			postalCode: v.postalCode ?? '',
 			email: v.email ?? '',
 			phone: v.phone ?? '',
+			website: v.website ?? '',
 			is1099Eligible: v.is1099Eligible,
 			w9OnFile: v.w9OnFile,
 			preferred: v.preferred
@@ -396,6 +411,11 @@
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
 								<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+							</div>
+							<div class="md:col-span-2">
+								<span class="mb-1 block text-xs font-medium text-muted-foreground">Website</span>
+								<Input data-testid="vendor-website-input" bind:value={vendorForm.website} placeholder="https://example.com" type="url" autocomplete="url" inputmode="url" />
+								{#if vendorErrors.website}<p class="mt-1 text-xs text-destructive" data-testid="vendor-website-error">{vendorErrors.website}</p>{/if}
 							</div>
 						</div>
 					{:else if vendorStep === 2}

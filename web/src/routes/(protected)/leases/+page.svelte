@@ -118,16 +118,20 @@
 		{ id: 'tenants', label: 'Tenants', description: 'Lease parties' },
 		{ id: 'identity', label: 'Lease #', description: 'Reference' },
 		{ id: 'dates', label: 'Dates', description: 'Start and end' },
-		{ id: 'money', label: 'Money', description: 'Rent and deposit' },
-		{ id: 'status', label: 'Status', description: 'Tracking and notes' },
+		{ id: 'rent', label: 'Rent', description: 'Rent and deposit' },
+		{ id: 'fees', label: 'Fees', description: 'Late fee and due day' },
+		{ id: 'status', label: 'Status', description: 'State and notes' },
+		{ id: 'tracking', label: 'Tracking', description: 'Backfill options' },
 	];
 	const leaseStepFields = [
 		['propertyId', 'unitId'],
 		['tenantId'],
 		['leaseNumber'],
 		['startDate', 'endDate'],
-		['monthlyRent', 'securityDeposit', 'lateFeeAmount', 'rentDueDay'],
-		['status', 'rentTrackingStartMode', 'rentTrackingStartDate', 'openingBalanceAmount', 'openingBalanceAsOfDate', 'openingBalanceNote', 'notes'],
+		['monthlyRent', 'securityDeposit'],
+		['lateFeeAmount', 'rentDueDay'],
+		['status', 'notes'],
+		['rentTrackingStartMode', 'rentTrackingStartDate', 'openingBalanceAmount', 'openingBalanceAsOfDate', 'openingBalanceNote'],
 	] as const;
 
 	function clearLeaseError(field: string) {
@@ -572,9 +576,13 @@
 				{:else if leaseStep === 3}
 					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="dates" />
 				{:else if leaseStep === 4}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="money" />
-				{:else}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="rent" />
+				{:else if leaseStep === 5}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="fees" />
+				{:else if leaseStep === 6}
 					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="status" />
+				{:else}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="tracking" />
 				{/if}
 			</div>
 		</FormStepper>

@@ -99,6 +99,7 @@ public class VendorService : IVendorService
             ServiceType = request.ServiceType,
             Email = request.Email,
             Phone = request.Phone,
+            Website = request.Website,
             TaxId = request.TaxId,
             AddressLine1 = request.AddressLine1,
             City = request.City,
@@ -133,6 +134,7 @@ public class VendorService : IVendorService
         if (request.ServiceType != null) entity.ServiceType = request.ServiceType;
         if (request.Email != null) entity.Email = request.Email;
         if (request.Phone != null) entity.Phone = request.Phone;
+        if (request.Website != null) entity.Website = request.Website;
         if (request.TaxId != null) entity.TaxId = request.TaxId;
         if (request.AddressLine1 != null) entity.AddressLine1 = request.AddressLine1;
         if (request.City != null) entity.City = request.City;

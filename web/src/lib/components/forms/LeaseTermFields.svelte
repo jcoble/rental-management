@@ -1,6 +1,6 @@
 <!--
   LeaseTermFields — the single source-of-truth field group for a Lease's TERM fields (number, dates,
-  rent, deposit, late fee, due day, status, notes). Consumed by BOTH the manual New-Lease modal
+  rent, deposit, late fee, due day, status, tracking, notes). Consumed by BOTH the manual New-Lease modal
   (leases/+page.svelte — which keeps its own property/unit/tenant pickers above this) AND the guided
   scan flow's Step 4 (property/unit/tenant resolved in prior steps). Owns ONLY the term field rows +
   inline errors + the optional "from your lease" badge (AC-3) — not the dialog chrome, the pickers,
@@ -55,14 +55,20 @@
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
 		statuses?: readonly string[];
-		section?: 'all' | 'identity' | 'dates' | 'money' | 'status';
+		section?: 'all' | 'identity' | 'dates' | 'money' | 'rent' | 'fees' | 'status' | 'tracking';
 		testidPrefix?: string;
 	} = $props();
 
 	const filled = (key: string) => !!autoFilled?.has(key);
 	const conf = (key: string) => confidence?.[STEP_FIELD_TO_EXTRACTION[key] ?? ''];
-	const show = (target: 'identity' | 'dates' | 'money' | 'status') =>
-		section === 'all' || section === target;
+	const showIdentity = $derived(section === 'all' || section === 'identity');
+	const showDates = $derived(section === 'all' || section === 'dates');
+	const showMoney = $derived(section === 'all' || section === 'money');
+	const showRent = $derived(showMoney || section === 'rent');
+	const showFees = $derived(showMoney || section === 'fees');
+	const showStatus = $derived(section === 'all' || section === 'status');
+	const showTracking = $derived(section === 'all' || section === 'tracking');
+	const showTrackingInactiveHelp = $derived(section === 'tracking' && form.status !== 'Active');
 	let autoDefaultedEndDate = $state('');
 
 	function handleStartDateChange(iso: string) {
@@ -83,7 +89,7 @@
 </script>
 
 <div class="grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-term-fields`}>
-	{#if show('identity')}
+	{#if showIdentity}
 	<div class="md:col-span-2">
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Lease number</span>
@@ -93,7 +99,7 @@
 		{#if errors.leaseNumber}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-number-error`}>{errors.leaseNumber}</p>{/if}
 	</div>
 	{/if}
-	{#if show('dates')}
+	{#if showDates}
 	<div>
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Start date</span>
@@ -123,7 +129,7 @@
 		{#if errors.endDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-end-error`}>{errors.endDate}</p>{/if}
 	</div>
 	{/if}
-	{#if show('money')}
+	{#if showRent}
 	<div>
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Monthly rent</span>
@@ -140,6 +146,8 @@
 		<Input data-testid={`${testidPrefix}-deposit-input`} bind:value={form.securityDeposit} placeholder="Security deposit" inputmode="decimal" mask="currency" />
 		{#if errors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-deposit-error`}>{errors.securityDeposit}</p>{/if}
 	</div>
+	{/if}
+	{#if showFees}
 	<div class="grid grid-cols-2 gap-2">
 		<div>
 			<div class="mb-1 flex items-center gap-2">
@@ -159,7 +167,7 @@
 		</div>
 	</div>
 	{/if}
-	{#if show('status')}
+	{#if showStatus}
 	<div class="md:col-span-2">
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
 		<Select.Root type="single" bind:value={form.status}>
@@ -171,7 +179,24 @@
 			</Select.Content>
 		</Select.Root>
 	</div>
-	{#if form.status === 'Active'}
+	<div class="md:col-span-2">
+		<span class="mb-1 block text-xs font-medium text-muted-foreground">Notes</span>
+		<textarea
+			data-testid={`${testidPrefix}-notes-input`}
+			bind:value={form.notes}
+			rows="3"
+			placeholder="Optional lease notes"
+			class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+		></textarea>
+		{#if errors.notes}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-notes-error`}>{errors.notes}</p>{/if}
+	</div>
+	{/if}
+	{#if showTracking}
+	{#if showTrackingInactiveHelp}
+		<div class="md:col-span-2 rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground" data-testid={`${testidPrefix}-rent-tracking-inactive`}>
+			Rent tracking options apply after the lease status is Active.
+		</div>
+	{:else if form.status === 'Active'}
 		<div class="md:col-span-2 grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-rent-tracking-fields`}>
 			<div class={form.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'md:col-span-2'}>
 				<span class="mb-1 block text-xs font-medium text-muted-foreground">Rent tracking start</span>
