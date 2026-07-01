@@ -112,7 +112,12 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
-builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
+// Realtime backplane (TSK-624): the Engine can't reach the API's in-memory SignalR hub, so it
+// publishes each entity change as a Postgres NOTIFY on its own pooled connection. The API-hosted
+// EntityChangeListener LISTENs and re-broadcasts to the hub. Shared NpgsqlDataSource so publishes
+// reuse a dedicated pool rather than opening a raw connection per event.
+builder.Services.AddSingleton(_ => new NpgsqlDataSourceBuilder(connectionString).Build());
+builder.Services.AddSingleton<IDataUpdateService, NotifyDataUpdateService>();
 
 // Phase 4 automation services (gated by Notifications flags; financial ones default OFF).
 builder.Services.AddScoped<IRentChargeService, RentChargeService>();
