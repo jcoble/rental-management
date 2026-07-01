@@ -213,11 +213,8 @@ public class AccountingTransactionsQuery : ListQuery
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "propertyId")]
     public int? PropertyId { get; set; }
 
-    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "from")]
-    public DateTime? From { get; set; }
-
-    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "to")]
-    public DateTime? To { get; set; }
+    // From/To (the ?from=&to= date range) are inherited from ListQuery now, so the grid date filter is
+    // uniform across every list endpoint. AccountingService keeps applying them to the transaction date.
 }
 
 public class AccountingTransactionsResponse
