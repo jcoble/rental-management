@@ -634,7 +634,10 @@ public class PortfolioQaService : IPortfolioQaService
     {
         var today = _timeProvider.UtcNow();
 
-        var paymentRows = await _db.Payments
+        // Cap the tool result like every sibling list tool; both the returned page and the truncation
+        // check stay DB-side so we do not materialize an unbounded overdue set into the LLM context.
+        const int maxRows = 50;
+        var overdueQuery = _db.Payments
             .AsNoTracking()
             .ForCurrentLeaseAttention(today)
             .Where(p =>
@@ -644,6 +647,7 @@ public class PortfolioQaService : IPortfolioQaService
                  p.Status == PaymentStatus.Late) &&
                 p.DueDate < today)
             .OrderBy(p => p.DueDate)
+            .ThenBy(p => p.Id)
             .Select(p => new
             {
                 leaseNumber  = p.Lease != null ? p.Lease.LeaseNumber : $"lease-{p.LeaseId}",
@@ -654,8 +658,14 @@ public class PortfolioQaService : IPortfolioQaService
                 amount       = p.Amount,
                 dueDate      = p.DueDate,
                 status       = p.Status,
-            })
+            });
+
+        var paymentRows = await overdueQuery
+            .Take(maxRows)
             .ToListAsync(ct);
+        var truncated = await overdueQuery
+            .Skip(maxRows)
+            .AnyAsync(ct);
 
         var rows = paymentRows
             .Select(p => new
@@ -670,9 +680,8 @@ public class PortfolioQaService : IPortfolioQaService
             })
             .ToList();
 
-        return rows.Count == 0
-            ? "[]"
-            : JsonSerializer.Serialize(rows, _json);
+        var result = new { count = rows.Count, truncated, overdue = rows };
+        return JsonSerializer.Serialize(result, _json);
     }
 
     private async Task<string> ListActiveLeasesAsync(int portfolioId, CancellationToken ct)

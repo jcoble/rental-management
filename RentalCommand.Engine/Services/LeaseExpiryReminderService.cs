@@ -62,11 +62,34 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                         && l.ExpiryReminderSentAt == null
                         && l.EndDate >= today)
             .Include(l => l.Property)
+                .ThenInclude(p => p!.Owner)   // M3: load the owner with the lease (one JOIN) instead of a per-lease Owners.FindAsync; the Include also honors the soft-delete filter that FindAsync bypassed
             .Include(l => l.Tenant)
             .ToListAsync(ct);
 
         if (leases.Count == 0)
             return 0;
+
+        // M3: batch the owner-email fallback (a linked UserAccount address used when the Owner record has
+        // no email) into one query keyed by (OwnerId, PortfolioId), instead of a per-lease UserAccounts
+        // lookup inside the loop.
+        var ownerIds = leases
+            .Select(l => l.Property?.OwnerId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+        var ownerFallbackEmails = ownerIds.Count == 0
+            ? new Dictionary<(int OwnerId, int PortfolioId), string>()
+            : await _db.UserAccounts
+                .Where(u => u.OwnerId != null && ownerIds.Contains(u.OwnerId.Value) && u.Email != "")
+                .GroupBy(u => new { OwnerId = u.OwnerId!.Value, u.PortfolioId })
+                .Select(g => new
+                {
+                    g.Key.OwnerId,
+                    g.Key.PortfolioId,
+                    Email = g.Min(u => u.Email),
+                })
+                .ToDictionaryAsync(x => (x.OwnerId, x.PortfolioId), x => x.Email, ct);
 
         var notifier = new AutomationNotifier(_db, _publisher);
         var configCache = new Dictionary<int, NotificationsConfig>();
@@ -101,17 +124,15 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
             var ownerId = lease.Property?.OwnerId;
             if (ownerId.HasValue)
             {
-                var owner = await _db.Owners.FindAsync([ownerId.Value], cancellationToken: ct);
+                var owner = lease.Property?.Owner;   // from the Include (soft-delete-filtered)
                 email = owner?.Email;
                 phone = owner?.Phone;
 
-                // Fallback: try the linked UserAccount for an email when the Owner record has none.
-                if (string.IsNullOrWhiteSpace(email))
+                // Fallback: the linked UserAccount's email when the Owner record has none (preloaded).
+                if (string.IsNullOrWhiteSpace(email) &&
+                    ownerFallbackEmails.TryGetValue((ownerId.Value, lease.PortfolioId), out var fallbackEmail))
                 {
-                    email = await _db.UserAccounts
-                        .Where(u => u.OwnerId == ownerId.Value && u.PortfolioId == lease.PortfolioId)
-                        .Select(u => u.Email)
-                        .FirstOrDefaultAsync(ct);
+                    email = fallbackEmail;
                 }
             }
 

@@ -90,7 +90,13 @@ export const leases = {
 	create: (data: Record<string, unknown>) => api.post<Lease>('/leases', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Lease>(`/leases/${id}`, data),
 	delete: (id: number) => api.delete(`/leases/${id}`),
-	ledger: (id: number) => api.get<LeaseLedger>(`/leases/${id}/ledger`),
+	ledger: (id: number, params?: { skip?: number; take?: number }) => {
+		const q = new URLSearchParams();
+		if (params?.skip != null) q.set('skip', String(params.skip));
+		if (params?.take != null) q.set('take', String(params.take));
+		const qs = q.toString();
+		return api.get<LeaseLedger>(`/leases/${id}/ledger${qs ? `?${qs}` : ''}`);
+	},
 	ask: (id: number, question: string) =>
 		api.post<LeaseQuestionResponse>(`/leases/${id}/ask`, { question }),
 

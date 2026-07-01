@@ -107,20 +107,39 @@
 	const leaseTemplateCount = $derived(leaseTemplatesQuery.data?.totalCount ?? 0);
 	const leaseTemplatePreview = $derived(leaseTemplatesQuery.data?.items ?? []);
 
-	// Payments for this lease
+	// Payments for this lease — server-side paged/sorted (the browser never materializes or slices the
+	// whole payment history; the DB pages it).
+	const PAYMENTS_PAGE_SIZE = 50;
+	let paymentsPage = $state(1);
+	let paymentsSort = $state('-dueDate');
 	const paymentsQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, leaseId],
-		queryFn: () => payments.list(portfolioId, { leaseId, take: 200 }),
+		queryKey: ['payments', portfolioId, leaseId, 'page', paymentsPage, paymentsSort],
+		queryFn: () => payments.listPage(portfolioId, {
+			leaseId,
+			skip: (paymentsPage - 1) * PAYMENTS_PAGE_SIZE,
+			take: PAYMENTS_PAGE_SIZE,
+			sort: paymentsSort || undefined,
+		}),
 		enabled: portfolioId > 0 && leaseId > 0,
 	}));
+	const paymentRows = $derived(paymentsQuery.data?.items ?? []);
+	const paymentsTotal = $derived(paymentsQuery.data?.totalCount ?? 0);
 
-	// Plain-English account history (charges, payments, balance) with a "why" per entry.
+	// Plain-English account history (charges, payments, balance) with a "why" per entry. The payment
+	// rows are paged DB-side (Skip/Take), so a multi-year tenancy never loads its whole history at once.
+	const LEDGER_PAGE_SIZE = 50;
+	let ledgerPage = $state(1);
 	const ledgerQuery = createQuery(() => ({
-		queryKey: ['lease-ledger', leaseId],
-		queryFn: () => leases.ledger(leaseId),
+		queryKey: ['lease-ledger', leaseId, ledgerPage],
+		queryFn: () => leases.ledger(leaseId, {
+			skip: (ledgerPage - 1) * LEDGER_PAGE_SIZE,
+			take: LEDGER_PAGE_SIZE,
+		}),
 		enabled: leaseId > 0,
 	}));
 	const ledger = $derived(ledgerQuery.data);
+	const ledgerTotal = $derived(ledger?.totalCount ?? 0);
+	const ledgerPageCount = $derived(Math.max(1, Math.ceil(ledgerTotal / LEDGER_PAGE_SIZE)));
 	const balanceLine = $derived.by(() => {
 		if (!ledger) return '';
 		if (ledger.balance > 0.005) return `${ledger.tenantName ?? 'This tenant'} still owes ${formatCurrency(ledger.balance)}.`;
@@ -366,17 +385,9 @@
 	let pastDueNotes = $state('');
 	let pastDuePaidErrors = $state<{ paidDate?: string }>({});
 
-	const pastDuePaymentCount = $derived.by(() => {
-		const today = new Date();
-		today.setHours(0, 0, 0, 0);
-		return (paymentsQuery.data ?? []).filter((payment) => {
-			if (!['Scheduled', 'Partial', 'Late'].includes(payment.status)) return false;
-			const dueDate = new Date(payment.dueDate);
-			if (Number.isNaN(dueDate.getTime())) return false;
-			dueDate.setHours(0, 0, 0, 0);
-			return dueDate < today;
-		}).length;
-	});
+	// Past-due count comes from the ledger's server-side aggregate over the WHOLE lease (not a
+	// client-side scan of the current payments page, which would undercount past page 1).
+	const pastDuePaymentCount = $derived(ledger?.pastDueCount ?? 0);
 
 	function openPastDuePaidDialog() {
 		pastDuePaidDate = new Date().toISOString().slice(0, 10);
@@ -1554,7 +1565,7 @@
 						{/if}
 					</div>
 
-					{#if ledger.entries.length === 0}
+					{#if ledgerTotal === 0}
 						<p class="text-sm text-muted-foreground">No charges or payments recorded yet.</p>
 					{:else}
 						<Tooltip.Provider delayDuration={150}>
@@ -1580,6 +1591,33 @@
 								{/each}
 							</ul>
 						</Tooltip.Provider>
+						{#if ledgerPageCount > 1}
+							<div class="mt-3 flex items-center justify-between gap-2" data-testid="lease-ledger-pager">
+								<p class="text-xs text-muted-foreground">
+									Page {ledgerPage} of {ledgerPageCount} · {ledgerTotal} payment{ledgerTotal === 1 ? '' : 's'}
+								</p>
+								<div class="flex items-center gap-2">
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={ledgerPage <= 1 || ledgerQuery.isFetching}
+										onclick={() => (ledgerPage = Math.max(1, ledgerPage - 1))}
+										data-testid="lease-ledger-newer"
+									>
+										Newer
+									</Button>
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={ledgerPage >= ledgerPageCount || ledgerQuery.isFetching}
+										onclick={() => (ledgerPage = Math.min(ledgerPageCount, ledgerPage + 1))}
+										data-testid="lease-ledger-older"
+									>
+										Older
+									</Button>
+								</div>
+							</div>
+						{/if}
 					{/if}
 				{/if}
 			</Card.Content>
@@ -1592,13 +1630,20 @@
 				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View deposits</a>
 			</div>
 			<DataGrid
-				data={paymentsQuery.data ?? []}
+				data={paymentRows}
 				columns={paymentColumns}
-				loading={paymentsQuery.isLoading}
+				loading={paymentsQuery.isLoading || paymentsQuery.isFetching}
 				emptyMessage="No payments recorded for this lease."
 				getRowKey={(p) => p.id}
 				onRowClick={(p) => goto(recordHref('payment', p))}
 				data-testid="lease-payments-grid"
+				pageSize={PAYMENTS_PAGE_SIZE}
+				page={paymentsPage}
+				totalCount={paymentsTotal}
+				serverSide
+				onPageChange={(page) => (paymentsPage = page)}
+				sort={paymentsSort}
+				onSortChange={(s) => { paymentsSort = s ?? ''; paymentsPage = 1; }}
 			/>
 		</div>
 

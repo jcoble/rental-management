@@ -21,7 +21,7 @@ public interface ILeaseService
     /// not found in the portfolio.
     /// </summary>
     Task<LeaseLedgerResponse?> GetLedgerAsync(
-        int portfolioId, int id, int? restrictToTenantId = null, CancellationToken ct = default);
+        int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default);
     Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default);
     Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);

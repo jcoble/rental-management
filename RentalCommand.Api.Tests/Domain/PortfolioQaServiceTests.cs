@@ -158,8 +158,48 @@ public sealed class PortfolioQaServiceTests : IDisposable
             question: "Who is overdue?");
 
         using var doc = JsonDocument.Parse(answer);
-        doc.RootElement.GetArrayLength().Should().Be(1);
-        doc.RootElement[0].GetProperty("leaseNumber").GetString().Should().Be("CURRENT-1");
+        doc.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+        var overdue = doc.RootElement.GetProperty("overdue");
+        overdue.GetArrayLength().Should().Be(1);
+        overdue[0].GetProperty("leaseNumber").GetString().Should().Be("CURRENT-1");
+    }
+
+    [Fact]
+    public async Task OverdueRentTool_PagesAndDetectsTruncationInSql()
+    {
+        var now = DateTime.UtcNow;
+        var lease = SeedLease(now);
+        for (var i = 0; i < 51; i++)
+        {
+            _db.Payments.Add(new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = lease,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1000m + i,
+                DueDate = now.Date.AddDays(-60 + i),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        await _db.SaveChangesAsync();
+
+        var answer = await AskToolAsync(
+            toolName: "list_overdue_rent",
+            argsJson: "{}",
+            question: "Who is overdue?");
+
+        using var doc = JsonDocument.Parse(answer);
+        doc.RootElement.GetProperty("count").GetInt32().Should().Be(50);
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeTrue();
+        doc.RootElement.GetProperty("overdue").GetArrayLength().Should().Be(50);
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            (sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) ||
+             sql.Contains("FETCH", StringComparison.OrdinalIgnoreCase)));
+        _commands.Should().Contain(sql => sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

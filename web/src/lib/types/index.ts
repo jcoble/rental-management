@@ -657,7 +657,18 @@ export interface LeaseLedger {
 	totalPaid: number;
 	/** Outstanding balance (charges minus payments). Negative = credit/overpayment. */
 	balance: number;
+	/** Past-due charges on the whole lease (Scheduled/Partial/Late, due before today) — computed
+	 * server-side, NOT derived from the paged entries. */
+	pastDueCount: number;
+	/** Opening-balance anchor, returned separately from the paged entries so it stays stable across
+	 * pages. Null when the lease carries no opening balance. */
+	opening: LedgerTransaction | null;
+	/** Ledger rows for the requested page (newest first). A payment may expand to two lines. */
 	entries: LedgerTransaction[];
+	/** Total payments on the lease (the pageable unit) — drives "load more". */
+	totalCount: number;
+	skip: number;
+	take: number;
 	testId: string;
 }
 
