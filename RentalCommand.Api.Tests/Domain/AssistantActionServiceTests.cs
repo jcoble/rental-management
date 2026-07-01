@@ -56,7 +56,7 @@ public sealed class AssistantActionServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        var expenseService = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>());
+        var expenseService = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>(), TimeProvider.System);
         _sut = new AssistantActionService(_db, expenseService);
     }
 

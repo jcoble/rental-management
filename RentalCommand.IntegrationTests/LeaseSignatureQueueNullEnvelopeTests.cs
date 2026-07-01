@@ -205,6 +205,7 @@ public sealed class LeaseSignatureQueueNullEnvelopeTests : IAsyncLifetime
             new LeaseAgreementPdfGenerator(),
             new AuditTrailService(db, new RentalCommand.Data.Auditing.AuditScope()),
             NullLogger<LeaseService>.Instance,
+            TimeProvider.System,
             new LeaseAgreementRenderer(
                 db,
                 storage,

@@ -1072,7 +1072,8 @@ public class BankingServiceTests : IDisposable
                 Environment = "sandbox",
                 ClientId = "client-id",
                 Secret = "secret",
-            }));
+            }),
+            TimeProvider.System);
 
     private Payment SeedRentPayment(DateTime paidAt)
     {
@@ -1186,7 +1187,8 @@ public class BankingServiceTests : IDisposable
                 Environment = "sandbox",
                 ClientId = "client-id",
                 Secret = "secret",
-            }));
+            }),
+            TimeProvider.System);
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {

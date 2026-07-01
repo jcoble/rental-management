@@ -55,7 +55,7 @@ public class YearEndPacketTests : IDisposable
         _db.SaveChanges();
 
         _scheduleE = new ScheduleEService(_db);
-        _sut = new AccountingService(_db, _scheduleE, new YearEndPacketPdfGenerator());
+        _sut = new AccountingService(_db, _scheduleE, new YearEndPacketPdfGenerator(), TimeProvider.System);
     }
 
     public void Dispose()
