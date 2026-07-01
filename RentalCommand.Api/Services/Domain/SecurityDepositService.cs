@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -23,6 +24,7 @@ public class SecurityDepositService : ISecurityDepositService
     private readonly IAuditTrailService _audit;
     private readonly ICurrentActor _actor;
     private readonly ILogger<SecurityDepositService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public SecurityDepositService(
         RentalCommandDbContext db,
@@ -30,7 +32,8 @@ public class SecurityDepositService : ISecurityDepositService
         IMoveOutStatementPdfGenerator pdf,
         IAuditTrailService audit,
         ICurrentActor actor,
-        ILogger<SecurityDepositService> logger)
+        ILogger<SecurityDepositService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _storage = storage;
@@ -38,6 +41,7 @@ public class SecurityDepositService : ISecurityDepositService
         _audit = audit;
         _actor = actor;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // Deposits are NOT marked IAuditable (no generic twin), so these explicit rows are the sole audit
@@ -121,7 +125,7 @@ public class SecurityDepositService : ISecurityDepositService
         if (lease == null)
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new SecurityDepositHolding
         {
             PortfolioId = portfolioId,
@@ -178,7 +182,7 @@ public class SecurityDepositService : ISecurityDepositService
 
         entity.DeductionsJson = JsonSerializer.Serialize(deductions);
         entity.DeductionsTotal = deductions.Sum(d => d.Amount);
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -207,7 +211,7 @@ public class SecurityDepositService : ISecurityDepositService
         var net = Math.Max(0m, entity.Amount - totalDeductions);
 
         entity.ReturnedAmount = net;
-        entity.ReturnedAt = DateTime.UtcNow;
+        entity.ReturnedAt = _timeProvider.UtcNow();
         // Terminal status keys off the deductions taken and what (if anything) actually went back:
         //   no deductions                 -> the full deposit was returned      -> Returned
         //   deductions, net refund > 0    -> the landlord kept part of it       -> PartiallyReturned
@@ -219,7 +223,7 @@ public class SecurityDepositService : ISecurityDepositService
                 : SecurityDepositStatus.Withheld;
         if (request.Notes != null)
             entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -283,7 +287,7 @@ public class SecurityDepositService : ISecurityDepositService
             PropertyLine = propertyLine,
             UnitLine = unit == null ? null : $"Unit {unit.UnitNumber}",
             LeaseNumber = lease?.LeaseNumber,
-            StatementDate = entity.ReturnedAt ?? DateTime.UtcNow,
+            StatementDate = entity.ReturnedAt ?? _timeProvider.UtcNow(),
             MoveOutDate = lease?.MoveOutDate,
             DepositHeld = entity.Amount,
             Deductions = deductions,

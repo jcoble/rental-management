@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -23,10 +24,12 @@ namespace RentalCommand.Api.Controllers;
 public class AdminAuditController : ManagementControllerBase
 {
     private readonly IAuditQueryService _service;
+    private readonly TimeProvider _timeProvider;
 
-    public AdminAuditController(IAuditQueryService service)
+    public AdminAuditController(IAuditQueryService service, TimeProvider timeProvider)
     {
         _service = service;
+        _timeProvider = timeProvider;
     }
 
     [HttpGet]
@@ -59,7 +62,7 @@ public class AdminAuditController : ManagementControllerBase
         CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
-        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        var stamp = _timeProvider.UtcNow().ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
 
         Response.ContentType = "text/csv; charset=utf-8";
         Response.Headers["Content-Disposition"] = $"attachment; filename=\"audit-{stamp}.csv\"";

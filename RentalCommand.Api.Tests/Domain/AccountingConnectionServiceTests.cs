@@ -190,12 +190,14 @@ public class AccountingConnectionServiceTests : IDisposable
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions.Value));
         var providerResolver = new AccountingProviderResolver(providers);
         var tokenService = new AccountingTokenService(
-            _dp, providerResolver, settingsResolver, NullLogger<AccountingTokenService>.Instance);
+            _dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
             _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
+            TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             _ctx.Db, _dp, providerResolver, settingsResolver, importService,
+            TimeProvider.System,
             NullLogger<AccountingConnectionService>.Instance);
     }
 

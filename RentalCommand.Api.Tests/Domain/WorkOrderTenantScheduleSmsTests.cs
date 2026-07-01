@@ -54,7 +54,8 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
             new NoopDataUpdate(),
             _publisher,
             Mock.Of<IFileStorage>(),
-            NullLogger<WorkOrderService>.Instance);
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose()

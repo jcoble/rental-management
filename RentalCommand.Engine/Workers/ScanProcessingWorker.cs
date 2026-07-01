@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Scanning;       // ReceiptExtractionSchema
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Workers;
@@ -75,6 +76,7 @@ public class ScanProcessingWorker : EngineWorkerBase
         var llm = scoped.GetRequiredService<ILlmProvider>();
         var storage = scoped.GetRequiredService<IFileStorage>();
         var dataUpdate = scoped.GetRequiredService<IDataUpdateService>();
+        var timeProvider = scoped.GetRequiredService<TimeProvider>();
         var logger = scoped.GetRequiredService<ILogger<ScanProcessingWorker>>();
 
         var pending = await db.ScanDrafts
@@ -229,7 +231,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                 }
 
                 draft.Status = "Reviewing";
-                draft.ReviewedAt = DateTime.UtcNow;
+                draft.ReviewedAt = timeProvider.UtcNow();
                 await db.SaveChangesAsync(ct);
 
                 logger.LogInformation(
@@ -371,12 +373,15 @@ public class ScanProcessingWorker : EngineWorkerBase
         {
             using var failScope = scoped.GetRequiredService<IServiceScopeFactory>().CreateScope();
             var failDb = failScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            // Hoist "now" to a local: an injected TimeProvider call can't be translated inside the
+            // ExecuteUpdate expression tree (it would try to compile to SQL).
+            var reviewedAt = failScope.ServiceProvider.GetRequiredService<TimeProvider>().UtcNow();
             await failDb.ScanDrafts
                 .Where(d => d.Id == draftId && d.Status == "Processing")
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(d => d.Status, "Failed")
                     .SetProperty(d => d.FailureReason, reason)
-                    .SetProperty(d => d.ReviewedAt, DateTime.UtcNow), CancellationToken.None);
+                    .SetProperty(d => d.ReviewedAt, reviewedAt), CancellationToken.None);
 
             await dataUpdate.BroadcastEntityUpdateAsync(
                 portfolioId, "ScanDraft", draftId,

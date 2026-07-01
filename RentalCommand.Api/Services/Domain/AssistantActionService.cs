@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -12,11 +13,13 @@ public sealed partial class AssistantActionService : IAssistantActionService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IExpenseService _expenses;
+    private readonly TimeProvider _timeProvider;
 
-    public AssistantActionService(RentalCommandDbContext db, IExpenseService expenses)
+    public AssistantActionService(RentalCommandDbContext db, IExpenseService expenses, TimeProvider timeProvider)
     {
         _db = db;
         _expenses = expenses;
+        _timeProvider = timeProvider;
     }
 
     public async Task<AssistantActionDraftResponse> DraftAsync(
@@ -154,7 +157,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
         string command,
         CancellationToken ct)
     {
-        var today = DateTime.UtcNow.Date;
+        var today = _timeProvider.UtcNow().Date;
         var amount = ExtractAmount(command);
         var category = InferCategory(command);
         var status = InferStatus(command);

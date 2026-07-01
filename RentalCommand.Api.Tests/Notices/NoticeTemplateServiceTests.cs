@@ -13,7 +13,7 @@ public class NoticeTemplateServiceTests : IDisposable
     [Fact]
     public async Task List_returns_all_five_types_with_available_fields()
     {
-        var service = new NoticeTemplateService(_ctx.Db);
+        var service = new NoticeTemplateService(_ctx.Db, TimeProvider.System);
 
         var list = await service.ListAsync(1, default);
 
@@ -26,7 +26,7 @@ public class NoticeTemplateServiceTests : IDisposable
     [Fact]
     public async Task Upsert_creates_then_updates_single_active_template()
     {
-        var service = new NoticeTemplateService(_ctx.Db);
+        var service = new NoticeTemplateService(_ctx.Db, TimeProvider.System);
 
         await service.UpsertAsync(1, "RenewalOffer",
             new UpsertNoticeTemplateRequest { Subject = "S1", Body = "B1" }, default);
@@ -45,7 +45,7 @@ public class NoticeTemplateServiceTests : IDisposable
     [Fact]
     public async Task Upsert_rejects_unknown_type()
     {
-        var service = new NoticeTemplateService(_ctx.Db);
+        var service = new NoticeTemplateService(_ctx.Db, TimeProvider.System);
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.UpsertAsync(1, "BogusType",
@@ -55,7 +55,7 @@ public class NoticeTemplateServiceTests : IDisposable
     [Fact]
     public async Task Upsert_rejects_empty_body()
     {
-        var service = new NoticeTemplateService(_ctx.Db);
+        var service = new NoticeTemplateService(_ctx.Db, TimeProvider.System);
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.UpsertAsync(1, "RenewalOffer",
@@ -65,7 +65,7 @@ public class NoticeTemplateServiceTests : IDisposable
     [Fact]
     public async Task Upsert_rejects_empty_subject()
     {
-        var service = new NoticeTemplateService(_ctx.Db);
+        var service = new NoticeTemplateService(_ctx.Db, TimeProvider.System);
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.UpsertAsync(1, "RenewalOffer",

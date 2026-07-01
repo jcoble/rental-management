@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -14,11 +15,13 @@ public class OwnerEntityService : IOwnerEntityService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public OwnerEntityService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public OwnerEntityService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
@@ -110,7 +113,7 @@ public class OwnerEntityService : IOwnerEntityService
 
     public async Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new OwnerEntity
         {
             PortfolioId = portfolioId,
@@ -164,7 +167,7 @@ public class OwnerEntityService : IOwnerEntityService
                          ?? (request.Address ?? entity.Address);
         if (request.Phone != null) entity.Phone = request.Phone;
         if (request.Email != null) entity.Email = request.Email;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -201,7 +204,7 @@ public class OwnerEntityService : IOwnerEntityService
                     statusCode: 409);
             }
 
-            var now = DateTime.UtcNow;
+            var now = _timeProvider.UtcNow();
             await _db.Properties
                 .Where(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id)
                 .ExecuteUpdateAsync(setters => setters
@@ -209,7 +212,7 @@ public class OwnerEntityService : IOwnerEntityService
                     .SetProperty(p => p.UpdatedAt, now), ct);
         }
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         entity.UpdatedAt = entity.DeletedAt.Value;
         await _db.SaveChangesAsync(ct);
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -9,10 +10,12 @@ namespace RentalCommand.Api.Services.Domain;
 public class NotificationService : INotificationService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public NotificationService(RentalCommandDbContext db)
+    public NotificationService(RentalCommandDbContext db, TimeProvider timeProvider)
     {
         _db = db;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<NotificationResponse>> ListAsync(
@@ -83,7 +86,7 @@ public class NotificationService : INotificationService
         if (!notification.IsRead)
         {
             notification.IsRead = true;
-            notification.ReadAt = DateTime.UtcNow;
+            notification.ReadAt = _timeProvider.UtcNow();
             await _db.SaveChangesAsync(ct);
         }
 
@@ -92,7 +95,7 @@ public class NotificationService : INotificationService
 
     public async Task MarkAllAsReadAsync(int portfolioId, int userId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var query = _db.Notifications
             .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead);
         if (!await IsStaffUserAsync(portfolioId, userId, ct))
@@ -121,7 +124,7 @@ public class NotificationService : INotificationService
             Message = request.Message.Trim(),
             Severity = NormalizeSeverity(request.Severity),
             ActionUrl = string.IsNullOrWhiteSpace(request.ActionUrl) ? null : request.ActionUrl.Trim(),
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
         };
 
         _db.Notifications.Add(notification);
@@ -168,7 +171,7 @@ public class NotificationService : INotificationService
 
         var trimmed = string.IsNullOrWhiteSpace(email) ? null : email.Trim();
         portfolio.Settings = WriteNotificationEmail(portfolio.Settings, trimmed);
-        portfolio.UpdatedAt = DateTime.UtcNow;
+        portfolio.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         return new NotificationEmailResponse { Email = trimmed };

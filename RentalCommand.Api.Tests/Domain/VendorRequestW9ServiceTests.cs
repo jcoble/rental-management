@@ -26,7 +26,8 @@ public class VendorRequestW9ServiceTests : IDisposable
         Mock.Of<IDataUpdateService>(),
         (publisher ?? new Mock<IMessagePublisher>()).Object,
         Mock.Of<IAuditTrailService>(),
-        Mock.Of<ILogger<VendorService>>());
+        Mock.Of<ILogger<VendorService>>(),
+        TimeProvider.System);
 
     private Vendor SeedVendor(string? phone)
     {

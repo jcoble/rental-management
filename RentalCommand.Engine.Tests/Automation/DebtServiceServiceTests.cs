@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Engine.Services;
@@ -29,7 +30,8 @@ public class DebtServiceServiceTests : IDisposable
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:TimeZone"] = "UTC" })
             .Build();
-        return new DebtServiceService(_ctx.Db, config, NullLogger<DebtServiceService>.Instance);
+        return new DebtServiceService(
+            _ctx.Db, TimeProvider.System, new AppTimeZoneProvider(config), NullLogger<DebtServiceService>.Instance);
     }
 
     private Property SeedProperty()

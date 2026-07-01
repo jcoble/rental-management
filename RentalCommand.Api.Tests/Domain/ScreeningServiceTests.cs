@@ -78,7 +78,8 @@ public class ScreeningServiceTests : IDisposable
         _publisher,
         Mock.Of<IDataUpdateService>(),
         new RecordingAuditService(),
-        NullLogger<ScreeningService>.Instance);
+        NullLogger<ScreeningService>.Instance,
+        TimeProvider.System);
 
     private async Task<RentalApplication> SeedApplicationAsync(bool consent, string? email = "applicant@example.com")
     {

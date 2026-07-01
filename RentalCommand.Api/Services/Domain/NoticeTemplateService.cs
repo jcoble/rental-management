@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -11,8 +12,13 @@ public class NoticeTemplateService : INoticeTemplateService
         ["RentReminder", "RenewalOffer", "MonthToMonthConversion", "MoveOutReminder", "LateRentNotice"];
 
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public NoticeTemplateService(RentalCommandDbContext db) => _db = db;
+    public NoticeTemplateService(RentalCommandDbContext db, TimeProvider timeProvider)
+    {
+        _db = db;
+        _timeProvider = timeProvider;
+    }
 
     public async Task<IReadOnlyList<NoticeTemplateResponse>> ListAsync(int portfolioId, CancellationToken ct = default)
     {
@@ -49,7 +55,7 @@ public class NoticeTemplateService : INoticeTemplateService
         var existing = await _db.NoticeTemplates
             .FirstOrDefaultAsync(x => x.PortfolioId == portfolioId && x.NoticeType == noticeType && x.IsActive, ct);
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         if (existing == null)
         {
             existing = new NoticeTemplate

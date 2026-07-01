@@ -428,18 +428,20 @@ public sealed class NativeEsignTests : IDisposable
     // -------------------------------------------------------------------------
 
     private NativeEsignProvider CreateProvider()
-        => new(_db, _storage, _config, NullLogger<NativeEsignProvider>.Instance);
+        => new(_db, _storage, _config, TimeProvider.System, NullLogger<NativeEsignProvider>.Instance);
 
     private LeaseEsignService CreateLeaseEsignService(IEsignProvider provider)
     {
         var leaseService = new LeaseService(
             _db, new NoopDataUpdateService(), _storage, new LeaseAgreementPdfGenerator(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()), NullLogger<LeaseService>.Instance);
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System), NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
 
         return new LeaseEsignService(
             _db, leaseService, provider, _storage, new NoopDataUpdateService(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             _config,
+            TimeProvider.System,
             NullLogger<LeaseEsignService>.Instance);
     }
 
@@ -448,7 +450,7 @@ public sealed class NativeEsignTests : IDisposable
         var provider = CreateProvider();
         var leaseEsign = CreateLeaseEsignService(provider);
         return new NativeSigningService(
-            _db, _storage, new ExecutedLeasePdfGenerator(), leaseEsign, NullLogger<NativeSigningService>.Instance);
+            _db, _storage, new ExecutedLeasePdfGenerator(), leaseEsign, TimeProvider.System, NullLogger<NativeSigningService>.Instance);
     }
 
     private async Task<EsignResult> SendAsync(NativeEsignProvider provider, Lease lease, (string Name, string Email)? extraSigner = null)

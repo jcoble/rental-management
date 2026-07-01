@@ -271,7 +271,8 @@ public class NoticeDraftServiceTests : IDisposable
         _ctx.Db,
         new NoopConversationService(),
         llm ?? new NoopLlmProvider(),
-        NullLogger<NoticeDraftService>.Instance);
+        NullLogger<NoticeDraftService>.Instance,
+        TimeProvider.System);
 
     [Fact]
     public async Task GenerateAsync_RentReminder_produces_one_draft_with_tenant_name()

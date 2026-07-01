@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -28,19 +29,22 @@ public class VendorDispatchService : IVendorDispatchService
     private readonly IAuditTrailService _audit;
     private readonly IMessagePublisher _publisher;
     private readonly ILogger<VendorDispatchService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public VendorDispatchService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         IMessagePublisher publisher,
-        ILogger<VendorDispatchService> logger)
+        ILogger<VendorDispatchService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _audit = audit;
         _publisher = publisher;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<DispatchResult> DispatchAsync(int portfolioId, int workOrderId, DispatchWorkOrderRequest request, int? changedByUserId, CancellationToken ct = default)
@@ -97,7 +101,7 @@ public class VendorDispatchService : IVendorDispatchService
                 .FirstOrDefaultAsync(ct);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var message = BuildJobSms(workOrder, property?.Name, property?.AddressLine1, unitNumber, request.Note);
 
         // Assign the vendor + record an open dispatch in the same save.
@@ -170,7 +174,7 @@ public class VendorDispatchService : IVendorDispatchService
             }
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var rating = new VendorRating
         {
             PortfolioId = portfolioId,
@@ -244,7 +248,7 @@ public class VendorDispatchService : IVendorDispatchService
 
         vendor.RatingCount = stats?.Count ?? 0;
         vendor.AverageRating = stats?.Avg is { } avg ? Math.Round(avg, 2) : null;
-        vendor.UpdatedAt = DateTime.UtcNow;
+        vendor.UpdatedAt = _timeProvider.UtcNow();
     }
 
     private static string BuildJobSms(WorkOrder workOrder, string? propertyName, string? propertyAddress, string? unitNumber, string? note)

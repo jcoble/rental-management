@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Voice;
@@ -15,6 +16,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
     private readonly IAudioTranscriptionService _transcriber;
     private readonly IFileStorage _storage;
     private readonly ILogger<VoiceIntakeService> _logger;
+    private readonly TimeProvider _timeProvider;
     private static readonly char[] TranscriptSeparators =
     [
         ' ', '\t', '\r', '\n', '.', ',', ';', ':', '!', '?', '"', '\'', '(', ')', '[', ']', '{', '}', '/', '\\', '|'
@@ -31,13 +33,15 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         ILlmProvider llm,
         IAudioTranscriptionService transcriber,
         IFileStorage storage,
-        ILogger<VoiceIntakeService> logger)
+        ILogger<VoiceIntakeService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _llm = llm;
         _transcriber = transcriber;
         _storage = storage;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<ScanDraft> CreateDraftAsync(
@@ -70,7 +74,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         {
             filePath = await _storage.UploadAsync(
                 new MemoryStream(audioBytes),
-                $"voice-{DateTime.UtcNow:yyyyMMddHHmmss}{Path.GetExtension(voiceFileName)}",
+                $"voice-{_timeProvider.UtcNow():yyyyMMddHHmmss}{Path.GetExtension(voiceFileName)}",
                 contentType ?? "application/octet-stream",
                 ct);
 
@@ -83,7 +87,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
                 FileSize = audioBytes.Length,
                 EntityType = "ScanDraft",
                 EntityId = null,
-                UploadedAt = DateTime.UtcNow,
+                UploadedAt = _timeProvider.UtcNow(),
             });
         }
 
@@ -98,8 +102,8 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
             ExtractedFields = classification.ExtractedFieldsJson,
             ModelId = classification.ModelId,
             TokensUsed = classification.TokensUsed,
-            CreatedAt = DateTime.UtcNow,
-            ReviewedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
+            ReviewedAt = _timeProvider.UtcNow(),
         };
 
         _db.ScanDrafts.Add(draft);
@@ -138,7 +142,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         draft.ExtractedFields = MergeFields(draft.ExtractedFields, classification.ExtractedFieldsJson);
         draft.TargetEntityType = classification.TargetEntityType;
         draft.ModelId = classification.ModelId;
-        draft.ReviewedAt = DateTime.UtcNow;
+        draft.ReviewedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         return draft;
     }

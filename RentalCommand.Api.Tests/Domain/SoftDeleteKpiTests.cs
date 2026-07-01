@@ -52,8 +52,8 @@ public sealed class SoftDeleteKpiTests : IDisposable
         });
         _db.SaveChanges();
 
-        _accounting = new AccountingService(_db, new ScheduleEService(_db), new YearEndPacketPdfGenerator());
-        _dashboard = new DashboardService(_db, new RentalCommand.Api.Services.Auditing.AuditDescriber());
+        _accounting = new AccountingService(_db, new ScheduleEService(_db), new YearEndPacketPdfGenerator(), TimeProvider.System);
+        _dashboard = new DashboardService(_db, new RentalCommand.Api.Services.Auditing.AuditDescriber(), TimeProvider.System);
     }
 
     public void Dispose()

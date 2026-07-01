@@ -51,7 +51,7 @@ public class AccountingServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new AccountingService(_db, new ScheduleEService(_db), new YearEndPacketPdfGenerator());
+        _sut = new AccountingService(_db, new ScheduleEService(_db), new YearEndPacketPdfGenerator(), TimeProvider.System);
     }
 
     public void Dispose()

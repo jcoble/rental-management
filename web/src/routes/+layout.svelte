@@ -24,9 +24,14 @@
 	import { shouldRetryQuery } from '$lib/api/query-retry';
 	import { onNavigate } from '$app/navigation';
 	import { initAuth } from '$lib/stores/auth.svelte';
+	import { env } from '$env/dynamic/public';
+	import SimClockPanel from '$lib/dev/SimClockPanel.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
+
+	// Dev-only master simulation-clock panel (spec §7.3), gated on PUBLIC_SIMULATION_ENABLED.
+	const simClockEnabled = env.PUBLIC_SIMULATION_ENABLED === 'true';
 
 	const queryClient = new QueryClient({
 		defaultOptions: {
@@ -128,6 +133,9 @@
 />
 <NavigationLoader />
 <Toaster richColors closeButton position="bottom-right" />
+{#if simClockEnabled}
+	<SimClockPanel />
+{/if}
 <Tooltip.Provider delayDuration={300}>
 	<QueryClientProvider client={queryClient}>
 		{@render children()}

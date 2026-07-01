@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -53,6 +54,7 @@ public class AccountingConnectionService
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingImportService _importService;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingConnectionService> _logger;
 
     public AccountingConnectionService(
@@ -61,6 +63,7 @@ public class AccountingConnectionService
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
         AccountingImportService importService,
+        TimeProvider timeProvider,
         ILogger<AccountingConnectionService> logger)
     {
         _db = db;
@@ -68,6 +71,7 @@ public class AccountingConnectionService
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
         _importService = importService;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -121,6 +125,8 @@ public class AccountingConnectionService
             StateToken = stateToken,
             RedirectUri = redirectUri,
             CodeVerifier = null,
+            // Ephemeral OAuth state: the 10-min TTL and its expiry checks stay on the REAL clock (never
+            // the simulation clock) so a time-travelling dev session can't wedge a live OAuth handshake.
             ExpiresAt = DateTime.UtcNow.Add(StateTtl),
             CreatedAt = DateTime.UtcNow,
         };
@@ -184,7 +190,7 @@ public class AccountingConnectionService
                 PortfolioId = portfolioId,
                 Provider = provider,
                 Status = AccountingConnectionStatus.Pending,
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
             };
             _db.AccountingConnections.Add(conn);
         }
@@ -202,9 +208,9 @@ public class AccountingConnectionService
         conn.CompanyName = result.CompanyName;
         conn.Status = AccountingConnectionStatus.Connected;
         conn.LastError = null;
-        conn.ConnectedAt ??= DateTime.UtcNow;
+        conn.ConnectedAt ??= _timeProvider.UtcNow();
         conn.DisconnectedAt = null;
-        conn.UpdatedAt = DateTime.UtcNow;
+        conn.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
@@ -278,8 +284,8 @@ public class AccountingConnectionService
         conn.AccessTokenCipherText = null;
         conn.RefreshTokenCipherText = null;
         conn.TokenExpiresAt = null;
-        conn.DisconnectedAt = DateTime.UtcNow;
-        conn.UpdatedAt = DateTime.UtcNow;
+        conn.DisconnectedAt = _timeProvider.UtcNow();
+        conn.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
@@ -395,7 +401,7 @@ public class AccountingConnectionService
             conn.PushEnabled = push.Value;
         }
 
-        conn.UpdatedAt = DateTime.UtcNow;
+        conn.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
     }
 
@@ -493,7 +499,7 @@ public class AccountingConnectionService
                 ExternalType = request.ExternalType,
                 ExternalId = request.ExternalId,
                 ExternalDisplayName = request.ExternalDisplayName,
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
             };
             _db.AccountingEntityMappings.Add(mapping);
         }
@@ -501,9 +507,9 @@ public class AccountingConnectionService
         mapping.LocalEntityType = request.LocalEntityType;
         mapping.LocalEntityId = request.LocalEntityId;
         mapping.LocalEnumValue = request.LocalEnumValue;
-        mapping.ConfirmedAt = DateTime.UtcNow;
+        mapping.ConfirmedAt = _timeProvider.UtcNow();
         mapping.ConfirmedByUserId = userId;
-        mapping.UpdatedAt = DateTime.UtcNow;
+        mapping.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         // Promote any parked (NeedsReview/Unmatched) transactions now resolvable by this confirmation.

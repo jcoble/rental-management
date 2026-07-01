@@ -86,7 +86,8 @@ public sealed class NotificationSettingsConcurrencyTests : IAsyncLifetime
                 var service = new NotificationSettingsService(
                     db,
                     new EphemeralDataProtectionProvider(),
-                    Array.Empty<ISmsProvider>());
+                    Array.Empty<ISmsProvider>(),
+                    TimeProvider.System);
 
                 return await service.GetRuntimeAsync(_portfolioId);
             }))

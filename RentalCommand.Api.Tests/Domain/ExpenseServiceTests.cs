@@ -46,7 +46,7 @@ public class ExpenseServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>());
+        _sut = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>(), TimeProvider.System);
     }
 
     public void Dispose()

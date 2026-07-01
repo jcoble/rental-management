@@ -26,7 +26,8 @@ public class VoiceConversationTests : IDisposable
         _llm.Object,
         _transcriber.Object,
         _storage.Object,
-        NullLogger<VoiceIntakeService>.Instance);
+        NullLogger<VoiceIntakeService>.Instance,
+        TimeProvider.System);
 
     [Fact]
     public async Task Conversation_FillsMissingAmount_ThenCompletes()

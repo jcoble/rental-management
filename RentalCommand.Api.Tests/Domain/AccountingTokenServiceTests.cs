@@ -114,7 +114,7 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var qbOptions = new QuickBooksOptions { ClientId = "id", ClientSecret = "secret", Environment = "sandbox" };
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
         var providerResolver = new AccountingProviderResolver(new[] { provider });
-        return new AccountingTokenService(_dp, providerResolver, settingsResolver, NullLogger<AccountingTokenService>.Instance);
+        return new AccountingTokenService(_dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
     }
 
     /// <summary>Fake provider whose RefreshTokenAsync returns a fixed result or throws a reconnect-required.</summary>

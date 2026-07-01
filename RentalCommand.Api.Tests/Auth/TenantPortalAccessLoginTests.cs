@@ -44,6 +44,7 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
         _ctx.Db.SaveChanges();
         _provisioning = new TenantPortalProvisioningService(
             _userManager, _ctx.Db, Options.Create(new SeedSettings()),
+            TimeProvider.System,
             NullLogger<TenantPortalProvisioningService>.Instance);
     }
 
@@ -113,9 +114,10 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
             userMigration.Object,
             Mock.Of<IAuthEmailSender>(),
             _ctx.Db,
-            new AuditTrailService(_ctx.Db, new AuditScope()),
+            new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
             Mock.Of<ISelfOwnerProvisioner>(),
-            NullLogger<AuthService>.Instance);
+            NullLogger<AuthService>.Instance,
+            TimeProvider.System);
     }
 
     private static SignInManager<ApplicationUser> CreateSignInManager(UserManager<ApplicationUser> userManager)

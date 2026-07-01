@@ -15,7 +15,7 @@ public class NotificationSettingsServiceTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     private NotificationSettingsService NewService() =>
-        new(_ctx.Db, new EphemeralDataProtectionProvider(), Array.Empty<ISmsProvider>());
+        new(_ctx.Db, new EphemeralDataProtectionProvider(), Array.Empty<ISmsProvider>(), TimeProvider.System);
 
     [Fact]
     public async Task UpdateAsync_EncryptsProviderSecrets_AndCredentialsDecryptThem()

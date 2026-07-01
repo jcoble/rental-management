@@ -29,8 +29,9 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             new NoopDataUpdateService(),
             Mock.Of<IFileStorage>(),
             Mock.Of<ILeaseAgreementPdfGenerator>(),
-            new AuditTrailService(_ctx.Db, new AuditScope()),
-            NullLogger<LeaseService>.Instance);
+            new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
+            NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

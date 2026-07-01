@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -16,23 +17,26 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
     private readonly RentalCommandDbContext _db;
     private readonly IDailyBriefingService _briefing;
     private readonly INotificationSettingsService _settings;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<DailyBriefingDeliveryService> _logger;
 
     public DailyBriefingDeliveryService(
         RentalCommandDbContext db,
         IDailyBriefingService briefing,
         INotificationSettingsService settings,
+        TimeProvider timeProvider,
         ILogger<DailyBriefingDeliveryService> logger)
     {
         _db = db;
         _briefing = briefing;
         _settings = settings;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
     public async Task<int> EnqueueDueAsync(DateTime? utcNow = null, CancellationToken ct = default)
     {
-        var now = utcNow ?? DateTime.UtcNow;
+        var now = utcNow ?? _timeProvider.UtcNow();
         var portfolios = await _db.Portfolios
             .Where(p => p.DeletedAt == null)
             .OrderBy(p => p.Id)

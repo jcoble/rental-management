@@ -6,6 +6,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -30,6 +31,7 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<LeaseExpiryReminderService> _logger;
 
     public LeaseExpiryReminderService(
@@ -37,19 +39,21 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
         IMessagePublisher publisher,
         INotificationSettingsService settings,
         IDataUpdateService dataUpdate,
+        TimeProvider timeProvider,
         ILogger<LeaseExpiryReminderService> logger)
     {
         _db = db;
         _publisher = publisher;
         _settings = settings;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
     /// <inheritdoc/>
     public async Task<int> RemindAsync(CancellationToken ct = default)
     {
-        var today = DateTime.UtcNow.Date;
+        var today = _timeProvider.UtcNow().Date;
 
         // Look-ahead can differ per portfolio (LeaseExpiryReminderDays is per-portfolio now). Load
         // unsent active leases broadly, then filter/gate each against its own portfolio's settings.
@@ -132,7 +136,7 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
 
             // Set the marker BEFORE publishing so the publisher's SaveChanges commits the outbox
             // row(s) and the marker in one transaction — a crash can't leave one without the other.
-            lease.ExpiryReminderSentAt = DateTime.UtcNow;
+            lease.ExpiryReminderSentAt = _timeProvider.UtcNow();
             try
             {
                 var inAppRows = await notifier.SendAsync(
@@ -148,7 +152,7 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                         RelatedEntityId: lease.Id),
                     new AutomationNotifier.EmailContent(email, $"Lease {lease.LeaseNumber} expires {lease.EndDate:MMM d}", body),
                     new AutomationNotifier.SmsContent(phone, body),
-                    DateTime.UtcNow,
+                    _timeProvider.UtcNow(),
                     ct);
 
                 foreach (var row in inAppRows)

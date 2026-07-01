@@ -114,7 +114,7 @@ public sealed class WebhookFailClosedTests
         var validator = new SmsWebhookSignatureValidator(config, NullLogger<SmsWebhookSignatureValidator>.Instance);
         var env = StubEnvironment(environment);
 
-        return new SmsWebhookController(router.Object, validator, env, NullLogger<SmsWebhookController>.Instance)
+        return new SmsWebhookController(router.Object, validator, env, NullLogger<SmsWebhookController>.Instance, TimeProvider.System)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

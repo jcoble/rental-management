@@ -25,7 +25,8 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             Mock.Of<IFileStorage>(),
             Mock.Of<ILeaseAgreementPdfGenerator>(),
             Mock.Of<IAuditTrailService>(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

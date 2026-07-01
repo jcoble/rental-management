@@ -39,9 +39,10 @@ public class TenantServiceTests : IDisposable
             _userManager,
             _ctx.Db,
             Options.Create(new SeedSettings()),
+            TimeProvider.System,
             NullLogger<TenantPortalProvisioningService>.Instance);
         _sut = new TenantService(
-            _ctx.Db, Mock.Of<IDataUpdateService>(), _provisioning, NullLogger<TenantService>.Instance);
+            _ctx.Db, Mock.Of<IDataUpdateService>(), _provisioning, NullLogger<TenantService>.Instance, TimeProvider.System);
     }
 
     public void Dispose()

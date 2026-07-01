@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -18,17 +19,20 @@ public class PortfolioService : IPortfolioService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IDataUpdateService _dataUpdate;
     private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
+    private readonly TimeProvider _timeProvider;
 
     public PortfolioService(
         RentalCommandDbContext db,
         UserManager<ApplicationUser> userManager,
         IDataUpdateService dataUpdate,
-        ISelfOwnerProvisioner selfOwnerProvisioner)
+        ISelfOwnerProvisioner selfOwnerProvisioner,
+        TimeProvider timeProvider)
     {
         _db = db;
         _userManager = userManager;
         _dataUpdate = dataUpdate;
         _selfOwnerProvisioner = selfOwnerProvisioner;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<PortfolioResponse>> ListForUserAsync(int portfolioId, CancellationToken ct = default)
@@ -138,7 +142,7 @@ public class PortfolioService : IPortfolioService
 
     public async Task<PortfolioResponse> CreateAsync(int userId, CreatePortfolioRequest request, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Portfolio
         {
             Name = request.Name,
@@ -193,7 +197,7 @@ public class PortfolioService : IPortfolioService
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (!string.IsNullOrWhiteSpace(request.Currency)) entity.Currency = request.Currency;
         if (request.Settings != null) entity.Settings = request.Settings;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -216,7 +220,7 @@ public class PortfolioService : IPortfolioService
             return false;
         }
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

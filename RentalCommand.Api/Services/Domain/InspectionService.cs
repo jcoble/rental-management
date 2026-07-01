@@ -4,6 +4,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -22,19 +23,22 @@ public class InspectionService : IInspectionService
     private readonly IFileStorage _storage;
     private readonly IInspectionReportPdfGenerator _pdf;
     private readonly ILogger<InspectionService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public InspectionService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IFileStorage storage,
         IInspectionReportPdfGenerator pdf,
-        ILogger<InspectionService> logger)
+        ILogger<InspectionService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _storage = storage;
         _pdf = pdf;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<InspectionResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -230,7 +234,7 @@ public class InspectionService : IInspectionService
             templateItems = resolved;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Inspection
         {
             PortfolioId = portfolioId,
@@ -312,7 +316,7 @@ public class InspectionService : IInspectionService
         if (request.Outcome != null) entity.Outcome = request.Outcome;
         if (request.Notes != null) entity.Notes = request.Notes;
         if (request.Inspector != null) entity.Inspector = request.Inspector;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -373,7 +377,7 @@ public class InspectionService : IInspectionService
         };
 
         _db.InspectionItems.Add(item);
-        inspection.UpdatedAt = DateTime.UtcNow;
+        inspection.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         return InspectionItemResponse.FromEntity(item);
@@ -476,7 +480,7 @@ public class InspectionService : IInspectionService
             item.SortOrder = orderById[item.Id];
         }
 
-        inspection.UpdatedAt = DateTime.UtcNow;
+        inspection.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         return items
@@ -547,7 +551,7 @@ public class InspectionService : IInspectionService
             return (null, "Mark at least one checklist item Pass, Fail, or N/A before completing — a completed inspection must record what was inspected.");
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var failedItems = items.Where(it => it.Result == InspectionItemResult.Fail).ToList();
         var workOrderIdByItemId = new Dictionary<int, int>();
         var newWorkOrderLinks = new List<(InspectionItem Item, WorkOrder WorkOrder)>();
@@ -921,7 +925,7 @@ public class InspectionService : IInspectionService
             .FirstOrDefaultAsync(i => i.Id == inspectionId && i.PortfolioId == portfolioId, ct);
         if (inspection != null)
         {
-            inspection.UpdatedAt = DateTime.UtcNow;
+            inspection.UpdatedAt = _timeProvider.UtcNow();
         }
     }
 
@@ -1019,7 +1023,7 @@ public class InspectionService : IInspectionService
             FileSize = pdfBytes.Length,
             EntityType = EntityType,
             EntityId = inspection.Id,
-            UploadedAt = DateTime.UtcNow,
+            UploadedAt = _timeProvider.UtcNow(),
         };
 
         try

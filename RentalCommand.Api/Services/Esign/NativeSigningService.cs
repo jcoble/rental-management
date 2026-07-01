@@ -5,6 +5,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Esign;
@@ -16,6 +17,7 @@ public sealed class NativeSigningService : INativeSigningService
     private readonly IFileStorage _storage;
     private readonly IExecutedLeasePdfGenerator _executedPdf;
     private readonly ILeaseEsignService _leaseEsign;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeSigningService> _logger;
 
     public NativeSigningService(
@@ -23,12 +25,14 @@ public sealed class NativeSigningService : INativeSigningService
         IFileStorage storage,
         IExecutedLeasePdfGenerator executedPdf,
         ILeaseEsignService leaseEsign,
+        TimeProvider timeProvider,
         ILogger<NativeSigningService> logger)
     {
         _db = db;
         _storage = storage;
         _executedPdf = executedPdf;
         _leaseEsign = leaseEsign;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -41,7 +45,7 @@ public sealed class NativeSigningService : INativeSigningService
             return error.Cast<SignPackageResponse>();
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // Mark Viewed + audit on the first open. Only meaningful while the signer is still pending.
         if (signer!.Status == SignatureSignerStatus.Pending)
@@ -162,7 +166,7 @@ public sealed class NativeSigningService : INativeSigningService
             return error.Cast<SignActionResponse>();
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         signer!.Status = SignatureSignerStatus.Signed;
         signer.SignatureType = typed ? SignatureSignatureType.Typed : SignatureSignatureType.Drawn;
@@ -216,7 +220,7 @@ public sealed class NativeSigningService : INativeSigningService
             return error.Cast<SignActionResponse>();
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         signer!.Status = SignatureSignerStatus.Declined;
         signer.IpAddress = ipAddress ?? signer.IpAddress;
@@ -545,7 +549,7 @@ public sealed class NativeSigningService : INativeSigningService
             FileSize = bytes.Length,
             EntityType = "Lease",
             EntityId = leaseId,
-            UploadedAt = DateTime.UtcNow,
+            UploadedAt = _timeProvider.UtcNow(),
         };
 
         try

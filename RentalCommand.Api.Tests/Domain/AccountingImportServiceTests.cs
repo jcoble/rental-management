@@ -402,9 +402,10 @@ public sealed class AccountingImportServiceTests : IDisposable
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
         var providerResolver = new AccountingProviderResolver(new[] { provider });
         var tokenService = new AccountingTokenService(
-            _dp, providerResolver, settingsResolver, NullLogger<AccountingTokenService>.Instance);
+            _dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         return new AccountingImportService(
             _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
+            TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
     }
 

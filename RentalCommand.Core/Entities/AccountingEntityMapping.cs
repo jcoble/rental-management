@@ -52,7 +52,7 @@ public class AccountingEntityMapping : IPortfolioScoped, IAuditable
     /// <summary>The suggester's score (0–1) when the mapping was surfaced for confirmation.</summary>
     public decimal? Confidence { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
     public AccountingConnection? AccountingConnection { get; set; }

@@ -60,7 +60,8 @@ public class InspectionChecklistServiceTests : IDisposable
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
-            NullLogger<InspectionService>.Instance);
+            NullLogger<InspectionService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose()

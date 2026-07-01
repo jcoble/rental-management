@@ -1,6 +1,7 @@
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services;
@@ -21,11 +22,13 @@ public sealed class AuditTrailService : IAuditTrailService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IAuditScope _scope;
+    private readonly TimeProvider _timeProvider;
 
-    public AuditTrailService(RentalCommandDbContext db, IAuditScope scope)
+    public AuditTrailService(RentalCommandDbContext db, IAuditScope scope, TimeProvider timeProvider)
     {
         _db = db;
         _scope = scope;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc />
@@ -78,7 +81,7 @@ public sealed class AuditTrailService : IAuditTrailService
                     NewValues = newValues,
                     ChangeReason = changeReason,
                     IpAddress = ipAddress,
-                    Timestamp = DateTime.UtcNow,
+                    Timestamp = _timeProvider.UtcNow(),
                 });
                 await _db.SaveChangesAsync(ct);
                 return;

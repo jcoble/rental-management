@@ -14,6 +14,7 @@ using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Payments;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -251,7 +252,13 @@ builder.Services.AddCors(options =>
 // Serialize/accept enums as their string names (e.g. "InProgress", "Normal") rather than
 // integers, matching what the SvelteKit client sends and renders. Without this the API
 // binds enums as numbers and 400s on the client's string enum values.
-builder.Services.AddControllers()
+// Dev-only simulation controllers ([SimulationOnly]) have all their routes stripped at startup when
+// simulation is inactive (production / flag off), so they simply do not exist there.
+var simulationEnabled = SimulationGate.IsEnabled(builder.Configuration, builder.Environment);
+builder.Services.AddControllers(options =>
+    {
+        options.Conventions.Add(new SimulationOnlyConvention(simulationEnabled));
+    })
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -330,6 +337,13 @@ else
 // the admin /admin/engine page (the Engine has no HTTP port, so the DB is the health contract).
 builder.Services.AddScoped<RentalCommand.Api.Services.Admin.IAdminEngineStatusService,
     RentalCommand.Api.Services.Admin.AdminEngineStatusService>();
+
+// --- Master simulation clock (TSK-615) ---
+// Binds the ambient TimeProvider + IAppTimeZoneProvider. In production (or when Simulation:Enabled is
+// false) this is TimeProvider.System — real clock, unchanged behavior. In non-prod with the flag on it
+// binds the controllable SimulationTimeProvider; pinFrameworkAuthClock keeps cookie/security-stamp auth
+// timing on the real clock even while domain time is simulated (S1).
+builder.Services.AddSimulationClock(builder.Configuration, builder.Environment, pinFrameworkAuthClock: true);
 
 var app = builder.Build();
 

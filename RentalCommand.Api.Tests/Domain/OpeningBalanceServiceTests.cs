@@ -52,14 +52,15 @@ public class OpeningBalanceServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new OpeningBalanceService(_db, new NoopDataUpdateService());
+        _sut = new OpeningBalanceService(_db, new NoopDataUpdateService(), TimeProvider.System);
         _leaseService = new LeaseService(
             _db,
             new NoopDataUpdateService(),
             new OpeningInMemoryFileStorage(),
             new LeaseAgreementPdfGenerator(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose()
