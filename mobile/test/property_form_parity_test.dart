@@ -116,6 +116,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repo.createdPayload, containsPair('name', 'Vineyard Flats'));
+      expect(repo.createdPayload, containsPair('type', 'SingleFamily'));
       expect(repo.createdPayload, containsPair('status', 'UnderMaintenance'));
       expect(repo.createdPayload, containsPair('ownerEntityId', 42));
       expect(repo.createdPayload, containsPair('addressLine2', 'Suite 12'));
@@ -132,6 +133,12 @@ void main() {
         repo.createdPayload,
         containsPair('manualAnnualDepreciation', 10909.0),
       );
+      expect(repo.createdUnits, hasLength(1));
+      expect(
+        repo.createdUnits.single,
+        containsPair('unitNumber', 'Vineyard Flats'),
+      );
+      expect(repo.createdUnits.single, containsPair('status', 'Vacant'));
     },
   );
 }
@@ -140,6 +147,7 @@ class _FakePropertiesRepository extends PropertiesRepository {
   _FakePropertiesRepository() : super(Dio());
 
   Map<String, dynamic>? createdPayload;
+  final createdUnits = <Map<String, dynamic>>[];
 
   @override
   Future<List<PropertyOwnerOption>> listOwnerOptions() async => const [
@@ -149,17 +157,36 @@ class _FakePropertiesRepository extends PropertiesRepository {
   @override
   Future<Property> createProperty(Map<String, dynamic> data) async {
     createdPayload = Map<String, dynamic>.from(data);
-    return _property();
+    return _property(type: data['type'] as String? ?? 'MultiFamily');
+  }
+
+  @override
+  Future<List<Unit>> listUnits(int propertyId) async => const [];
+
+  @override
+  Future<Unit> createUnit(int propertyId, Map<String, dynamic> data) async {
+    createdUnits.add(Map<String, dynamic>.from(data));
+    return Unit(
+      id: createdUnits.length,
+      propertyId: propertyId,
+      unitNumber: data['unitNumber'] as String? ?? '',
+      bedrooms: (data['bedrooms'] as num?)?.toInt() ?? 0,
+      bathrooms: (data['bathrooms'] as num?)?.toDouble() ?? 0,
+      marketRent: (data['marketRent'] as num?)?.toDouble() ?? 0,
+      status: data['status'] as String? ?? 'Vacant',
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+    );
   }
 }
 
-Property _property() {
+Property _property({required String type}) {
   return Property(
     id: 1,
     portfolioId: 1,
     ownerEntityId: 42,
     name: 'Vineyard Flats',
-    type: 'MultiFamily',
+    type: type,
     status: 'UnderMaintenance',
     addressLine1: '401 Market St',
     addressLine2: 'Suite 12',
@@ -170,6 +197,7 @@ Property _property() {
     managementFeePercent: 8.5,
     notes: 'North building has separate utility meters.',
     ownerName: 'North Coast Holdings',
+    unitCount: 0,
     createdAt: DateTime(2026),
     updatedAt: DateTime(2026),
   );

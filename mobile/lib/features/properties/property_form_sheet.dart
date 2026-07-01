@@ -6,6 +6,7 @@ import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../places/address_autocomplete_field.dart';
 import 'properties_repository.dart';
+import 'property_labels.dart';
 
 Future<Property?> showPropertyFormSheet(
   BuildContext context, {
@@ -44,6 +45,9 @@ const _propertyStatuses = [
   _PropertyOption('Inactive', 'Inactive'),
 ];
 
+const _defaultCreatePropertyType = 'SingleFamily';
+const _unitNumberMaxLength = 50;
+
 class _PropertyFormSheet extends ConsumerStatefulWidget {
   const _PropertyFormSheet({this.property, this.onSaved});
 
@@ -69,7 +73,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
   final _inServiceDateCtrl = TextEditingController();
   final _manualDepreciationCtrl = TextEditingController();
 
-  String _selectedType = 'MultiFamily';
+  String _selectedType = _defaultCreatePropertyType;
   String _selectedStatus = 'Active';
   int? _selectedOwnerEntityId;
   List<PropertyOwnerOption> _owners = const [];
@@ -301,6 +305,38 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     return data;
   }
 
+  Future<Property> _createProperty(
+    PropertiesRepository repo,
+    Map<String, dynamic> payload,
+  ) async {
+    final saved = await repo.createProperty(payload);
+    final type = payload['type'] as String? ?? saved.type;
+    if (!isPropertyUnitType(type)) return saved;
+
+    if ((saved.unitCount ?? 0) > 0) return saved;
+
+    final existingUnits = await repo.listUnits(saved.id);
+    if (existingUnits.isNotEmpty) return saved;
+
+    await repo.createUnit(saved.id, {
+      'unitNumber': _canonicalUnitNumber(saved.name),
+      'bedrooms': 0,
+      'bathrooms': 0,
+      'marketRent': 0,
+      'status': 'Vacant',
+    });
+    return saved;
+  }
+
+  String _canonicalUnitNumber(String propertyName) {
+    final value = propertyName.trim().isEmpty
+        ? 'Property'
+        : propertyName.trim();
+    return value.length <= _unitNumberMaxLength
+        ? value
+        : value.substring(0, _unitNumberMaxLength);
+  }
+
   Future<void> _submit() async {
     setState(() {
       _saving = true;
@@ -311,7 +347,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
       final repo = ref.read(propertiesRepositoryProvider);
       final saved = _isEditing
           ? await repo.updateProperty(widget.property!.id, _payload())
-          : await repo.createProperty(_payload());
+          : await _createProperty(repo, _payload());
 
       widget.onSaved?.call(saved);
       if (mounted) Navigator.of(context).pop(saved);
