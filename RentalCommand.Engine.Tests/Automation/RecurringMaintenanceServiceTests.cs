@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -171,7 +172,8 @@ public class RecurringMaintenanceServiceTests : IDisposable
             _ctx.Db,
             new FakeNotificationSettingsService(cfg),
             Mock.Of<IDataUpdateService>(),
-            new ConfigurationBuilder().Build(),
+            TimeProvider.System,
+            new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
             NullLogger<RecurringMaintenanceService>.Instance);
     }
 

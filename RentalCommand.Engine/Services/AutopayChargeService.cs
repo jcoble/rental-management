@@ -6,6 +6,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -15,15 +16,18 @@ public sealed class AutopayChargeService : IAutopayChargeService
 {
     private readonly RentalCommandDbContext _db;
     private readonly StripeConfig _config;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<AutopayChargeService> _logger;
 
     public AutopayChargeService(
         RentalCommandDbContext db,
         IOptions<StripeConfig> config,
+        TimeProvider timeProvider,
         ILogger<AutopayChargeService> logger)
     {
         _db = db;
         _config = config.Value;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -38,7 +42,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
             return 0;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // Candidate payments: scheduled (or late) rent, due now, on a lease with an ACTIVE autopay
         // enrollment. Joining through the active enrollment is the selection gate — leases that
@@ -153,7 +157,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 // payment_intent.succeeded webhook reconciles it and marks the Payment Paid.
                 transaction.ProviderPaymentIntentId = intent.Id;
                 transaction.Status = MapStatus(intent.Status);
-                transaction.UpdatedAt = DateTime.UtcNow;
+                transaction.UpdatedAt = _timeProvider.UtcNow();
                 await _db.SaveChangesAsync(ct);
                 charged++;
 
@@ -169,7 +173,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 // per-key recovery guard on the next run, and we don't crash the cycle.
                 transaction.Status = PaymentTransactionStatus.Failed;
                 transaction.FailureReason = ex.Message;
-                transaction.UpdatedAt = DateTime.UtcNow;
+                transaction.UpdatedAt = _timeProvider.UtcNow();
                 await _db.SaveChangesAsync(ct);
 
                 _logger.LogWarning(

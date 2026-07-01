@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using System.Text.Json;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -160,7 +161,8 @@ public class LateFeeServiceTests : IDisposable
             new FakeNotificationSettingsService(cfg),
             Mock.Of<IDataUpdateService>(),
             Options.Create(cfg),
-            new ConfigurationBuilder().Build(),
+            TimeProvider.System,
+            new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
             NullLogger<LateFeeService>.Instance);
     }
 

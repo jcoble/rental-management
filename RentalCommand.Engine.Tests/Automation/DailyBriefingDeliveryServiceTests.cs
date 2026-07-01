@@ -47,6 +47,7 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
             _ctx.Db,
             briefing,
             new StubNotificationSettingsService(config),
+            TimeProvider.System,
             NullLogger<DailyBriefingDeliveryService>.Instance);
 
         var first = await sut.EnqueueDueAsync(new DateTime(2026, 6, 3, 13, 0, 0, DateTimeKind.Utc));
@@ -101,6 +102,7 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
                 Summary = "Should not enqueue.",
             }),
             new StubNotificationSettingsService(config),
+            TimeProvider.System,
             NullLogger<DailyBriefingDeliveryService>.Instance);
 
         var queued = await sut.EnqueueDueAsync(new DateTime(2026, 6, 3, 13, 0, 0, DateTimeKind.Utc));
