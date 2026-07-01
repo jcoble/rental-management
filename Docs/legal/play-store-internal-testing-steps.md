@@ -5,7 +5,7 @@ Google Play **Internal testing** track so your dad (and other named testers) can
 install it from the Play Store.
 
 - **App id (package name):** `com.rentalcommand.rental_command`
-- **Signed bundle to upload:** `mobile/build/app/outputs/bundle/release/app-release.aab`
+- **Signed bundle to upload:** `mobile/build/app/outputs/bundle/prodRelease/app-prod-release.aab`
 - **Version of this build:** `1.0.0 (versionCode 1)`
 - **Backend the app talks to:** production — `https://rc.coblesolutions.com`
 
@@ -23,7 +23,7 @@ install it from the Play Store.
 - A credit/debit card for the **one-time $25** developer registration fee.
 - A government photo ID for identity verification (Google now verifies all new
   developer accounts).
-- The signed `app-release.aab` file (already built — see path above).
+- The signed prod-flavor `app-prod-release.aab` file (already built — see path above).
 - The **privacy policy hosted at a public URL** (see step 5b). The Markdown +
   HTML source live in `Docs/legal/privacy-policy.md` / `Docs/legal/privacy-policy.html`.
   You must put the HTML somewhere publicly reachable first.
@@ -73,11 +73,13 @@ install it from the Play Store.
    - The `.aab` is signed with the **upload key** `CN=Rental Command, O=Cole Solutions`
      (keystore at `mobile/android/upload-keystore.jks`). Keep that keystore + its
      password safe — you need the same upload key for every future update.
-4. **Upload** `mobile/build/app/outputs/bundle/release/app-release.aab`.
-5. **Release name:** Play prefills `1 (1.0.0)` — leave it or set `1.0.0-internal`.
-6. **Release notes:** add a short note, e.g. `Initial internal test build.`
+4. Build the prod-flavor app bundle if needed:
+   `cd mobile && flutter build appbundle --release --flavor prod --dart-define=FLAVOR=prod`.
+5. **Upload** `mobile/build/app/outputs/bundle/prodRelease/app-prod-release.aab`.
+6. **Release name:** Play prefills `1 (1.0.0)` — leave it or set `1.0.0-internal`.
+7. **Release notes:** add a short note, e.g. `Initial internal test build.`
    (put it inside the `<en-US>` language tag if asked).
-7. Click **Next**, review any warnings, then **Save** (don't roll out yet — finish
+8. Click **Next**, review any warnings, then **Save** (don't roll out yet — finish
    the App content forms in step 5 first, or Play will block the rollout).
 
 ---
@@ -202,7 +204,7 @@ When you're ready for anyone to install it from the Play Store:
 | Item | Value |
 |------|-------|
 | Package name | `com.rentalcommand.rental_command` |
-| App bundle (AAB) | `mobile/build/app/outputs/bundle/release/app-release.aab` |
+| App bundle (AAB) | `mobile/build/app/outputs/bundle/prodRelease/app-prod-release.aab` |
 | Upload keystore | `mobile/android/upload-keystore.jks` (gitignored — back it up off-repo) |
 | Upload key alias | `upload` |
 | Version | `1.0.0 (versionCode 1)` |
