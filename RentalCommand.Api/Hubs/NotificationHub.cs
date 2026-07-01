@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Hubs;
 
@@ -92,13 +93,16 @@ public class NotificationHubService : INotificationHubService
 {
     private readonly IHubContext<NotificationHub> _hubContext;
     private readonly ILogger<NotificationHubService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public NotificationHubService(
         IHubContext<NotificationHub> hubContext,
-        ILogger<NotificationHubService> logger)
+        ILogger<NotificationHubService> logger,
+        TimeProvider timeProvider)
     {
         _hubContext = hubContext;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task SendNotificationAsync(int portfolioId, object notification)
@@ -135,7 +139,7 @@ public class NotificationHubService : INotificationHubService
         {
             await _hubContext.Clients
                 .Group($"portfolio-{portfolioId}")
-                .SendAsync("ReceiveAlert", new { severity, message, timestamp = DateTime.UtcNow });
+                .SendAsync("ReceiveAlert", new { severity, message, timestamp = _timeProvider.UtcNow() });
         }
         catch (Exception ex)
         {

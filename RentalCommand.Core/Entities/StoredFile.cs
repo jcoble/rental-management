@@ -13,7 +13,7 @@ public class StoredFile
     public long FileSize { get; set; }
     public string? EntityType { get; set; }
     public int? EntityId { get; set; }
-    public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UploadedAt { get; set; }
 
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }

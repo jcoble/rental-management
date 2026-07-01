@@ -59,6 +59,6 @@ public class NotificationSettings
     public bool DailyBriefingIncludeEmpty { get; set; }
     public string? DailyBriefingSmsRecipientsCipherText { get; set; }
     public string? DailyBriefingEmailRecipientsCipherText { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 }

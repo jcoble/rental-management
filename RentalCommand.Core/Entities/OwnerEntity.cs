@@ -36,8 +36,8 @@ public class OwnerEntity : IAuditable, IPortfolioScoped
     /// </summary>
     public bool IsPrimary { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }

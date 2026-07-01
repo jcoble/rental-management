@@ -54,7 +54,7 @@ public class AccountingSyncMap : IPortfolioScoped
     /// </summary>
     public string? MetadataJson { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
     public AccountingConnection? AccountingConnection { get; set; }

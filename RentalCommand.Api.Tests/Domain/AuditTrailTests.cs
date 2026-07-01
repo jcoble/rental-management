@@ -36,7 +36,7 @@ public sealed class AuditTrailTests : IDisposable
 
         _scope = new AuditScope();
         _actor = new FakeActor { UserId = 7, ActorLabel = "Jane Landlord", IpAddress = "203.0.113.5" };
-        var interceptor = new AuditSaveChangesInterceptor(_actor, _scope);
+        var interceptor = new AuditSaveChangesInterceptor(_actor, _scope, TimeProvider.System);
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
