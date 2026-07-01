@@ -89,7 +89,7 @@ public class ConversationNotificationTests : IDisposable
             });
         _ctx.Db.SaveChanges();
 
-        var sut = new NotificationService(_ctx.Db, TimeProvider.System);
+        var sut = new NotificationService(_ctx.Db, TimeProvider.System, new NoopDataUpdateService());
 
         var tenantItems = await sut.ListAsync(1, userId: 20);
         tenantItems.Select(n => n.Title).Should().Equal("Pool closed");
@@ -100,7 +100,7 @@ public class ConversationNotificationTests : IDisposable
     [Fact]
     public async Task CreateBroadcastAsync_NormalizesSeverityAndCountsAsUnreadForPortfolioUsers()
     {
-        var sut = new NotificationService(_ctx.Db, TimeProvider.System);
+        var sut = new NotificationService(_ctx.Db, TimeProvider.System, new NoopDataUpdateService());
 
         var created = await sut.CreateBroadcastAsync(
             1,
