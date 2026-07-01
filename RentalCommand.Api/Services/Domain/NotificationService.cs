@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -11,11 +12,14 @@ public class NotificationService : INotificationService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
+    private readonly IDataUpdateService _dataUpdate;
 
-    public NotificationService(RentalCommandDbContext db, TimeProvider timeProvider)
+    public NotificationService(
+        RentalCommandDbContext db, TimeProvider timeProvider, IDataUpdateService dataUpdate)
     {
         _db = db;
         _timeProvider = timeProvider;
+        _dataUpdate = dataUpdate;
     }
 
     public async Task<IReadOnlyList<NotificationResponse>> ListAsync(
@@ -130,7 +134,14 @@ public class NotificationService : INotificationService
         _db.Notifications.Add(notification);
         await _db.SaveChangesAsync(ct);
 
-        return NotificationResponse.FromEntity(notification);
+        // Push the new bell notification live to the portfolio group. Without this the notification
+        // store only refreshes on init/open/settings-save, so a broadcast created here (or, via the
+        // backplane, by Engine automation) would sit unseen until the next manual refresh.
+        var response = NotificationResponse.FromEntity(notification);
+        await _dataUpdate.BroadcastEntityUpdateAsync(
+            portfolioId, "Notification", notification.Id, response, ct);
+
+        return response;
     }
 
     private static string NormalizeSeverity(string? severity)
