@@ -280,6 +280,12 @@ builder.Services.AddSignalR().AddJsonProtocol(options =>
 builder.Services.AddScoped<IDataUpdateService, DataUpdateService>();
 builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
 
+// Realtime backplane bridge (TSK-624): LISTENs on the Postgres channel the Engine NOTIFYs, and
+// re-broadcasts each cross-process entity change onto the SignalR hub via DataUpdateService. Without
+// this, Engine-originated automation (rent charges, late fees, notices, scan completion, …) never
+// pushes live — the hub is in-memory per-process and the Engine runs in a separate process.
+builder.Services.AddHostedService<EntityChangeListener>();
+
 // --- Domain feature services (per-entity scoped CRUD) ---
 builder.Services.AddDomainServices();
 
