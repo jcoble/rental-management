@@ -40,6 +40,7 @@ public sealed class PushDispatchTests : IDisposable
         services.AddScoped<RentalCommandDbContext>(_ => new RentalCommandDbContext(options));
         services.AddScoped<INotificationChannel>(_ => new ThrowingNotificationChannel());
         services.AddSingleton<IPushSender>(_push);
+        services.AddSingleton(TimeProvider.System);
         services.AddScoped<ISandboxGuard, SandboxGuard>();
         services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
         _provider = services.BuildServiceProvider();
