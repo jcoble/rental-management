@@ -112,7 +112,8 @@ public class PortalService : IPortalService
             .Select(p => new PortalPaymentResponse
             {
                 Id = p.Id,
-                LeaseId = p.LeaseId,
+                // Portal payments are scoped to the tenant's lease (filtered above), so never lease-less.
+                LeaseId = p.LeaseId!.Value,
                 PaymentType = p.PaymentType.ToString(),
                 Status = p.Status.ToString(),
                 Amount = p.Amount,

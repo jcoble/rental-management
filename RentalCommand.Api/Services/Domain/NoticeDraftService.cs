@@ -224,7 +224,7 @@ public class NoticeDraftService : INoticeDraftService
             {
                 if (payment.Lease?.Tenant == null) continue;
                 var daysLate = (today - payment.DueDate.Date).Days;
-                if (!DraftExists(existingDrafts, payment.LeaseId, "LateRentNotice", created))
+                if (!DraftExists(existingDrafts, payment.LeaseId!.Value, "LateRentNotice", created))
                 {
                     created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, TemplateFor("LateRentNotice"), portfolioName, ct));
                 }
@@ -264,7 +264,7 @@ public class NoticeDraftService : INoticeDraftService
                 var dueDate = payment.DueDate.Date;
                 // Per-period skip: a reminder for this lease+period already exists (any status) or was
                 // queued earlier this run (e.g. a duplicate scheduled payment on the same due date).
-                if (!existingReminderPeriods.Add((payment.LeaseId, dueDate))) continue;
+                if (!existingReminderPeriods.Add((payment.LeaseId!.Value, dueDate))) continue;
                 created.Add(await BuildRentReminderDraftAsync(
                     portfolioId, payment.Lease, now, TemplateFor("RentReminder"), portfolioName, ct, dueDate));
             }

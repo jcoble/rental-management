@@ -333,18 +333,23 @@ public class PaymentService : IPaymentService
         {
             // Reassigning a payment to a different lease moves it onto that lease's ledger — the target
             // lease must belong to the caller's portfolio (cross-tenant IDOR guard, mirroring CreateAsync).
-            if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, targetLeaseId, ct))
+            // A reassignment always targets a real lease (request.LeaseId was supplied and differs).
+            if (targetLeaseId is not { } newLeaseId ||
+                !await _db.EnsureLeaseInPortfolioAsync(portfolioId, newLeaseId, ct))
             {
                 return null;
             }
         }
 
-        if (targetLeaseId != entity.LeaseId || targetPaymentType != entity.PaymentType)
+        // The (lease, type, period) uniqueness only constrains lease-tied auto-generated rows
+        // (PeriodKey != null ⇒ a lease); a lease-less payment (application fee) has no PeriodKey to guard.
+        if (targetLeaseId is { } periodLeaseId &&
+            (targetLeaseId != entity.LeaseId || targetPaymentType != entity.PaymentType))
         {
             await EnsureGeneratedPeriodPaymentKeyAvailableAsync(
                 portfolioId,
                 id,
-                targetLeaseId,
+                periodLeaseId,
                 targetPaymentType,
                 entity.PeriodKey,
                 ct);

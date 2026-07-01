@@ -290,7 +290,7 @@ public class ReportsService : IReportsService
                         p.DueDate >= from && p.DueDate <= to)
             .Select(p => new RentLedgerQueryRow
             {
-                LeaseId = p.LeaseId,
+                LeaseId = p.LeaseId!.Value,
                 LeaseNumber = p.Lease!.LeaseNumber,
                 PropertyId = p.Lease.PropertyId,
                 PropertyName = p.Lease.Property!.Name,
@@ -310,7 +310,7 @@ public class ReportsService : IReportsService
                         p.PaidDate >= from && p.PaidDate <= to)
             .Select(p => new RentLedgerQueryRow
             {
-                LeaseId = p.LeaseId,
+                LeaseId = p.LeaseId!.Value,
                 LeaseNumber = p.Lease!.LeaseNumber,
                 PropertyId = p.Lease.PropertyId,
                 PropertyName = p.Lease.Property!.Name,
@@ -524,7 +524,8 @@ public class ReportsService : IReportsService
                 };
                 return new DelinquencyRow
                 {
-                    LeaseId = g.Key.LeaseId,
+                    // Delinquency is lease-scoped (ForCurrentLeaseAttention requires a live lease).
+                    LeaseId = g.Key.LeaseId!.Value,
                     LeaseNumber = g.Key.LeaseNumber,
                     PropertyId = g.Key.PropertyId,
                     PropertyName = g.Key.PropertyName,

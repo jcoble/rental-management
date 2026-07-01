@@ -109,11 +109,12 @@ public sealed class RentChargeService : IRentChargeService
 
         var existingRows = await _db.Payments
             .AsNoTracking()
-            .Where(p => candidateLeaseIds.Contains(p.LeaseId)
+            .Where(p => p.LeaseId != null
+                && candidateLeaseIds.Contains(p.LeaseId.Value)
                 && p.PaymentType == PaymentType.Rent
                 && p.PeriodKey != null
                 && candidatePeriodKeys.Contains(p.PeriodKey))
-            .Select(p => new { p.LeaseId, p.PeriodKey })
+            .Select(p => new { LeaseId = p.LeaseId!.Value, p.PeriodKey })
             .ToListAsync(ct);
 
         var existing = existingRows
