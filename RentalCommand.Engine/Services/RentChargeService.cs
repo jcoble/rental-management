@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -7,6 +6,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -17,13 +17,12 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RentChargeService : IRentChargeService
 {
-    private const string DefaultTimeZoneId = "America/New_York";
-
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly TimeZoneInfo _businessTimeZone;
+    private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
     private readonly ILogger<RentChargeService> _logger;
 
     private readonly record struct RentChargeCandidate(
@@ -36,30 +35,26 @@ public sealed class RentChargeService : IRentChargeService
         IMessagePublisher publisher,
         INotificationSettingsService settings,
         IDataUpdateService dataUpdate,
-        IConfiguration configuration,
+        TimeProvider timeProvider,
+        IAppTimeZoneProvider tz,
         ILogger<RentChargeService> logger)
     {
         _db = db;
         _publisher = publisher;
         _settings = settings;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
+        _tz = tz;
         _logger = logger;
-
-        // The landlord's business day rolls over in their LOCAL zone, not UTC. Near month-end an
-        // evening (ET) UtcNow is already the next day/month in UTC, which would charge rent for the
-        // wrong period — so derive the business "today"/period/due-day in this zone. DB writes stay UTC.
-        var tzId = configuration["App:TimeZone"];
-        if (string.IsNullOrWhiteSpace(tzId))
-            tzId = DefaultTimeZoneId;
-        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
     /// <inheritdoc/>
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
-        // Business "today" in the landlord's local zone (drives period key + due-day math only).
-        // Every value WRITTEN to the DB below stays UTC (DateTime.UtcNow / Kind=Utc).
-        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
+        // Business "today" in the landlord's local zone (drives period key + due-day math only). Near
+        // month-end an evening (ET) UtcNow is already the next day/month in UTC, which would charge rent
+        // for the wrong period. Every value WRITTEN to the DB below stays UTC (Kind=Utc).
+        var today = TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date;
 
         var leases = await _db.Leases
             .Where(l => l.Status == LeaseStatus.Active)
@@ -149,8 +144,8 @@ public sealed class RentChargeService : IRentChargeService
                 Amount = lease.MonthlyRent,
                 DueDate = period.DueDate,
                 PeriodKey = period.PeriodKey,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
+                UpdatedAt = _timeProvider.UtcNow(),
             };
 
             _db.Payments.Add(payment);
@@ -186,7 +181,7 @@ public sealed class RentChargeService : IRentChargeService
                             RelatedEntityId: payment.Id),
                         new AutomationNotifier.EmailContent(tenant.Email, $"Rent due {period.DueDate:MMM d}", message),
                         new AutomationNotifier.SmsContent(tenant.Phone, message),
-                        DateTime.UtcNow,
+                        _timeProvider.UtcNow(),
                         ct,
                         new AutomationNotifier.AudienceTargets(
                             IncludeStaff: true,

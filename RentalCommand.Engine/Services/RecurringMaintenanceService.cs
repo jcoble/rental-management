@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -7,6 +6,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -21,44 +21,44 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
 {
-    private const string DefaultTimeZoneId = "America/New_York";
-
     private readonly RentalCommandDbContext _db;
     private readonly INotificationSettingsService _settings;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly TimeZoneInfo _businessTimeZone;
+    private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
     private readonly ILogger<RecurringMaintenanceService> _logger;
 
     public RecurringMaintenanceService(
         RentalCommandDbContext db,
         INotificationSettingsService settings,
         IDataUpdateService dataUpdate,
-        IConfiguration configuration,
+        TimeProvider timeProvider,
+        IAppTimeZoneProvider tz,
         ILogger<RecurringMaintenanceService> logger)
     {
         _db = db;
         _settings = settings;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
+        _tz = tz;
         _logger = logger;
-
-        // Chores roll over on the landlord's local calendar day, not in UTC. Near midnight an evening
-        // (ET) UtcNow is already "tomorrow" in UTC, which would generate a due task a day early — so the
-        // due-date comparison is done in this zone. Every value WRITTEN to the DB stays UTC.
-        var tzId = configuration["App:TimeZone"];
-        if (string.IsNullOrWhiteSpace(tzId))
-            tzId = DefaultTimeZoneId;
-        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
     /// <inheritdoc/>
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
+        // Chores roll over on the landlord's local calendar day, not in UTC. Near midnight an evening
+        // (ET) UtcNow is already "tomorrow" in UTC, which would generate a due task a day early — so the
+        // due-date comparison is done in this zone (resolved once per cycle so a sim-clock tz override
+        // still takes effect). Every value WRITTEN to the DB stays UTC.
+        var businessTimeZone = _tz.BusinessTimeZone;
+
         // Business "today" in the landlord's local zone (drives the due comparison + interval math only).
         // NextDueDate is a timestamptz column, so the comparison value must be UTC-Kind or Npgsql rejects
         // the parameter ("Cannot write DateTime with Kind=Unspecified to timestamp with time zone").
         // NextDueDate is stored as UTC-midnight of the local calendar date, so we mark this the same way.
         var today = DateTime.SpecifyKind(
-            TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date,
+            TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), businessTimeZone).Date,
             DateTimeKind.Utc);
 
         // Active, non-deleted tasks that are due. The query filter already excludes soft-deleted rows.
@@ -84,7 +84,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             if (!cfg.EnableRecurringMaintenance)
                 continue;
 
-            var now = DateTime.UtcNow;
+            var now = _timeProvider.UtcNow();
 
             // Roll NextDueDate forward off the value that was due. If several periods were missed (e.g. the
             // Engine was down), we still create exactly ONE work order this run and advance the schedule
@@ -110,7 +110,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
                 Priority = task.Priority,
                 Status = WorkOrderStatus.New,
                 RequestedAt = now,
-                ScheduledFor = ToScheduledUtc(task.NextDueDate, task.ScheduledTime, _businessTimeZone),
+                ScheduledFor = ToScheduledUtc(task.NextDueDate, task.ScheduledTime, businessTimeZone),
                 EstimatedCost = task.EstimatedCost,
                 CreatedBy = "Recurring maintenance",
                 UpdatedAt = now,

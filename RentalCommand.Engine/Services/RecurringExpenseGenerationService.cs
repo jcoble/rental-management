@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -20,27 +20,24 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerationService
 {
-    private const string DefaultTimeZoneId = "America/New_York";
-
     /// <summary>Max periods materialized for one template in a single run (backlog guard).</summary>
     private const int MaxCatchUpPeriods = 36;
 
     private readonly RentalCommandDbContext _db;
-    private readonly TimeZoneInfo _businessTimeZone;
+    private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
     private readonly ILogger<RecurringExpenseGenerationService> _logger;
 
     public RecurringExpenseGenerationService(
         RentalCommandDbContext db,
-        IConfiguration configuration,
+        TimeProvider timeProvider,
+        IAppTimeZoneProvider tz,
         ILogger<RecurringExpenseGenerationService> logger)
     {
         _db = db;
+        _timeProvider = timeProvider;
+        _tz = tz;
         _logger = logger;
-
-        var tzId = configuration["App:TimeZone"];
-        if (string.IsNullOrWhiteSpace(tzId))
-            tzId = DefaultTimeZoneId;
-        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
     /// <inheritdoc/>
@@ -49,7 +46,7 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
         // Business "today" in the landlord's local zone (drives the due comparison). NextRunDate is a
         // timestamptz column, so the comparison value must be UTC-Kind or Npgsql rejects the parameter.
         var today = DateTime.SpecifyKind(
-            TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date,
+            TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date,
             DateTimeKind.Utc);
 
         var templates = await _db.RecurringExpenses
@@ -62,7 +59,7 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
         {
             ct.ThrowIfCancellationRequested();
 
-            var now = DateTime.UtcNow;
+            var now = _timeProvider.UtcNow();
             var newExpenses = new List<Expense>();
 
             // Materialize one expense per due period, advancing the run date each time. Cap the catch-up

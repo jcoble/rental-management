@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using System.Text.Json;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -226,7 +227,8 @@ public class RentChargeServiceTests : IDisposable
             publisher,
             new FakeNotificationSettingsService(cfg),
             Mock.Of<IDataUpdateService>(),
-            new ConfigurationBuilder().Build(),
+            TimeProvider.System,
+            new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
             NullLogger<RentChargeService>.Instance);
     }
 
