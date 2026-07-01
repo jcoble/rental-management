@@ -132,6 +132,8 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
   final _domainNavigators = <MobileShellTabId, MobileDomainNavigator>{};
+  late final List<MobileQuickActionController> _quickActionControllers =
+      List.generate(_tabs.length, (_) => MobileQuickActionController());
   late final MobileShellNavigator _shellNavigator;
   int _selectedIndex = 0;
 
@@ -165,6 +167,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
     if (identical(_domainNavigators[tab], controller)) {
       _domainNavigators.remove(tab);
     }
+  }
+
+  Widget _quickActionScope(int index, Widget child) {
+    return MobileQuickActionScope(
+      controller: _quickActionControllers[index],
+      child: child,
+    );
   }
 
   int _tabIndexFor(MobileShellTabId tab) {
@@ -358,6 +367,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
   void dispose() {
     MobileShellNavigationRegistry.detach(_shellNavigator);
     WidgetsBinding.instance.removeObserver(this);
+    for (final controller in _quickActionControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -469,6 +481,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     final selectedIndex = _selectedIndex >= tabs.length
         ? tabs.length - 1
         : _selectedIndex;
+    final quickActionController = tenantMode
+        ? null
+        : _quickActionControllers[selectedIndex];
 
     return MobileShellNavigation(
       controller: _shellNavigator,
@@ -489,76 +504,98 @@ class _HomeShellState extends ConsumerState<HomeShell>
                         const _TenantMoreTab(),
                       ]
                     : [
-                        _HomeTab(
-                          user: user,
-                          onOpenCapture: _openCapture,
-                          onOpenOverdue: () => _openShellTab(
-                            MobileShellTabId.money,
-                            destination: MobileDestinationId.moneyOverview,
-                            detailBuilder: (_) => const OverdueScreen(),
+                        _quickActionScope(
+                          0,
+                          _HomeTab(
+                            user: user,
+                            onOpenCapture: _openCapture,
+                            onOpenOverdue: () => _openShellTab(
+                              MobileShellTabId.money,
+                              destination: MobileDestinationId.moneyOverview,
+                              detailBuilder: (_) => const OverdueScreen(),
+                            ),
+                            onSwitchToTab: (index) =>
+                                setState(() => _selectedIndex = index),
+                            onOpenAssistant: _openAssistant,
                           ),
-                          onSwitchToTab: (index) =>
-                              setState(() => _selectedIndex = index),
-                          onOpenAssistant: _openAssistant,
                         ),
-                        RentalsHubScreen(
-                          onControllerReady: (controller) => _registerDomain(
-                            MobileShellTabId.rentals,
-                            controller,
+                        _quickActionScope(
+                          1,
+                          RentalsHubScreen(
+                            onControllerReady: (controller) => _registerDomain(
+                              MobileShellTabId.rentals,
+                              controller,
+                            ),
+                            onControllerDisposed: (controller) =>
+                                _unregisterDomain(
+                                  MobileShellTabId.rentals,
+                                  controller,
+                                ),
                           ),
-                          onControllerDisposed: (controller) =>
-                              _unregisterDomain(
-                                MobileShellTabId.rentals,
-                                controller,
-                              ),
                         ),
-                        MoneyHubScreen(
-                          onControllerReady: (controller) => _registerDomain(
-                            MobileShellTabId.money,
-                            controller,
+                        _quickActionScope(
+                          2,
+                          MoneyHubScreen(
+                            onControllerReady: (controller) => _registerDomain(
+                              MobileShellTabId.money,
+                              controller,
+                            ),
+                            onControllerDisposed: (controller) =>
+                                _unregisterDomain(
+                                  MobileShellTabId.money,
+                                  controller,
+                                ),
                           ),
-                          onControllerDisposed: (controller) =>
-                              _unregisterDomain(
-                                MobileShellTabId.money,
-                                controller,
-                              ),
                         ),
-                        WorkHubScreen(
-                          onControllerReady: (controller) => _registerDomain(
-                            MobileShellTabId.work,
-                            controller,
+                        _quickActionScope(
+                          3,
+                          WorkHubScreen(
+                            onControllerReady: (controller) => _registerDomain(
+                              MobileShellTabId.work,
+                              controller,
+                            ),
+                            onControllerDisposed: (controller) =>
+                                _unregisterDomain(
+                                  MobileShellTabId.work,
+                                  controller,
+                                ),
                           ),
-                          onControllerDisposed: (controller) =>
-                              _unregisterDomain(
-                                MobileShellTabId.work,
-                                controller,
-                              ),
                         ),
-                        InboxHubScreen(
-                          onControllerReady: (controller) => _registerDomain(
-                            MobileShellTabId.inbox,
-                            controller,
+                        _quickActionScope(
+                          4,
+                          InboxHubScreen(
+                            onControllerReady: (controller) => _registerDomain(
+                              MobileShellTabId.inbox,
+                              controller,
+                            ),
+                            onControllerDisposed: (controller) =>
+                                _unregisterDomain(
+                                  MobileShellTabId.inbox,
+                                  controller,
+                                ),
                           ),
-                          onControllerDisposed: (controller) =>
-                              _unregisterDomain(
-                                MobileShellTabId.inbox,
-                                controller,
-                              ),
                         ),
                       ],
               ),
             ),
           ],
         ),
-        floatingActionButton: tenantMode || selectedIndex != 0
+        floatingActionButton: quickActionController == null
             ? null
-            : MobileQuickActionFab(
-                heroTag: 'home-quick-action-fab',
-                onChat: _openAssistant,
-                onRecord: _openRecord,
-                onScan: _openCapture,
+            : AnimatedBuilder(
+                animation: quickActionController,
+                builder: (context, _) {
+                  return MobileQuickActionFab(
+                    heroTag: 'home-quick-action-fab-$selectedIndex',
+                    primaryAction: quickActionController.primaryAction,
+                    useNearestScope: false,
+                    onChat: _openAssistant,
+                    onRecord: _openRecord,
+                    onScan: _openCapture,
+                  );
+                },
               ),
-        floatingActionButtonLocation: tenantMode || selectedIndex != 0
+        floatingActionButtonLocation: quickActionController == null
             ? null
             : FloatingActionButtonLocation.endFloat,
         bottomNavigationBar: _MorphNavBar(
