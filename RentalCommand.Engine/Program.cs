@@ -9,6 +9,7 @@ using Npgsql;
 using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -53,6 +54,12 @@ builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
         .AddInterceptors(
             sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
             sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
+
+// --- Master simulation clock (TSK-615) ---
+// Same ambient TimeProvider + IAppTimeZoneProvider registration as the API so both processes agree on
+// "now". Production / flag-off binds TimeProvider.System (real clock). The Engine has no auth handlers,
+// so it does not pin any framework auth clock.
+builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 
 // DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP/Zoho or SendGrid email,
 // config-selected; logs when unconfigured).

@@ -14,6 +14,7 @@ using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Payments;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -330,6 +331,13 @@ else
 // the admin /admin/engine page (the Engine has no HTTP port, so the DB is the health contract).
 builder.Services.AddScoped<RentalCommand.Api.Services.Admin.IAdminEngineStatusService,
     RentalCommand.Api.Services.Admin.AdminEngineStatusService>();
+
+// --- Master simulation clock (TSK-615) ---
+// Binds the ambient TimeProvider + IAppTimeZoneProvider. In production (or when Simulation:Enabled is
+// false) this is TimeProvider.System — real clock, unchanged behavior. In non-prod with the flag on it
+// binds the controllable SimulationTimeProvider; pinFrameworkAuthClock keeps cookie/security-stamp auth
+// timing on the real clock even while domain time is simulated (S1).
+builder.Services.AddSimulationClock(builder.Configuration, builder.Environment, pinFrameworkAuthClock: true);
 
 var app = builder.Build();
 
