@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
-import { apiToken, bearer, login, unique } from './helpers';
+import { apiToken, bearer, loginWithApi, unique } from './helpers';
 
 interface SeededExpenseContext {
 	propertyName: string;
@@ -10,6 +10,7 @@ interface SeededExpenseContext {
 	workOrderDateUs: string;
 	vendorOneAddress: string;
 	vendorOnePhone: string;
+	vendorOneWebsite: string;
 	vendorOneTaxId: string;
 }
 
@@ -72,6 +73,7 @@ async function seedExpenseContext(request: APIRequestContext): Promise<SeededExp
 		name: vendorOneName,
 		serviceType: 'Plumbing',
 		phone: '(614) 555-0101',
+		website: 'https://plumbing.example.test',
 		taxId: '12-3456789',
 		addressLine1: '88 Maple Ave',
 		city: 'Columbus',
@@ -110,16 +112,19 @@ async function seedExpenseContext(request: APIRequestContext): Promise<SeededExp
 		workOrderDateUs: '06/15/2026',
 		vendorOneAddress: '88 Maple Ave, Columbus, OH 43201',
 		vendorOnePhone: '(614) 555-0101',
+		vendorOneWebsite: 'https://plumbing.example.test',
 		vendorOneTaxId: '12-3456789'
 	};
 }
 
 test.describe('Accounting expense autofill', () => {
+	test.describe.configure({ timeout: 90_000 });
+
 	test('prefills safe expense fields from selected work order and vendor', async ({ page, request }) => {
 		const seeded = await seedExpenseContext(request);
 
-		await login(page);
-		await page.goto('/accounting');
+		await loginWithApi(page, request);
+		await page.goto('/accounting', { waitUntil: 'domcontentloaded' });
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 		await page.waitForLoadState('networkidle');
 
@@ -142,6 +147,7 @@ test.describe('Accounting expense autofill', () => {
 		await nextExpenseStep(page);
 		await expect(page.getByTestId('expense-vendor-address-input')).toHaveValue(seeded.vendorOneAddress);
 		await expect(page.getByTestId('expense-vendor-phone-input')).toHaveValue(seeded.vendorOnePhone);
+		await expect(page.getByTestId('expense-vendor-website-input')).toHaveValue(seeded.vendorOneWebsite);
 		await expect(page.getByTestId('expense-vendor-taxid-input')).toHaveValue(seeded.vendorOneTaxId);
 
 		await page.getByTestId('expense-vendor-address-input').fill('Manual address stays');

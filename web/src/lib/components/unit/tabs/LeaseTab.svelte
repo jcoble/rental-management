@@ -74,15 +74,19 @@
 		{ id: 'tenants', label: 'Tenants', description: 'Existing or new' },
 		{ id: 'identity', label: 'Lease #', description: 'Reference' },
 		{ id: 'dates', label: 'Dates', description: 'Start and end' },
-		{ id: 'money', label: 'Money', description: 'Rent and deposit' },
-		{ id: 'status', label: 'Status', description: 'Tracking' },
+		{ id: 'rent', label: 'Rent', description: 'Rent and deposit' },
+		{ id: 'fees', label: 'Fees', description: 'Late fee and due day' },
+		{ id: 'status', label: 'Status', description: 'State and notes' },
+		{ id: 'tracking', label: 'Tracking', description: 'Backfill options' },
 	];
 	const createLeaseStepFields = [
 		['tenantId', 'tenant.firstName', 'tenant.lastName', 'tenant.email', 'tenant.phone'],
 		['leaseNumber'],
 		['startDate', 'endDate'],
-		['monthlyRent', 'securityDeposit', 'lateFeeAmount', 'rentDueDay'],
-		['status', 'rentTrackingStartMode', 'rentTrackingStartDate', 'openingBalanceAmount', 'openingBalanceAsOfDate', 'openingBalanceNote', 'notes'],
+		['monthlyRent', 'securityDeposit'],
+		['lateFeeAmount', 'rentDueDay'],
+		['status', 'notes'],
+		['rentTrackingStartMode', 'rentTrackingStartDate', 'openingBalanceAmount', 'openingBalanceAsOfDate', 'openingBalanceNote'],
 	] as const;
 
 	// Which lease to show: an explicit ?lease=<id> (e.g. a prior lease) wins, otherwise the
@@ -626,9 +630,13 @@
 				{:else if createLeaseStep === 2}
 					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="dates" testidPrefix="unit-lease-create" />
 				{:else if createLeaseStep === 3}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="money" testidPrefix="unit-lease-create" />
-				{:else}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="rent" testidPrefix="unit-lease-create" />
+				{:else if createLeaseStep === 4}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="fees" testidPrefix="unit-lease-create" />
+				{:else if createLeaseStep === 5}
 					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="status" testidPrefix="unit-lease-create" />
+				{:else}
+					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="tracking" testidPrefix="unit-lease-create" />
 				{/if}
 			</FormStepper>
 		</div>

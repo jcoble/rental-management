@@ -949,6 +949,7 @@ export interface Vendor {
 	postalCode?: string | null;
 	email?: string;
 	phone?: string;
+	website?: string | null;
 	taxId?: string;
 	is1099Eligible: boolean;
 	w9OnFile: boolean;
