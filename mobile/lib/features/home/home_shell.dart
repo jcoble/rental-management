@@ -240,6 +240,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
       case '/rentals':
         _openShellTab(MobileShellTabId.rentals);
         return true;
+      case '/owners':
+        _openShellTab(
+          MobileShellTabId.rentals,
+          destination: MobileDestinationId.owners,
+        );
+        return true;
       case '/units':
         _openShellTab(
           MobileShellTabId.rentals,
