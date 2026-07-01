@@ -318,3 +318,53 @@ public static IServiceCollection AddSimulationClock(this IServiceCollection serv
 - **Spec coverage:** A1–A7 (§5), B1–B4 (§6 incl. command-bridge for MF-1), C1–C3 (§7 incl. PUBLIC flag + inline shim + anonymous poll for MF-2), D1 (§8 tz via IAppTimeZoneProvider for MF-3), D5 (SF-B audit), poll-only (SF-A, no NOTIFY), classification + hoist-to-local (SF-C/D), E1 (all §13 acceptance criteria incl. prod guard + business-day boundary). Covered.
 - **Types consistent:** `UtcNow()/TodayUtc()/NowOffset()`, `ClockMode`, `ClockState`, `IClockStateProvider`, `IAppTimeZoneProvider` used identically across tasks.
 - **Open confirmations for the executor:** verify the exact RLS-policy application mechanism (A3 Step 2) and whether the API integration harness boots the Engine (B4) — both flagged inline.
+
+---
+
+## Review incorporated (PlanReviewer, 2026-07-01 — Approve-with-changes)
+
+These **supersede** the affected task text. Full detail: `Docs/e2e/investigations/2026-07-01-clock-plan-review.md`.
+
+- **M1 (A2/A3/B1) — Npgsql UTC-Kind.** Seed the `SimulationClock` row via raw SQL with explicit
+  `TIMESTAMPTZ '…+00'` literals (DONE in `20260701053759_AddSimulationClock.cs`), NOT `HasData`/default
+  (Kind=Unspecified throws). In B1, `DateTime.SpecifyKind(x, DateTimeKind.Utc)` every parsed
+  `instantUtc`/`date` before writing. Anchors stay non-nullable, seeded to a fixed UTC epoch.
+- **M2 (C1/C2) — web env flag.** Use `$env/dynamic/public`
+  (`import { env } from '$env/dynamic/public'; env.PUBLIC_SIMULATION_ENABLED === 'true'`), NOT
+  `$env/static/public` (hard build break — nothing declares it). Add `PUBLIC_SIMULATION_ENABLED` to
+  `web/.env`/`.env.example` + CI.
+- **M3 (C1/C2) — shim must not touch auth timing.** The shim exposes `RealDate`; client auth-expiry math
+  stays real — `isTokenExpired` (`auth.svelte.ts:118`) + all refresh gates use `RealDate.now()`. Only
+  no-arg `new Date()`/`Date.now()` for DISPLAY are simmed.
+- **M4 (B3) — `run-due` order:** rent-charge → notice-draft → **lease-expiry-reminder** → late-fee →
+  autopay → debt-service → recurring-expense → recurring-maintenance. (`daily-briefing` optional; E1 doesn't assert it.)
+- **M5 (D1-D4) — tests must compile.** Each ctor change updates its test **construction sites in the SAME
+  commit** (10 files: `RentChargeServiceTests.cs:224`, `LateFeeServiceTests.cs:157`,
+  `AutopayChargeServiceTests.cs:191`, `RecurringMaintenanceServiceTests.cs:170`,
+  `RecurringExpenseGenerationServiceTests.cs:29`, `DebtServiceServiceTests.cs:32`,
+  `LeaseExpiryReminderServiceTests.cs:77`, `DailyBriefingDeliveryServiceTests.cs:46,95`,
+  `NoticeAutoSendTests.cs:108`). Add `Microsoft.Extensions.TimeProvider.Testing` to `Engine.Tests.csproj`
+  (+ `Api.Tests.csproj` for D3/D4).
+- **M6 (D2-D4) — additional keep-real sites:** `Esign/NativeSigningService.cs:505`,
+  `Esign/NativeEsignProvider.cs:73,102`, `Domain/LeaseEsignService.cs:633,639` (e-sign link expiry);
+  `AccountingTokenRefreshWorker.cs:43,51,74` (OAuth refresh horizon); `AccountingConnectionService.cs:124`
+  (OAuth state-TTL **write** — the :164/:362 reads were already excluded); `TenantPortalProvisioningService.cs:315`
+  (portal-disabled sentinel); `OutboxDispatchWorker.cs:82,91,115,143,158` (backoff `FailedAt`, real).
+- **B3 registry method names (per service, hardcode per key):** `GenerateAsync`
+  (RentCharge/DebtService/RecurringExpense/RecurringMaintenance), `AssessAsync` (LateFee),
+  `ChargeDueAsync` (Autopay), `RemindAsync` (LeaseExpiry), `GenerateAllAsync` (NoticeDraft),
+  `EnqueueDueAsync(DateTime? utcNow = null, ct)` (DailyBriefing — pass `null` to use the injected clock).
+- **S1 (A7) — auth guard.** Register `SimulationTimeProvider` as ambient `TimeProvider`; add a cheap guard
+  pinning framework auth options (cookie/OAuth/security-stamp) to `TimeProvider.System` in non-prod.
+  Bearer `exp`/`nbf`, 2FA, and email-confirm/reset already stay real by default (S1 correction).
+- **S2 (C2/C3) — web wiring.** `web/src/hooks.client.ts` does NOT exist → create it (`init`) or bootstrap
+  from root `+layout.svelte` (`$effect`, not `onMount`). `transformPageChunk` slots into the single existing
+  `resolve` (`hooks.server.ts:94` → `resolve(event, { transformPageChunk })`; no `sequence`). Placeholder
+  above `%sveltekit.head%` (`app.html:94`). Mount `SimClockPanel` in root `+layout.svelte`.
+- **A4 test:** use `RentalCommand.TestCommon/SqliteTestContext.cs` (it EXISTS) for the `ClockStateProvider`
+  test; A5/A6 stub `IClockStateProvider` (no DB). (Plan's "PG-only, avoid SQLite" caveat was wrong.)
+- **B4:** the integration harness does NOT boot the Engine → drive `SimWorkerCommandWorker.ExecuteCycleAsync`
+  directly against the Testcontainers Postgres.
+- **D4 correction:** the hoist site is `RentalCommand.Engine/Workers/ScanProcessingWorker.cs:379` (NOT
+  `Api/Scanning`); `ScanService.cs:1701` is correct.
+- **S3:** dev controllers are runtime-404-gated, not compiled out → don't claim byte-identical prod artifacts.
