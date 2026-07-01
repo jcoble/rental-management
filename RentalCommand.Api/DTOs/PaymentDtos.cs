@@ -14,6 +14,9 @@ public class PaymentResponse
     /// <summary>The lease this payment is on; null for a lease-less payment (e.g. an application fee).</summary>
     public int? LeaseId { get; set; }
 
+    /// <summary>The application this payment is on, when it is a lease-less application/screening fee; null otherwise.</summary>
+    public int? ApplicationId { get; set; }
+
     /// <summary>
     /// Unit the payment's lease is on; resolved DB-side via the lease join so the web client can route the
     /// payment to its unit's Command Center tab. Null only if the lease navigation wasn't loaded.
@@ -96,8 +99,10 @@ public class PaymentResponse
         // Lease label for the detail/list view. Only set when the Lease navigation was loaded
         // (Include'd); left null otherwise so callers that don't join don't pay for it.
         LeaseNumber = e.Lease?.LeaseNumber,
+        ApplicationId = e.ApplicationId,
         UnitId = e.Lease?.UnitId,
-        PropertyId = e.Lease?.PropertyId,
+        // Lease-tied payments scope by the lease's property; a lease-less fee carries its own PropertyId.
+        PropertyId = e.Lease?.PropertyId ?? e.PropertyId,
         PropertyName = e.Lease?.Property?.Name,
         UnitNumber = e.Lease?.Unit?.UnitNumber,
         TenantName = e.Lease?.Tenant == null

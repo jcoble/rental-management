@@ -1092,6 +1092,18 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(l => l.Payments)
                 .HasForeignKey(e => e.LeaseId)
                 .OnDelete(DeleteBehavior.SetNull);
+            // Optional application/property links for lease-less income (application/screening fees).
+            // SetNull so deleting an application or property never removes the income record. ApplicationId
+            // is not soft-delete-joined, so no query-filter guard is needed (mirrors ScreeningResult).
+            entity.HasIndex(e => e.ApplicationId);
+            entity.HasOne(e => e.Application)
+                .WithMany()
+                .HasForeignKey(e => e.ApplicationId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Expense>(entity =>

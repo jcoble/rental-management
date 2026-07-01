@@ -54,6 +54,21 @@ public class Payment : IAuditable, IPortfolioScoped
     /// </summary>
     public string? ExtractedData { get; set; }
 
+    /// <summary>
+    /// The rental application this payment is tied to, for a lease-less application/screening fee
+    /// (<see cref="PaymentType.ApplicationFee"/>). Null for lease-tied payments. SetNull on delete.
+    /// </summary>
+    public int? ApplicationId { get; set; }
+
+    /// <summary>
+    /// The property this payment is attributed to when there is no lease (application fee). For
+    /// lease-tied payments the property comes from the lease; this is used for lease-less income so it
+    /// still lands on the right property's Schedule E / cash flow. Null when unknown. SetNull on delete.
+    /// </summary>
+    public int? PropertyId { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Lease? Lease { get; set; }
+    public RentalApplication? Application { get; set; }
+    public Property? Property { get; set; }
 }
