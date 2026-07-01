@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Engine.Services;
@@ -26,7 +27,8 @@ public class RecurringExpenseGenerationServiceTests : IDisposable
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:TimeZone"] = "UTC" })
             .Build();
-        return new RecurringExpenseGenerationService(_ctx.Db, config, NullLogger<RecurringExpenseGenerationService>.Instance);
+        return new RecurringExpenseGenerationService(
+            _ctx.Db, TimeProvider.System, new AppTimeZoneProvider(config), NullLogger<RecurringExpenseGenerationService>.Instance);
     }
 
     private Property SeedProperty()

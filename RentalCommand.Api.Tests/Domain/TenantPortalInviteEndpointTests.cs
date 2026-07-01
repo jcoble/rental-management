@@ -106,6 +106,7 @@ public sealed class TenantPortalInviteEndpointTests : IDisposable
     {
         var provisioning = new TenantPortalProvisioningService(
             _userManager, _ctx.Db, Options.Create(new SeedSettings()),
+            TimeProvider.System,
             NullLogger<TenantPortalProvisioningService>.Instance);
         var emailSender = new OutboxAuthEmailSender(
             _ctx.Db, new ConfigurationBuilder().Build(), NullLogger<OutboxAuthEmailSender>.Instance);

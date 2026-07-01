@@ -25,7 +25,7 @@ public class UnitServiceCreateTests : IDisposable
     public UnitServiceCreateTests()
     {
         _ctx = new SqliteTestContext();
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>());
+        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

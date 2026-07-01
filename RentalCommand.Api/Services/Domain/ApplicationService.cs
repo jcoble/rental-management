@@ -6,6 +6,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -22,6 +23,7 @@ public sealed class ApplicationService : IApplicationService
     private readonly IAuditTrailService _audit;
     private readonly ITenantPortalProvisioningService _portalProvisioning;
     private readonly ILogger<ApplicationService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public ApplicationService(
         RentalCommandDbContext db,
@@ -29,7 +31,8 @@ public sealed class ApplicationService : IApplicationService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         ITenantPortalProvisioningService portalProvisioning,
-        ILogger<ApplicationService> logger)
+        ILogger<ApplicationService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _files = files;
@@ -37,6 +40,7 @@ public sealed class ApplicationService : IApplicationService
         _audit = audit;
         _portalProvisioning = portalProvisioning;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // -------------------------------------------------------------------------
@@ -118,7 +122,7 @@ public sealed class ApplicationService : IApplicationService
                 statusCode: 409);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new RentalApplication
         {
             PortfolioId = portfolioId,
@@ -204,7 +208,7 @@ public sealed class ApplicationService : IApplicationService
                 statusCode: 409);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new RentalApplication
         {
             PortfolioId = portfolioId,
@@ -510,7 +514,7 @@ public sealed class ApplicationService : IApplicationService
 
         if (request.Notes != null) entity.Notes = TrimToNull(request.Notes);
 
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _audit.LogAsync(
@@ -541,7 +545,7 @@ public sealed class ApplicationService : IApplicationService
         if (entity.Status is ApplicationStatus.Declined or ApplicationStatus.Withdrawn)
             throw new InvalidOperationException($"Application is {entity.Status.ToString().ToLowerInvariant()} and cannot be approved.");
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // Mirror Tenant creation: the approved applicant becomes a real tenant record.
         var tenant = new Tenant
@@ -614,7 +618,7 @@ public sealed class ApplicationService : IApplicationService
         if (entity.Status is ApplicationStatus.Approved)
             throw new InvalidOperationException("An approved application cannot be declined.");
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         entity.Status = ApplicationStatus.Declined;
         entity.DecisionReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
         entity.ReviewedAtUtc = now;
@@ -646,7 +650,7 @@ public sealed class ApplicationService : IApplicationService
         if (entity.Status is ApplicationStatus.Approved)
             throw new InvalidOperationException("An approved application cannot be withdrawn.");
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         entity.Status = ApplicationStatus.Withdrawn;
         entity.ReviewedAtUtc = now;
         entity.UpdatedAt = now;
@@ -667,7 +671,7 @@ public sealed class ApplicationService : IApplicationService
         // "regenerate to revoke the old link" behavior.
         var token = GenerateToken();
         portfolio.PublicApplicationToken = token;
-        portfolio.UpdatedAt = DateTime.UtcNow;
+        portfolio.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         return new ApplicationLinkResult

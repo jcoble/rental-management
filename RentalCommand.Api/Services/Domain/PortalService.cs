@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -11,11 +12,13 @@ public class PortalService : IPortalService
 {
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseQaService _leaseQa;
+    private readonly TimeProvider _timeProvider;
 
-    public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa)
+    public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa, TimeProvider timeProvider)
     {
         _db = db;
         _leaseQa = leaseQa;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<LeaseResponse>> GetLeasesAsync(int portfolioId, int tenantId, CancellationToken ct = default)
@@ -53,7 +56,7 @@ public class PortalService : IPortalService
 
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var overdueCutoffUtc = DateTime.UtcNow.Date;
+        var overdueCutoffUtc = _timeProvider.UtcNow().Date;
 
         // All four figures are conditional SUM/COUNT aggregates computed SQL-side in a single grouped
         // round-trip — no payment rows are pulled into memory. Partial-aware: a Paid payment contributes
@@ -124,7 +127,7 @@ public class PortalService : IPortalService
 
     public async Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         return await _db.Appointments
             .AsNoTracking()
@@ -223,7 +226,7 @@ public class PortalService : IPortalService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var workOrder = new WorkOrder
         {
             PortfolioId = portfolioId,
@@ -317,7 +320,7 @@ public class PortalService : IPortalService
         if (enrollment != null)
         {
             enrollment.Active = false;
-            enrollment.UpdatedAt = DateTime.UtcNow;
+            enrollment.UpdatedAt = _timeProvider.UtcNow();
             await _db.SaveChangesAsync(ct);
         }
 

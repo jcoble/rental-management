@@ -41,8 +41,8 @@ public class PaymentServiceTests : IDisposable
         SeedPortfolioAndLease();
 
         _sut = new PaymentService(_db, new NoopDataUpdateService(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            _files);
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
+            _files, TimeProvider.System);
     }
 
     public void Dispose()

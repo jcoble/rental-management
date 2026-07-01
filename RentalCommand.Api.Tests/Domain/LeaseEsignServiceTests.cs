@@ -669,8 +669,9 @@ public sealed class LeaseEsignServiceTests : IDisposable
             new NoopDataUpdateService(),
             _storage,
             new LeaseAgreementPdfGenerator(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             NullLogger<LeaseService>.Instance,
+            TimeProvider.System,
             new LeaseAgreementRenderer(
                 _db,
                 _storage,
@@ -683,8 +684,9 @@ public sealed class LeaseEsignServiceTests : IDisposable
             provider,
             _storage,
             new NoopDataUpdateService(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             _config,
+            TimeProvider.System,
             NullLogger<LeaseEsignService>.Instance);
     }
 

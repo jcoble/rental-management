@@ -46,7 +46,7 @@ public class DashboardOccupancyDefinitionTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new DashboardService(_db, new AuditDescriber());
+        _sut = new DashboardService(_db, new AuditDescriber(), TimeProvider.System);
     }
 
     public void Dispose()

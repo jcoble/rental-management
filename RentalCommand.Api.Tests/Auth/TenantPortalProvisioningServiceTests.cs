@@ -136,6 +136,7 @@ public class TenantPortalProvisioningServiceTests : IDisposable
         userManager,
         _ctx.Db,
         Options.Create(new SeedSettings()),
+        TimeProvider.System,
         NullLogger<TenantPortalProvisioningService>.Instance);
 
     private static Mock<UserManager<ApplicationUser>> CreateUserManagerMock()

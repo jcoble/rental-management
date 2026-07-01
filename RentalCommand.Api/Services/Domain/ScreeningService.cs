@@ -5,6 +5,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -27,6 +28,7 @@ public sealed class ScreeningService : IScreeningService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScreeningService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public ScreeningService(
         RentalCommandDbContext db,
@@ -37,7 +39,8 @@ public sealed class ScreeningService : IScreeningService
         IMessagePublisher publisher,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        ILogger<ScreeningService> logger)
+        ILogger<ScreeningService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _provider = provider;
@@ -48,6 +51,7 @@ public sealed class ScreeningService : IScreeningService
         _dataUpdate = dataUpdate;
         _audit = audit;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<ScreeningResultResponse?> RequestScreeningAsync(
@@ -78,7 +82,7 @@ public sealed class ScreeningService : IScreeningService
         if (!providerResult.IsConfigured)
             throw new ScreeningNotConfiguredException();
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var result = new ScreeningResult
         {
             PortfolioId = portfolioId,
@@ -160,7 +164,7 @@ public sealed class ScreeningService : IScreeningService
 
         var craBlock = $"{_config.CreditReportingAgencyName}, {_config.CreditReportingAgencyAddress}, {_config.CreditReportingAgencyPhone}";
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var pdfBytes = _pdf.Generate(new AdverseActionNoticeData
         {
             ManagementCompanyName = portfolio?.ManagementCompanyName,

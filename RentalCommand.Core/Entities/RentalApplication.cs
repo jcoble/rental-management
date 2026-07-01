@@ -67,14 +67,14 @@ public class RentalApplication : IAuditable, IPortfolioScoped
     /// <summary>Optional reason captured when the application is declined.</summary>
     public string? DecisionReason { get; set; }
 
-    public DateTime SubmittedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime SubmittedAtUtc { get; set; }
     public DateTime? ReviewedAtUtc { get; set; }
 
     /// <summary>Tenant created when this application was approved; null otherwise.</summary>
     public int? ApprovedTenantId { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }

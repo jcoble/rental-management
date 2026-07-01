@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -35,13 +36,16 @@ public sealed class SelfOwnerProvisioner : ISelfOwnerProvisioner
 {
     private readonly RentalCommandDbContext _db;
     private readonly ILogger<SelfOwnerProvisioner> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public SelfOwnerProvisioner(
         RentalCommandDbContext db,
-        ILogger<SelfOwnerProvisioner> logger)
+        ILogger<SelfOwnerProvisioner> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<OwnerEntity?> EnsureSelfOwnerAsync(ApplicationUser user, int portfolioId, CancellationToken ct = default)
@@ -55,7 +59,7 @@ public sealed class SelfOwnerProvisioner : ISelfOwnerProvisioner
             return existingPrimary;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var owner = new OwnerEntity
         {
             PortfolioId = portfolioId,

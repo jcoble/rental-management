@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Data.Auditing;
 
@@ -27,6 +28,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
 {
     private readonly ICurrentActor _actor;
     private readonly IAuditScope _scope;
+    private readonly TimeProvider _timeProvider;
 
     // Property names (case-insensitive substring match) whose values are redacted from the JSON.
     private static readonly string[] RedactedFragments =
@@ -37,10 +39,11 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
     private readonly List<PendingAudit> _pending = new();
     private bool _writing;
 
-    public AuditSaveChangesInterceptor(ICurrentActor actor, IAuditScope scope)
+    public AuditSaveChangesInterceptor(ICurrentActor actor, IAuditScope scope, TimeProvider timeProvider)
     {
         _actor = actor;
         _scope = scope;
+        _timeProvider = timeProvider;
     }
 
     public override InterceptionResult<int> SavingChanges(
@@ -232,7 +235,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
             return rows;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         foreach (var pending in _pending)
         {
             var entityId = ReadEntityId(pending.Entry);

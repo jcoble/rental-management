@@ -30,7 +30,8 @@ public class SecurityDepositServiceListTests : IDisposable
             Mock.Of<IMoveOutStatementPdfGenerator>(),
             new NoopAuditTrailService(),
             Mock.Of<ICurrentActor>(),
-            Mock.Of<ILogger<SecurityDepositService>>());
+            Mock.Of<ILogger<SecurityDepositService>>(),
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

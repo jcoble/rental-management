@@ -25,7 +25,7 @@ public class ScanBatch
     /// <summary>Number of files accepted into the batch (one draft per file).</summary>
     public int FileCount { get; set; }
 
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAtUtc { get; set; }
 
     public Portfolio? Portfolio { get; set; }
 }

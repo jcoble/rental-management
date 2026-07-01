@@ -59,8 +59,9 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             new NoopDataUpdateService(),
             _storage,
             new LeaseAgreementPdfGenerator(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             NullLogger<LeaseService>.Instance,
+            TimeProvider.System,
             new LeaseAgreementRenderer(
                 _db,
                 _storage,
@@ -123,7 +124,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     {
         var lease = SeedLeaseWithGraph();
         var template = await SeedActiveOverlayTemplateAsync(lease.PropertyId);
-        var templates = new DocumentTemplateService(_db, new DocumentTemplateFieldCatalog(), _storage);
+        var templates = new DocumentTemplateService(_db, new DocumentTemplateFieldCatalog(), _storage, TimeProvider.System);
 
         var result = await templates.PreviewLeasePdfAsync(PortfolioId, template.Id, lease.Id);
 

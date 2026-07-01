@@ -24,7 +24,7 @@ public class AdverseActionNotice
     /// <summary>Name/address/phone of the credit-reporting agency that supplied the report (one block).</summary>
     public string CreditReportingAgency { get; set; } = string.Empty;
 
-    public DateTime GeneratedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime GeneratedAtUtc { get; set; }
 
     /// <summary>The generated notice PDF (StoredFile with EntityType=Application). Null only if storage failed.</summary>
     public int? StoredFileId { get; set; }
@@ -32,8 +32,8 @@ public class AdverseActionNotice
     /// <summary>When the notice was enqueued to the applicant (email outbox); null when not sent.</summary>
     public DateTime? SentAtUtc { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public RentalApplication? Application { get; set; }

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,11 +14,13 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public RecurringMaintenanceTaskService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public RecurringMaintenanceTaskService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
@@ -110,7 +113,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new RecurringMaintenanceTask
         {
             PortfolioId = portfolioId,
@@ -171,7 +174,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         entity.EstimatedCost = request.EstimatedCost;
         if (request.IsActive.HasValue) entity.IsActive = request.IsActive.Value;
         if (request.Priority.HasValue) entity.Priority = request.Priority.Value;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -190,7 +193,7 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         }
 
         entity.IsActive = isActive;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
@@ -208,8 +211,8 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         }
 
         // Soft-delete: keep the chore's history; the global query filter hides it from every read.
-        entity.DeletedAt = DateTime.UtcNow;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
+        entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

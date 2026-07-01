@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -22,17 +23,20 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<SmsInboundVendorDoneService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public SmsInboundVendorDoneService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        ILogger<SmsInboundVendorDoneService> logger)
+        ILogger<SmsInboundVendorDoneService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _audit = audit;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<bool> CanHandleAsync(string? fromPhone, string? body, CancellationToken ct = default)
@@ -70,7 +74,7 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
 
         var portfolioId = dispatch.PortfolioId;
         var respondedAt = DateTime.SpecifyKind(receivedAtUtc, DateTimeKind.Utc);
-        var nowUtc = DateTime.UtcNow;
+        var nowUtc = _timeProvider.UtcNow();
         var normalizedFrom = SmsPhone.Normalize(fromPhone);
 
         dispatch.Status = VendorDispatchStatus.Completed;

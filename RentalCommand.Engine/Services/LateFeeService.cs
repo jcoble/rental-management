@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
@@ -8,6 +7,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -23,14 +23,13 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class LateFeeService : ILateFeeService
 {
-    private const string DefaultTimeZoneId = "America/New_York";
-
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
     private readonly IDataUpdateService _dataUpdate;
     private readonly NotificationsConfig _defaults;
-    private readonly TimeZoneInfo _businessTimeZone;
+    private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
     private readonly ILogger<LateFeeService> _logger;
 
     public LateFeeService(
@@ -39,7 +38,8 @@ public sealed class LateFeeService : ILateFeeService
         INotificationSettingsService settings,
         IDataUpdateService dataUpdate,
         IOptions<NotificationsConfig> options,
-        IConfiguration configuration,
+        TimeProvider timeProvider,
+        IAppTimeZoneProvider tz,
         ILogger<LateFeeService> logger)
     {
         _db = db;
@@ -47,16 +47,9 @@ public sealed class LateFeeService : ILateFeeService
         _settings = settings;
         _dataUpdate = dataUpdate;
         _defaults = options.Value;
+        _timeProvider = timeProvider;
+        _tz = tz;
         _logger = logger;
-
-        // Whether rent is "past due" — and by how many days — rolls over in the landlord's LOCAL
-        // zone, not UTC. Near month-end an evening (ET) UtcNow is already the next day in UTC, which
-        // would mis-date the grace cutoff. Derive the business "today"/cutoff in this zone; DB writes
-        // stay UTC.
-        var tzId = configuration["App:TimeZone"];
-        if (string.IsNullOrWhiteSpace(tzId))
-            tzId = DefaultTimeZoneId;
-        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
     /// <inheritdoc />
@@ -66,7 +59,7 @@ public sealed class LateFeeService : ILateFeeService
         // "past due" decision use their calendar day, not UTC's. Rent DueDates are stored as UTC
         // midnight, so express today/cutoff as UTC-midnight too (Kind=Utc) to compare like-for-like
         // and to keep the late-fee row's DueDate a UTC value.
-        var localToday = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
+        var localToday = TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date;
         var today = new DateTime(localToday.Year, localToday.Month, localToday.Day, 0, 0, 0, DateTimeKind.Utc);
 
         // Grace days are per-portfolio now, so the cutoff is too. Load overdue rent broadly and gate
@@ -104,7 +97,7 @@ public sealed class LateFeeService : ILateFeeService
 
         var notifier = new AutomationNotifier(_db, _publisher);
         var configCache = new Dictionary<int, NotificationsConfig>();
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var count = 0;
 
         foreach (var rp in overdueRent)

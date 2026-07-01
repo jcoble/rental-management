@@ -5,6 +5,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -86,6 +87,7 @@ public class LeaseService : ILeaseService
     private readonly ILeaseAgreementRenderer? _agreementRenderer;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<LeaseService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public LeaseService(
         RentalCommandDbContext db,
@@ -94,6 +96,7 @@ public class LeaseService : ILeaseService
         ILeaseAgreementPdfGenerator pdf,
         IAuditTrailService audit,
         ILogger<LeaseService> logger,
+        TimeProvider timeProvider,
         ILeaseAgreementRenderer? agreementRenderer = null)
     {
         _db = db;
@@ -103,6 +106,7 @@ public class LeaseService : ILeaseService
         _agreementRenderer = agreementRenderer;
         _audit = audit;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // A lease is a legal contract, so high-stakes events (create / edit / terminate) get an explicit
@@ -260,7 +264,7 @@ public class LeaseService : ILeaseService
             throw new DomainValidationException("Opening balance amount and as-of date are required.");
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var opening = await _db.OpeningBalances
             .FirstOrDefaultAsync(o => o.PortfolioId == lease.PortfolioId && o.LeaseId == lease.Id, ct);
 
@@ -302,7 +306,7 @@ public class LeaseService : ILeaseService
             RentChargeGenerationStart(lease),
             lease.EndDate,
             lease.RentDueDay,
-            DateTime.UtcNow.Date);
+            _timeProvider.UtcNow().Date);
         if (periods.Count == 0)
         {
             return [];
@@ -322,7 +326,7 @@ public class LeaseService : ILeaseService
             .ToListAsync(ct);
 
         var existing = existingPeriodKeys.ToHashSet(StringComparer.Ordinal);
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var created = periods
             .Where(p => !existing.Contains(p.PeriodKey))
             .Select(period => new Payment
@@ -375,7 +379,7 @@ public class LeaseService : ILeaseService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var holding = new SecurityDepositHolding
         {
             PortfolioId = lease.PortfolioId,
@@ -913,7 +917,7 @@ public class LeaseService : ILeaseService
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, request.UnitId, 0, startUtc, endUtc, ct);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var rentTrackingStartDate = request.Status == LeaseStatus.Active
             ? ResolveRentTrackingStartDate(startUtc, request.RentTrackingStartMode, request.RentTrackingStartDate, now.Date)
             : null;
@@ -1065,16 +1069,16 @@ public class LeaseService : ILeaseService
                 return null;
             }
 
-            SetLeaseTenantMemberships(entity, tenantIds, DateTime.UtcNow);
+            SetLeaseTenantMemberships(entity, tenantIds, _timeProvider.UtcNow());
         }
         if (rentTrackingMode.HasValue)
         {
             entity.RentTrackingStartDate = newStatus == LeaseStatus.Active
-                ? ResolveRentTrackingStartDate(entity.StartDate, rentTrackingMode.Value, request.RentTrackingStartDate, DateTime.UtcNow.Date)
+                ? ResolveRentTrackingStartDate(entity.StartDate, rentTrackingMode.Value, request.RentTrackingStartDate, _timeProvider.UtcNow().Date)
                 : null;
         }
         if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         // Keep the canonical Unit.Status in step with the lease lifecycle whenever the status moves:
         // activating occupies the unit; a real exit frees it (unless another Active lease still holds it).
@@ -1136,7 +1140,7 @@ public class LeaseService : ILeaseService
         // otherwise record only the DeletedAt change).
         var before = Snapshot(entity);
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
 
         // Terminating (soft-deleting) a lease is a real exit: free the unit unless another Active lease
         // still holds it. The soft-deleted lease is excluded both by the explicit Id guard and by the
@@ -1223,7 +1227,7 @@ public class LeaseService : ILeaseService
             FileSize = pdfBytes.Length,
             EntityType = EntityType,
             EntityId = lease.Id,
-            UploadedAt = DateTime.UtcNow,
+            UploadedAt = _timeProvider.UtcNow(),
         };
 
         try
@@ -1260,7 +1264,7 @@ public class LeaseService : ILeaseService
         int? documentTemplateVersion,
         CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         return _db.Leases
             .Where(l => l.Id == leaseId && l.PortfolioId == portfolioId)
             .ExecuteUpdateAsync(setters => setters

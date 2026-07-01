@@ -30,7 +30,8 @@ public class SmsInboundRouterTests : IDisposable
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
-            Mock.Of<ILogger<SmsInboundVendorDoneService>>());
+            Mock.Of<ILogger<SmsInboundVendorDoneService>>(),
+            TimeProvider.System);
 
         var rent = new SmsInboundRentConfirmationService(
             _ctx.Db,
@@ -38,7 +39,8 @@ public class SmsInboundRouterTests : IDisposable
             Mock.Of<IAuditTrailService>(),
             Mock.Of<IMessagePublisher>(),
             Mock.Of<ILlmProvider>(),
-            Mock.Of<ILogger<SmsInboundRentConfirmationService>>());
+            Mock.Of<ILogger<SmsInboundRentConfirmationService>>(),
+            TimeProvider.System);
 
         return new SmsInboundRouter(vendorDone, rent);
     }
@@ -60,7 +62,7 @@ public class SmsInboundRouterTests : IDisposable
         // Dispatch the work order to the vendor (creates an open dispatch).
         await new VendorDispatchService(
                 _ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
-                Mock.Of<IMessagePublisher>(), Mock.Of<ILogger<VendorDispatchService>>())
+                Mock.Of<IMessagePublisher>(), Mock.Of<ILogger<VendorDispatchService>>(), TimeProvider.System)
             .DispatchAsync(PortfolioId, workOrder.Id, new DispatchWorkOrderRequest { VendorId = vendor.Id }, changedByUserId: 1);
 
         var reply = await CreateRouter().RouteAsync("+16145550199", "DONE", DateTime.UtcNow);

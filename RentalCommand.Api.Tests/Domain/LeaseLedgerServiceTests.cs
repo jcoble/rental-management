@@ -49,8 +49,9 @@ public class LeaseLedgerServiceTests : IDisposable
             new NoopDataUpdateService(),
             new LedgerInMemoryFileStorage(),
             new LeaseAgreementPdfGenerator(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose()

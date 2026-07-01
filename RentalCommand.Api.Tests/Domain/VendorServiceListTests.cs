@@ -28,7 +28,8 @@ public class VendorServiceListTests : IDisposable
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IAuditTrailService>(),
-            NullLogger<VendorService>.Instance);
+            NullLogger<VendorService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

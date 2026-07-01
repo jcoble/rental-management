@@ -1066,13 +1066,14 @@ public class BankingServiceTests : IDisposable
             ctx.Db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
-            new RentalCommand.Api.Services.AuditTrailService(ctx.Db, new RentalCommand.Data.Auditing.AuditScope()),
+            new RentalCommand.Api.Services.AuditTrailService(ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             Options.Create(new PlaidOptions
             {
                 Environment = "sandbox",
                 ClientId = "client-id",
                 Secret = "secret",
-            }));
+            }),
+            TimeProvider.System);
 
     private Payment SeedRentPayment(DateTime paidAt)
     {
@@ -1180,13 +1181,14 @@ public class BankingServiceTests : IDisposable
             _ctx.Db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
-            new RentalCommand.Api.Services.AuditTrailService(_ctx.Db, new RentalCommand.Data.Auditing.AuditScope()),
+            new RentalCommand.Api.Services.AuditTrailService(_ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
             Options.Create(options ?? new PlaidOptions
             {
                 Environment = "sandbox",
                 ClientId = "client-id",
                 Secret = "secret",
-            }));
+            }),
+            TimeProvider.System);
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {

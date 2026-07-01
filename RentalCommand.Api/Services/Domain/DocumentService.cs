@@ -4,6 +4,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,11 +14,13 @@ public sealed class DocumentService : IDocumentService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IAuditTrailService _audit;
+    private readonly TimeProvider _timeProvider;
 
-    public DocumentService(RentalCommandDbContext db, IAuditTrailService audit)
+    public DocumentService(RentalCommandDbContext db, IAuditTrailService audit, TimeProvider timeProvider)
     {
         _db = db;
         _audit = audit;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<DocumentDto>> ListAsync(
@@ -58,7 +61,7 @@ public sealed class DocumentService : IDocumentService
             ContentType = contentType,
             FileSize = sizeBytes,
             FilePath = storagePath,
-            UploadedAt = DateTime.UtcNow
+            UploadedAt = _timeProvider.UtcNow()
         };
 
         _db.StoredFiles.Add(row);
@@ -91,7 +94,7 @@ public sealed class DocumentService : IDocumentService
         var row = await FindAsync(portfolioId, id, ct);
         if (row is null) return false;
 
-        row.DeletedAt = DateTime.UtcNow;
+        row.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await LogUnitDocumentChangeAsync(
             portfolioId,

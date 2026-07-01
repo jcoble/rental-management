@@ -55,8 +55,9 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             new NoopDataUpdate(),
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
-            NullLogger<WorkOrderService>.Instance);
-        _properties = new PropertyService(_db, new NoopDataUpdate());
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System);
+        _properties = new PropertyService(_db, new NoopDataUpdate(), TimeProvider.System);
     }
 
     public void Dispose()

@@ -42,7 +42,7 @@ public class UnitDashboardServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new UnitDashboardService(_db, new AuditDescriber(), new AuditDiffBuilder());
+        _sut = new UnitDashboardService(_db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System);
     }
 
     public void Dispose()

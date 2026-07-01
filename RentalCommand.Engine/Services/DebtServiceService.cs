@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -20,32 +20,29 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class DebtServiceService : IDebtServiceService
 {
-    private const string DefaultTimeZoneId = "America/New_York";
-
     private readonly RentalCommandDbContext _db;
-    private readonly TimeZoneInfo _businessTimeZone;
+    private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
     private readonly ILogger<DebtServiceService> _logger;
 
     public DebtServiceService(
         RentalCommandDbContext db,
-        IConfiguration configuration,
+        TimeProvider timeProvider,
+        IAppTimeZoneProvider tz,
         ILogger<DebtServiceService> logger)
     {
         _db = db;
+        _timeProvider = timeProvider;
+        _tz = tz;
         _logger = logger;
-
-        // The landlord's business month rolls over in their LOCAL zone, not UTC (mirrors
-        // RentChargeService). Drives the "current period" math only; DB writes stay UTC.
-        var tzId = configuration["App:TimeZone"];
-        if (string.IsNullOrWhiteSpace(tzId))
-            tzId = DefaultTimeZoneId;
-        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
     /// <inheritdoc/>
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
-        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
+        // The landlord's business month rolls over in their LOCAL zone, not UTC (mirrors
+        // RentChargeService). Drives the "current period" math only; DB writes stay UTC.
+        var today = TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date;
 
         var loans = await _db.Loans
             .Where(l => l.Status == LoanStatus.Active)
@@ -127,7 +124,7 @@ public sealed class DebtServiceService : IDebtServiceService
                     BalanceAfter = split.BalanceAfter,
                     Status = LoanPaymentStatus.Scheduled,
                     PaymentDoesNotCoverInterest = split.DoesNotCoverInterest,
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = _timeProvider.UtcNow(),
                 });
 
                 loanCreated++;
@@ -147,7 +144,7 @@ public sealed class DebtServiceService : IDebtServiceService
             // Update the derived cache (CurrentBalance/Status). This is a convenience mirror; the
             // authoritative figures live in the LoanPayment rows.
             loan.CurrentBalance = lastBalanceAfter;
-            loan.UpdatedAt = DateTime.UtcNow;
+            loan.UpdatedAt = _timeProvider.UtcNow();
             if (paidOff)
                 loan.Status = LoanStatus.PaidOff;
 

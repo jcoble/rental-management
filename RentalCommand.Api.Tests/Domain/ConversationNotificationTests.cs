@@ -30,7 +30,8 @@ public class ConversationNotificationTests : IDisposable
         var tenant = SeedTenantWithStaffAndTenantUsers();
         var sut = new ConversationService(
             _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance);
+            NullLogger<ConversationService>.Instance,
+            TimeProvider.System);
 
         var result = await sut.TenantStartAsync(1, tenant.Id, "Sink leak", "Water under the cabinet");
 
@@ -48,7 +49,8 @@ public class ConversationNotificationTests : IDisposable
         var tenant = SeedTenantWithStaffAndTenantUsers();
         var sut = new ConversationService(
             _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance);
+            NullLogger<ConversationService>.Instance,
+            TimeProvider.System);
 
         var result = await sut.StartAsync(
             1,
@@ -87,7 +89,7 @@ public class ConversationNotificationTests : IDisposable
             });
         _ctx.Db.SaveChanges();
 
-        var sut = new NotificationService(_ctx.Db);
+        var sut = new NotificationService(_ctx.Db, TimeProvider.System);
 
         var tenantItems = await sut.ListAsync(1, userId: 20);
         tenantItems.Select(n => n.Title).Should().Equal("Pool closed");
@@ -98,7 +100,7 @@ public class ConversationNotificationTests : IDisposable
     [Fact]
     public async Task CreateBroadcastAsync_NormalizesSeverityAndCountsAsUnreadForPortfolioUsers()
     {
-        var sut = new NotificationService(_ctx.Db);
+        var sut = new NotificationService(_ctx.Db, TimeProvider.System);
 
         var created = await sut.CreateBroadcastAsync(
             1,
@@ -158,7 +160,8 @@ public class ConversationNotificationTests : IDisposable
 
         var sut = new ConversationService(
             _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance);
+            NullLogger<ConversationService>.Instance,
+            TimeProvider.System);
 
         var list = await sut.ListAsync(1);
         var summary = list.Should().ContainSingle(c => c.Id == conversation.Id).Subject;
@@ -186,7 +189,8 @@ public class ConversationNotificationTests : IDisposable
 
         var sut = new ConversationService(
             _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance);
+            NullLogger<ConversationService>.Instance,
+            TimeProvider.System);
 
         _commands.Clear();
         var page = await sut.ListPageAsync(1, new ListQuery
@@ -230,7 +234,8 @@ public class ConversationNotificationTests : IDisposable
 
         var sut = new ConversationService(
             _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance);
+            NullLogger<ConversationService>.Instance,
+            TimeProvider.System);
 
         _commands.Clear();
         var unreadCount = await sut.GetUnreadCountAsync(1);

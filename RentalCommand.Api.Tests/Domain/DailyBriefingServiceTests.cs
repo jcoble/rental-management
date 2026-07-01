@@ -42,7 +42,7 @@ public class DailyBriefingServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new DailyBriefingService(_db, new NoopLlmProvider());
+        _sut = new DailyBriefingService(_db, new NoopLlmProvider(), TimeProvider.System);
     }
 
     public void Dispose()

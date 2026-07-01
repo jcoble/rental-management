@@ -6,6 +6,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Payments;
@@ -28,17 +29,20 @@ public class StripePaymentService : IStripePaymentService
     private readonly StripeConfig _config;
     private readonly ISandboxGuard _sandbox;
     private readonly ILogger<StripePaymentService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public StripePaymentService(
         RentalCommandDbContext db,
         IOptions<StripeConfig> config,
         ISandboxGuard sandbox,
-        ILogger<StripePaymentService> logger)
+        ILogger<StripePaymentService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _config = config.Value;
         _sandbox = sandbox;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
@@ -99,7 +103,7 @@ public class StripePaymentService : IStripePaymentService
             }
         }, requestOptions, ct);
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var transaction = new PaymentTransaction
         {
             PortfolioId = portfolioId,
@@ -199,7 +203,7 @@ public class StripePaymentService : IStripePaymentService
         }, requestOptions, ct);
 
         // Record a pending transaction now; the webhook flips it (and the Payment) on completion.
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var transaction = new PaymentTransaction
         {
             PortfolioId = portfolioId,
@@ -302,7 +306,7 @@ public class StripePaymentService : IStripePaymentService
             return;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var webhookEvent = new StripeWebhookEvent
         {
             EventId = ev.Id,

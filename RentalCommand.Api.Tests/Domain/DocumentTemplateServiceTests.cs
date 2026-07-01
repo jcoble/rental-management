@@ -24,7 +24,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     public DocumentTemplateServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new DocumentTemplateService(_ctx.Db, _catalog, _files);
+        _sut = new DocumentTemplateService(_ctx.Db, _catalog, _files, TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

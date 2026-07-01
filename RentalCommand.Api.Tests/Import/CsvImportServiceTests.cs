@@ -25,9 +25,9 @@ public class CsvImportServiceTests : IDisposable
         var noop = new NoopDataUpdateService();
         _sut = new CsvImportService(
             _ctx.Db,
-            new TenantService(_ctx.Db, noop, new NoopTenantPortalProvisioningService(), NullLogger<TenantService>.Instance),
-            new PropertyService(_ctx.Db, noop),
-            new UnitService(_ctx.Db, noop, Mock.Of<IAuditTrailService>()));
+            new TenantService(_ctx.Db, noop, new NoopTenantPortalProvisioningService(), NullLogger<TenantService>.Instance, TimeProvider.System),
+            new PropertyService(_ctx.Db, noop, TimeProvider.System),
+            new UnitService(_ctx.Db, noop, Mock.Of<IAuditTrailService>(), TimeProvider.System));
     }
 
     public void Dispose() => _ctx.Dispose();

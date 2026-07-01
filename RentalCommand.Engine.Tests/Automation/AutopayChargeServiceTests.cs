@@ -191,6 +191,7 @@ public class AutopayChargeServiceTests : IDisposable
         return new AutopayChargeService(
             _ctx.Db,
             Options.Create(config),
+            TimeProvider.System,
             NullLogger<AutopayChargeService>.Instance);
     }
 

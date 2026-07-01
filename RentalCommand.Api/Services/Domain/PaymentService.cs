@@ -6,6 +6,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -19,17 +20,20 @@ public class PaymentService : IPaymentService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
     private readonly IFileStorage _files;
+    private readonly TimeProvider _timeProvider;
 
     public PaymentService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        IFileStorage files)
+        IFileStorage files,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _audit = audit;
         _files = files;
+        _timeProvider = timeProvider;
     }
 
     // Money movement is high-stakes: status changes (reversals / refunds / waivers), collection, and
@@ -238,7 +242,7 @@ public class PaymentService : IPaymentService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Payment
         {
             PortfolioId = portfolioId,
@@ -337,7 +341,7 @@ public class PaymentService : IPaymentService
             entity.PaidDate = request.PaidDate.ToUtc() ?? entity.DueDate;
         }
 
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -374,11 +378,11 @@ public class PaymentService : IPaymentService
         entity.Status = PaymentStatus.Paid;
         // Marking paid means fully collected: clear any partial split so the whole Amount counts as collected.
         entity.AmountPaid = null;
-        entity.PaidDate = request.PaidDate?.ToUtc() ?? DateTime.UtcNow;
+        entity.PaidDate = request.PaidDate?.ToUtc() ?? _timeProvider.UtcNow();
         if (request.Method != null) entity.Method = request.Method;
         if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
         if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -403,7 +407,7 @@ public class PaymentService : IPaymentService
         if (!leaseExists)
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var paidDate = request.PaidDate?.ToUtc() ?? now;
 
         var entities = await _db.Payments

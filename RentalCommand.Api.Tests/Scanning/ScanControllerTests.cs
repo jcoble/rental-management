@@ -280,7 +280,7 @@ public class ScanControllerTests : IDisposable
 
     private ScanController CreateController(IScanService scan, IFileStorage? files = null)
     {
-        var controller = new ScanController(scan, _db, files ?? Mock.Of<IFileStorage>())
+        var controller = new ScanController(scan, _db, files ?? Mock.Of<IFileStorage>(), TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {

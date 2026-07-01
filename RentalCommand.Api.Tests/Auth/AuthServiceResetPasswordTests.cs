@@ -112,9 +112,10 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         Mock.Of<IUserMigrationService>(),
         Mock.Of<IAuthEmailSender>(),
         _ctx.Db,
-        new AuditTrailService(_ctx.Db, new AuditScope()),
+        new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
         Mock.Of<ISelfOwnerProvisioner>(),
-        NullLogger<AuthService>.Instance);
+        NullLogger<AuthService>.Instance,
+        TimeProvider.System);
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {

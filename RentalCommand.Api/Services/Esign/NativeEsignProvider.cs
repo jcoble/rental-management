@@ -5,6 +5,7 @@ using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Esign;
@@ -32,17 +33,20 @@ public sealed class NativeEsignProvider : IEsignProvider
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IConfiguration _configuration;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeEsignProvider> _logger;
 
     public NativeEsignProvider(
         RentalCommandDbContext db,
         IFileStorage storage,
         IConfiguration configuration,
+        TimeProvider timeProvider,
         ILogger<NativeEsignProvider> logger)
     {
         _db = db;
         _storage = storage;
         _configuration = configuration;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -70,7 +74,10 @@ public sealed class NativeEsignProvider : IEsignProvider
             return new EsignResult { Status = "Error", Error = "Lease not found for this document." };
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
+        // The signing LINK's expiry stays on the REAL clock (never the simulation clock) so a
+        // time-travelling dev session can't wrongly expire — or revive — a real tenant's signing link.
+        var linkExpiresAtUtc = DateTime.UtcNow.Add(TokenLifetime);
 
         // Persist the original (unsigned) document so the signer can review the exact bytes that were sent.
         var originalFileId = await StoreDocumentAsync(
@@ -99,7 +106,7 @@ public sealed class NativeEsignProvider : IEsignProvider
                 Name = s.Name,
                 Email = s.Email,
                 Token = GenerateToken(),
-                ExpiresAtUtc = now.Add(TokenLifetime),
+                ExpiresAtUtc = linkExpiresAtUtc,
                 Status = SignatureSignerStatus.Pending,
             });
         }
@@ -216,7 +223,7 @@ use electronic records and signatures (E-SIGN / UETA).
             PortfolioId = request.PortfolioId,
             MessageType = "email",
             Payload = payload,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
         });
         await _db.SaveChangesAsync(ct);
     }
@@ -239,7 +246,7 @@ use electronic records and signatures (E-SIGN / UETA).
             FileSize = bytes.Length,
             EntityType = entityType,
             EntityId = leaseId,
-            UploadedAt = DateTime.UtcNow,
+            UploadedAt = _timeProvider.UtcNow(),
         };
 
         try

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -16,17 +17,19 @@ public class DailyBriefingService : IDailyBriefingService
 
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
+    private readonly TimeProvider _timeProvider;
 
-    public DailyBriefingService(RentalCommandDbContext db, ILlmProvider llm)
+    public DailyBriefingService(RentalCommandDbContext db, ILlmProvider llm, TimeProvider timeProvider)
     {
         _db = db;
         _llm = llm;
+        _timeProvider = timeProvider;
     }
 
     public async Task<BriefingResponse> ComposeAsync(int portfolioId, CancellationToken ct = default)
     {
         // TODO: portfolio-timezone handling is a future refinement; using UTC for now.
-        var today = DateTime.UtcNow.Date;
+        var today = _timeProvider.UtcNow().Date;
         var tomorrow = today.AddDays(1);
         var nextWeekEnd = today.AddDays(8);
         var sixtyDaysOut = today.AddDays(60);
@@ -242,7 +245,7 @@ public class DailyBriefingService : IDailyBriefingService
         return new BriefingResponse
         {
             Date = today,
-            GeneratedAt = DateTime.UtcNow,
+            GeneratedAt = _timeProvider.UtcNow(),
             Summary = summary,
             LlmEnhanced = llmEnhanced,
             Bullets = sortedBullets,

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -109,17 +110,20 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RentalCommandDbContext _dbContext;
     private readonly SeedSettings _settings;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<TenantPortalProvisioningService> _logger;
 
     public TenantPortalProvisioningService(
         UserManager<ApplicationUser> userManager,
         RentalCommandDbContext dbContext,
         IOptions<SeedSettings> settings,
+        TimeProvider timeProvider,
         ILogger<TenantPortalProvisioningService> logger)
     {
         _userManager = userManager;
         _dbContext = dbContext;
         _settings = settings.Value;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -153,7 +157,7 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
             displayName = email;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         bool created;
 
         var identityUser = await _userManager.FindByEmailAsync(email);

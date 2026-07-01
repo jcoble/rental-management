@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -9,15 +10,17 @@ namespace RentalCommand.Api.Services.Domain;
 public class AnalyticsService : IAnalyticsService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public AnalyticsService(RentalCommandDbContext db)
+    public AnalyticsService(RentalCommandDbContext db, TimeProvider timeProvider)
     {
         _db = db;
+        _timeProvider = timeProvider;
     }
 
     public async Task<AnalyticsOverview> GetOverviewAsync(int portfolioId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var today = now.Date;
 
         // ── 1. Occupancy ─────────────────────────────────────────────────────────────────────────

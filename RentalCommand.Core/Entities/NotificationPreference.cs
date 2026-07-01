@@ -32,8 +32,8 @@ public class NotificationPreference
     /// </summary>
     public bool EnablePush { get; set; } = true;
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
 }

@@ -21,7 +21,7 @@ public class SelfOwnerProvisionerTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     private SelfOwnerProvisioner BuildProvisioner() =>
-        new(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance);
+        new(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance, TimeProvider.System);
 
     private ApplicationUser SeedUser(string displayName, string email, int portfolioId = 1)
     {

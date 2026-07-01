@@ -55,7 +55,7 @@ public class AccountingConnection : IPortfolioScoped, IAuditable
     public DateTime? ConnectedAt { get; set; }
     public DateTime? DisconnectedAt { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }

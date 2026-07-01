@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -20,11 +21,13 @@ public class DemoDataSeeder
 {
     private readonly RentalCommandDbContext _db;
     private readonly ILogger<DemoDataSeeder> _logger;
+    private readonly TimeProvider _timeProvider;
 
-    public DemoDataSeeder(RentalCommandDbContext db, ILogger<DemoDataSeeder> logger)
+    public DemoDataSeeder(RentalCommandDbContext db, ILogger<DemoDataSeeder> logger, TimeProvider timeProvider)
     {
         _db = db;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
@@ -44,7 +47,7 @@ public class DemoDataSeeder
             return;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // Seed atomically: if any step fails the whole thing rolls back, so a partial
         // dataset can never strand the idempotency guard (which checks for any property).

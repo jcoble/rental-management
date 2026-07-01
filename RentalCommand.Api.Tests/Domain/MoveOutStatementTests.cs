@@ -40,7 +40,8 @@ public class MoveOutStatementTests : IDisposable
         new MoveOutStatementPdfGenerator(),
         Mock.Of<RentalCommand.Core.Interfaces.IAuditTrailService>(),
         Mock.Of<RentalCommand.Core.Interfaces.ICurrentActor>(),
-        Mock.Of<ILogger<SecurityDepositService>>());
+        Mock.Of<ILogger<SecurityDepositService>>(),
+        TimeProvider.System);
 
     [Fact]
     public async Task MoveOutStatement_ReturnsPdf_WithDepositAndDeductions()

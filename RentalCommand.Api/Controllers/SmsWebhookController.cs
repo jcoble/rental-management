@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Hosting;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Security;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,17 +18,20 @@ public class SmsWebhookController : ControllerBase
     private readonly ISmsWebhookSignatureValidator _signatureValidator;
     private readonly IHostEnvironment _environment;
     private readonly ILogger<SmsWebhookController> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public SmsWebhookController(
         ISmsInboundRouter router,
         ISmsWebhookSignatureValidator signatureValidator,
         IHostEnvironment environment,
-        ILogger<SmsWebhookController> logger)
+        ILogger<SmsWebhookController> logger,
+        TimeProvider timeProvider)
     {
         _router = router;
         _signatureValidator = signatureValidator;
         _environment = environment;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     [HttpPost("inbound")]
@@ -62,7 +66,7 @@ public class SmsWebhookController : ControllerBase
         }
 
         // Route to vendor-DONE (job completion) or fall back to tenant rent-YES confirmation.
-        var responseMessage = await _router.RouteAsync(from, body, DateTime.UtcNow, ct);
+        var responseMessage = await _router.RouteAsync(from, body, _timeProvider.UtcNow(), ct);
         return Content(ToMessageResponse(responseMessage), "application/xml", Encoding.UTF8);
     }
 

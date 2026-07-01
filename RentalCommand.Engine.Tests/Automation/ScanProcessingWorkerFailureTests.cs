@@ -47,6 +47,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         services.AddSingleton<ILlmProvider>(_llm);
         services.AddSingleton<IFileStorage, StubFileStorage>();
         services.AddSingleton<IDataUpdateService, StubDataUpdateService>();
+        services.AddSingleton(TimeProvider.System);
         _provider = services.BuildServiceProvider();
 
         using var scope = _provider.CreateScope();

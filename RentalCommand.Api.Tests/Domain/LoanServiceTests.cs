@@ -24,7 +24,7 @@ public class LoanServiceTests : IDisposable
 
     public LoanServiceTests()
     {
-        _sut = new LoanService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new LoanService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();
