@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_chrome.dart';
 import 'mobile_domain_navigation.dart';
+import 'mobile_quick_action_fab.dart';
+import 'mobile_quick_action_helpers.dart';
 import 'mobile_shell_actions.dart';
 
 class RentalsHubScreen extends StatelessWidget {
@@ -111,22 +113,31 @@ class MobileDomainHubScreen extends StatefulWidget {
 class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
   final _contentNavigatorKey = GlobalKey<NavigatorState>();
   late final MobileDomainHeaderController _headerController;
+  late final MobileQuickActionFabRegistry _quickActionFabRegistry;
   late final MobileDomainNavigator _domainNavigator;
   int _selectedIndex = 0;
   bool _headerCollapsed = false;
+  bool _quickActionFallbackReady = false;
+  bool _quickActionFallbackCheckScheduled = false;
 
   @override
   void initState() {
     super.initState();
     _headerController = MobileDomainHeaderController()
       ..addListener(_handleHeaderChanged);
+    _quickActionFabRegistry = MobileQuickActionFabRegistry()
+      ..addListener(_handleQuickActionFabChanged);
     _domainNavigator = MobileDomainNavigator(_openDestination);
     widget.onControllerReady?.call(_domainNavigator);
+    _scheduleQuickActionFallbackCheck();
   }
 
   @override
   void dispose() {
     widget.onControllerDisposed?.call(_domainNavigator);
+    _quickActionFabRegistry
+      ..removeListener(_handleQuickActionFabChanged)
+      ..dispose();
     _headerController
       ..removeListener(_handleHeaderChanged)
       ..dispose();
@@ -135,6 +146,20 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
 
   void _handleHeaderChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _handleQuickActionFabChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _scheduleQuickActionFallbackCheck() {
+    if (_quickActionFallbackCheckScheduled) return;
+    _quickActionFallbackCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _quickActionFallbackCheckScheduled = false;
+      if (!mounted) return;
+      setState(() => _quickActionFallbackReady = true);
+    });
   }
 
   @override
@@ -169,10 +194,12 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     setState(() {
       _selectedIndex = index;
       _headerCollapsed = false;
+      _quickActionFallbackReady = false;
       if (detailBuilder == null) {
         _headerController.clearActiveDetail();
       }
     });
+    _scheduleQuickActionFallbackCheck();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _replaceContentRoot(widget.destinations[index]);
@@ -277,41 +304,64 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: MobileDomainHeaderScope(
-          controller: _headerController,
-          child: MobileDomainNavigation(
-            controller: _domainNavigator,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _HubSegmentBar(
-                  destinations: widget.destinations,
-                  selectedIndex: _selectedIndex,
-                  onSelected: _selectIndex,
-                ),
-                Expanded(
-                  child: PopScope<void>(
-                    canPop: false,
-                    onPopInvokedWithResult: (didPop, _) {
-                      unawaited(_handleSystemBack(didPop));
-                    },
-                    child: ScrollNotificationObserver(
-                      child: _DomainScrollCollapseObserver(
-                        onNotification: _handleContentScroll,
-                        child: MobileDomainChromeScope(
-                          embedded: true,
-                          child: Navigator(
-                            key: _contentNavigatorKey,
-                            onGenerateRoute: (_) => _rootRoute(selected),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: MobileQuickActionFabHost(
+                registry: _quickActionFabRegistry,
+                child: MobileDomainHeaderScope(
+                  controller: _headerController,
+                  child: MobileDomainNavigation(
+                    controller: _domainNavigator,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _HubSegmentBar(
+                          destinations: widget.destinations,
+                          selectedIndex: _selectedIndex,
+                          onSelected: _selectIndex,
+                        ),
+                        Expanded(
+                          child: PopScope<void>(
+                            canPop: false,
+                            onPopInvokedWithResult: (didPop, _) {
+                              unawaited(_handleSystemBack(didPop));
+                            },
+                            child: ScrollNotificationObserver(
+                              child: _DomainScrollCollapseObserver(
+                                onNotification: _handleContentScroll,
+                                child: MobileDomainChromeScope(
+                                  embedded: true,
+                                  child: Navigator(
+                                    key: _contentNavigatorKey,
+                                    onGenerateRoute: (_) =>
+                                        _rootRoute(selected),
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
+            if (_quickActionFallbackReady &&
+                !_quickActionFabRegistry.hasMountedFab)
+              Positioned(
+                right: 16,
+                bottom: 16,
+                child: MobileQuickActionFab(
+                  heroTag: '${widget.title.toLowerCase()}-hub-quick-action-fab',
+                  registerWithHost: false,
+                  onChat: () => openMobileAssistant(context),
+                  onRecord: () => openMobileRecord(context),
+                  onScan: () => openMobileScan(context),
+                ),
+              ),
+          ],
         ),
       ),
     );
