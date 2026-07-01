@@ -153,7 +153,7 @@ class ScanDraft {
   final int id;
   final int portfolioId;
 
-  /// 'Expense', 'Payment', 'WorkOrder', or 'Lease'
+  /// 'Expense', 'Payment', 'WorkOrder', 'Lease', 'Application', or 'Loan'
   final String targetEntityType;
 
   /// Lifecycle: 'Pending' -> 'Processing' -> 'Reviewing' -> 'Confirmed'
@@ -187,6 +187,9 @@ class ScanDraft {
   /// Target is a scanned completed paper rental application; confirming creates
   /// a RentalApplication (applicant), mirroring the public apply form.
   bool get isApplication => targetEntityType == 'Application';
+
+  /// Target is a scanned mortgage statement or closing disclosure.
+  bool get isLoan => targetEntityType == 'Loan';
 
   /// Queued for extraction; the Engine has not picked it up yet.
   bool get isPending => status == 'Pending';
