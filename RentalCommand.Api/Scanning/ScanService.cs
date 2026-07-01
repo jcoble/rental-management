@@ -521,6 +521,7 @@ public sealed class ScanService : IScanService
             Name = TruncateRequired(name, 200),
             ServiceType = "General",
             Phone = Truncate(dto.VendorPhone?.Trim(), 50),
+            Website = Truncate(dto.VendorWebsite?.Trim(), 500),
             TaxId = Truncate(dto.VendorTaxId?.Trim(), 50),
             Notes = "Created from scanned receipt.",
             CreatedAt = now,

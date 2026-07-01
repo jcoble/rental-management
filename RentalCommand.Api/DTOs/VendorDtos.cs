@@ -12,6 +12,7 @@ public class VendorResponse
     public string ServiceType { get; set; } = string.Empty;
     public string? Email { get; set; }
     public string? Phone { get; set; }
+    public string? Website { get; set; }
     public string? TaxId { get; set; }
     public string? AddressLine1 { get; set; }
     public string? City { get; set; }
@@ -45,6 +46,7 @@ public class VendorResponse
         ServiceType = e.ServiceType,
         Email = e.Email,
         Phone = e.Phone,
+        Website = e.Website,
         TaxId = e.TaxId,
         AddressLine1 = e.AddressLine1,
         City = e.City,
@@ -138,6 +140,10 @@ public class CreateVendorRequest
     [MaxLength(50)]
     public string? Phone { get; set; }
 
+    [MaxLength(500)]
+    [Url]
+    public string? Website { get; set; }
+
     [MaxLength(50)]
     public string? TaxId { get; set; }
 
@@ -175,6 +181,10 @@ public class UpdateVendorRequest
 
     [MaxLength(50)]
     public string? Phone { get; set; }
+
+    [MaxLength(500)]
+    [Url]
+    public string? Website { get; set; }
 
     [MaxLength(50)]
     public string? TaxId { get; set; }

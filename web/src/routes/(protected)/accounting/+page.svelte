@@ -504,6 +504,7 @@
 		if (!vendor) return false;
 		fillExpenseTextField('vendorAddress', vendorAddress(vendor));
 		fillExpenseTextField('vendorPhone', vendor.phone);
+		fillExpenseTextField('vendorWebsite', vendor.website);
 		fillExpenseTextField('vendorTaxId', vendor.taxId);
 		return true;
 	}

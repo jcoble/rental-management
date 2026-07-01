@@ -70,18 +70,21 @@ public class VendorServiceListTests : IDisposable
         {
             Name = "Acme HVAC",
             ServiceType = "HVAC",
+            Website = "https://acme.example.test",
             AddressLine1 = "123 Service Rd",
             City = "Columbus",
             State = "OH",
             PostalCode = "43215",
         });
 
+        created.Website.Should().Be("https://acme.example.test");
         created.AddressLine1.Should().Be("123 Service Rd");
         created.City.Should().Be("Columbus");
         created.State.Should().Be("OH");
         created.PostalCode.Should().Be("43215");
 
         var saved = await _ctx.Db.Vendors.AsNoTracking().SingleAsync(v => v.Id == created.Id);
+        saved.Website.Should().Be("https://acme.example.test");
         saved.AddressLine1.Should().Be("123 Service Rd");
         saved.City.Should().Be("Columbus");
         saved.State.Should().Be("OH");
@@ -96,6 +99,7 @@ public class VendorServiceListTests : IDisposable
 
         var updated = await _sut.UpdateAsync(PortfolioId, vendorId, new UpdateVendorRequest
         {
+            Website = "https://repair.example.test",
             AddressLine1 = "456 Repair Ave",
             City = "Cincinnati",
             State = "OH",
@@ -103,6 +107,7 @@ public class VendorServiceListTests : IDisposable
         });
 
         updated.Should().NotBeNull();
+        updated!.Website.Should().Be("https://repair.example.test");
         updated!.AddressLine1.Should().Be("456 Repair Ave");
         updated.City.Should().Be("Cincinnati");
         updated.State.Should().Be("OH");
