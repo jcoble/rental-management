@@ -8,13 +8,14 @@
 # Usage:
 #   ./scripts/voice-test.sh                 # runs through all the sample commands
 #   ./scripts/voice-test.sh scan            # a single named command
+#   ANDROID_PACKAGE=com.rentalcommand.rental_command.dev ./scripts/voice-test.sh scan
 #   ./scripts/voice-test.sh log-expense     # with sample params
 #   ./scripts/voice-test.sh "rentalcommand://voice/log-expense?amount=40&category=plumbing&property=123%20Main"
 #
 # Requires: a running app (flutter run) and `adb` on PATH with one device.
 set -euo pipefail
 
-PKG="com.rentalcommand.rental_command"
+PKG="${ANDROID_PACKAGE:-com.rentalcommand.rental_command}"
 
 fire() {
   local uri="$1"

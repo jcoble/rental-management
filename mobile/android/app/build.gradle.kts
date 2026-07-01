@@ -39,7 +39,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.rentalcommand.rental_command"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -47,6 +46,20 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    flavorDimensions += "environment"
+
+    productFlavors {
+        create("prod") {
+            dimension = "environment"
+            manifestPlaceholders["appLabel"] = "Rental Command"
+        }
+        create("dev") {
+            dimension = "environment"
+            applicationIdSuffix = ".dev"
+            manifestPlaceholders["appLabel"] = "Rental Command Dev"
+        }
     }
 
     signingConfigs {
@@ -74,6 +87,16 @@ android {
             }
         }
     }
+}
+
+// Dev builds intentionally run without Firebase/FCM native config. Google login
+// is not Firebase-backed, and PushService already fail-softs when Firebase
+// cannot initialize. The committed google-services.json only declares the prod
+// package, so skip dev Google Services processing until a dev FCM app exists.
+tasks.matching { task ->
+    task.name.startsWith("processDev") && task.name.endsWith("GoogleServices")
+}.configureEach {
+    enabled = false
 }
 
 kotlin {
