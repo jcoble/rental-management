@@ -12,6 +12,55 @@ class MobileQuickAction {
   final VoidCallback onPressed;
 }
 
+class MobileQuickActionFabRegistry extends ChangeNotifier {
+  int _mountedFabCount = 0;
+  bool _notificationScheduled = false;
+  bool _disposed = false;
+
+  bool get hasMountedFab => _mountedFabCount > 0;
+
+  void register() {
+    _mountedFabCount++;
+    _scheduleNotify();
+  }
+
+  void unregister() {
+    if (_mountedFabCount == 0) return;
+    _mountedFabCount--;
+    _scheduleNotify();
+  }
+
+  void _scheduleNotify() {
+    if (_disposed || _notificationScheduled) return;
+    _notificationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _notificationScheduled = false;
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+}
+
+class MobileQuickActionFabHost
+    extends InheritedNotifier<MobileQuickActionFabRegistry> {
+  const MobileQuickActionFabHost({
+    super.key,
+    required MobileQuickActionFabRegistry registry,
+    required super.child,
+  }) : super(notifier: registry);
+
+  static MobileQuickActionFabRegistry? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<MobileQuickActionFabHost>()
+        ?.notifier;
+  }
+}
+
 class MobileQuickActionFab extends StatefulWidget {
   const MobileQuickActionFab({
     super.key,
@@ -20,6 +69,7 @@ class MobileQuickActionFab extends StatefulWidget {
     required this.onRecord,
     required this.onScan,
     this.heroTag = 'mobile-quick-action-fab',
+    this.registerWithHost = true,
   });
 
   final MobileQuickAction? primaryAction;
@@ -27,6 +77,7 @@ class MobileQuickActionFab extends StatefulWidget {
   final VoidCallback onRecord;
   final VoidCallback onScan;
   final Object heroTag;
+  final bool registerWithHost;
 
   @override
   State<MobileQuickActionFab> createState() => _MobileQuickActionFabState();
@@ -34,6 +85,48 @@ class MobileQuickActionFab extends StatefulWidget {
 
 class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
   bool _open = false;
+  MobileQuickActionFabRegistry? _registry;
+  bool _registered = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncRegistry();
+  }
+
+  @override
+  void didUpdateWidget(covariant MobileQuickActionFab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.registerWithHost != widget.registerWithHost) {
+      _syncRegistry();
+    }
+  }
+
+  @override
+  void dispose() {
+    _unregister();
+    super.dispose();
+  }
+
+  void _syncRegistry() {
+    final nextRegistry = widget.registerWithHost
+        ? MobileQuickActionFabHost.maybeOf(context)
+        : null;
+    if (identical(nextRegistry, _registry)) return;
+
+    _unregister();
+    _registry = nextRegistry;
+    if (_registry != null) {
+      _registry!.register();
+      _registered = true;
+    }
+  }
+
+  void _unregister() {
+    if (!_registered) return;
+    _registry?.unregister();
+    _registered = false;
+  }
 
   void _toggle() => setState(() => _open = !_open);
 
