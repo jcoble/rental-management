@@ -39,8 +39,8 @@ public static class SimulationClockServiceCollectionExtensions
         bool pinFrameworkAuthClock)
     {
         // Safety net: even if the flag is somehow true in Production, the clock stays real. The whole
-        // simulation surface is a non-production dev/test tool.
-        var enabled = configuration.GetValue<bool>("Simulation:Enabled") && !environment.IsProduction();
+        // simulation surface is a non-production dev/test tool. One source of truth in SimulationGate.
+        var enabled = SimulationGate.IsEnabled(configuration, environment);
 
         if (!enabled)
         {

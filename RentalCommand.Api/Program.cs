@@ -252,7 +252,13 @@ builder.Services.AddCors(options =>
 // Serialize/accept enums as their string names (e.g. "InProgress", "Normal") rather than
 // integers, matching what the SvelteKit client sends and renders. Without this the API
 // binds enums as numbers and 400s on the client's string enum values.
-builder.Services.AddControllers()
+// Dev-only simulation controllers ([SimulationOnly]) have all their routes stripped at startup when
+// simulation is inactive (production / flag off), so they simply do not exist there.
+var simulationEnabled = SimulationGate.IsEnabled(builder.Configuration, builder.Environment);
+builder.Services.AddControllers(options =>
+    {
+        options.Conventions.Add(new SimulationOnlyConvention(simulationEnabled));
+    })
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
