@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -17,12 +18,14 @@ public class ReportsService : IReportsService
     private readonly RentalCommandDbContext _db;
     private readonly IOwnerStatementService _ownerStatements;
     private readonly IScheduleEService _scheduleE;
+    private readonly TimeProvider _timeProvider;
 
-    public ReportsService(RentalCommandDbContext db, IOwnerStatementService ownerStatements, IScheduleEService scheduleE)
+    public ReportsService(RentalCommandDbContext db, IOwnerStatementService ownerStatements, IScheduleEService scheduleE, TimeProvider timeProvider)
     {
         _db = db;
         _ownerStatements = ownerStatements;
         _scheduleE = scheduleE;
+        _timeProvider = timeProvider;
     }
 
     // ── Catalog ──────────────────────────────────────────────────────────────────────────────────
@@ -204,7 +207,7 @@ public class ReportsService : IReportsService
 
     public async Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var today = DateTime.UtcNow.Date;
+        var today = _timeProvider.UtcNow().Date;
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         var q = _db.Leases
@@ -250,7 +253,7 @@ public class ReportsService : IReportsService
 
         return new RentRollResponse
         {
-            GeneratedAt = DateTime.UtcNow,
+            GeneratedAt = _timeProvider.UtcNow(),
             Rows = rows,
             LeaseCount = totals?.LeaseCount ?? 0,
             TotalMonthlyRent = totals?.TotalMonthlyRent ?? 0m,
@@ -262,7 +265,7 @@ public class ReportsService : IReportsService
 
     public async Task<RentLedgerResponse> GetRentLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var (from, to) = ResolveRange(query);
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         const int chargeEntryKind = 0;
@@ -434,7 +437,7 @@ public class ReportsService : IReportsService
 
     public async Task<DelinquencyResponse> GetDelinquencyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var asOf = DateTime.UtcNow;
+        var asOf = _timeProvider.UtcNow();
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         // Owed-and-overdue, using the SAME predicate as AccountingService.GetPastDueAsync / the Money
@@ -574,7 +577,7 @@ public class ReportsService : IReportsService
 
     public async Task<CashFlowResponse> GetCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var (from, to) = ResolveRange(query);
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         // Money in: income is ACTUAL CASH RECEIVED — Rent + LateFee that is Paid (full Amount) or
@@ -673,7 +676,7 @@ public class ReportsService : IReportsService
 
     public async Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var (from, to) = ResolveRange(query);
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         var propertyQuery = _db.Properties
@@ -816,7 +819,7 @@ public class ReportsService : IReportsService
     /// </summary>
     private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, int? propertyId, CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         var leaseQuery = _db.Leases
             .AsNoTracking()
@@ -873,7 +876,7 @@ public class ReportsService : IReportsService
 
     public async Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var (from, to) = ResolveRange(query);
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         const int expenseEntryKind = 0;
@@ -980,7 +983,7 @@ public class ReportsService : IReportsService
 
     public async Task<PropertyProfitAndLossResponse> GetPropertyProfitAndLossAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var (from, to) = ResolveRange(query);
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         var propertyQuery = _db.Properties
@@ -1110,7 +1113,7 @@ public class ReportsService : IReportsService
 
         return new OccupancyResponse
         {
-            GeneratedAt = DateTime.UtcNow,
+            GeneratedAt = _timeProvider.UtcNow(),
             Rows = occRows,
             TotalUnits = totalUnits,
             OccupiedUnits = occupiedUnits,
@@ -1128,7 +1131,7 @@ public class ReportsService : IReportsService
     public async Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(int portfolioId, ReportRangeQuery query, int days, CancellationToken ct = default)
     {
         var window = days > 0 ? days : DefaultExpirationWindowDays;
-        var asOf = DateTime.UtcNow;
+        var asOf = _timeProvider.UtcNow();
         var cutoff = asOf.AddDays(window);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
@@ -1297,7 +1300,7 @@ public class ReportsService : IReportsService
 
         return new SecurityDepositRegisterResponse
         {
-            GeneratedAt = DateTime.UtcNow,
+            GeneratedAt = _timeProvider.UtcNow(),
             Rows = rows,
             TotalHeld = totals?.TotalHeld ?? 0m,
             TotalDeductions = totals?.TotalDeductions ?? 0m,
@@ -1395,7 +1398,7 @@ public class ReportsService : IReportsService
 
     public async Task<WorkOrderReportResponse> GetWorkOrdersAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var (from, to) = ResolveRange(query);
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         var q = _db.WorkOrders
@@ -1492,9 +1495,8 @@ public class ReportsService : IReportsService
     /// bounds default to a sensible window: <c>from</c> → start of the current year, <c>to</c> → now.
     /// The <c>to</c> end is inclusive (extended to end-of-day) so a same-day "from == to" still matches.
     /// </summary>
-    internal static (DateTime From, DateTime To) ResolveRange(ReportRangeQuery query)
+    internal static (DateTime From, DateTime To) ResolveRange(ReportRangeQuery query, DateTime now)
     {
-        var now = DateTime.UtcNow;
         var from = (query.From?.ToUtc()) ?? new DateTime(now.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var toRaw = (query.To?.ToUtc()) ?? now;
 

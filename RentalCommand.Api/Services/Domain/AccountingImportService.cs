@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -46,6 +47,7 @@ public sealed class AccountingImportService
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingTokenService _tokenService;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingImportService> _logger;
 
     public AccountingImportService(
@@ -54,6 +56,7 @@ public sealed class AccountingImportService
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
         AccountingTokenService tokenService,
+        TimeProvider timeProvider,
         ILogger<AccountingImportService> logger)
     {
         _db = db;
@@ -62,6 +65,7 @@ public sealed class AccountingImportService
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
         _tokenService = tokenService;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -179,8 +183,8 @@ public sealed class AccountingImportService
 
         // Persist delta cursors + last-sync on the connection.
         connection.LastPulledAtJson = JsonSerializer.Serialize(cursors);
-        connection.LastSyncedAt = DateTime.UtcNow;
-        connection.UpdatedAt = DateTime.UtcNow;
+        connection.LastSyncedAt = _timeProvider.UtcNow();
+        connection.UpdatedAt = _timeProvider.UtcNow();
         if (connection.Status == AccountingConnectionStatus.Error)
         {
             connection.Status = AccountingConnectionStatus.Connected;
@@ -228,7 +232,7 @@ public sealed class AccountingImportService
 
         if (promoted > 0)
         {
-            connection.UpdatedAt = DateTime.UtcNow;
+            connection.UpdatedAt = _timeProvider.UtcNow();
             await _db.SaveChangesAsync(ct);
         }
 
@@ -475,8 +479,8 @@ public sealed class AccountingImportService
                 PaidDate = dto.TxnDateUtc,
                 Method = dto.PaymentMethod,
                 ExternalReference = dto.ReferenceNumber ?? dto.ExternalId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
+                UpdatedAt = _timeProvider.UtcNow(),
             };
             _db.Payments.Add(payment);
             await _db.SaveChangesAsync(ct); // need the generated Id for the ledger row
@@ -556,8 +560,8 @@ public sealed class AccountingImportService
                 IncurredAt = dto.TxnDateUtc,
                 PaidAt = dto.TxnDateUtc,
                 Description = BuildExpenseDescription(dto),
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
+                UpdatedAt = _timeProvider.UtcNow(),
             };
             _db.Expenses.Add(expense);
             await _db.SaveChangesAsync(ct);
@@ -610,8 +614,8 @@ public sealed class AccountingImportService
                 PaidDate = dto.TxnDateUtc,
                 Method = dto.PaymentMethod,
                 ExternalReference = dto.ReferenceNumber ?? dto.ExternalId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
+                UpdatedAt = _timeProvider.UtcNow(),
             };
             _db.Payments.Add(payment);
             await _db.SaveChangesAsync(ct);
@@ -661,8 +665,8 @@ public sealed class AccountingImportService
                 IncurredAt = dto.TxnDateUtc,
                 PaidAt = dto.TxnDateUtc,
                 Description = BuildExpenseDescription(dto),
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                CreatedAt = _timeProvider.UtcNow(),
+                UpdatedAt = _timeProvider.UtcNow(),
             };
             _db.Expenses.Add(expense);
             await _db.SaveChangesAsync(ct);
@@ -707,11 +711,11 @@ public sealed class AccountingImportService
                 row.Confidence = confidence;
                 if (autoConfirm && localId != null)
                 {
-                    row.ConfirmedAt = DateTime.UtcNow; // system auto-link (ConfirmedByUserId stays null)
+                    row.ConfirmedAt = _timeProvider.UtcNow(); // system auto-link (ConfirmedByUserId stays null)
                 }
             }
 
-            row.UpdatedAt = DateTime.UtcNow;
+            row.UpdatedAt = _timeProvider.UtcNow();
             return;
         }
 
@@ -725,9 +729,9 @@ public sealed class AccountingImportService
             LocalEntityType = localType,
             LocalEntityId = localId,
             Confidence = confidence,
-            ConfirmedAt = autoConfirm && localId != null ? DateTime.UtcNow : null,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            ConfirmedAt = autoConfirm && localId != null ? _timeProvider.UtcNow() : null,
+            CreatedAt = _timeProvider.UtcNow(),
+            UpdatedAt = _timeProvider.UtcNow(),
         });
     }
 
@@ -748,11 +752,11 @@ public sealed class AccountingImportService
                 row.Confidence = confidence;
                 if (autoConfirm)
                 {
-                    row.ConfirmedAt = DateTime.UtcNow;
+                    row.ConfirmedAt = _timeProvider.UtcNow();
                 }
             }
 
-            row.UpdatedAt = DateTime.UtcNow;
+            row.UpdatedAt = _timeProvider.UtcNow();
             return;
         }
 
@@ -767,9 +771,9 @@ public sealed class AccountingImportService
             LocalEntityId = null,
             LocalEnumValue = enumValue,
             Confidence = confidence,
-            ConfirmedAt = autoConfirm ? DateTime.UtcNow : null,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            ConfirmedAt = autoConfirm ? _timeProvider.UtcNow() : null,
+            CreatedAt = _timeProvider.UtcNow(),
+            UpdatedAt = _timeProvider.UtcNow(),
         });
     }
 
@@ -905,23 +909,23 @@ public sealed class AccountingImportService
             Status = status,
             AttemptCount = 1,
             LastError = note,
-            LastAttemptAt = DateTime.UtcNow,
+            LastAttemptAt = _timeProvider.UtcNow(),
             // Stash the raw external payload so a later confirm can re-resolve without a fresh pull.
             MetadataJson = metadata,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
+            UpdatedAt = _timeProvider.UtcNow(),
         });
     }
 
-    private static void MarkImported(AccountingSyncMap row, string localType, int localId)
+    private void MarkImported(AccountingSyncMap row, string localType, int localId)
     {
         row.Status = LedgerStatus.Imported;
         row.LocalEntityType = localType;
         row.LocalEntityId = localId;
         row.AttemptCount += 1;
         row.LastError = null;
-        row.LastAttemptAt = DateTime.UtcNow;
-        row.UpdatedAt = DateTime.UtcNow;
+        row.LastAttemptAt = _timeProvider.UtcNow();
+        row.UpdatedAt = _timeProvider.UtcNow();
     }
 
     // =====================================================================================

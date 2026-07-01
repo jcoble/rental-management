@@ -59,7 +59,8 @@ public class OpeningBalanceServiceTests : IDisposable
             new OpeningInMemoryFileStorage(),
             new LeaseAgreementPdfGenerator(),
             new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose()

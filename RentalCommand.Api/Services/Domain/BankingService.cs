@@ -9,6 +9,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -25,19 +26,22 @@ public class BankingService : IBankingService
     private readonly IPlaidBankingProvider _plaid;
     private readonly IAuditTrailService _audit;
     private readonly PlaidOptions _plaidOptions;
+    private readonly TimeProvider _timeProvider;
 
     public BankingService(
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
         IPlaidBankingProvider plaid,
         IAuditTrailService audit,
-        IOptions<PlaidOptions> plaidOptions)
+        IOptions<PlaidOptions> plaidOptions,
+        TimeProvider timeProvider)
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Banking.v1");
         _plaid = plaid;
         _audit = audit;
         _plaidOptions = plaidOptions.Value;
+        _timeProvider = timeProvider;
     }
 
     private static string ConnectionSnapshot(BankConnection connection) => JsonSerializer.Serialize(new
@@ -169,7 +173,7 @@ public class BankingService : IBankingService
         }
 
         var exchange = await _plaid.ExchangePublicTokenAsync(settings, publicToken, ct);
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var itemIdHash = ExternalLookupHash(exchange.ItemId);
         var accountIdHash = ExternalLookupHash(accountId);
         var connection = await _db.BankConnections
@@ -246,7 +250,7 @@ public class BankingService : IBankingService
 
         var cursor = UnprotectNullable(connection.SyncCursorCipherText);
         var synced = await _plaid.SyncTransactionsAsync(settings, accessToken, cursor, ct);
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var linkedAccountId = UnprotectNullable(connection.ExternalAccountIdCipherText);
         var imported = new List<BankTransaction>();
         var modified = new List<BankTransaction>();
@@ -434,7 +438,7 @@ public class BankingService : IBankingService
             throw new InvalidOperationException("At least one bank transaction is required.");
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var provider = string.IsNullOrWhiteSpace(request.Provider) ? "Manual" : request.Provider.Trim();
         var institution = string.IsNullOrWhiteSpace(request.InstitutionName) ? "Imported bank" : request.InstitutionName.Trim();
         var account = string.IsNullOrWhiteSpace(request.AccountName) ? "Imported account" : request.AccountName.Trim();
@@ -586,7 +590,7 @@ public class BankingService : IBankingService
 
         transaction.MatchStatus = "Matched";
         transaction.MatchConfidence = 1m;
-        transaction.UpdatedAt = DateTime.UtcNow;
+        transaction.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,
@@ -612,7 +616,7 @@ public class BankingService : IBankingService
         transaction.MatchedExpenseId = null;
         transaction.MatchStatus = "Unmatched";
         transaction.MatchConfidence = null;
-        transaction.UpdatedAt = DateTime.UtcNow;
+        transaction.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,
@@ -719,7 +723,7 @@ public class BankingService : IBankingService
         // payment/expense as the SAME money, so it is not counted twice.
         transaction.MatchStatus = "Matched";
         transaction.MatchConfidence = 1m;
-        transaction.UpdatedAt = DateTime.UtcNow;
+        transaction.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,
@@ -750,7 +754,7 @@ public class BankingService : IBankingService
         transaction.MatchedExpenseId = null;
         transaction.MatchStatus = "Dismissed";
         transaction.MatchConfidence = null;
-        transaction.UpdatedAt = DateTime.UtcNow;
+        transaction.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,
@@ -785,7 +789,7 @@ public class BankingService : IBankingService
         transaction.MatchStatus = "Removed";
         transaction.MatchConfidence = null;
         transaction.Notes = "Marked personal / ignored by the landlord.";
-        transaction.UpdatedAt = DateTime.UtcNow;
+        transaction.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,

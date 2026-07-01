@@ -50,7 +50,7 @@ public class ReportsServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ReportsService(_db, new OwnerStatementService(_db), new ScheduleEService(_db));
+        _sut = new ReportsService(_db, new OwnerStatementService(_db), new ScheduleEService(_db), TimeProvider.System);
     }
 
     public void Dispose()
@@ -122,7 +122,7 @@ public class ReportsServiceTests : IDisposable
         {
             From = new DateTime(2026, 01, 01, 0, 0, 0, DateTimeKind.Utc),
             To = new DateTime(2026, 01, 31, 0, 0, 0, DateTimeKind.Utc),
-        });
+        }, DateTime.UtcNow);
 
         from.Should().Be(new DateTime(2026, 01, 01, 0, 0, 0, DateTimeKind.Utc));
         to.Date.Should().Be(new DateTime(2026, 01, 31));

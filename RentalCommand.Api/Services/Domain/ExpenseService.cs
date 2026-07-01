@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -14,12 +15,14 @@ public class ExpenseService : IExpenseService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _files;
+    private readonly TimeProvider _timeProvider;
 
-    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IFileStorage files)
+    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IFileStorage files, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _files = files;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
@@ -246,7 +249,7 @@ public class ExpenseService : IExpenseService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Expense
         {
             PortfolioId = portfolioId,
@@ -372,7 +375,7 @@ public class ExpenseService : IExpenseService
             }
         }
 
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -390,7 +393,7 @@ public class ExpenseService : IExpenseService
             return false;
         }
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

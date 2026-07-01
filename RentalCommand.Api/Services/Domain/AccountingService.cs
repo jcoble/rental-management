@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -18,15 +19,18 @@ public class AccountingService : IAccountingService
     private readonly RentalCommandDbContext _db;
     private readonly IScheduleEService _scheduleE;
     private readonly IYearEndPacketPdfGenerator _packetPdf;
+    private readonly TimeProvider _timeProvider;
 
     public AccountingService(
         RentalCommandDbContext db,
         IScheduleEService scheduleE,
-        IYearEndPacketPdfGenerator packetPdf)
+        IYearEndPacketPdfGenerator packetPdf,
+        TimeProvider timeProvider)
     {
         _db = db;
         _scheduleE = scheduleE;
         _packetPdf = packetPdf;
+        _timeProvider = timeProvider;
     }
 
     public async Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default)
@@ -75,7 +79,7 @@ public class AccountingService : IAccountingService
         // Payment collection rollup. Collected cash remains historical; active receivables (outstanding
         // and overdue) are limited to current leases so old fixed-term lease balances do not become
         // dashboard/Money TODOs after the lease ended without an extension.
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var collectedRaw = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
@@ -146,7 +150,7 @@ public class AccountingService : IAccountingService
 
     public async Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var last30Start = now.AddDays(-30);
 
@@ -250,7 +254,7 @@ public class AccountingService : IAccountingService
 
     public async Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
         // payments, and find the oldest past-due due date — the single source of truth for "behind".
@@ -830,7 +834,7 @@ public class AccountingService : IAccountingService
 
     public async Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default)
     {
-        var generatedAt = DateTime.UtcNow;
+        var generatedAt = _timeProvider.UtcNow();
 
         var ledgerRows = await ReportLedgerQuery(portfolioId)
             .OrderByDescending(l => l.Date)
@@ -1270,7 +1274,7 @@ public class AccountingService : IAccountingService
     public async Task<YearEndPacketData> GetYearEndPacketDataAsync(
         int portfolioId, int year, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // ── Portfolio header ────────────────────────────────────────────────────────────────────
         var portfolio = await _db.Portfolios

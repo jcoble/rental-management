@@ -193,9 +193,11 @@ public class AccountingConnectionServiceTests : IDisposable
             _dp, providerResolver, settingsResolver, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
             _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
+            TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             _ctx.Db, _dp, providerResolver, settingsResolver, importService,
+            TimeProvider.System,
             NullLogger<AccountingConnectionService>.Instance);
     }
 

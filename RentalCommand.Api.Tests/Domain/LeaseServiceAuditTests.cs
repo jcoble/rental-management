@@ -28,7 +28,8 @@ public sealed class LeaseServiceAuditTests : IDisposable
             Mock.Of<IFileStorage>(),
             Mock.Of<ILeaseAgreementPdfGenerator>(),
             new AuditTrailService(_ctx.Db, new AuditScope()),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

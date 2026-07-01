@@ -42,7 +42,7 @@ public class PaymentServiceTests : IDisposable
 
         _sut = new PaymentService(_db, new NoopDataUpdateService(),
             new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            _files);
+            _files, TimeProvider.System);
     }
 
     public void Dispose()
