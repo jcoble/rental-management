@@ -591,11 +591,15 @@ public class ReportsService : IReportsService
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee || p.PaymentType == PaymentType.ApplicationFee) &&
                 (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
 
         if (propertyFilter is not null)
-            incomeQuery = incomeQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
+            // Lease-tied income scopes by the lease's property; a lease-less app fee by its own PropertyId.
+            incomeQuery = incomeQuery.Where(p =>
+                p.LeaseId != null
+                    ? propertyFilter.Contains(p.Lease!.PropertyId)
+                    : (p.PropertyId != null && propertyFilter.Contains(p.PropertyId.Value)));
 
         var incomeByMonth = (await incomeQuery
             .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
@@ -695,9 +699,8 @@ public class ReportsService : IReportsService
                     .Where(pay =>
                         pay.PortfolioId == portfolioId &&
                         (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
-                        (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee) &&
-                        pay.Lease != null &&
-                        pay.Lease.PropertyId == p.Id &&
+                        (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee || pay.PaymentType == PaymentType.ApplicationFee) &&
+                        (pay.LeaseId != null ? pay.Lease!.PropertyId : pay.PropertyId) == p.Id &&
                         (pay.PaidDate ?? pay.DueDate) >= from && (pay.PaidDate ?? pay.DueDate) <= to)
                     .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial ? (pay.AmountPaid ?? 0m) : pay.Amount)) ?? 0m,
                 OperatingExpenses = _db.Expenses
