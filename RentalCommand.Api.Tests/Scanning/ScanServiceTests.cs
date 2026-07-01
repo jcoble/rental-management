@@ -1555,7 +1555,7 @@ public class ScanServiceTests : IDisposable
         public Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
-        public Task<LeaseLedgerResponse?> GetLedgerAsync(int portfolioId, int id, int? restrictToTenantId = null, CancellationToken ct = default)
+        public Task<LeaseLedgerResponse?> GetLedgerAsync(int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default)
