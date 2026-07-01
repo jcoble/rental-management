@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -25,6 +26,7 @@ public class IdentitySeeder
     private readonly SeedSettings _settings;
     private readonly ITenantPortalProvisioningService _portalProvisioning;
     private readonly ILogger<IdentitySeeder> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public IdentitySeeder(
         UserManager<ApplicationUser> userManager,
@@ -32,7 +34,8 @@ public class IdentitySeeder
         RentalCommandDbContext dbContext,
         IOptions<SeedSettings> settings,
         ITenantPortalProvisioningService portalProvisioning,
-        ILogger<IdentitySeeder> logger)
+        ILogger<IdentitySeeder> logger,
+        TimeProvider timeProvider)
     {
         _userManager = userManager;
         _roleManager = roleManager;
@@ -40,6 +43,7 @@ public class IdentitySeeder
         _settings = settings.Value;
         _portalProvisioning = portalProvisioning;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task SeedAsync(CancellationToken ct = default)
@@ -106,7 +110,7 @@ public class IdentitySeeder
             return existing;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var portfolio = new Portfolio
         {
             Name = _settings.PortfolioName,
@@ -131,7 +135,7 @@ public class IdentitySeeder
             return;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         var admin = new ApplicationUser
         {
@@ -197,7 +201,7 @@ public class IdentitySeeder
         if (accountExists)
             return;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         _dbContext.UserAccounts.Add(new UserAccount
         {
             PortfolioId  = portfolioId,

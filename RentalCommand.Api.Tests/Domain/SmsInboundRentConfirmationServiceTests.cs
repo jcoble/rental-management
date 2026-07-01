@@ -27,7 +27,8 @@ public class SmsInboundRentConfirmationServiceTests : IDisposable
         Mock.Of<IAuditTrailService>(),
         Mock.Of<IMessagePublisher>(),
         Mock.Of<ILlmProvider>(),
-        Mock.Of<ILogger<SmsInboundRentConfirmationService>>());
+        Mock.Of<ILogger<SmsInboundRentConfirmationService>>(),
+        TimeProvider.System);
 
     [Fact]
     public async Task HandleAsync_YesFromTenantPhone_MarksOldestUnpaidRentPaid()

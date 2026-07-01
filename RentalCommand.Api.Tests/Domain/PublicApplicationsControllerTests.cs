@@ -61,7 +61,8 @@ public class PublicApplicationsControllerTests : IDisposable
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
             new NoopTenantPortalProvisioningService(),
-            NullLogger<ApplicationService>.Instance);
+            NullLogger<ApplicationService>.Instance,
+            TimeProvider.System);
         var uploadSettings = Options.Create(new UploadSettings
         {
             MaxFileSizeBytes = 10_000_000,

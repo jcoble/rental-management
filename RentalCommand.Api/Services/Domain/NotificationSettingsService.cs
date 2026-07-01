@@ -7,6 +7,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -20,15 +21,18 @@ public sealed class NotificationSettingsService : INotificationSettingsService
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly IReadOnlyDictionary<SmsProviderKey, ISmsProvider> _smsProviders;
+    private readonly TimeProvider _timeProvider;
 
     public NotificationSettingsService(
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
-        IEnumerable<ISmsProvider> smsProviders)
+        IEnumerable<ISmsProvider> smsProviders,
+        TimeProvider timeProvider)
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.NotificationSettings.v1");
         _smsProviders = smsProviders.ToDictionary(p => p.Key, p => p);
+        _timeProvider = timeProvider;
     }
 
     public async Task<NotificationSettingsResponse> GetAdminAsync(int portfolioId, CancellationToken ct = default)
@@ -41,7 +45,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
     public async Task<NotificationSettingsResponse> UpdateAsync(int portfolioId, UpdateNotificationSettingsRequest request, CancellationToken ct = default)
     {
         var row = await GetOrCreateAsync(portfolioId, ct);
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         row.EnableRentCharges = request.EnableRentCharges;
         row.EnableLateFees = request.EnableLateFees;
@@ -195,7 +199,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         if (row is not null)
             return row;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         if (_db.Database.IsNpgsql())
         {

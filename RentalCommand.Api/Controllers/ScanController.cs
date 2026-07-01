@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
@@ -21,6 +22,7 @@ public class ScanController : ManagementControllerBase
     private readonly IScanService _scan;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
+    private readonly TimeProvider _timeProvider;
 
     // Content types we trust to render inline (non-active: no script execution). Anything else
     // is forced to download as octet-stream so an uploaded html/svg/etc. can't run on our origin.
@@ -39,11 +41,12 @@ public class ScanController : ManagementControllerBase
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
     private const int MaxBatchFiles = 100;
 
-    public ScanController(IScanService scan, RentalCommandDbContext db, IFileStorage files)
+    public ScanController(IScanService scan, RentalCommandDbContext db, IFileStorage files, TimeProvider timeProvider)
     {
         _scan = scan;
         _db = db;
         _files = files;
+        _timeProvider = timeProvider;
     }
 
     // -------------------------------------------------------------------------
@@ -144,7 +147,7 @@ public class ScanController : ManagementControllerBase
             TargetEntityType = target,
             Status = ScanBatchStatus.Processing,
             FileCount = payloads.Count,
-            CreatedAtUtc = DateTime.UtcNow,
+            CreatedAtUtc = _timeProvider.UtcNow(),
         };
         _db.ScanBatches.Add(batch);
         await _db.SaveChangesAsync(ct);

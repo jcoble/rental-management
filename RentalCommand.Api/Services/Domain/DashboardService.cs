@@ -4,6 +4,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,11 +14,13 @@ public class DashboardService : IDashboardService
 {
     private readonly RentalCommandDbContext _db;
     private readonly AuditDescriber _auditDescriber;
+    private readonly TimeProvider _timeProvider;
 
-    public DashboardService(RentalCommandDbContext db, AuditDescriber auditDescriber)
+    public DashboardService(RentalCommandDbContext db, AuditDescriber auditDescriber, TimeProvider timeProvider)
     {
         _db = db;
         _auditDescriber = auditDescriber;
+        _timeProvider = timeProvider;
     }
 
     public async Task<DashboardResponse?> GetDashboardAsync(int portfolioId, CancellationToken ct = default)
@@ -30,7 +33,7 @@ public class DashboardService : IDashboardService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var nextMonthStart = monthStart.AddMonths(1);
         var soonCutoff = now.AddDays(60);

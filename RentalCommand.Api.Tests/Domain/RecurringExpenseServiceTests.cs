@@ -24,7 +24,7 @@ public class RecurringExpenseServiceTests : IDisposable
 
     public RecurringExpenseServiceTests()
     {
-        _sut = new RecurringExpenseService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new RecurringExpenseService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

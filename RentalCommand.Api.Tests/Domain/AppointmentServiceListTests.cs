@@ -22,7 +22,7 @@ public class AppointmentServiceListTests : IDisposable
     public AppointmentServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new AppointmentService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new AppointmentService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

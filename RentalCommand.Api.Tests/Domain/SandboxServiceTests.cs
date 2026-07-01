@@ -22,10 +22,10 @@ public class SandboxServiceTests : IDisposable
 
     private SandboxService BuildService()
     {
-        var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance);
+        var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance, TimeProvider.System);
         var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
-            _ctx.Db, NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance);
-        return new SandboxService(_ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance);
+            _ctx.Db, NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance, TimeProvider.System);
+        return new SandboxService(_ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System);
     }
 
     // -----------------------------------------------------------------------

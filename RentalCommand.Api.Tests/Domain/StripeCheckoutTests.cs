@@ -184,7 +184,8 @@ public class StripeCheckoutTests : IDisposable
             _ctx.Db,
             Options.Create(config),
             new SandboxGuard(_ctx.Db),
-            NullLogger<StripePaymentService>.Instance);
+            NullLogger<StripePaymentService>.Instance,
+            TimeProvider.System);
     }
 
     private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int tenantId, decimal amount = 1000m)

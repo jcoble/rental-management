@@ -10,6 +10,7 @@ using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
@@ -30,19 +31,22 @@ public class AdminUsersController : ManagementControllerBase
     private readonly IAuditTrailService _audit;
     private readonly IAuthEmailSender _authEmailSender;
     private readonly ILogger<AdminUsersController> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public AdminUsersController(
         UserManager<ApplicationUser> userManager,
         RentalCommandDbContext db,
         IAuditTrailService audit,
         IAuthEmailSender authEmailSender,
-        ILogger<AdminUsersController> logger)
+        ILogger<AdminUsersController> logger,
+        TimeProvider timeProvider)
     {
         _userManager = userManager;
         _db = db;
         _audit = audit;
         _authEmailSender = authEmailSender;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -157,7 +161,7 @@ public class AdminUsersController : ManagementControllerBase
             }
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var passwordToUse = !string.IsNullOrWhiteSpace(request.TemporaryPassword)
             ? request.TemporaryPassword
             : GenerateTemporaryPassword();
@@ -318,7 +322,7 @@ public class AdminUsersController : ManagementControllerBase
         // Update the domain UserAccount.
         var oldRole = account.Role;
         account.Role = request.Role;
-        account.UpdatedAt = DateTime.UtcNow;
+        account.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,
@@ -390,7 +394,7 @@ public class AdminUsersController : ManagementControllerBase
 
         var oldIsActive = account.IsActive;
         account.IsActive = request.IsActive;
-        account.UpdatedAt = DateTime.UtcNow;
+        account.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         await _audit.LogAsync(
             portfolioId,

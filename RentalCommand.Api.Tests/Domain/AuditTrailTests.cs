@@ -210,7 +210,7 @@ public sealed class AuditTrailTests : IDisposable
         expense.Amount = 250m;
         await _db.SaveChangesAsync(); // interceptor records a generic Updated twin: { Amount: 100 → 250 }
 
-        var sut = new AuditTrailService(_db, _scope);
+        var sut = new AuditTrailService(_db, _scope, TimeProvider.System);
         await sut.LogAsync(
             PortfolioId, "Expense", expense.Id, AuditLogOperation.Updated,
             oldValues: """{"Amount":100,"Status":"Pending"}""",

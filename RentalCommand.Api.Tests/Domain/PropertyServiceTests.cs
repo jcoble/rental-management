@@ -24,7 +24,7 @@ public class PropertyServiceTests : IDisposable
     public PropertyServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new PropertyService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new PropertyService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -168,7 +168,7 @@ public class PropertyServiceTests : IDisposable
         updated!.OwnerEntityId.Should().BeNull();
         _ctx.Db.Properties.Single(p => p.Id == property.Id).OwnerEntityId.Should().BeNull();
 
-        var ownerService = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        var ownerService = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
         (await ownerService.DeleteAsync(PortfolioId, owner.Id)).Should().BeTrue();
     }
 

@@ -55,7 +55,8 @@ public class VoiceIntakeServiceTests : IDisposable
             _llm.Object,
             _transcriber.Object,
             _storage.Object,
-            NullLogger<VoiceIntakeService>.Instance);
+            NullLogger<VoiceIntakeService>.Instance,
+            TimeProvider.System);
 
         var draft = await sut.CreateDraftAsync(
             portfolioId: 1,
@@ -93,7 +94,8 @@ public class VoiceIntakeServiceTests : IDisposable
             _llm.Object,
             _transcriber.Object,
             _storage.Object,
-            NullLogger<VoiceIntakeService>.Instance);
+            NullLogger<VoiceIntakeService>.Instance,
+            TimeProvider.System);
 
         var act = () => sut.CreateDraftAsync(
             portfolioId: 1,

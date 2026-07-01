@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.DataProtection;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -28,17 +29,20 @@ public sealed class AccountingTokenService
     private readonly IDataProtector _protector;
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingTokenService> _logger;
 
     public AccountingTokenService(
         IDataProtectionProvider dataProtection,
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
+        TimeProvider timeProvider,
         ILogger<AccountingTokenService> logger)
     {
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -93,7 +97,7 @@ public sealed class AccountingTokenService
                 connection.Status = AccountingConnectionStatus.Connected;
             }
 
-            connection.UpdatedAt = DateTime.UtcNow;
+            connection.UpdatedAt = _timeProvider.UtcNow();
             await db.SaveChangesAsync(ct);
 
             _logger.LogInformation(
@@ -112,7 +116,7 @@ public sealed class AccountingTokenService
         }
     }
 
-    private static async Task MarkNeedsReconnectAsync(
+    private async Task MarkNeedsReconnectAsync(
         RentalCommandDbContext db, AccountingConnection connection, string reason, CancellationToken ct)
     {
         connection.Status = AccountingConnectionStatus.NeedsReconnect;
@@ -120,7 +124,7 @@ public sealed class AccountingTokenService
         connection.RefreshTokenCipherText = null;
         connection.TokenExpiresAt = null;
         connection.LastError = reason;
-        connection.UpdatedAt = DateTime.UtcNow;
+        connection.UpdatedAt = _timeProvider.UtcNow();
         await db.SaveChangesAsync(ct);
     }
 

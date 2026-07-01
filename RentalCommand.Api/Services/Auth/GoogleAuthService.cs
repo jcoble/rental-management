@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -60,6 +61,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
     private readonly RentalCommandDbContext _db;
     private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<GoogleAuthService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
     private const string TokenInfoEndpoint = "https://oauth2.googleapis.com/tokeninfo";
@@ -71,7 +73,8 @@ public sealed class GoogleAuthService : IGoogleAuthService
         IOptions<GoogleAuthOptions> options,
         RentalCommandDbContext db,
         Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
-        ILogger<GoogleAuthService> logger)
+        ILogger<GoogleAuthService> logger,
+        TimeProvider timeProvider)
     {
         _userManager = userManager;
         _tokenService = tokenService;
@@ -80,6 +83,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         _db = db;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<GoogleAuthResult> AuthenticateAsync(string code, string redirectUri, CancellationToken ct = default)
@@ -170,6 +174,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         var roles = await _userManager.GetRolesAsync(user);
         var tokens = await _tokenService.GenerateTokensAsync(user, roles);
 
+        // Login timing stays on the REAL clock (auth/security tracking), never the simulation clock.
         user.LastLoginAt = DateTime.UtcNow;
         await _userManager.UpdateAsync(user);
 
@@ -309,7 +314,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
             Email = email,
             EmailConfirmed = true,
             DisplayName = displayName ?? email,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = _timeProvider.UtcNow()
         };
 
         var result = await _userManager.CreateAsync(user);
@@ -341,7 +346,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
             // 1) Empty portfolio with the choice pending — only if the user has none yet. No demo seed.
             if (user.PortfolioId == null)
             {
-                var now = DateTime.UtcNow;
+                var now = _timeProvider.UtcNow();
                 var portfolio = new Portfolio
                 {
                     Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
@@ -379,7 +384,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
             if (user.PortfolioId is int pid &&
                 !await _db.UserAccounts.AnyAsync(a => a.PortfolioId == pid && a.Email == user.Email))
             {
-                var ts = DateTime.UtcNow;
+                var ts = _timeProvider.UtcNow();
                 _db.UserAccounts.Add(new UserAccount
                 {
                     PortfolioId = pid,

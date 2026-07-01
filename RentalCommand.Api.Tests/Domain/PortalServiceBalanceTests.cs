@@ -19,7 +19,7 @@ public class PortalServiceBalanceTests : IDisposable
     public PortalServiceBalanceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new PortalService(_ctx.Db, new NoopLeaseQaService());
+        _sut = new PortalService(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

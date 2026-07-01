@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Scanning;
@@ -17,17 +18,20 @@ public sealed class ScanFileService : IScanFileService
     private readonly IFileStorage _storage;
     private readonly UploadSettings _settings;
     private readonly ILogger<ScanFileService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public ScanFileService(
         RentalCommandDbContext db,
         IFileStorage storage,
         IOptions<UploadSettings> settings,
-        ILogger<ScanFileService> logger)
+        ILogger<ScanFileService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _storage = storage;
         _settings = settings.Value;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<StoredFile> StoreAsync(
@@ -58,7 +62,7 @@ public sealed class ScanFileService : IScanFileService
             FileSize = bytes.Length,
             EntityType = targetEntityType,
             EntityId = null,
-            UploadedAt = DateTime.UtcNow
+            UploadedAt = _timeProvider.UtcNow()
         };
 
         _db.StoredFiles.Add(storedFile);

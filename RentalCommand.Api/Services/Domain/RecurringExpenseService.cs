@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,11 +14,13 @@ public class RecurringExpenseService : IRecurringExpenseService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public RecurringExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public RecurringExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -79,7 +82,7 @@ public class RecurringExpenseService : IRecurringExpenseService
             !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var start = request.StartDate.ToUtc();
         var entity = new RecurringExpense
         {
@@ -133,7 +136,7 @@ public class RecurringExpenseService : IRecurringExpenseService
         if (request.NextRunDate.HasValue) entity.NextRunDate = request.NextRunDate.Value.ToUtc();
         if (request.Active.HasValue) entity.Active = request.Active.Value;
         if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -149,7 +152,7 @@ public class RecurringExpenseService : IRecurringExpenseService
         if (entity == null)
             return false;
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

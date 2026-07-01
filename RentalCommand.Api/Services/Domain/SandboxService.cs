@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -11,17 +12,20 @@ public sealed class SandboxService : ISandboxService
     private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly Auth.DemoDataSeeder _demoSeeder;
     private readonly ILogger<SandboxService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public SandboxService(
         RentalCommandDbContext db,
         ISelfOwnerProvisioner selfOwnerProvisioner,
         Auth.DemoDataSeeder demoSeeder,
-        ILogger<SandboxService> logger)
+        ILogger<SandboxService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _demoSeeder = demoSeeder;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<SandboxStateResponse?> GetStateAsync(int portfolioId, CancellationToken ct = default)
@@ -58,7 +62,7 @@ public sealed class SandboxService : ISandboxService
 
         portfolio.IsSandbox = false;
         portfolio.SandboxSeededAtUtc = null;
-        portfolio.UpdatedAt = DateTime.UtcNow;
+        portfolio.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         // The wipe removed the demo owners, so the fresh Live portfolio has none. Re-create the primary
@@ -94,7 +98,7 @@ public sealed class SandboxService : ISandboxService
             return ToState(portfolio);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         if (choice == OnboardingChoice.Sandbox)
         {

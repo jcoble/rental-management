@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -19,19 +20,22 @@ public class AccountingController : ManagementControllerBase
     private readonly IOwnerStatementService _ownerStatements;
     private readonly IOwnerStatementEmailService _ownerStatementEmail;
     private readonly IReportsService _reports;
+    private readonly TimeProvider _timeProvider;
 
     public AccountingController(
         IAccountingService service,
         IScheduleEService scheduleE,
         IOwnerStatementService ownerStatements,
         IOwnerStatementEmailService ownerStatementEmail,
-        IReportsService reports)
+        IReportsService reports,
+        TimeProvider timeProvider)
     {
         _service = service;
         _scheduleE = scheduleE;
         _ownerStatements = ownerStatements;
         _ownerStatementEmail = ownerStatementEmail;
         _reports = reports;
+        _timeProvider = timeProvider;
     }
 
     /// <summary>
@@ -60,7 +64,7 @@ public class AccountingController : ManagementControllerBase
         [FromQuery] int? propertyId,
         CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year - 1;
+        var reportYear = year ?? _timeProvider.UtcNow().Year - 1;
         var result = await _reports.GetYearEndAsync(GetPortfolioId(), reportYear, propertyId, ct);
         return Ok(result);
     }
@@ -131,7 +135,7 @@ public class AccountingController : ManagementControllerBase
         [FromQuery] int? propertyId,
         CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year;
+        var reportYear = year ?? _timeProvider.UtcNow().Year;
         var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, propertyId, ct);
         return Ok(report);
     }
@@ -146,7 +150,7 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     public async Task<IActionResult> ScheduleEExport([FromQuery] int? year, CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year;
+        var reportYear = year ?? _timeProvider.UtcNow().Year;
         var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, ct: ct);
 
         var csv = BuildCsv(report);
@@ -165,7 +169,7 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     public async Task<IActionResult> YearEndPacket([FromQuery] int? year, CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year - 1;
+        var reportYear = year ?? _timeProvider.UtcNow().Year - 1;
         var pdf = await _service.GetYearEndPacketAsync(GetPortfolioId(), reportYear, ct);
         // Inline so it previews in the browser; the filename still applies on download/save.
         return File(pdf, "application/pdf", $"year-end-{reportYear}.pdf");
@@ -182,7 +186,7 @@ public class AccountingController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<OwnerStatementSummary>>> OwnerStatements(
         [FromQuery] int? year, CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year;
+        var reportYear = year ?? _timeProvider.UtcNow().Year;
         var summaries = await _ownerStatements.ListOwnersWithNetAsync(GetPortfolioId(), reportYear, ct);
         return Ok(summaries);
     }
@@ -198,7 +202,7 @@ public class AccountingController : ManagementControllerBase
     public async Task<ActionResult<OwnerStatementReport>> OwnerStatement(
         [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year;
+        var reportYear = year ?? _timeProvider.UtcNow().Year;
         var report = await _ownerStatements.GetForOwnerAsync(GetPortfolioId(), ownerId, reportYear, ct);
         if (report is null)
             return NotFound();
@@ -217,7 +221,7 @@ public class AccountingController : ManagementControllerBase
     public async Task<IActionResult> OwnerStatementExport(
         [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year;
+        var reportYear = year ?? _timeProvider.UtcNow().Year;
         var report = await _ownerStatements.GetForOwnerAsync(GetPortfolioId(), ownerId, reportYear, ct);
         if (report is null)
             return NotFound();
@@ -240,7 +244,7 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(object), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> EmailOwnerStatement(int ownerId, [FromQuery] int? year, CancellationToken ct)
     {
-        var reportYear = year ?? DateTime.UtcNow.Year;
+        var reportYear = year ?? _timeProvider.UtcNow().Year;
         var result = await _ownerStatementEmail.SendOwnerStatementAsync(GetPortfolioId(), ownerId, reportYear, ct);
         if (!result.Sent)
             return BadRequest(new { error = result.Reason });

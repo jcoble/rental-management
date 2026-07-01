@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -104,6 +105,7 @@ public class AuthService : IAuthService
     private readonly IAuditTrailService _audit;
     private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<AuthService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -114,7 +116,8 @@ public class AuthService : IAuthService
         RentalCommandDbContext db,
         IAuditTrailService audit,
         Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        TimeProvider timeProvider)
     {
         _userManager = userManager;
         _signInManager = signInManager;
@@ -125,6 +128,7 @@ public class AuthService : IAuthService
         _audit = audit;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null)
@@ -168,6 +172,7 @@ public class AuthService : IAuthService
             return AuthResult.Fail("EMAIL_NOT_VERIFIED: Please verify your email address before logging in.");
         }
 
+        // Login timing stays on the REAL clock (auth/security tracking), never the simulation clock.
         user.LastLoginAt = DateTime.UtcNow;
         await _userManager.UpdateAsync(user);
 
@@ -196,7 +201,7 @@ public class AuthService : IAuthService
             Email = request.Email,
             EmailConfirmed = false, // email-confirm gate
             DisplayName = request.DisplayName,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = _timeProvider.UtcNow()
         };
 
         var createResult = await _userManager.CreateAsync(user, request.Password);
@@ -236,7 +241,7 @@ public class AuthService : IAuthService
     {
         try
         {
-            var now = DateTime.UtcNow;
+            var now = _timeProvider.UtcNow();
             var portfolio = new Portfolio
             {
                 Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",

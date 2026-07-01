@@ -28,13 +28,15 @@ public class VendorDispatchServiceTests : IDisposable
         Mock.Of<IDataUpdateService>(),
         Mock.Of<IAuditTrailService>(),
         (publisher ?? new Mock<IMessagePublisher>()).Object,
-        Mock.Of<ILogger<VendorDispatchService>>());
+        Mock.Of<ILogger<VendorDispatchService>>(),
+        TimeProvider.System);
 
     private SmsInboundVendorDoneService CreateDoneSut() => new(
         _ctx.Db,
         Mock.Of<IDataUpdateService>(),
         Mock.Of<IAuditTrailService>(),
-        Mock.Of<ILogger<SmsInboundVendorDoneService>>());
+        Mock.Of<ILogger<SmsInboundVendorDoneService>>(),
+        TimeProvider.System);
 
     [Fact]
     public async Task DispatchAsync_CreatesOpenDispatch_AndEnqueuesSms()

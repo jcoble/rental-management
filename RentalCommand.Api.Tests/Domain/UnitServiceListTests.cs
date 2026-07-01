@@ -23,7 +23,7 @@ public class UnitServiceListTests : IDisposable
     public UnitServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>());
+        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -188,7 +188,7 @@ public class UnitServiceListTests : IDisposable
         _commands.Clear();
         var list = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery());
         var listSql = _commands.ToList();
-        var dashboard = await new UnitDashboardService(_ctx.Db, new AuditDescriber(), new AuditDiffBuilder())
+        var dashboard = await new UnitDashboardService(_ctx.Db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System)
             .GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         var row = list.Items.Should().ContainSingle().Subject;

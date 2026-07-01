@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -23,12 +24,14 @@ public class UnitDashboardService : IUnitDashboardService
     private readonly RentalCommandDbContext _db;
     private readonly AuditDescriber _auditDescriber;
     private readonly AuditDiffBuilder _auditDiff;
+    private readonly TimeProvider _timeProvider;
 
-    public UnitDashboardService(RentalCommandDbContext db, AuditDescriber auditDescriber, AuditDiffBuilder auditDiff)
+    public UnitDashboardService(RentalCommandDbContext db, AuditDescriber auditDescriber, AuditDiffBuilder auditDiff, TimeProvider timeProvider)
     {
         _db = db;
         _auditDescriber = auditDescriber;
         _auditDiff = auditDiff;
+        _timeProvider = timeProvider;
     }
 
     public async Task<UnitDashboardResponse?> GetDashboardAsync(int portfolioId, int unitId, CancellationToken ct = default)
@@ -45,7 +48,7 @@ public class UnitDashboardService : IUnitDashboardService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // The unit's lease ids stay as a SQL subquery anywhere they are reused below. Do not materialize
         // this list in API memory; payment/document filtering must remain DB-side even for long-lived units.

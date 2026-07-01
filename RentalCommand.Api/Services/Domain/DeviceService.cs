@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -8,10 +9,12 @@ namespace RentalCommand.Api.Services.Domain;
 public class DeviceService : IDeviceService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public DeviceService(RentalCommandDbContext db)
+    public DeviceService(RentalCommandDbContext db, TimeProvider timeProvider)
     {
         _db = db;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
@@ -20,7 +23,7 @@ public class DeviceService : IDeviceService
         var existing = await _db.DeviceTokens
             .FirstOrDefaultAsync(d => d.Token == token, ct);
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         if (existing is not null)
         {

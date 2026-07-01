@@ -4,6 +4,7 @@ using RentalCommand.Api.Scanning;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -14,12 +15,14 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     private readonly RentalCommandDbContext _db;
     private readonly IDocumentTemplateFieldCatalog _catalog;
     private readonly IFileStorage _files;
+    private readonly TimeProvider _timeProvider;
 
-    public DocumentTemplateService(RentalCommandDbContext db, IDocumentTemplateFieldCatalog catalog, IFileStorage files)
+    public DocumentTemplateService(RentalCommandDbContext db, IDocumentTemplateFieldCatalog catalog, IFileStorage files, TimeProvider timeProvider)
     {
         _db = db;
         _catalog = catalog;
         _files = files;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
@@ -124,7 +127,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(validation);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var template = new DocumentTemplate
         {
             PortfolioId = portfolioId,
@@ -185,7 +188,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         var storageKey = await _files.UploadAsync(content, safeFileName, contentType, ct);
         try
         {
-            var now = DateTime.UtcNow;
+            var now = _timeProvider.UtcNow();
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
             var stored = new StoredFile
@@ -263,7 +266,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         {
             template.Status = request.Status.Value;
             template.ArchivedAtUtc = request.Status.Value == DocumentTemplateStatus.Archived
-                ? DateTime.UtcNow
+                ? _timeProvider.UtcNow()
                 : null;
         }
         if (request.RenderMode.HasValue) template.RenderMode = request.RenderMode.Value;
@@ -273,7 +276,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         if (request.DraftHtml is not null) template.DraftHtml = request.DraftHtml;
         if (request.DefaultForPortfolio.HasValue) template.DefaultForPortfolio = request.DefaultForPortfolio.Value;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         template.UpdatedAtUtc = now;
         template.Version++;
 
@@ -584,10 +587,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         return null;
     }
 
-    private static void BumpTemplateVersion(DocumentTemplate template)
+    private void BumpTemplateVersion(DocumentTemplate template)
     {
         template.Version++;
-        template.UpdatedAtUtc = DateTime.UtcNow;
+        template.UpdatedAtUtc = _timeProvider.UtcNow();
     }
 
     private static string? NormalizeNullable(string? value) =>

@@ -5,6 +5,7 @@ using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Esign;
@@ -32,17 +33,20 @@ public sealed class NativeEsignProvider : IEsignProvider
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IConfiguration _configuration;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeEsignProvider> _logger;
 
     public NativeEsignProvider(
         RentalCommandDbContext db,
         IFileStorage storage,
         IConfiguration configuration,
+        TimeProvider timeProvider,
         ILogger<NativeEsignProvider> logger)
     {
         _db = db;
         _storage = storage;
         _configuration = configuration;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -216,7 +220,7 @@ use electronic records and signatures (E-SIGN / UETA).
             PortfolioId = request.PortfolioId,
             MessageType = "email",
             Payload = payload,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
         });
         await _db.SaveChangesAsync(ct);
     }
@@ -239,7 +243,7 @@ use electronic records and signatures (E-SIGN / UETA).
             FileSize = bytes.Length,
             EntityType = entityType,
             EntityId = leaseId,
-            UploadedAt = DateTime.UtcNow,
+            UploadedAt = _timeProvider.UtcNow(),
         };
 
         try

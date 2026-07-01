@@ -404,7 +404,7 @@ public class ScanBatchControllerTests : IDisposable
     private ScanController CreateController(IScanService scan)
     {
         var files = Mock.Of<IFileStorage>();
-        return new ScanController(scan, _db, files)
+        return new ScanController(scan, _db, files, TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {

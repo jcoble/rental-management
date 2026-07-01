@@ -147,7 +147,7 @@ public sealed class UnitCommandCenterAuditTests : IDisposable
             _db);
 
     private UnitDashboardService CreateDashboardService() =>
-        new(_db, new AuditDescriber(), new AuditDiffBuilder());
+        new(_db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System);
 
     private IServiceProvider CreateServices()
     {
@@ -156,6 +156,7 @@ public sealed class UnitCommandCenterAuditTests : IDisposable
         services.AddSingleton<RentalCommandDbContext>(_db);
         services.AddScoped<IAuditScope, AuditScope>();
         services.AddScoped<IAuditTrailService, AuditTrailService>();
+        services.AddSingleton(TimeProvider.System);
         return services.BuildServiceProvider();
     }
 }

@@ -6,6 +6,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -44,19 +45,22 @@ public class WorkOrderService : IWorkOrderService
     private readonly IMessagePublisher _publisher;
     private readonly IFileStorage _files;
     private readonly ILogger<WorkOrderService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public WorkOrderService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IMessagePublisher publisher,
         IFileStorage files,
-        ILogger<WorkOrderService> logger)
+        ILogger<WorkOrderService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _publisher = publisher;
         _files = files;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
@@ -262,7 +266,7 @@ public class WorkOrderService : IWorkOrderService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new WorkOrder
         {
             PortfolioId = portfolioId,
@@ -465,7 +469,7 @@ public class WorkOrderService : IWorkOrderService
         }
         if (request.Status.HasValue) entity.Status = request.Status.Value;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
         if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtcDateTime();
@@ -589,8 +593,8 @@ public class WorkOrderService : IWorkOrderService
 
         // Soft-delete: preserve the maintenance record (consistent with the other entities +
         // keeps an audit trail). The global query filter hides it from all reads.
-        entity.DeletedAt = DateTime.UtcNow;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
+        entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

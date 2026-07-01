@@ -6,6 +6,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -20,17 +21,20 @@ public class ConversationService : IConversationService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFairHousingReviewService _fairHousing;
     private readonly ILogger<ConversationService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public ConversationService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IFairHousingReviewService fairHousing,
-        ILogger<ConversationService> logger)
+        ILogger<ConversationService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _fairHousing = fairHousing;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // ===========================================================================================
@@ -188,7 +192,7 @@ public class ConversationService : IConversationService
         await EnforceFairHousingGateAsync(
             portfolioId, tenantId, conversationId: null, subject, body, acknowledgedFairHousingReview, ct);
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var preview = Preview(body);
 
         var conversation = new Conversation
@@ -258,7 +262,7 @@ public class ConversationService : IConversationService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
@@ -353,7 +357,7 @@ public class ConversationService : IConversationService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var conversation = new Conversation
         {
             PortfolioId = portfolioId,
@@ -413,7 +417,7 @@ public class ConversationService : IConversationService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
 

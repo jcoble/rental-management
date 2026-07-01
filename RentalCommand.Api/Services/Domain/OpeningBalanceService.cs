@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,11 +14,13 @@ public class OpeningBalanceService : IOpeningBalanceService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public OpeningBalanceService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public OpeningBalanceService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<OpeningBalanceResponse>> ListAsync(int portfolioId, int? leaseId, CancellationToken ct = default)
@@ -66,7 +69,7 @@ public class OpeningBalanceService : IOpeningBalanceService
             return (CreateOpeningBalanceResult.AlreadyExists, null);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new OpeningBalance
         {
             PortfolioId = portfolioId,
@@ -98,7 +101,7 @@ public class OpeningBalanceService : IOpeningBalanceService
         if (request.Amount.HasValue) entity.Amount = request.Amount.Value;
         if (request.AsOfDate.HasValue) entity.AsOfDate = request.AsOfDate.Value.ToUtc();
         if (request.Note != null) entity.Note = request.Note;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 

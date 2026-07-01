@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -24,17 +25,20 @@ public class NoticeDraftService : INoticeDraftService
     private readonly IConversationService _conversations;
     private readonly ILlmProvider _llm;
     private readonly ILogger<NoticeDraftService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public NoticeDraftService(
         RentalCommandDbContext db,
         IConversationService conversations,
         ILlmProvider llm,
-        ILogger<NoticeDraftService> logger)
+        ILogger<NoticeDraftService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _conversations = conversations;
         _llm = llm;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(
@@ -62,7 +66,7 @@ public class NoticeDraftService : INoticeDraftService
         GenerateNoticeDraftsRequest? request = null,
         CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var today = now.Date;
         var created = new List<NoticeDraft>();
 
@@ -290,7 +294,7 @@ public class NoticeDraftService : INoticeDraftService
 
         if (!string.IsNullOrWhiteSpace(request.Subject)) draft.Subject = request.Subject.Trim();
         if (!string.IsNullOrWhiteSpace(request.Body)) draft.Body = request.Body.Trim();
-        draft.UpdatedAt = DateTime.UtcNow;
+        draft.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
         return Map(draft);
     }
@@ -321,7 +325,7 @@ public class NoticeDraftService : INoticeDraftService
         if (conversation == null) return null;
 
         draft.Status = "Approved";
-        draft.ApprovedAt = DateTime.UtcNow;
+        draft.ApprovedAt = _timeProvider.UtcNow();
         draft.UpdatedAt = draft.ApprovedAt.Value;
         draft.ConversationId = conversation.Id;
         draft.ApprovedChannels = string.Join(",", channels);
@@ -336,7 +340,7 @@ public class NoticeDraftService : INoticeDraftService
         if (draft == null || draft.Status != "Draft") return null;
 
         draft.Status = "Dismissed";
-        draft.DismissedAt = DateTime.UtcNow;
+        draft.DismissedAt = _timeProvider.UtcNow();
         draft.UpdatedAt = draft.DismissedAt.Value;
         await _db.SaveChangesAsync(ct);
         return Map(draft);
