@@ -801,9 +801,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasKey(e => e.Id);
             entity.Property(e => e.MessageType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Payload).HasColumnType("jsonb");
+            entity.Property(e => e.DedupKey).HasMaxLength(200);
             entity.Property(e => e.Error).HasMaxLength(4000);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.SentAt);
+            // Idempotency lookup for producers that set DedupKey (e.g. daily briefing). Most rows have
+            // a null DedupKey, so a partial index keeps it tiny and serves AnyAsync(m => m.DedupKey == key).
+            entity.HasIndex(e => e.DedupKey)
+                  .HasDatabaseName("IX_OutboxMessages_DedupKey")
+                  .HasFilter("\"DedupKey\" IS NOT NULL");
             // Drain hot path (OutboxDispatchWorker): WHERE SentAt IS NULL AND RetryCount < 5
             // ORDER BY CreatedAt. A partial index over the unsent rows, ordered by CreatedAt, serves
             // both the filter and the sort without scanning/sorting the (ever-growing) sent rows.

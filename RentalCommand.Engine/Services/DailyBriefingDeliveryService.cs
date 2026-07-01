@@ -61,7 +61,8 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                 continue;
 
             var dateKey = localNow.Date.ToString("yyyy-MM-dd");
-            if (await AlreadyQueuedAsync(portfolio.Id, dateKey, ct))
+            var dedupKey = $"{Purpose}:{portfolio.Id}:{dateKey}";
+            if (await AlreadyQueuedAsync(dedupKey, ct))
                 continue;
 
             var briefing = await _briefing.ComposeAsync(portfolio.Id, ct);
@@ -79,6 +80,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                 {
                     PortfolioId = portfolio.Id,
                     MessageType = "sms",
+                    DedupKey = dedupKey,
                     Payload = JsonSerializer.Serialize(new
                     {
                         purpose = Purpose,
@@ -97,6 +99,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                 {
                     PortfolioId = portfolio.Id,
                     MessageType = "email",
+                    DedupKey = dedupKey,
                     Payload = JsonSerializer.Serialize(new
                     {
                         purpose = Purpose,
@@ -120,38 +123,10 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
         return queued;
     }
 
-    private async Task<bool> AlreadyQueuedAsync(int portfolioId, string dateKey, CancellationToken ct)
-    {
-        var payloads = await _db.OutboxMessages
-            .Where(m => m.PortfolioId == portfolioId && (m.MessageType == "sms" || m.MessageType == "email"))
-            .Select(m => m.Payload)
-            .ToListAsync(ct);
-
-        return payloads.Any(payload => IsDailyBriefingPayloadForDate(payload, dateKey));
-    }
-
-    private static bool IsDailyBriefingPayloadForDate(string? payload, string dateKey)
-    {
-        if (string.IsNullOrWhiteSpace(payload))
-            return false;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(payload);
-            var root = doc.RootElement;
-            return root.ValueKind == JsonValueKind.Object
-                   && root.TryGetProperty("purpose", out var purpose)
-                   && purpose.ValueKind == JsonValueKind.String
-                   && string.Equals(purpose.GetString(), Purpose, StringComparison.Ordinal)
-                   && root.TryGetProperty("date", out var date)
-                   && date.ValueKind == JsonValueKind.String
-                   && string.Equals(date.GetString(), dateKey, StringComparison.Ordinal);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
+    // Single indexed lookup on DedupKey — no payload scan, no in-memory JSON parse, bounded regardless
+    // of how many historical outbox rows the portfolio has accumulated.
+    private async Task<bool> AlreadyQueuedAsync(string dedupKey, CancellationToken ct) =>
+        await _db.OutboxMessages.AnyAsync(m => m.DedupKey == dedupKey, ct);
 
     private static DateTime ToPortfolioLocalTime(DateTime utcNow, string? timeZoneId)
     {
