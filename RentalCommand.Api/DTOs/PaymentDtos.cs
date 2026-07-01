@@ -10,7 +10,9 @@ public class PaymentResponse
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int LeaseId { get; set; }
+
+    /// <summary>The lease this payment is on; null for a lease-less payment (e.g. an application fee).</summary>
+    public int? LeaseId { get; set; }
 
     /// <summary>
     /// Unit the payment's lease is on; resolved DB-side via the lease join so the web client can route the

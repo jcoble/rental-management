@@ -7,7 +7,14 @@ public class Payment : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int LeaseId { get; set; }
+
+    /// <summary>
+    /// The lease this payment is charged against. Nullable so income can exist without a lease
+    /// (e.g. an application/screening fee recorded before any lease exists — see <see cref="ApplicationId"/>).
+    /// Lease-tied payments (Rent/LateFee/Utility) always set it; the accounting view and the Payment
+    /// global query filter both tolerate a null lease.
+    /// </summary>
+    public int? LeaseId { get; set; }
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
     public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
     public decimal Amount { get; set; }

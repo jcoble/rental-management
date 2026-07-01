@@ -1086,10 +1086,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(p => p.Payments)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+            // Optional lease (nullable FK): a lease-less payment (application fee) has LeaseId == null.
+            // SetNull (not Cascade) so deleting a lease never cascade-deletes historical payment/income rows.
             entity.HasOne(e => e.Lease)
                 .WithMany(l => l.Payments)
                 .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Expense>(entity =>
@@ -1772,7 +1774,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // ----------------------------------------------------------------------------------------
 
         // Dependents of Lease (Lease has `DeletedAt == null`). Payment is the H-4 root.
-        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        // A lease-less payment (LeaseId == null, e.g. an application/screening fee) has no lease to soft-check,
+        // so it is retained; a payment whose lease is soft-deleted is still hidden. Without the `e.Lease == null`
+        // branch EF emits an INNER JOIN and every lease-less payment silently vanishes from every query.
+        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.Lease == null || e.Lease.DeletedAt == null);
         modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<NoticeDraft>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);

@@ -330,7 +330,8 @@ public class AccountingService : IAccountingService
             .GroupBy(p => p.LeaseId)
             .Select(g => new PastDueLeaseGroup
             {
-                LeaseId = g.Key,
+                // Past-due payments are lease-scoped (ForCurrentLeaseAttention requires a live lease).
+                LeaseId = g.Key!.Value,
                 // A Partial past-due payment only owes its unpaid remainder (Amount − AmountPaid);
                 // Scheduled/Late owe in full. Summed SQL-side.
                 PastDueAmount = g.Sum(p =>
