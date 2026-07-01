@@ -1786,10 +1786,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // ----------------------------------------------------------------------------------------
 
         // Dependents of Lease (Lease has `DeletedAt == null`). Payment is the H-4 root.
-        // A lease-less payment (LeaseId == null, e.g. an application/screening fee) has no lease to soft-check,
-        // so it is retained; a payment whose lease is soft-deleted is still hidden. Without the `e.Lease == null`
-        // branch EF emits an INNER JOIN and every lease-less payment silently vanishes from every query.
-        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.Lease == null || e.Lease.DeletedAt == null);
+        // Keep a payment when it is lease-less (LeaseId == null — an application/screening fee) OR it has a
+        // LIVE lease. EF composes the Lease soft-delete query filter into the `e.Lease` navigation, so
+        // `e.Lease != null` is true only for a non-deleted lease; a soft-deleted lease's payments are still
+        // hidden. This mirrors the accounting view's `p."LeaseId" IS NULL OR l."Id" IS NOT NULL` guard. Do NOT
+        // use `e.Lease!.DeletedAt == null` here: adding the lease-less OR forces a LEFT JOIN, and on the
+        // no-match (soft-deleted) side `l."DeletedAt" IS NULL` is true, which would resurface those payments.
+        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.LeaseId == null || e.Lease != null);
         modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<NoticeDraft>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
