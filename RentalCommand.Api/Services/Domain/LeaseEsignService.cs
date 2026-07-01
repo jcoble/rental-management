@@ -7,6 +7,7 @@ using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -24,6 +25,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
     private readonly string _webBaseUrl;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<LeaseEsignService> _logger;
 
     public LeaseEsignService(
@@ -34,6 +36,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         IConfiguration configuration,
+        TimeProvider timeProvider,
         ILogger<LeaseEsignService> logger)
     {
         _db = db;
@@ -43,6 +46,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         _dataUpdate = dataUpdate;
         _audit = audit;
         _webBaseUrl = NormalizeWebBaseUrl(configuration["App:WebBaseUrl"]);
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -138,7 +142,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         {
             lease.Status = LeaseStatus.PendingSignature;
         }
-        lease.UpdatedAt = DateTime.UtcNow;
+        lease.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await SafeAsync("send audit", () => _audit.LogAsync(
@@ -319,7 +323,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         {
             lease.Status = LeaseStatus.Active;
         }
-        lease.UpdatedAt = DateTime.UtcNow;
+        lease.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await SafeAsync("signed audit", () => _audit.LogAsync(
@@ -364,7 +368,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         }
 
         lease.EsignStatus = EsignStatus.Declined;
-        lease.UpdatedAt = DateTime.UtcNow;
+        lease.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await SafeAsync("declined audit", () => _audit.LogAsync(
@@ -424,7 +428,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
             FileSize = signedBytes.Length,
             EntityType = EntityType,
             EntityId = lease.Id,
-            UploadedAt = DateTime.UtcNow,
+            UploadedAt = _timeProvider.UtcNow(),
         };
 
         try

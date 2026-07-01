@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -17,6 +18,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly IMessagePublisher _publisher;
     private readonly IKnowledgeBaseService _kb;
     private readonly ILogger<PortfolioQaService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     // Compact JSON serializer — no indentation to minimise tokens.
     private static readonly JsonSerializerOptions _json = new()
@@ -125,7 +127,8 @@ public class PortfolioQaService : IPortfolioQaService
         IAccountingService accounting,
         IMessagePublisher publisher,
         IKnowledgeBaseService kb,
-        ILogger<PortfolioQaService> logger)
+        ILogger<PortfolioQaService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _llm = llm;
@@ -133,6 +136,7 @@ public class PortfolioQaService : IPortfolioQaService
         _publisher = publisher;
         _kb = kb;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // ---------------------------------------------------------------------------
@@ -156,7 +160,7 @@ public class PortfolioQaService : IPortfolioQaService
             // No relevant docs matched — fall through to the data path so we still try to help.
         }
 
-        var today = DateTime.UtcNow.Date;
+        var today = _timeProvider.UtcNow().Date;
         var systemPrompt = $"""
             You are a helpful rental-portfolio assistant for portfolio {portfolioId}.
             Answer in plain English suitable for a non-technical landlord who manages their
@@ -628,7 +632,7 @@ public class PortfolioQaService : IPortfolioQaService
 
     private async Task<string> ListOverdueRentAsync(int portfolioId, CancellationToken ct)
     {
-        var today = DateTime.UtcNow;
+        var today = _timeProvider.UtcNow();
 
         var paymentRows = await _db.Payments
             .AsNoTracking()
@@ -778,7 +782,7 @@ public class PortfolioQaService : IPortfolioQaService
             catch { /* default: 60 */ }
         }
 
-        var today = DateTime.UtcNow.Date;
+        var today = _timeProvider.UtcNow().Date;
         var cutoff = today.AddDays(withinDays);
 
         var rows = await _db.Leases
@@ -931,7 +935,7 @@ public class PortfolioQaService : IPortfolioQaService
         }
 
         const int maxRows = 50;
-        var cutoff = DateTime.UtcNow.AddDays(-withinDays);
+        var cutoff = _timeProvider.UtcNow().AddDays(-withinDays);
 
         var expensesQuery = _db.Expenses
             .AsNoTracking()
@@ -990,7 +994,7 @@ public class PortfolioQaService : IPortfolioQaService
         }
 
         const int maxRows = 50;
-        var cutoff = DateTime.UtcNow.AddDays(-withinDays);
+        var cutoff = _timeProvider.UtcNow().AddDays(-withinDays);
 
         var paymentsQuery = _db.Payments
             .AsNoTracking()
@@ -1047,7 +1051,7 @@ public class PortfolioQaService : IPortfolioQaService
             catch { /* default: 14 */ }
         }
 
-        var now    = DateTime.UtcNow;
+        var now    = _timeProvider.UtcNow();
         var cutoff = now.AddDays(withinDays);
 
         // Appointments and inspections are merged, sorted, and capped in SQL; only enum/date

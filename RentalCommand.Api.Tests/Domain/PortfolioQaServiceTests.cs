@@ -358,7 +358,8 @@ public sealed class PortfolioQaServiceTests : IDisposable
             accounting ?? new ThrowingAccountingService(),
             new NoopMessagePublisher(),
             new EmptyKnowledgeBaseService(),
-            NullLogger<PortfolioQaService>.Instance);
+            NullLogger<PortfolioQaService>.Instance,
+            TimeProvider.System);
 
         var response = await sut.AskAsync(PortfolioId, question, history: null);
         response.ToolsUsed.Should().ContainSingle().Which.Should().Be(toolName);

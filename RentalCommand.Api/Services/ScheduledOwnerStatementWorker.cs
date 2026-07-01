@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services;
@@ -22,16 +23,19 @@ public sealed class ScheduledOwnerStatementWorker : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ScheduledOwnerStatementWorker> _logger;
+    private readonly TimeProvider _timeProvider;
 
     // Tracks the last UTC date on which the batch ran so we don't double-send within the same day.
     private DateOnly? _lastRunDate;
 
     public ScheduledOwnerStatementWorker(
         IServiceScopeFactory scopeFactory,
-        ILogger<ScheduledOwnerStatementWorker> logger)
+        ILogger<ScheduledOwnerStatementWorker> logger,
+        TimeProvider timeProvider)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -79,7 +83,7 @@ public sealed class ScheduledOwnerStatementWorker : BackgroundService
         if (!config.EmailOwnerStatementsMonthly)
             return;
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = DateOnly.FromDateTime(_timeProvider.UtcNow());
         var targetDay = Math.Clamp(config.StatementDayOfMonth, 1, 28);
 
         // Not the right day of month.

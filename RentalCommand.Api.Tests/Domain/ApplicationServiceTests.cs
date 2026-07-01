@@ -72,7 +72,7 @@ public class ApplicationServiceTests : IDisposable
 
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
-            new NoopTenantPortalProvisioningService(), NullLogger<ApplicationService>.Instance);
+            new NoopTenantPortalProvisioningService(), NullLogger<ApplicationService>.Instance, TimeProvider.System);
     }
 
     public void Dispose()

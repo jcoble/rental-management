@@ -89,7 +89,8 @@ public class ScanServiceTests : IDisposable
             _applications,
             _loans,
             _audit,
-            NullLogger<ScanService>.Instance);
+            NullLogger<ScanService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose()

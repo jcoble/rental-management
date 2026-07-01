@@ -55,8 +55,9 @@ public class WorkOrderStatusTimelineTests : IDisposable
             new NoopDataUpdateService(),
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
-            NullLogger<WorkOrderService>.Instance);
-        _portal = new PortalService(_db, new NoopLeaseQaService());
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System);
+        _portal = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
     public void Dispose()

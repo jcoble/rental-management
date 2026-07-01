@@ -5,6 +5,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -17,12 +18,14 @@ public class UnitService : IUnitService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
+    private readonly TimeProvider _timeProvider;
 
-    public UnitService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit)
+    public UnitService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _audit = audit;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -108,7 +111,7 @@ public class UnitService : IUnitService
         };
 
         var totalCount = await q.CountAsync(ct);
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         // One projection query: the health badges are correlated subqueries (grouped counts + the active
         // lease's scalars). No per-unit dashboard call, no N+1 — the only in-memory step is formatting the
@@ -283,7 +286,7 @@ public class UnitService : IUnitService
                 StatusCodes.Status409Conflict);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Unit
         {
             PropertyId = request.PropertyId,
@@ -352,7 +355,7 @@ public class UnitService : IUnitService
         ApplyValueIfChanged(request.MarketRent, entity.MarketRent, "MarketRent", v => entity.MarketRent = v);
         ApplyValueIfChanged(request.Status, entity.Status, "Status", v => entity.Status = v);
         ApplyStringIfChanged(request.Notes, entity.Notes, "Notes", v => entity.Notes = v);
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -423,7 +426,7 @@ public class UnitService : IUnitService
 
         await EnsureUnitHasNoHistoryAsync(portfolioId, id, ct);
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _audit.LogAsync(

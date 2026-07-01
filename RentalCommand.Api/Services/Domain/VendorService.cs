@@ -6,6 +6,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -20,19 +21,22 @@ public class VendorService : IVendorService
     private readonly IMessagePublisher _publisher;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<VendorService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public VendorService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IMessagePublisher publisher,
         IAuditTrailService audit,
-        ILogger<VendorService> logger)
+        ILogger<VendorService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _publisher = publisher;
         _audit = audit;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<VendorResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
@@ -91,7 +95,7 @@ public class VendorService : IVendorService
 
     public async Task<VendorResponse> CreateAsync(int portfolioId, CreateVendorRequest request, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Vendor
         {
             PortfolioId = portfolioId,
@@ -144,7 +148,7 @@ public class VendorService : IVendorService
         if (request.W9OnFile.HasValue) entity.W9OnFile = request.W9OnFile.Value;
         if (request.Preferred.HasValue) entity.Preferred = request.Preferred.Value;
         if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -180,7 +184,7 @@ public class VendorService : IVendorService
                 $"This vendor is assigned to {openWorkOrderCount} open {plural}; reassign or close them first.");
         }
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

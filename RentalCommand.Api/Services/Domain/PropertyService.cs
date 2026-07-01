@@ -4,6 +4,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -17,11 +18,13 @@ public class PropertyService : IPropertyService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public PropertyService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public PropertyService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
@@ -156,7 +159,7 @@ public class PropertyService : IPropertyService
                 .FirstOrDefaultAsync(ct);
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Property
         {
             PortfolioId = portfolioId,
@@ -231,7 +234,7 @@ public class PropertyService : IPropertyService
         }
 
         var previousCanonicalUnitNumber = CanonicalUnitNumber(entity.Name);
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
 
         if (request.OwnerId.HasValue) entity.OwnerId = request.OwnerId;
         if (request.ClearOwnerEntity)
@@ -348,7 +351,7 @@ public class PropertyService : IPropertyService
 
         await EnsurePropertyHasNoHistoryAsync(portfolioId, id, ct);
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         if (canonicalUnitToDelete != null)
         {
             canonicalUnitToDelete.DeletedAt = now;

@@ -5,6 +5,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -16,12 +17,14 @@ public sealed class UnitListingService : IUnitListingService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
+    private readonly TimeProvider _timeProvider;
 
-    public UnitListingService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit)
+    public UnitListingService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _audit = audit;
+        _timeProvider = timeProvider;
     }
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
@@ -50,7 +53,7 @@ public sealed class UnitListingService : IUnitListingService
         if (seed is null)
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var listing = await LoadTrackedListingAsync(portfolioId, unitId, ct);
         var isNew = listing is null;
         listing ??= new UnitListing
@@ -95,7 +98,7 @@ public sealed class UnitListingService : IUnitListingService
         if (seed is null)
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var listing = await LoadTrackedListingAsync(portfolioId, unitId, ct);
         var isNew = listing is null;
         listing ??= new UnitListing

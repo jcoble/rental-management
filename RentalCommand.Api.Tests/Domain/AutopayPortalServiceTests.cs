@@ -20,7 +20,7 @@ public class AutopayPortalServiceTests : IDisposable
 
     public AutopayPortalServiceTests()
     {
-        _sut = new PortalService(_ctx.Db, new NoopLeaseQaService());
+        _sut = new PortalService(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

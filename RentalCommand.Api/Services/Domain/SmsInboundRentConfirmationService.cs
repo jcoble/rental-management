@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -19,6 +20,7 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
     private readonly IMessagePublisher _publisher;
     private readonly ILlmProvider _llm;
     private readonly ILogger<SmsInboundRentConfirmationService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public SmsInboundRentConfirmationService(
         RentalCommandDbContext db,
@@ -26,7 +28,8 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
         IAuditTrailService audit,
         IMessagePublisher publisher,
         ILlmProvider llm,
-        ILogger<SmsInboundRentConfirmationService> logger)
+        ILogger<SmsInboundRentConfirmationService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -34,6 +37,7 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
         _publisher = publisher;
         _llm = llm;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<SmsInboundRentConfirmationResult> HandleAsync(
@@ -115,7 +119,7 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "tenant";
 
         var paidDateUtc = DateTime.SpecifyKind(receivedAtUtc, DateTimeKind.Utc);
-        var nowUtc = DateTime.UtcNow;
+        var nowUtc = _timeProvider.UtcNow();
 
         var oldValues = JsonSerializer.Serialize(new
         {

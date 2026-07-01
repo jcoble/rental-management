@@ -28,7 +28,7 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
     public RecurringMaintenanceTaskServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new RecurringMaintenanceTaskService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new RecurringMaintenanceTaskService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

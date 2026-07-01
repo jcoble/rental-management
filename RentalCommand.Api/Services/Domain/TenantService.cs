@@ -6,6 +6,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -20,17 +21,20 @@ public class TenantService : ITenantService
     private readonly IDataUpdateService _dataUpdate;
     private readonly ITenantPortalProvisioningService _portalProvisioning;
     private readonly ILogger<TenantService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public TenantService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         ITenantPortalProvisioningService portalProvisioning,
-        ILogger<TenantService> logger)
+        ILogger<TenantService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _portalProvisioning = portalProvisioning;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
@@ -211,7 +215,7 @@ public class TenantService : ITenantService
 
     public async Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Tenant
         {
             PortfolioId = portfolioId,
@@ -274,7 +278,7 @@ public class TenantService : ITenantService
         if (request.EmergencyContact != null) entity.EmergencyContact = request.EmergencyContact;
         if (request.DateOfBirth.HasValue) entity.DateOfBirth = request.DateOfBirth.ToUtc();
         if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -309,7 +313,7 @@ public class TenantService : ITenantService
                 "This tenant has an active lease; end or reassign it first.");
         }
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -14,11 +15,13 @@ public class LoanService : ILoanService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public LoanService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public LoanService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -76,7 +79,7 @@ public class LoanService : ILoanService
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var entity = new Loan
         {
             PortfolioId = portfolioId,
@@ -134,7 +137,7 @@ public class LoanService : ILoanService
         if (request.EscrowCoversInsurance.HasValue) entity.EscrowCoversInsurance = request.EscrowCoversInsurance.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 
@@ -157,7 +160,7 @@ public class LoanService : ILoanService
         if (entity == null)
             return false;
 
-        entity.DeletedAt = DateTime.UtcNow;
+        entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);

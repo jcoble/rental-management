@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -14,11 +15,13 @@ public class AppointmentService : IAppointmentService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly TimeProvider _timeProvider;
 
-    public AppointmentService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public AppointmentService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IReadOnlyList<AppointmentResponse>> ListAsync(int portfolioId, int? propertyId, int? tenantId, ListQuery query, CancellationToken ct = default)
@@ -147,7 +150,7 @@ public class AppointmentService : IAppointmentService
             return null;
         }
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var startUtc = request.ScheduledStart.ToUtc();
         var endUtc = request.ScheduledEnd.ToUtc();
         EnsureValidTimeRange(startUtc, endUtc);
@@ -212,7 +215,7 @@ public class AppointmentService : IAppointmentService
         // independently (e.g. moving only the start past a previously-set end).
         EnsureValidTimeRange(entity.ScheduledStart, entity.ScheduledEnd);
 
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = _timeProvider.UtcNow();
 
         await _db.SaveChangesAsync(ct);
 

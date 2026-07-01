@@ -22,7 +22,8 @@ public sealed class UnitListingServiceTests : IDisposable
         _sut = new UnitListingService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>());
+            Mock.Of<IAuditTrailService>(),
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

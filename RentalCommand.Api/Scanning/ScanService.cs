@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Scanning;
@@ -32,6 +33,7 @@ public sealed class ScanService : IScanService
     private readonly ILoanService _loans;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
+    private readonly TimeProvider _timeProvider;
     private static readonly Regex ExpenseUnitReferenceRegex = new(
         @"\b(?:unit|apt|apartment)\s*(?:#|:)?\s*([A-Za-z0-9][A-Za-z0-9-]*)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
@@ -54,7 +56,8 @@ public sealed class ScanService : IScanService
         IApplicationService applications,
         ILoanService loans,
         IAuditTrailService audit,
-        ILogger<ScanService> logger)
+        ILogger<ScanService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _files = files;
@@ -69,6 +72,7 @@ public sealed class ScanService : IScanService
         _loans = loans;
         _audit = audit;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     // -------------------------------------------------------------------------
@@ -108,7 +112,7 @@ public sealed class ScanService : IScanService
             portfolioId,
             targetEntityType,
             fileBytes,
-            $"scan-{DateTime.UtcNow:yyyyMMddHHmmss}",
+            $"scan-{_timeProvider.UtcNow():yyyyMMddHHmmss}",
             contentType,
             ct);
 
@@ -124,7 +128,7 @@ public sealed class ScanService : IScanService
                 portfolioId,
                 targetEntityType,
                 thumbBytes,
-                $"scan-thumb-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                $"scan-thumb-{_timeProvider.UtcNow():yyyyMMddHHmmss}",
                 "image/jpeg",
                 ct);
             thumbnailPath = thumbStored.FilePath;
@@ -138,7 +142,7 @@ public sealed class ScanService : IScanService
             ThumbnailPath = thumbnailPath,
             TargetEntityType = targetEntityType,
             Status = "Pending",
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
         };
 
         _db.ScanDrafts.Add(draft);
@@ -404,7 +408,7 @@ public sealed class ScanService : IScanService
             Amount      = expenseAmount,
             Subtotal    = dto.Subtotal,
             TaxAmount   = dto.Tax,
-            IncurredAt  = dto.TransactionDate ?? DateTime.UtcNow,
+            IncurredAt  = dto.TransactionDate ?? _timeProvider.UtcNow(),
             BillableToOwner = false,
             Notes       = dto.Notes,
             ReceiptData = receiptDataJson,
@@ -428,7 +432,7 @@ public sealed class ScanService : IScanService
         if (isPaid)
         {
             request.Status  = ExpenseStatus.Paid;
-            request.PaidAt  = dto.TransactionDate ?? DateTime.UtcNow;
+            request.PaidAt  = dto.TransactionDate ?? _timeProvider.UtcNow();
             request.DueDate = null;
         }
         else
@@ -514,7 +518,7 @@ public sealed class ScanService : IScanService
         if (matches.Count > 1)
             return null;
 
-        var now = DateTime.UtcNow;
+        var now = _timeProvider.UtcNow();
         var vendor = new Vendor
         {
             PortfolioId = portfolioId,
@@ -587,7 +591,7 @@ public sealed class ScanService : IScanService
             new[] { dto.PayerName, dto.Notes }
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
 
-        var paymentDate = dto.TransactionDate ?? DateTime.UtcNow;
+        var paymentDate = dto.TransactionDate ?? _timeProvider.UtcNow();
 
         var paymentRequest = new CreatePaymentRequest
         {
@@ -705,7 +709,7 @@ public sealed class ScanService : IScanService
             Category = string.IsNullOrWhiteSpace(fields.Category) ? "General" : fields.Category!,
             Priority = fields.Priority,
             Status = WorkOrderStatus.New,
-            RequestedAt = DateTime.UtcNow,
+            RequestedAt = _timeProvider.UtcNow(),
             EstimatedCost = fields.EstimatedCost,
             CreatedBy = userId.ToString(),
             // Keep the full scan extraction superset as jsonb extras.
@@ -847,7 +851,7 @@ public sealed class ScanService : IScanService
             return new ScanConfirmResult(false, null, "Monthly rent must be greater than zero");
 
         var leaseNumber = string.IsNullOrWhiteSpace(fields.LeaseNumber)
-            ? $"SCAN-{DateTime.UtcNow:yyyyMMddHHmmss}"
+            ? $"SCAN-{_timeProvider.UtcNow():yyyyMMddHHmmss}"
             : fields.LeaseNumber!;
 
         var request = new CreateLeaseRequest
@@ -1087,7 +1091,7 @@ public sealed class ScanService : IScanService
             AnnualInterestRatePct = fields.AnnualInterestRatePct ?? 0m,
             // Clamp to the column's [1,1200] range; default a 30-year term when unreadable.
             TermMonths = fields.TermMonths is >= 1 and <= 1200 ? fields.TermMonths.Value : 360,
-            StartDate = fields.StartDate ?? DateTime.UtcNow,
+            StartDate = fields.StartDate ?? _timeProvider.UtcNow(),
             DayOfMonthDue = fields.DayOfMonthDue is >= 1 and <= 31 ? fields.DayOfMonthDue.Value : 1,
             MonthlyPrincipalInterest = fields.MonthlyPrincipalInterest ?? 0m,
             MonthlyEscrow = fields.MonthlyEscrow ?? 0m,
@@ -1694,11 +1698,12 @@ public sealed class ScanService : IScanService
                 .SetProperty(f => f.EntityType, entityType)
                 .SetProperty(f => f.EntityId, (int?)entityId), ct);
 
+        var now = _timeProvider.UtcNow();
         await _db.ScanDrafts
             .Where(d => d.Id == draftId && d.PortfolioId == portfolioId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(d => d.Status, "Confirmed")
-                .SetProperty(d => d.ConfirmedAt, (DateTime?)DateTime.UtcNow)
+                .SetProperty(d => d.ConfirmedAt, (DateTime?)now)
                 .SetProperty(d => d.ReviewedBy, userId.ToString()), ct);
     }
 
@@ -1723,7 +1728,7 @@ public sealed class ScanService : IScanService
             return false; // already finalized or mid-confirm — don't race with a concurrent confirm
 
         draft.Status = "Rejected";
-        draft.ReviewedAt = DateTime.UtcNow;
+        draft.ReviewedAt = _timeProvider.UtcNow();
         draft.ReviewedBy = userId.ToString();
         var rejectionReason = Truncate(reason?.Trim(), 500);
         if (rejectionReason is not null)

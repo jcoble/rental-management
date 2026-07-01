@@ -261,10 +261,11 @@ public class AdminUsersControllerTests : IDisposable
     private AdminUsersController CreateController(UserManager<ApplicationUser>? userManager = null) => new(
         userManager ?? CreateUserManagerMock().Object,
         _ctx.Db,
-        new AuditTrailService(_ctx.Db, new AuditScope()),
+        new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
         // Real outbox sender over the test Db so we can assert the invite email is enqueued.
         new OutboxAuthEmailSender(_ctx.Db, new ConfigurationBuilder().Build(), NullLogger<OutboxAuthEmailSender>.Instance),
-        NullLogger<AdminUsersController>.Instance)
+        NullLogger<AdminUsersController>.Instance,
+        TimeProvider.System)
     {
         ControllerContext = new ControllerContext
         {

@@ -19,7 +19,7 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
 
     public OwnerEntityServiceDeleteTests()
     {
-        _sut = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

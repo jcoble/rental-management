@@ -28,7 +28,8 @@ public class WorkOrderServiceListTests : IDisposable
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
-            NullLogger<WorkOrderService>.Instance);
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System);
     }
 
     public void Dispose() => _ctx.Dispose();

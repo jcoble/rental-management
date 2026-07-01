@@ -71,7 +71,7 @@ public class SandboxGuardAndSeederTests : IDisposable
         });
         _ctx.Db.SaveChanges();
 
-        var seeder = new DemoDataSeeder(_ctx.Db, NullLogger<DemoDataSeeder>.Instance);
+        var seeder = new DemoDataSeeder(_ctx.Db, NullLogger<DemoDataSeeder>.Instance, TimeProvider.System);
         await seeder.SeedPortfolioAsync(2, CancellationToken.None);
 
         // Demo data landed under portfolio 2, all FK'd correctly.
@@ -112,7 +112,7 @@ public class SandboxGuardAndSeederTests : IDisposable
     [Fact]
     public async Task SeedPortfolio_IsIdempotent()
     {
-        var seeder = new DemoDataSeeder(_ctx.Db, NullLogger<DemoDataSeeder>.Instance);
+        var seeder = new DemoDataSeeder(_ctx.Db, NullLogger<DemoDataSeeder>.Instance, TimeProvider.System);
         await seeder.SeedPortfolioAsync(1, CancellationToken.None);
         var firstCount = await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1);
         firstCount.Should().BeGreaterThan(0);
@@ -176,7 +176,8 @@ public class SandboxGuardAndSeederTests : IDisposable
             _ctx.Db,
             Options.Create(config),
             new SandboxGuard(_ctx.Db),
-            NullLogger<StripePaymentService>.Instance);
+            NullLogger<StripePaymentService>.Instance,
+            TimeProvider.System);
     }
 
     private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int portfolioId, int tenantId, decimal amount = 1000m)
