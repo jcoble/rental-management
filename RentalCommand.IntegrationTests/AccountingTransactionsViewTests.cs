@@ -405,8 +405,10 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────
-    // NEW — the load-bearing guarantee: soft-delete is enforced INSIDE the view. A payment whose lease
-    // is soft-deleted must drop out of the grid (the view's INNER JOIN Leases ... AND DeletedAt IS NULL).
+    // The load-bearing guarantee: soft-delete is enforced INSIDE the view. A payment whose lease is
+    // soft-deleted must drop out of the grid. After F1 the Payments branch is a LEFT JOIN (so a
+    // lease-less payment is kept) guarded by WHERE "LeaseId" IS NULL OR l."Id" IS NOT NULL — a
+    // soft-deleted lease nulls l, so a lease-tied payment fails the guard's second arm and still drops.
     // ─────────────────────────────────────────────────────────────────────────────────────────────
     [SkippableFact]
     public async Task GetTransactionsAsync_ExcludesPaymentsOfSoftDeletedLease()
@@ -437,7 +439,47 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
             CancellationToken.None);
 
         after.Items.Should().NotContain(t => t.Kind == "Payment" && t.Id == paymentId,
-            "the view's INNER JOIN Leases ... AND DeletedAt IS NULL drops payments of a soft-deleted lease");
+            "the view's LEFT JOIN + WHERE (\"LeaseId\" IS NULL OR l.\"Id\" IS NOT NULL) drops payments of a soft-deleted lease");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    // F1 (nullable-lease income): a lease-less payment (LeaseId == null, e.g. an application fee) is
+    // RETAINED by the view — the Payments branch is now a LEFT JOIN and the WHERE guard keeps rows with
+    // no lease reference — surfacing in the ledger with null property/tenant.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    [SkippableFact]
+    public async Task GetTransactionsAsync_IncludesLeaselessPayment()
+    {
+        SkipIfNoDocker();
+        await using var db = NewContext(_ownerConnString);
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+
+        db.Payments.Add(new Payment
+        {
+            PortfolioId = _portfolioId,
+            Lease = null, // lease-less income (application/screening fee shape)
+            PaymentType = PaymentType.Other,
+            Status = PaymentStatus.Paid,
+            Amount = 50m,
+            DueDate = date,
+            PaidDate = date,
+            CreatedAt = date,
+            UpdatedAt = date,
+        });
+        await db.SaveChangesAsync();
+        var leaselessId = await db.Payments
+            .Where(p => p.PortfolioId == _portfolioId && p.LeaseId == null)
+            .Select(p => p.Id)
+            .SingleAsync();
+
+        var page = await NewService(db).GetTransactionsAsync(
+            _portfolioId,
+            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
+            CancellationToken.None);
+
+        var row = page.Items.Single(t => t.Kind == "Payment" && t.Id == leaselessId);
+        row.Amount.Should().Be(50m, "the lease-less payment is retained by the view's LEFT JOIN");
+        row.PropertyId.Should().BeNull("a lease-less payment has no lease to resolve a property from");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────
