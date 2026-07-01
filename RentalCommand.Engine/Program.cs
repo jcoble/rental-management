@@ -170,6 +170,15 @@ builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
+
+// Dev-only (Simulation:Enabled, non-prod): the command-bridge worker that runs automation jobs on demand
+// at sim-time when the API enqueues a SimWorkerCommand. Never registered in production.
+if (SimulationGate.IsEnabled(builder.Configuration, builder.Environment))
+{
+    builder.Services.AddSingleton<SimWorkerRegistry>();
+    builder.Services.AddHostedService<SimWorkerCommandWorker>();
+}
+
 // Continuous accounting pull: imports each Connected + PullEnabled connection's deltas into the domain.
 builder.Services.AddHostedService<AccountingPullWorker>();
 // Proactive token refresh: rotates access tokens before expiry so the continuous pull never dies on a stale token.
