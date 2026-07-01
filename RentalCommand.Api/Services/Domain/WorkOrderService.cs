@@ -108,6 +108,42 @@ public class WorkOrderService : IWorkOrderService
             q = q.Where(w => w.Priority == query.Priority.Value);
         }
 
+        if (query.RequestedFrom.HasValue)
+        {
+            var requestedFrom = query.RequestedFrom.Value.ToUtc();
+            q = q.Where(w => w.RequestedAt >= requestedFrom);
+        }
+
+        if (query.RequestedTo.HasValue)
+        {
+            var requestedToExclusive = ToExclusiveUpperBound(query.RequestedTo.Value);
+            q = q.Where(w => w.RequestedAt < requestedToExclusive);
+        }
+
+        if (query.ScheduledFrom.HasValue)
+        {
+            var scheduledFrom = query.ScheduledFrom.Value.ToUtc();
+            q = q.Where(w => w.ScheduledFor != null && w.ScheduledFor >= scheduledFrom);
+        }
+
+        if (query.ScheduledTo.HasValue)
+        {
+            var scheduledToExclusive = ToExclusiveUpperBound(query.ScheduledTo.Value);
+            q = q.Where(w => w.ScheduledFor != null && w.ScheduledFor < scheduledToExclusive);
+        }
+
+        if (query.CompletedFrom.HasValue)
+        {
+            var completedFrom = query.CompletedFrom.Value.ToUtc();
+            q = q.Where(w => w.CompletedAt != null && w.CompletedAt >= completedFrom);
+        }
+
+        if (query.CompletedTo.HasValue)
+        {
+            var completedToExclusive = ToExclusiveUpperBound(query.CompletedTo.Value);
+            q = q.Where(w => w.CompletedAt != null && w.CompletedAt < completedToExclusive);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
@@ -138,6 +174,7 @@ public class WorkOrderService : IWorkOrderService
             "priority" => query.SortDescending ? q.OrderByDescending(w => w.Priority) : q.OrderBy(w => w.Priority),
             "requestedat" => query.SortDescending ? q.OrderByDescending(w => w.RequestedAt) : q.OrderBy(w => w.RequestedAt),
             "scheduledfor" => query.SortDescending ? q.OrderByDescending(w => w.ScheduledFor) : q.OrderBy(w => w.ScheduledFor),
+            "completedat" => query.SortDescending ? q.OrderByDescending(w => w.CompletedAt) : q.OrderBy(w => w.CompletedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(w => w.UpdatedAt) : q.OrderBy(w => w.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(w => w.RequestedAt) : q.OrderBy(w => w.RequestedAt),
         };
@@ -166,17 +203,35 @@ public class WorkOrderService : IWorkOrderService
         };
     }
 
-    private static WorkOrderListQuery ToWorkOrderListQuery(ListQuery query, int? propertyId, int? unitId, int? vendorId) => new()
+    private static WorkOrderListQuery ToWorkOrderListQuery(ListQuery query, int? propertyId, int? unitId, int? vendorId)
     {
-        Skip = query.Skip,
-        Take = query.Take,
-        Search = query.Search,
-        Sort = query.Sort,
-        PropertyId = propertyId,
-        UnitId = unitId,
-        VendorId = vendorId,
-        OpenOnly = query is WorkOrderListQuery workOrderQuery && workOrderQuery.OpenOnly,
-    };
+        var workOrderQuery = query as WorkOrderListQuery;
+        return new WorkOrderListQuery
+        {
+            Skip = query.Skip,
+            Take = query.Take,
+            Search = query.Search,
+            Sort = query.Sort,
+            PropertyId = propertyId ?? workOrderQuery?.PropertyId,
+            UnitId = unitId ?? workOrderQuery?.UnitId,
+            VendorId = vendorId ?? workOrderQuery?.VendorId,
+            OpenOnly = workOrderQuery?.OpenOnly ?? false,
+            Status = workOrderQuery?.Status,
+            Priority = workOrderQuery?.Priority,
+            RequestedFrom = workOrderQuery?.RequestedFrom,
+            RequestedTo = workOrderQuery?.RequestedTo,
+            ScheduledFrom = workOrderQuery?.ScheduledFrom,
+            ScheduledTo = workOrderQuery?.ScheduledTo,
+            CompletedFrom = workOrderQuery?.CompletedFrom,
+            CompletedTo = workOrderQuery?.CompletedTo,
+        };
+    }
+
+    private static DateTime ToExclusiveUpperBound(DateTime value)
+    {
+        var utc = value.ToUtc();
+        return value.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1) : utc;
+    }
 
     private sealed record WorkOrderListRow(
         WorkOrder WorkOrder, string? PropertyName, string? UnitNumber, string? VendorName, string? TenantName);

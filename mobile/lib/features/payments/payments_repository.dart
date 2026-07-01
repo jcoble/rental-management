@@ -122,11 +122,27 @@ class PaymentsRepository {
   Future<List<Payment>> listPayments({
     int? leaseId,
     String sort = '-createdAt',
+    String? dueFrom,
+    String? dueTo,
+    String? paidFrom,
+    String? paidTo,
   }) async {
     try {
       final params = <String, dynamic>{};
       if (leaseId != null) params['leaseId'] = leaseId;
       if (sort.isNotEmpty) params['sort'] = sort;
+      if (dueFrom != null && dueFrom.isNotEmpty) {
+        params['dueFrom'] = dueFrom;
+      }
+      if (dueTo != null && dueTo.isNotEmpty) {
+        params['dueTo'] = dueTo;
+      }
+      if (paidFrom != null && paidFrom.isNotEmpty) {
+        params['paidFrom'] = paidFrom;
+      }
+      if (paidTo != null && paidTo.isNotEmpty) {
+        params['paidTo'] = paidTo;
+      }
       final response = await _dio.get<List<dynamic>>(
         '/payments',
         queryParameters: params.isEmpty ? null : params,

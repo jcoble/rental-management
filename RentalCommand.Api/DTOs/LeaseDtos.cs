@@ -149,6 +149,13 @@ public class LeaseListQuery : ListQuery
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
     public LeaseStatus? Status { get; set; }
+    public DateTime? StartFrom { get; set; }
+    public DateTime? StartTo { get; set; }
+    public DateTime? EndFrom { get; set; }
+    public DateTime? EndTo { get; set; }
+    public DateTime? ActiveOn { get; set; }
+    public DateTime? ActiveFrom { get; set; }
+    public DateTime? ActiveTo { get; set; }
 }
 
 /// <summary>

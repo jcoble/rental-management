@@ -28,6 +28,12 @@ class WorkOrdersRepository {
     bool openOnly = false,
     int take = 50,
     String sort = '-updatedAt',
+    String? requestedFrom,
+    String? requestedTo,
+    String? scheduledFrom,
+    String? scheduledTo,
+    String? completedFrom,
+    String? completedTo,
   }) async {
     try {
       final params = <String, dynamic>{'take': take, 'sort': sort};
@@ -35,6 +41,24 @@ class WorkOrdersRepository {
       if (unitId != null) params['unitId'] = unitId;
       if (vendorId != null) params['vendorId'] = vendorId;
       if (openOnly) params['openOnly'] = true;
+      if (requestedFrom != null && requestedFrom.isNotEmpty) {
+        params['requestedFrom'] = requestedFrom;
+      }
+      if (requestedTo != null && requestedTo.isNotEmpty) {
+        params['requestedTo'] = requestedTo;
+      }
+      if (scheduledFrom != null && scheduledFrom.isNotEmpty) {
+        params['scheduledFrom'] = scheduledFrom;
+      }
+      if (scheduledTo != null && scheduledTo.isNotEmpty) {
+        params['scheduledTo'] = scheduledTo;
+      }
+      if (completedFrom != null && completedFrom.isNotEmpty) {
+        params['completedFrom'] = completedFrom;
+      }
+      if (completedTo != null && completedTo.isNotEmpty) {
+        params['completedTo'] = completedTo;
+      }
       final response = await _dio.get<Map<String, dynamic>>(
         '/work-orders/page',
         queryParameters: params,

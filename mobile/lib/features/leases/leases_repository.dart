@@ -27,12 +27,33 @@ class LeasesRepository {
 
   final Dio _dio;
 
-  Future<List<Lease>> listLeases({int? tenantId, int? propertyId}) async {
+  Future<List<Lease>> listLeases({
+    int? tenantId,
+    int? propertyId,
+    int? unitId,
+    String? status,
+    String? startFrom,
+    String? startTo,
+    String? endFrom,
+    String? endTo,
+    String? activeOn,
+    String? activeFrom,
+    String? activeTo,
+  }) async {
     try {
       final params = <String, dynamic>{
         'tenantId': tenantId,
         'propertyId': propertyId,
-      }..removeWhere((_, v) => v == null);
+        'unitId': unitId,
+        'status': status,
+        'startFrom': startFrom,
+        'startTo': startTo,
+        'endFrom': endFrom,
+        'endTo': endTo,
+        'activeOn': activeOn,
+        'activeFrom': activeFrom,
+        'activeTo': activeTo,
+      }..removeWhere((_, v) => v == null || (v is String && v.isEmpty));
       final response = await _dio.get<List<dynamic>>(
         '/leases',
         queryParameters: params.isNotEmpty ? params : null,
@@ -49,8 +70,7 @@ class LeasesRepository {
 
   Future<Lease> getLease(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/leases/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/leases/$id');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -70,8 +90,10 @@ class LeasesRepository {
   ///   securityDeposit, lateFeeAmount, rentDueDay, status? }
   Future<Lease> createLease(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/leases', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/leases',
+        data: data,
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -349,9 +371,9 @@ class LeaseLedger {
     final rawEntries = json['entries'];
     final entries = rawEntries is List
         ? rawEntries
-            .whereType<Map<String, dynamic>>()
-            .map(LeaseLedgerEntry.fromJson)
-            .toList()
+              .whereType<Map<String, dynamic>>()
+              .map(LeaseLedgerEntry.fromJson)
+              .toList()
         : <LeaseLedgerEntry>[];
 
     return LeaseLedger(
@@ -482,8 +504,8 @@ class LeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
 
 final leasesProvider =
     NotifierProvider<LeasesNotifier, AsyncValue<List<Lease>>>(
-  LeasesNotifier.new,
-);
+      LeasesNotifier.new,
+    );
 
 // ── Leases for a specific tenant ──────────────────────────────────────────────
 
@@ -515,8 +537,8 @@ class TenantLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
 
 final tenantLeasesProvider =
     NotifierProvider.family<TenantLeasesNotifier, AsyncValue<List<Lease>>, int>(
-  TenantLeasesNotifier.new,
-);
+      TenantLeasesNotifier.new,
+    );
 
 // ── Single lease detail ───────────────────────────────────────────────────────
 
@@ -548,14 +570,15 @@ class LeaseDetailNotifier extends Notifier<AsyncValue<Lease>> {
 
 final leaseDetailProvider =
     NotifierProvider.family<LeaseDetailNotifier, AsyncValue<Lease>, int>(
-  LeaseDetailNotifier.new,
-);
+      LeaseDetailNotifier.new,
+    );
 
 // ── Lease ledger ──────────────────────────────────────────────────────────────
 
 /// Transparent ledger for a single lease, keyed by lease id. autoDispose so it
 /// refreshes whenever the ledger view is reopened.
-final leaseLedgerProvider =
-    FutureProvider.autoDispose.family<LeaseLedger, int>((ref, leaseId) {
-  return ref.watch(leasesRepositoryProvider).ledger(leaseId);
-});
+final leaseLedgerProvider = FutureProvider.autoDispose.family<LeaseLedger, int>(
+  (ref, leaseId) {
+    return ref.watch(leasesRepositoryProvider).ledger(leaseId);
+  },
+);

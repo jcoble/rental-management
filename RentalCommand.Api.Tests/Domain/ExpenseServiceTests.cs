@@ -96,6 +96,92 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersIncurredDateWindowInSql()
+    {
+        var (unitId, _) = SeedUnitsForListPage();
+        var day1 = new DateTime(2026, 2, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedDirectUnitExpense(unitId, "Feb 1 supply", day1, 10m);
+        SeedDirectUnitExpense(unitId, "Feb 2 supply", day1.AddDays(1), 20m);
+        SeedDirectUnitExpense(unitId, "Feb 3 supply", day1.AddDays(2), 30m);
+        SeedDirectUnitExpense(unitId, "Feb 4 supply", day1.AddDays(3), 40m);
+        SeedDirectUnitExpense(unitId, "Feb 5 supply", day1.AddDays(4), 50m);
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ExpenseListQuery
+            {
+                IncurredFrom = new DateTime(2026, 2, 2, 0, 0, 0, DateTimeKind.Utc),
+                IncurredTo = new DateTime(2026, 2, 4, 0, 0, 0, DateTimeKind.Utc),
+                Sort = "incurredAt",
+                Take = 10,
+            });
+
+        page.TotalCount.Should().Be(3);
+        page.Items.Select(e => e.Description).Should().Equal("Feb 2 supply", "Feb 3 supply", "Feb 4 supply");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("IncurredAt", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("IncurredAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_SortsExpenseDateColumnsInSql()
+    {
+        var (unitId, _) = SeedUnitsForListPage();
+        var day1 = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedDirectUnitExpense(unitId, "Paid Mar 1", day1, 10m, dueDate: day1.AddDays(10), paidAt: day1);
+        SeedDirectUnitExpense(unitId, "Paid Mar 3", day1, 20m, dueDate: day1.AddDays(8), paidAt: day1.AddDays(2));
+        SeedDirectUnitExpense(unitId, "Paid Mar 2", day1, 30m, dueDate: day1.AddDays(9), paidAt: day1.AddDays(1));
+
+        _commands.Clear();
+        var paidPage = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ListQuery
+            {
+                Sort = "paidAt",
+                Take = 10,
+            });
+
+        paidPage.Items.Select(e => e.Description).Should().Equal("Paid Mar 1", "Paid Mar 2", "Paid Mar 3");
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("PaidAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var duePage = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ListQuery
+            {
+                Sort = "-dueDate",
+                Take = 10,
+            });
+
+        duePage.Items.Select(e => e.Description).Should().Equal("Paid Mar 1", "Paid Mar 2", "Paid Mar 3");
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DueDate", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GetAsync_OrdersReceiptLineItemsInSql()
     {
         var now = DateTime.UtcNow;
@@ -428,7 +514,13 @@ public class ExpenseServiceTests : IDisposable
         _db.SaveChanges();
     }
 
-    private void SeedDirectUnitExpense(int unitId, string description, DateTime incurredAt, decimal amount)
+    private void SeedDirectUnitExpense(
+        int unitId,
+        string description,
+        DateTime incurredAt,
+        decimal amount,
+        DateTime? dueDate = null,
+        DateTime? paidAt = null)
     {
         var propertyId = _db.Units.Where(u => u.Id == unitId).Select(u => u.PropertyId).Single();
         _db.Expenses.Add(new Expense
@@ -441,6 +533,8 @@ public class ExpenseServiceTests : IDisposable
             Status = ExpenseStatus.Paid,
             Amount = amount,
             IncurredAt = incurredAt,
+            DueDate = dueDate,
+            PaidAt = paidAt,
             CreatedAt = incurredAt,
             UpdatedAt = incurredAt,
         });

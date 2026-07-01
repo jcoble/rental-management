@@ -65,11 +65,35 @@ class MoneyRepository {
     int? propertyId,
     int? unitId,
     int take = 100,
+    String? incurredFrom,
+    String? incurredTo,
+    String? dueFrom,
+    String? dueTo,
+    String? paidFrom,
+    String? paidTo,
   }) async {
     try {
       final params = <String, dynamic>{'take': take, 'sort': '-incurredAt'};
       if (propertyId != null) params['propertyId'] = propertyId;
       if (unitId != null) params['unitId'] = unitId;
+      if (incurredFrom != null && incurredFrom.isNotEmpty) {
+        params['incurredFrom'] = incurredFrom;
+      }
+      if (incurredTo != null && incurredTo.isNotEmpty) {
+        params['incurredTo'] = incurredTo;
+      }
+      if (dueFrom != null && dueFrom.isNotEmpty) {
+        params['dueFrom'] = dueFrom;
+      }
+      if (dueTo != null && dueTo.isNotEmpty) {
+        params['dueTo'] = dueTo;
+      }
+      if (paidFrom != null && paidFrom.isNotEmpty) {
+        params['paidFrom'] = paidFrom;
+      }
+      if (paidTo != null && paidTo.isNotEmpty) {
+        params['paidTo'] = paidTo;
+      }
       final response = await _dio.get<List<dynamic>>(
         '/expenses',
         queryParameters: params,

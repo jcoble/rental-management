@@ -1,6 +1,10 @@
 import type { Payment } from '$lib/types';
 import { api } from '../client';
-import { buildListQuery, type ListParams } from '../list-params';
+import {
+	buildPaymentListPagePath,
+	buildPaymentListPath,
+	type PaymentListParams
+} from './payment-list-path';
 
 export interface PaymentListResponse {
 	items: Payment[];
@@ -10,14 +14,10 @@ export interface PaymentListResponse {
 }
 
 export const payments = {
-	list: (portfolioId: number, params?: ListParams & { leaseId?: number }) => {
-		const { leaseId, ...list } = params ?? {};
-		return api.get<Payment[]>(`/payments${buildListQuery(list, { portfolioId, leaseId })}`);
-	},
-	listPage: (portfolioId: number, params?: ListParams & { leaseId?: number }) => {
-		const { leaseId, ...list } = params ?? {};
-		return api.get<PaymentListResponse>(`/payments/page${buildListQuery(list, { portfolioId, leaseId })}`);
-	},
+	list: (portfolioId: number, params?: PaymentListParams) =>
+		api.get<Payment[]>(buildPaymentListPath(portfolioId, params)),
+	listPage: (portfolioId: number, params?: PaymentListParams) =>
+		api.get<PaymentListResponse>(buildPaymentListPagePath(portfolioId, params)),
 	get: (id: number) => api.get<Payment>(`/payments/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Payment>('/payments', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Payment>(`/payments/${id}`, data),

@@ -195,7 +195,40 @@ public class PaymentService : IPaymentService
                 (p.ExternalReference != null && EF.Functions.ILike(p.ExternalReference, $"%{term}%")));
         }
 
+        if (query is PaymentListQuery paymentQuery)
+        {
+            if (paymentQuery.DueFrom.HasValue)
+            {
+                var dueFrom = paymentQuery.DueFrom.Value.ToUtc();
+                q = q.Where(p => p.DueDate >= dueFrom);
+            }
+
+            if (paymentQuery.DueTo.HasValue)
+            {
+                var dueToExclusive = ToExclusiveUpperBound(paymentQuery.DueTo.Value);
+                q = q.Where(p => p.DueDate < dueToExclusive);
+            }
+
+            if (paymentQuery.PaidFrom.HasValue)
+            {
+                var paidFrom = paymentQuery.PaidFrom.Value.ToUtc();
+                q = q.Where(p => p.PaidDate != null && p.PaidDate >= paidFrom);
+            }
+
+            if (paymentQuery.PaidTo.HasValue)
+            {
+                var paidToExclusive = ToExclusiveUpperBound(paymentQuery.PaidTo.Value);
+                q = q.Where(p => p.PaidDate != null && p.PaidDate < paidToExclusive);
+            }
+        }
+
         return q;
+    }
+
+    private static DateTime ToExclusiveUpperBound(DateTime value)
+    {
+        var utc = value.ToUtc();
+        return value.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1) : utc;
     }
 
     private static IQueryable<Payment> ApplySort(IQueryable<Payment> q, ListQuery query) =>

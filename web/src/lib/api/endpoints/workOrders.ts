@@ -1,15 +1,12 @@
 import type { VendorDispatch, WorkOrder, WorkOrderDetail } from '$lib/types';
 import { api } from '../client';
-import { buildListQuery, type ListParams } from '../list-params';
+import {
+	buildWorkOrderListPagePath,
+	buildWorkOrderListPath,
+	type WorkOrderListParams
+} from './work-order-list-path';
 
-export interface WorkOrderListParams extends ListParams {
-	propertyId?: number;
-	unitId?: number;
-	vendorId?: number;
-	status?: string;
-	priority?: string;
-	openOnly?: boolean;
-}
+export type { WorkOrderListParams } from './work-order-list-path';
 
 export interface WorkOrderListResponse {
 	items: WorkOrder[];
@@ -20,14 +17,10 @@ export interface WorkOrderListResponse {
 
 export const workOrders = {
 	list: (portfolioId: number, params?: WorkOrderListParams) => {
-		const { propertyId, unitId, vendorId, ...list } = params ?? {};
-		return api.get<WorkOrder[]>(`/work-orders${buildListQuery(list, { portfolioId, propertyId, unitId, vendorId })}`);
+		return api.get<WorkOrder[]>(buildWorkOrderListPath(portfolioId, params));
 	},
 	listPage: (portfolioId: number, params?: WorkOrderListParams) => {
-		const { propertyId, unitId, vendorId, status, priority, ...list } = params ?? {};
-		return api.get<WorkOrderListResponse>(
-			`/work-orders/page${buildListQuery(list, { portfolioId, propertyId, unitId, vendorId, status, priority })}`
-		);
+		return api.get<WorkOrderListResponse>(buildWorkOrderListPagePath(portfolioId, params));
 	},
 	// Detail includes a `timeline` of status-change events (oldest→newest).
 	get: (id: number) => api.get<WorkOrderDetail>(`/work-orders/${id}`),
