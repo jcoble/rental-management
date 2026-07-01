@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Npgsql;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Workers;
@@ -116,7 +117,7 @@ public sealed class AccountingTokenRefreshWorker : EngineWorkerBase
 
         conn.Status = AccountingConnectionStatus.Error;
         conn.LastError = Truncate(ex.Message, 2000);
-        conn.UpdatedAt = DateTime.UtcNow;
+        conn.UpdatedAt = scoped.GetRequiredService<TimeProvider>().UtcNow();
         await db.SaveChangesAsync(ct);
     }
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -14,10 +15,12 @@ namespace RentalCommand.Engine.Services;
 public sealed class OutboxMessagePublisher : IMessagePublisher
 {
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public OutboxMessagePublisher(RentalCommandDbContext db)
+    public OutboxMessagePublisher(RentalCommandDbContext db, TimeProvider timeProvider)
     {
         _db = db;
+        _timeProvider = timeProvider;
     }
 
     public async Task PublishAsync<TPayload>(
@@ -32,7 +35,7 @@ public sealed class OutboxMessagePublisher : IMessagePublisher
             MessageType = messageType,
             Payload = JsonSerializer.Serialize(payload),
             RetryCount = 0,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = _timeProvider.UtcNow(),
         };
 
         _db.OutboxMessages.Add(message);
