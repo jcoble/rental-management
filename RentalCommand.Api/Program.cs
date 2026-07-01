@@ -278,7 +278,6 @@ builder.Services.AddSignalR().AddJsonProtocol(options =>
     options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 builder.Services.AddScoped<IDataUpdateService, DataUpdateService>();
-builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
 
 // Realtime backplane bridge (TSK-624): LISTENs on the Postgres channel the Engine NOTIFYs, and
 // re-broadcasts each cross-process entity change onto the SignalR hub via DataUpdateService. Without
@@ -465,7 +464,6 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapControllers();
 
 // --- SignalR hubs (auth required; websocket transports pass the JWT via ?access_token=) ---
-app.MapHub<NotificationHub>("/api/v1/hubs/notifications");
 app.MapHub<DataUpdateHub>("/api/v1/hubs/updates");
 
 app.Run();
