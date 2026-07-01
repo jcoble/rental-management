@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 class MobileQuickAction {
   const MobileQuickAction({
@@ -12,6 +13,90 @@ class MobileQuickAction {
   final VoidCallback onPressed;
 }
 
+class MobileQuickActionController extends ChangeNotifier {
+  final List<_MobileQuickActionRegistration> _registrations = [];
+  bool _disposed = false;
+  bool _notifyScheduled = false;
+
+  MobileQuickAction? get primaryAction =>
+      _registrations.isEmpty ? null : _registrations.last.action;
+
+  void setPrimaryAction(Object owner, MobileQuickAction? action) {
+    if (_disposed) return;
+
+    final index = _registrations.indexWhere(
+      (entry) => identical(entry.owner, owner),
+    );
+    if (index == -1) {
+      _registrations.add(_MobileQuickActionRegistration(owner, action));
+      _notifyChanged();
+      return;
+    }
+
+    final existing = _registrations[index];
+    if (existing.action == action) return;
+    _registrations[index] = _MobileQuickActionRegistration(owner, action);
+    _notifyChanged();
+  }
+
+  void clearPrimaryAction(Object owner) {
+    if (_disposed) return;
+
+    final previousLength = _registrations.length;
+    _registrations.removeWhere((entry) => identical(entry.owner, owner));
+    if (_registrations.length == previousLength) return;
+    _notifyChanged();
+  }
+
+  void _notifyChanged() {
+    if (_disposed) return;
+
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    final canNotifyNow =
+        phase == SchedulerPhase.idle ||
+        phase == SchedulerPhase.postFrameCallbacks;
+    if (canNotifyNow) {
+      notifyListeners();
+      return;
+    }
+
+    if (_notifyScheduled) return;
+    _notifyScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _notifyScheduled = false;
+      if (!_disposed) notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+}
+
+class _MobileQuickActionRegistration {
+  const _MobileQuickActionRegistration(this.owner, this.action);
+
+  final Object owner;
+  final MobileQuickAction? action;
+}
+
+class MobileQuickActionScope
+    extends InheritedNotifier<MobileQuickActionController> {
+  const MobileQuickActionScope({
+    super.key,
+    required MobileQuickActionController controller,
+    required super.child,
+  }) : super(notifier: controller);
+
+  static MobileQuickActionController? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<MobileQuickActionScope>()
+        ?.notifier;
+  }
+}
+
 class MobileQuickActionFab extends StatefulWidget {
   const MobileQuickActionFab({
     super.key,
@@ -20,6 +105,7 @@ class MobileQuickActionFab extends StatefulWidget {
     required this.onRecord,
     required this.onScan,
     this.heroTag = 'mobile-quick-action-fab',
+    this.useNearestScope = true,
   });
 
   final MobileQuickAction? primaryAction;
@@ -27,13 +113,18 @@ class MobileQuickActionFab extends StatefulWidget {
   final VoidCallback onRecord;
   final VoidCallback onScan;
   final Object heroTag;
+  final bool useNearestScope;
 
   @override
   State<MobileQuickActionFab> createState() => _MobileQuickActionFabState();
 }
 
 class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
+  final Object _scopeOwner = Object();
+  MobileQuickActionController? _scopeController;
   bool _open = false;
+
+  bool get _usesScope => _scopeController != null && widget.useNearestScope;
 
   void _toggle() => setState(() => _open = !_open);
 
@@ -62,7 +153,40 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
   ];
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = MobileQuickActionScope.maybeOf(context);
+    if (!identical(_scopeController, nextController)) {
+      _scopeController?.clearPrimaryAction(_scopeOwner);
+      _scopeController = nextController;
+    }
+    _syncScopedAction();
+  }
+
+  @override
+  void didUpdateWidget(covariant MobileQuickActionFab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncScopedAction();
+  }
+
+  @override
+  void dispose() {
+    _scopeController?.clearPrimaryAction(_scopeOwner);
+    super.dispose();
+  }
+
+  void _syncScopedAction() {
+    if (_usesScope) {
+      _scopeController!.setPrimaryAction(_scopeOwner, widget.primaryAction);
+    } else {
+      _scopeController?.clearPrimaryAction(_scopeOwner);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_usesScope) return const SizedBox.shrink();
+
     final actions = _actions;
 
     return Column(
