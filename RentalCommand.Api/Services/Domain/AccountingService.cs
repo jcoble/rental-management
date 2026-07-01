@@ -1105,7 +1105,10 @@ public class AccountingService : IAccountingService
     {
         var payments = _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
+            // Lease-scoped ledger rows (property/tenant resolved via the lease): a lease-less payment
+            // (application fee) has no lease to render, so it is excluded here — it surfaces on Schedule E
+            // + cash flow + the vw_accounting_transactions ledger instead.
+            .Where(p => p.PortfolioId == portfolioId && p.Lease != null)
             .Select(p => new AccountingReportLedgerRow
             {
                 Date = p.PaidDate ?? p.DueDate,

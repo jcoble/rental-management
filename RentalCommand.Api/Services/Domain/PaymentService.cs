@@ -269,8 +269,10 @@ public class PaymentService : IPaymentService
 
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)
     {
-        // Verify the referenced lease belongs to the caller's portfolio.
-        if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId, ct))
+        // Verify the referenced lease belongs to the caller's portfolio — only when a lease is supplied.
+        // A lease-less payment (application/screening fee) carries an ApplicationId instead; gap5 (G5.2)
+        // adds the "exactly one of LeaseId / ApplicationId" validation + the application scope guard.
+        if (request.LeaseId is { } leaseId && !await _db.EnsureLeaseInPortfolioAsync(portfolioId, leaseId, ct))
         {
             return null;
         }
