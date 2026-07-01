@@ -216,6 +216,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.EntityType).HasMaxLength(120);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => new { e.EntityType, e.EntityId });
+            // #7 ScanProcessingWorker polls StoredFiles.FirstOrDefaultAsync(f => f.FilePath == …) every
+            // ~2s; the column was unindexed → sequential scan of an ever-growing table each poll.
+            entity.HasIndex(e => e.FilePath).HasDatabaseName("IX_StoredFiles_FilePath");
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 
@@ -468,6 +471,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             // One row per portfolio per provider.
             entity.HasIndex(e => new { e.PortfolioId, e.Provider }).IsUnique();
+            // #10 Both accounting workers scan cross-portfolio by Status (and the token-refresh worker by
+            // TokenExpiresAt). (Status, TokenExpiresAt) serves both without a leading PortfolioId the
+            // cross-portfolio scan doesn't filter on.
+            entity.HasIndex(e => new { e.Status, e.TokenExpiresAt })
+                  .HasDatabaseName("IX_AccountingConnections_Status_TokenExpiresAt");
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
@@ -971,6 +979,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.EsignEnvelopeId);
             entity.HasIndex(e => e.DocumentTemplateId);
+            // #6 Lease-expiry sweep (LeaseExpiryReminderService, CROSS-portfolio): WHERE Status=Active
+            // AND ExpiryReminderSentAt IS NULL AND EndDate >= today. A partial index over the unsent rows,
+            // keyed by (Status, EndDate), matches the predicate without a full scan and without a leading
+            // PortfolioId the cross-portfolio sweep doesn't filter on.
+            entity.HasIndex(e => new { e.Status, e.EndDate })
+                  .HasDatabaseName("IX_Leases_ExpirySweep")
+                  .HasFilter("\"ExpiryReminderSentAt\" IS NULL");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             // StartDate must precede EndDate, and RentDueDay must be a valid day of month.
             entity.ToTable(t =>
@@ -1054,6 +1069,19 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => new { e.PaymentType, e.Status, e.DueDate })
                   .HasDatabaseName("IX_Payments_LateFeeSweep")
                   .HasFilter("\"PeriodKey\" IS NOT NULL");
+            // #1 Collected-MTD, cash-flow/GL/Schedule-E income, owner statements, recent-payments — all
+            // bucket by PaidDate within a portfolio, and there was no PaidDate index. Highest-value add;
+            // also powers the grid PaidDate date-range filter.
+            entity.HasIndex(e => new { e.PortfolioId, e.PaidDate })
+                  .HasDatabaseName("IX_Payments_Portfolio_PaidDate");
+            // #4 Overdue / receivables (Dashboard, PortfolioQa, PaymentAttention): WHERE PortfolioId
+            // AND Status IN (...) AND DueDate < today.
+            entity.HasIndex(e => new { e.PortfolioId, e.Status, e.DueDate })
+                  .HasDatabaseName("IX_Payments_Portfolio_Status_DueDate");
+            // #5 Paged lease ledger (GetLedgerAsync): WHERE PortfolioId AND LeaseId, ORDER BY
+            // COALESCE(PaidDate, DueDate) DESC, Id DESC. Covering so the page is an index range scan.
+            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.PaidDate, e.DueDate, e.Id })
+                  .HasDatabaseName("IX_Payments_Portfolio_Lease_LedgerDates");
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Payments)
                 .HasForeignKey(e => e.PortfolioId)
@@ -1085,6 +1113,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.WorkOrderId);
             entity.HasIndex(e => e.Status);
+            // #2 Every financial report + the grid Expense date-range filter buckets expenses by
+            // IncurredAt (accrual) and PaidAt (cash-basis / Schedule E), portfolio-scoped.
+            entity.HasIndex(e => new { e.PortfolioId, e.IncurredAt })
+                  .HasDatabaseName("IX_Expenses_Portfolio_IncurredAt");
+            entity.HasIndex(e => new { e.PortfolioId, e.PaidAt })
+                  .HasDatabaseName("IX_Expenses_Portfolio_PaidAt");
+            // #3 Schedule-E + property P&L group by Category within a property over a period.
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.Category, e.IncurredAt })
+                  .HasDatabaseName("IX_Expenses_Portfolio_Property_Category_IncurredAt");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Expenses)
@@ -1352,6 +1389,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // The worker's hot path: scan active, not-yet-deleted tasks that are due. The query filter
             // already excludes soft-deleted rows; this index serves the (active, due) scan per portfolio.
             entity.HasIndex(e => new { e.PortfolioId, e.IsActive, e.NextDueDate });
+            // #9 The generation sweep is CROSS-portfolio: WHERE IsActive AND NextDueDate <= today. The
+            // (PortfolioId, IsActive, NextDueDate) index above leads with a column the sweep doesn't
+            // filter (a skip-scan), so add (IsActive, NextDueDate) for the sweep to range-scan directly.
+            entity.HasIndex(e => new { e.IsActive, e.NextDueDate })
+                  .HasDatabaseName("IX_RecurringMaintenanceTasks_Active_NextDueDate");
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.VendorId);
