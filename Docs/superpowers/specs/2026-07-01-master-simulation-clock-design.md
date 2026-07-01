@@ -1,293 +1,299 @@
 # Master Simulation Clock — Design Spec
 
 - **Date:** 2026-07-01
-- **Status:** Approved (design) — implementation pending
+- **Status:** Approved-with-changes (design) — review incorporated; implementation pending
 - **Notion task:** TSK-615
 - **Branch:** `tsk-615-master-simulation-clock`
 - **Scope:** RentalCommand (this repo). EdiPlatform port tracked separately.
+- **Review:** adversarial code-grounded review folded in (see §14). Verdict was
+  Approve-with-changes; the three must-fixes (worker-trigger feasibility, web gating/cold-start
+  sync, timezone control surface) are now the baseline design below.
 
 ## 1. Context & goal
 
-We are building a true-to-life, **web-only** end-to-end test of Rental Command: a landlord
-comes in cold — registers, confirms email, onboards ~2 years of history from scans, then runs
-~1 year of day-to-day operations — while we **advance simulated time** and verify scheduled
-jobs, reminders, the lease lifecycle, and **year-end reports** all behave and reconcile against
-an independently-kept ground-truth ledger.
+True-to-life, **web-only** end-to-end test of Rental Command: a landlord comes in cold —
+registers, confirms email, onboards ~2 years of history from scans, then runs ~1 year of
+day-to-day operations — while we **advance simulated time** and verify scheduled jobs, reminders,
+the lease lifecycle, and **year-end reports** all behave and reconcile against an independently
+kept ground-truth ledger.
 
-This is impossible unless **"now" is a single, controllable value** shared by every part of the
-system that reasons about time: the API, the Engine background workers, and the web UI. Today
-there is no such control — **339** backend call sites and **113** web call sites read the
-machine clock directly.
+This requires **one controllable "now"** shared by the API, the Engine workers, and the web UI.
+Today there is no such control — ~349 backend and ~123 web call sites read the machine clock
+directly.
 
-**Goal:** introduce one controllable clock, honored everywhere business time matters, changeable
-on demand in dev/test, and completely inert (real time) in production.
+**Goal:** one controllable clock, honored everywhere business time matters, changeable on demand
+in dev/test, completely inert (real time) in production.
 
 ## 2. Non-goals
 
-- **Not** changing the OS clock or Postgres clock. The app already never asks Postgres for the
-  time (zero DB-side time defaults), so an app-layer clock captures 100% of domain time.
-- **Not** virtualizing infrastructure time: JWT/refresh-token lifetimes, TLS validity, HTTP
-  caches, rate limiters, outbox retry backoff, `Stopwatch`/perf timing, and log timestamps stay
-  on the real clock.
-- **Not** a production feature. The entire simulation surface is compiled/served only in non-prod.
-- **Mobile (Flutter):** the clock swap will be mirrored for parity later, but it is off the
-  web-only test path and out of scope for this spec.
+- **Not** changing the OS or Postgres clock. The app never asks Postgres for the time (zero
+  DB-side time defaults — verified), so an app-layer clock captures 100% of domain time.
+- **Not** virtualizing infrastructure time: JWT/refresh lifetimes, OAuth token-expiry checks, TLS,
+  HTTP caches, rate limiters, outbox retry backoff, `Stopwatch`/perf, log timestamps stay real.
+- **Not** a production feature. The whole simulation surface is compiled/served only in non-prod.
+- **Mobile (Flutter):** clock swap mirrored for parity later; off the web-only test path, out of
+  scope here.
 
 ## 3. Current state (grounded in the code)
 
-- **.NET (`net10.0`):** ~339 wall-clock sites (`DateTime.UtcNow/Now/Today`,
-  `DateTimeOffset.UtcNow/Now`) across Core/Data/Api/Engine. No clock abstraction. Hotspots:
-  `AccountingImportService` (26), `AccountingConnectionService` (13), `ScanService` (12),
-  `LeaseService` (10), `ReportsService`/`BankingService`/`AccountingController` (8 each).
-- **Engine:** 12+ wall-clock-driven workers — `RentChargeWorker`, `AutopayChargeWorker`,
-  `LateFeeWorker`, `RecurringExpenseWorker`, `RecurringMaintenanceWorker`, `DebtServiceWorker`,
-  `LeaseExpiryReminderWorker`, `NoticeDraftWorker`, `DailyBriefingDeliveryWorker`,
-  `AccountingPullWorker`, `OutboxDispatchWorker`, `ScanProcessingWorker`. Each has a paired
-  service (`IRentChargeService`, `ILateFeeService`, …) — the loop body is already callable,
-  which makes on-demand triggering feasible.
-- **Web:** 113 `new Date()/Date.now()` sites (~40 files), hub `web/src/lib/utils/date.ts`. **All**
-  server-side date usage is auth/cookie/cache timing (`login/+page.server.ts`,
-  `auth/google/callback/+server.ts`, `lib/server/jwt-claims.ts`, `lib/server/token-refresh.ts`)
-  → stays real.
-- **Existing helper:** `RentalCommand.Api/Services/Domain/DateTimeNormalization.cs` coerces
-  `Kind`→UTC for Npgsql `timestamptz`. This **complements** (does not replace) the clock:
-  normalization is about *Kind*; the clock is about *now*.
-- **Precedent:** EdiPlatform already uses the `TimeProvider ?? TimeProvider.System` DI idiom
-  (`EdiPlatform.Engine/Services/ApiChannel/Auth/OAuth2TokenCache.cs:34`) — the pattern to mirror.
+- **.NET (`net10.0`):** ~349 wall-clock sites across Core/Data/Api/Engine; no clock abstraction.
+  Hotspots: `AccountingImportService` (26), `AccountingConnectionService` (13 — **but includes
+  OAuth token-expiry checks that must stay real**, e.g. `AccountingConnectionService.cs:164,362`),
+  `ScanService` (12), `LeaseService` (10). **Note:** hotspot counts are per-file totals and
+  include keep-real infra sites — the sweep classifies per-site (§5.6), it is not a blanket swap.
+- **Data layer:** audit timestamps are set in `RentalCommand.Data/Auditing/AuditSaveChangesInterceptor.cs:235`
+  (`var now = DateTime.UtcNow`). This is the "story of record" (surfaces in `RecordHistory.svelte`)
+  and **must be virtualized too** (§5.6), which means giving `RentalCommand.Data` a `TimeProvider`.
+- **Engine:** 12+ wall-clock workers. Their automation services
+  (`RentChargeService`, `LateFeeService`, `LeaseExpiryReminderService`, `AutopayChargeService`,
+  `NoticeDraftGenerationService`, `DebtServiceService`, `RecurringExpenseGenerationService`,
+  `RecurringMaintenanceService`, `DailyBriefingDeliveryService`) live in `RentalCommand.Engine.Services`
+  and are registered **only** in the Engine. All are parameterless `Task<int> …Async(CancellationToken)`
+  and **idempotent** (RentCharge/LateFee dedupe on `(LeaseId, PeriodKey)` + partial unique index;
+  LeaseExpiry latches on `ExpiryReminderSentAt`). `IDailyBriefingDeliveryService.EnqueueDueAsync(DateTime? utcNow=null,…)`
+  already exposes an injectable "now".
+- **Project dependency direction (verified):** `Engine → Api → {Core, Data}`. The **Api references
+  only Core + Data**; the **Engine references the Api**. So the API **cannot** reference the Engine
+  (build cycle), and the Engine has **no HTTP port** (`Host.CreateApplicationBuilder`). This shapes
+  the worker-trigger design (§6).
+- **Business-day timezone (verified):** rollover logic reads **`App:TimeZone` config**, not any
+  provider zone — `RentChargeService.cs:51`, `LateFeeService.cs:56`, `RecurringMaintenanceService.cs:47`,
+  `DebtServiceService.cs:39`, `RecurringExpenseGenerationService.cs:40`. Reports bucket in **pure UTC**
+  (`ReportsService.cs:207` etc.). This shapes the timezone control (§8).
+- **Web:** ~123 `new Date()/Date.now()` sites (~40 files), hub `web/src/lib/utils/date.ts`. **All**
+  server-side date usage is auth/cookie/cache timing → stays real. SSR is on app-wide
+  (`+layout.ts: ssr = true`).
+- **No Postgres `LISTEN/NOTIFY` anywhere** (verified). Cross-process signaling today is the SignalR
+  hub (auth-gated, portfolio/user-group scoped — **no `Clients.All`**) + a DB outbox with polling.
+- **Zero DB-side time defaults (verified):** no `defaultValueSql`/`now()`/`CURRENT_TIMESTAMP` on any
+  timestamp column; the accounting view computes no server-side time.
+- **Precedent:** EdiPlatform uses the `TimeProvider ?? TimeProvider.System` idiom; web uses
+  `PUBLIC_*` env flags (`PUBLIC_GOOGLE_CLIENT_ID`).
 
 ## 4. Architecture overview
 
-Three tiers, one source of truth.
+Three tiers, one source of truth, poll-based cross-process agreement.
 
 ```
-[ dev control ] ──▶ SimulationClock (1-row table) ◀── read by both processes
-     │                       │
-     │            ┌──────────┴──────────┐
-     ▼            ▼                     ▼
- /api/v1/dev/  API process         Engine process
-   clock       TimeProvider        TimeProvider
-   + workers   = SimulationTP      = SimulationTP
-                    │                    │
-                    ▼                    ▼
-             domain reads sim-now   workers read sim-now;
-             everywhere             triggered on demand
-                    │
-                    ▼  (SignalR "clock-changed")
-                Web browser: global Date shim (offset synced)
+[ dev control (API) ] ──▶ SimulationClock (1-row table) ◀── polled ~1s by both processes
+        │                          │
+        │                ┌─────────┴─────────┐
+        ▼                ▼                   ▼
+  GET /dev/clock     API process         Engine process
+  (anonymous, RO)    TimeProvider=SimTP  TimeProvider=SimTP
+  set/advance/...    (+ IAppTimeZone)    (+ IAppTimeZone)
+  (admin)                 │                   │
+  POST /dev/workers/* ────┼── SimWorkerCommand table ──▶ dev-only SimWorkerCommandWorker
+  (enqueue command)       │   (API enqueues; Engine     runs the service in Engine's
+                          │    executes; result polled)  native admin/RLS+system-actor ctx
+                          ▼
+   Web browser: inline app.html Date shim; offset polled from anonymous GET /dev/clock
 ```
 
-- **Backend source of truth:** an injected `TimeProvider`. Prod binds `TimeProvider.System`;
-  non-prod binds `SimulationTimeProvider`, which computes sim-now from the shared
-  `SimulationClock` row.
-- **Cross-process agreement:** API and Engine are separate OS processes; they agree because both
-  read the same DB row (cached in-memory, invalidated by Postgres `NOTIFY` / SignalR).
-- **Web:** the browser mirrors backend sim-now via a dev-only global `Date` shim; SSR stays real.
+- **Backend source of truth:** injected `TimeProvider`. Prod = `TimeProvider.System`; non-prod =
+  `SimulationTimeProvider` reading the shared `SimulationClock` row.
+- **Cross-process:** API and Engine each **poll** the one-row table (~1s cache). No NOTIFY, no
+  backend SignalR for the clock.
+- **Worker triggers:** because the API can't call Engine services, the API **enqueues a command
+  row**; a dev-only Engine worker **executes** it in the Engine's correct context and writes the
+  result back; the API returns it (long-poll).
+- **Web:** browser mirrors sim-now via an inline `Date` shim whose offset is polled from an
+  anonymous dev endpoint (works pre-login). SSR stays real.
 
 ## 5. Backend design
 
 ### 5.1 The abstraction
-
-Use `System.TimeProvider`. Add Core extension methods so the sweep is mechanical and call sites
-stay terse:
+`System.TimeProvider`, with Core extension methods so the sweep is mechanical:
 
 ```csharp
 // RentalCommand.Core/Time/TimeProviderExtensions.cs
-public static class TimeProviderExtensions
-{
-    public static DateTime UtcNow(this TimeProvider tp) => tp.GetUtcNow().UtcDateTime;                 // was DateTime.UtcNow
-    public static DateOnly TodayUtc(this TimeProvider tp) => DateOnly.FromDateTime(tp.GetUtcNow().UtcDateTime); // was DateTime.Today (UTC intent)
-    public static DateTimeOffset NowOffset(this TimeProvider tp) => tp.GetUtcNow();                    // was DateTimeOffset.UtcNow
-}
+public static DateTime UtcNow(this TimeProvider tp) => tp.GetUtcNow().UtcDateTime;                   // was DateTime.UtcNow
+public static DateOnly TodayUtc(this TimeProvider tp) => DateOnly.FromDateTime(tp.GetUtcNow().UtcDateTime); // was DateTime.Today (UTC)
+public static DateTimeOffset NowOffset(this TimeProvider tp) => tp.GetUtcNow();                      // was DateTimeOffset.UtcNow
 ```
-
-Call-site sweep pattern: inject `TimeProvider` (ctor), then
-`DateTime.UtcNow` → `_timeProvider.UtcNow()`, `DateTimeOffset.UtcNow` → `_timeProvider.NowOffset()`,
-`DateTime.Today` → `_timeProvider.TodayUtc()`. Local-time sites (`DateTime.Now`) map via
-`GetLocalNow()`/`LocalTimeZone`, enumerated case-by-case (most code is UTC-based already).
 
 ### 5.2 `SimulationTimeProvider` (non-prod only)
 
 ```csharp
 public sealed class SimulationTimeProvider(IClockStateProvider state) : TimeProvider
 {
-    public override DateTimeOffset GetUtcNow()
+    public override DateTimeOffset GetUtcNow() => state.Current.Mode switch
     {
-        var s = state.Current; // cheap in-memory read
-        return s.Mode switch
-        {
-            ClockMode.Real   => base.GetUtcNow(),
-            ClockMode.Frozen => s.SimAnchorUtc,
-            ClockMode.Offset => base.GetUtcNow() + (s.SimAnchorUtc - s.RealAnchorUtc),
-            _                => base.GetUtcNow(),
-        };
-    }
-    public override TimeZoneInfo LocalTimeZone => state.Current.SimTimeZone ?? base.LocalTimeZone;
-    // GetTimestamp()/CreateTimer(): NOT overridden → real monotonic timing + real timers.
+        ClockMode.Real   => base.GetUtcNow(),
+        ClockMode.Frozen => state.Current.SimAnchorUtc,
+        ClockMode.Offset => base.GetUtcNow() + (state.Current.SimAnchorUtc - state.Current.RealAnchorUtc),
+        _                => base.GetUtcNow(),
+    };
+    // LocalTimeZone override is kept but is NOT the business-tz lever (see §8) — business-day
+    // logic reads App:TimeZone. GetTimestamp()/CreateTimer() are NOT overridden (real timing/timers;
+    // verified nothing calls TimeProvider.CreateTimer today).
 }
 ```
 
-Rationale for leaving `GetTimestamp`/`CreateTimer` **real**: `Stopwatch`/perf stay accurate and
-background loops keep ticking in real time. We drive scheduled work deterministically via
-**on-demand triggers** (§7), not by faking timers — simpler and robust.
+### 5.3 Shared state: `SimulationClock` (one row)
 
-### 5.3 Shared state: `SimulationClock`
+`Id`(=1) · `Mode`(Real|Frozen|Offset) · `SimAnchorUtc` · `RealAnchorUtc` · `TimeZoneId`(business-tz
+override, nullable) · `UpdatedAtRealUtc`. Seed `Mode=Real`.
+**RLS:** the table is global (no `PortfolioId`) and MUST be **excluded from the `tenant_isolation`
+policy set** so a portfolio-scoped session can still read it. Harmless if shipped-but-unread in prod.
 
-One-row EF entity + migration (present in all envs; only *read* when `SimulationTimeProvider` is
-bound):
-
-| Column | Type | Notes |
-|---|---|---|
-| `Id` | int PK | always `1` |
-| `Mode` | text/enum | `Real` \| `Frozen` \| `Offset` |
-| `SimAnchorUtc` | timestamptz | the simulated instant … |
-| `RealAnchorUtc` | timestamptz | … at this real instant (for `Offset` ticking) |
-| `TimeZoneId` | text null | simulated local tz |
-| `UpdatedAtRealUtc` | timestamptz | audit |
-
-Default seed: `Mode=Real`.
-
-### 5.4 Cheap reads + invalidation
-
-`GetUtcNow()` is called constantly and is synchronous — it must not hit the DB. An
-`IClockStateProvider` holds the current `ClockState` in memory, refreshed:
-
-- immediately on a `clock-changed` notification (Postgres `LISTEN/NOTIFY` channel `sim_clock`,
-  and SignalR for the web), and
-- by a **1 s fallback poll** (a lightweight hosted service in both API and Engine).
-
-Worst-case staleness is 1 s, which never affects determinism: time-travel is always followed by
-an explicit trigger/observe step.
+### 5.4 Cheap reads + invalidation (poll-only)
+`GetUtcNow()` is hot + synchronous → never hits the DB. `IClockStateProvider` holds `ClockState`
+in memory, refreshed by a **~1s poll** hosted service in both API and Engine (**no LISTEN/NOTIFY** —
+none exists in the codebase and it's unjustified for a dev tool). The worker-command executor
+forces a state refresh before running; the replay driver **freezes** the clock while firing workers,
+so the 1s staleness never affects determinism.
 
 ### 5.5 DI wiring & gating
+- Config flag `Simulation:Enabled` (default **false**; true only in Development/test).
+- **Prod:** `AddSingleton(TimeProvider.System)`; no dev routes; clock row never read; no command worker.
+- **Non-prod:** register `IClockStateProvider` + 1s refresher + `AddSingleton<TimeProvider, SimulationTimeProvider>()`
+  + `IAppTimeZoneProvider` (sim override) + (Engine only) the `SimWorkerCommandWorker`; map dev routes.
+- One shared `AddSimulationClock(config)` extension called by both API and Engine startup.
 
-- Config flag `Simulation:Enabled` (default **false**; `true` only in Development/test).
-- **Prod (`false`):** `services.AddSingleton(TimeProvider.System)`; no dev routes; clock row never read.
-- **Non-prod (`true`):** register `IClockStateProvider` + refresher hosted service +
-  `services.AddSingleton<TimeProvider, SimulationTimeProvider>()`; map dev routes.
-- One shared `AddSimulationClock(config)` extension, called by both API and Engine startup.
-
-### 5.6 Classification rule (which of the 339 sites to virtualize)
-
-- **Virtualize (inject `TimeProvider`):** anything that (a) is stored on a business record that
-  appears in reports, (b) drives a scheduled job's due/period logic, or (c) is a
-  lease/payment/expense/notice/inspection date or a due/overdue/period-boundary computation.
-- **Keep real (do NOT touch):** JWT/refresh issue+expiry (`JwtTokenService`), API-key/auth
-  handlers, HTTP cache TTLs, rate limiting, outbox retry backoff scheduling, `Stopwatch`/perf,
-  and log/telemetry timestamps.
-
-The sweep (§9 Phase D) applies this rule per site; auth/infra sites are explicitly excluded.
+### 5.6 Classification rule (which sites to virtualize) + mechanics
+- **Virtualize:** business time — stored on a business record that appears in reports; drives a
+  scheduled job's due/period logic; lease/payment/expense/notice/inspection dates; due/overdue/
+  period-boundary computations; **and the Data audit-interceptor timestamp** (`AuditSaveChangesInterceptor.cs:235`)
+  + the `NotificationHub` alert timestamp, so a sim-dated record gets a sim-dated audit/alert.
+- **Keep real (do NOT touch), even inside hotspot files:** JWT/refresh issue+expiry
+  (`JwtTokenService`), OAuth token-expiry (`AccountingConnectionService.cs:164,362`), API-key/auth
+  handlers, HTTP cache TTLs, rate limiting, outbox retry backoff, `Stopwatch`/perf, log/telemetry.
+- **EF expression-tree mechanic (SF-D):** inside `ExecuteUpdate`/`SetProperty` or any query lambda,
+  `_timeProvider.UtcNow()` cannot be translated — **hoist to a local first**
+  (`var now = _timeProvider.UtcNow();`). Known sites: `ScanService.cs:1701`,
+  `ScanProcessingWorker.cs:379`. (Only ~4 lambda-embedded sites exist; no domain
+  `.Where(x => x < DateTime.UtcNow)` translates to SQL `now()` — the codebase already hoists.)
 
 ## 6. Control surface (dev-only)
 
-All under `/api/v1/dev/*`, mapped only when `Simulation:Enabled`, requiring an authenticated
-admin. Every mutation persists the `SimulationClock` row and broadcasts `clock-changed`
-(`NOTIFY` + SignalR).
+Mapped only when `Simulation:Enabled`. Every clock mutation persists the row.
 
-- `GET  /api/v1/dev/clock` → `{ simNowUtc, mode, timeZoneId, offsetSeconds }`
-- `POST /api/v1/dev/clock/set` `{ instantUtc | date, timeZoneId?, mode?="offset" }` — anchor
-  sim-now to the given instant; `mode=frozen` holds it, `offset` ticks forward from it.
-- `POST /api/v1/dev/clock/advance` `{ days?, hours?, minutes?, seconds? }` — shift the anchor by
-  a delta (works frozen or ticking).
-- `POST /api/v1/dev/clock/freeze` / `POST /api/v1/dev/clock/unfreeze`
-- `POST /api/v1/dev/clock/reset` → back to `Real`.
+### 6.1 Clock (on the API — API references Data, can read/write the row)
+- `GET  /api/v1/dev/clock` → `{ simNowUtc, mode, timeZoneId, offsetSeconds }` — **`AllowAnonymous`
+  in non-prod** (`Simulation:Enabled` is the real gate) so the web can sync it **before login**
+  (register / confirm-email pages).
+- `POST /api/v1/dev/clock/set` `{ instantUtc | date, timeZoneId?, mode?="offset" }` · `advance`
+  `{ days?,hours?,… }` · `freeze`/`unfreeze` · `reset` → back to `Real`. (admin-gated)
 
-### Worker triggers
-
-- `POST /api/v1/dev/workers/{key}/run-once` — invoke that worker's due-work service once at
-  sim-now, synchronously; return a summary (e.g. `{ created: 12, skipped: 3 }`).
-- `POST /api/v1/dev/workers/run-due` — run all due workers once (convenience after a time jump).
-
-Keys map to the existing services (`rent-charge`, `autopay`, `late-fee`, `recurring-expense`,
-`recurring-maintenance`, `debt-service`, `lease-expiry-reminder`, `notice-draft`,
-`daily-briefing`). Non-prod + admin gated.
+### 6.2 Worker triggers (command bridge — API cannot call Engine services)
+Because `Engine → Api` (verified), the API cannot reference the Engine's automation services, and
+the Engine has no HTTP port. So:
+- API `POST /api/v1/dev/workers/{key}/run-once` and `POST /api/v1/dev/workers/run-due` **insert a
+  row** into a dev-only `SimWorkerCommand` table (`key`, `requestedSimUtc`, `status`, `resultJson`).
+- A dev-only **`SimWorkerCommandWorker`** in the Engine (fast poll, ~500ms, only when
+  `Simulation:Enabled`) picks up pending commands and invokes the matching service **in the Engine's
+  native context** — `EngineRlsInterceptor` pins `app.is_admin='true'` (correct cross-portfolio
+  sweep) and `SystemCurrentActor` provides the audit actor — then writes `{created,skipped,error}`.
+- The API endpoint **long-polls** the row (or `GET /api/v1/dev/workers/commands/{id}`) and returns
+  the result, giving the driver effectively-synchronous behavior.
+- `run-due` expands to the dependency order: **RentCharge → notices → LateFee → Autopay →
+  DebtService/Recurring → Outbox.** Determinism: the driver **freezes** the clock before firing.
+- **Rationale over relocating services into the API:** keeps the 9 production automation services
+  and both process bootstraps **untouched** (no prod-behavior risk), reuses the existing DB-as-bridge
+  + polling pattern, and inherits correct RLS + system audit actor for free. The only cost is a
+  dev-only table + worker + brief poll latency, which is immaterial for a deliberate step-through driver.
 
 ## 7. Web design
 
-### 7.1 Global `Date` shim (dev-only)
+### 7.1 Gating + loading
+- Gate on **`PUBLIC_SIMULATION_ENABLED`** via `$env/static/public` (**not** `import.meta.env.DEV`,
+  which strips the shim from any built image). Precedent: `PUBLIC_GOOGLE_CLIENT_ID`.
+- **Load via an inline `<script>` in `web/src/app.html`** (same pattern as the existing splash
+  loader) so `Date` is patched **truly before app boot** — a module import from a layout is not.
+  The inline shim initializes its offset+mode from a `rc_sim` cookie (warm, synchronously correct on
+  reload) else 0; overrides `Date.now()` and `new Date()` (no-arg) only; `new Date(...args)`,
+  `Date.parse`, `Date.UTC`, and `instanceof` pass through.
 
-`web/src/lib/dev/sim-clock.ts` — a ~40-line shim (no prod dependency) that, when active:
-
-- overrides `Date.now()` → `realNow + offsetMs` (or a fixed instant when frozen),
-- overrides `new Date()` (no args) → simulated now; `new Date(...args)` passes through unchanged,
-- preserves `instanceof Date`, `Date.parse`, `Date.UTC`.
-
-Loaded **before app boot** (guarded by `import.meta.env.DEV` and a runtime `Simulation:Enabled`
-check). Zero edits to the 113 call sites; `date.ts` helpers (which use `Date.now()`/`new Date()`)
-become sim-aware automatically.
-
-### 7.2 Sync
-
-On load, `GET /api/v1/dev/clock` → `offsetMs = simNow - realNow` (+ mode). Subscribe to the
-existing SignalR hub's `clock-changed` → re-apply. Expose
-`window.__simClock = { sync(), set(iso), offsetMs, mode }` so the browser-driving tester can
-read/force it directly.
+### 7.2 Sync (works pre-login)
+A tiny client bootstrap polls the **anonymous** `GET /api/v1/dev/clock` (~1s), updates the shim's
+offset + mode, and writes the `rc_sim` cookie for the next warm load. Exposes
+`window.__simClock = { sync(), set(iso), offsetMs, mode }` for the browser-driving tester. **No
+SignalR dependency for the clock** (the hub is auth-gated/portfolio-scoped and wouldn't reach
+cold-start pages).
 
 ### 7.3 Dev panel
+`web/src/lib/dev/SimClockPanel.svelte` — floating widget (dev + `PUBLIC_SIMULATION_ENABLED`) with
+set-date / +1d / +1w / +1m / freeze / reset calling the endpoints.
 
-`web/src/lib/dev/SimClockPanel.svelte` — a small floating widget (dev + `Simulation:Enabled`
-only) showing sim-now with set-date / +1d / +1w / +1m / freeze / reset controls that call the
-endpoints. Mounted in the root layout behind a dev guard.
+### 7.4 SSR stays real (+ hydration note)
+No server patching. Because SSR is on app-wide, server-rendered relative-time (`daysFromTodayUtc`/
+`isPastDueUtc`) renders on the real clock and the client re-renders on sim time — a **cosmetic
+Svelte-5 hydration text patch** (no hard error; reactivity re-renders). Acceptable for a dev harness;
+the sim run may set `ssr=false` (precedent: `apply/[token]/+page.ts`) to eliminate it entirely.
 
-### 7.4 SSR stays real
+## 8. Timezone testing (corrected)
+The meaningful lever is **`App:TimeZone`**, not `TimeProvider.LocalTimeZone`: the business-day
+rollover in rent/late-fee/recurring/debt services reads `App:TimeZone` (verified), while **reports
+bucket in pure UTC regardless**. So:
+- The `SimulationClock.TimeZoneId` feeds an **`IAppTimeZoneProvider`** that returns the sim override
+  (else the `App:TimeZone` config default); the 5 business-day services read it instead of raw
+  `configuration["App:TimeZone"]` (part of the Phase-D sweep). Default **America/New_York** (matches
+  the corpus ground truth).
+- This lets us exercise real **business-day-boundary** bugs (e.g., a payment at 23:00 ET on the last
+  grace day = next-day UTC — is it on-time?). Report month/day buckets are UTC by design and are
+  asserted as such, not "fixed" by a tz.
 
-No server-side patching. The handful of SSR display dates are corrected on client hydration;
-auth/cookie/cache timing stays real by design.
-
-## 8. Timezone testing
-
-The control sets an explicit `timeZoneId`/offset so we can exercise "landlord Central, tenant
-Pacific, traveling to UTC+9" and surface the date-boundary bugs that hide in reports (month/day
-rollover between UTC and local).
-
-## 9. Rollout plan (phased; drives the implementation plan)
-
-- **A — Infra:** Core `TimeProvider` extensions; `SimulationTimeProvider`; `SimulationClock`
-  entity + migration; `IClockStateProvider` + refresher + `NOTIFY`/SignalR invalidation;
-  `AddSimulationClock` DI + gating; bind `System` in prod. Unit tests with `FakeTimeProvider`.
-- **B — Control + triggers:** dev clock endpoints + worker `run-once`/`run-due`; broadcast
-  wiring. Integration tests.
-- **C — Web:** shim + sync + dev panel.
-- **D — The sweep:** replace domain wall-clock sites with the injected `TimeProvider` across
-  services → workers → Core/Data, in reviewed batches, applying the §5.6 rule (skip auth/infra).
-  **Parallelize edits, sequence builds** (concurrent rebuilds of one `.csproj` corrupt bin/obj).
-- **E — Verify:** set date → API/Engine/web agree; advance + trigger → correct rent
-  charges/late fees/lease-expiry reminders; reconcile a slice against SA's ledger; confirm the
-  prod build has no dev routes/shim and uses `System`.
+## 9. Rollout plan (drives the implementation plan)
+- **A — Infra:** Core `TimeProvider` extensions; `SimulationTimeProvider`; `SimulationClock` entity
+  + migration (RLS-excluded, global); `IClockStateProvider` + **1s poll** refresher (no NOTIFY);
+  `IAppTimeZoneProvider`; `AddSimulationClock` DI + gating; bind `System` in prod. Unit tests with
+  `FakeTimeProvider`.
+- **B — Control + command bridge:** anonymous `GET /dev/clock` + admin set/advance/freeze/reset;
+  `SimWorkerCommand` table + migration; Engine `SimWorkerCommandWorker`; API enqueue+long-poll
+  endpoints; `run-due` ordering. Integration tests (set→GET; advance→enqueue→Engine executes→result).
+- **C — Web:** `PUBLIC_SIMULATION_ENABLED` gate; inline `app.html` shim + cookie; ~1s anonymous poll
+  bootstrap; `window.__simClock`; dev panel.
+- **D — The sweep:** replace domain wall-clock sites with injected `TimeProvider` across
+  services → workers → **Data audit interceptor** → Core, in reviewed batches, applying §5.6 (skip
+  auth/infra; hoist-to-local for EF lambdas). Route the 5 business-day services through
+  `IAppTimeZoneProvider`. **Parallelize edits, sequence builds.**
+- **E — Verify:** set date → API/Engine/web agree; freeze + `run-due` after a 35-day jump → correct
+  rent charges/late fees/lease-expiry reminders + matching sim-dated audit rows; a business-day
+  boundary (23:00 ET) case; prod build has no dev routes/shim/command-worker and uses `System`;
+  reconcile a slice against SA's ledger.
 
 ## 10. Testing the clock
-
-- **Unit:** `SimulationTimeProvider` offset/frozen/tz math; `ClockState` invalidation; endpoint
-  set/advance/reset; extension helpers. Services under test use `FakeTimeProvider`
-  (`Microsoft.Extensions.TimeProvider.Testing`).
-- **Integration:** set→GET round-trip; advance→worker-trigger→DB records; cross-process (API
-  sets, Engine sees via `NOTIFY`).
-- **Guard test:** with `Simulation:Enabled=false`, dev routes 404 and `TimeProvider.System` is
+- **Unit:** `SimulationTimeProvider` offset/frozen math; `ClockState` poll refresh; endpoint
+  set/advance/reset; extension helpers; `IAppTimeZoneProvider` override. Services under test use
+  `FakeTimeProvider`.
+- **Integration:** set→anonymous GET round-trip; advance→enqueue command→Engine `SimWorkerCommandWorker`
+  executes→result row (cross-process); audit row carries sim time.
+- **Guard test:** `Simulation:Enabled=false` → dev routes 404, no command worker, `TimeProvider.System`
   bound.
 
 ## 11. Safety
-
-Whole surface behind `Simulation:Enabled` (false in prod) + admin auth on endpoints. Prod:
-`TimeProvider.System`, no routes, no shim, clock row unread. Never touches OS/Postgres clocks.
-The `SimulationClock` table is harmless if present in prod (never read).
+Whole surface behind `Simulation:Enabled` (false in prod) + admin auth on mutating endpoints (GET is
+anonymous but read-only and non-prod-only). Prod: `System`, no routes, no shim, no command worker,
+clock row unread. Never touches OS/Postgres clocks.
 
 ## 12. Open questions / risks
-
-- **`DateTime.Now` (local) sites:** enumerate; map to `GetLocalNow()`/simulated `LocalTimeZone`.
-- **Mixed real/sim within one worker:** e.g. outbox retry backoff (real) vs due-date (sim) in
-  the same loop — keep backoff real, due-date sim; verify no comparison mixes the two.
-- **Third-party libs** calling `DateTime.UtcNow` internally (token/crypto) — out of scope,
-  correctly stays real.
-- **1 s cache staleness** — acceptable; time-travel is always followed by an explicit
-  trigger/observe.
+- **`DateTime.Now` (local) sites:** enumerate in the sweep; most are UTC-based already.
+- **Mixed real/sim in one worker:** keep outbox retry backoff real, due-date sim; verify no
+  comparison mixes them.
+- **Third-party libs** calling `DateTime.UtcNow` internally — out of scope, correctly real.
+- **Command-bridge latency / crash:** if the Engine command worker is down, the API long-poll times
+  out → surface a clear error to the driver (don't hang).
 
 ## 13. Acceptance criteria
-
-1. In dev, `POST /dev/clock/set {date}` makes API responses, Engine worker logic, and web
-   display all report that date.
-2. `advance 35 days` then `workers/run-due` produces exactly the rent charges + late fees +
-   lease-expiry reminders expected for that window.
-3. A timezone set exercises a date-boundary case (e.g. UTC-vs-Central month rollover) without an
-   off-by-one in a report.
-4. Prod build: dev routes absent, shim absent, `TimeProvider.System` bound, all existing
-   behavior unchanged.
+1. `POST /dev/clock/set {date}` → API responses, Engine worker logic, and web display all report that date.
+2. Freeze + advance 35 days + `workers/run-due` → exactly the expected rent charges + late fees +
+   lease-expiry reminders, **each with a sim-dated audit row**.
+3. A **business-day boundary** case (payment 23:00 America/New_York on the last grace day) is treated
+   correctly by late-fee logic under the `App:TimeZone` override. (Reports remain UTC-bucketed by design.)
+4. Prod build: dev routes/shim/command-worker absent, `TimeProvider.System` bound, existing behavior
+   unchanged; cold-start (register/confirm-email) still syncs sim time via the anonymous GET.
 5. Reconciliation: a sampled month of the sim run matches SA's ground-truth ledger.
+
+## 14. Review incorporated (2026-07-01)
+Adversarial review verdict **Approve-with-changes**; all folded into the baseline above:
+- **MF-1** worker triggers can't run on the API (Engine→API cycle; services Engine-only; Engine has
+  no HTTP) → **command-bridge** (§6.2), keeping prod services untouched + correct RLS/audit.
+- **MF-2** web gating/sync for cold-start → `PUBLIC_SIMULATION_ENABLED`, inline `app.html` shim +
+  cookie, **anonymous** `GET /dev/clock` ~1s poll, no SignalR clock dependency (§7).
+- **MF-3** timezone control targeted the wrong seam → override **`App:TimeZone`** via
+  `IAppTimeZoneProvider`; reports are UTC-bucketed; AC#3 reframed to a business-day boundary (§8, §13).
+- **SF-A** drop LISTEN/NOTIFY → **1s poll** (§5.4). **SF-B** virtualize the Data audit interceptor +
+  hub alert timestamp (§5.6). **SF-C** don't virtualize token/expiry/cache sites inside hotspot
+  files (§5.6). **SF-D** hoist-to-local for EF expression trees (§5.6). **RLS:** `SimulationClock`
+  excluded from `tenant_isolation` (§5.3). Counts corrected to ~349/~123 (§3).
