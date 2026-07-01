@@ -888,7 +888,10 @@ public class ReportsService : IReportsService
         // cumulative net.
         var paymentQuery = _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid);
+            // Lease-scoped ledger rows (property/tenant/lease-number come from the lease): a lease-less
+            // payment (application fee) has none of those, so it is excluded here and instead surfaces on
+            // Schedule E + cash flow + the vw_accounting_transactions ledger.
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null);
 
         if (propertyFilter is not null)
             paymentQuery = paymentQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));

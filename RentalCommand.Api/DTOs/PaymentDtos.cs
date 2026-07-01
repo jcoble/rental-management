@@ -131,9 +131,13 @@ public class PaymentListQuery : ListQuery
 
 public class CreatePaymentRequest
 {
-    [Required]
+    /// <summary>
+    /// The lease to charge. Optional: a lease-less payment (application/screening fee) sets
+    /// <see cref="ApplicationId"/> instead. gap5 (G5.2) completes the "exactly one of LeaseId /
+    /// ApplicationId" validation in <c>PaymentService.CreateAsync</c>.
+    /// </summary>
     [Range(1, int.MaxValue)]
-    public int LeaseId { get; set; }
+    public int? LeaseId { get; set; }
 
     [EnumDataType(typeof(PaymentType))]
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
