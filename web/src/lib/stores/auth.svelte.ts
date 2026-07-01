@@ -10,6 +10,7 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import type { User } from '$lib/types/user';
 import { hasRole, isAdmin, isManager, isStaff, isPortalUser } from '$lib/types/user';
+import { realNow } from '$lib/dev/real-time';
 
 let user = $state<User | null>(null);
 let accessToken = $state<string | null>(null);
@@ -111,11 +112,19 @@ export function clearAuth() {
 	}
 }
 
-/** True if the token is expired or expires within `bufferSeconds`. */
+/**
+ * True if the token is expired or expires within `bufferSeconds`.
+ *
+ * M3: compares against {@link realNow}, NOT `Date.now()`. The dev sim-clock shim replaces the global
+ * `Date`, so a bare `Date.now()` here would return simulated time — advancing the sim clock would make
+ * every live token read as expired, triggering refresh storms and refresh-family revocation. The server
+ * issues/validates JWTs on the real clock, so this client-side gate must use real time too. (The stored
+ * `accessTokenExpiration` is a `new Date(<iso string>)`, which the shim passes through unchanged.)
+ */
 export function isTokenExpired(bufferSeconds = 60): boolean {
 	if (!accessTokenExpiration) return true;
 	const buffer = bufferSeconds * 1000;
-	return accessTokenExpiration.getTime() - Date.now() < buffer;
+	return accessTokenExpiration.getTime() - realNow() < buffer;
 }
 
 /** Reactive accessor for components. */
