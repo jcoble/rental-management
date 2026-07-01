@@ -218,6 +218,142 @@ public class LeaseLedgerServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetLedgerAsync_PagesPaymentRowsInSql_AndReportsTotalPaymentCount()
+    {
+        var lease = SeedLease();
+        // Six rent charges across six months — more than the two-row page we request below.
+        for (var month = 1; month <= 6; month++)
+        {
+            _db.Payments.Add(new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = lease,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1000m,
+                DueDate = new DateTime(2026, month, 1, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            });
+        }
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+
+        var page1 = await _sut.GetLedgerAsync(PortfolioId, lease.Id, skip: 0, take: 2, ct: CancellationToken.None);
+
+        page1.Should().NotBeNull();
+        // TotalCount is the whole payment set (the pageable unit), independent of the page size.
+        page1!.TotalCount.Should().Be(6);
+        page1.Skip.Should().Be(0);
+        page1.Take.Should().Be(2);
+        // Only the first page of rows was materialized (2 Scheduled charges → 2 rows, no companions).
+        page1.Entries.Should().HaveCount(2);
+        // Newest first: June then May.
+        page1.Entries.Select(e => e.Date).Should().ContainInOrder(
+            new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc));
+        // Paging happens in SQL (LIMIT/OFFSET after ORDER BY), not by materializing the whole history.
+        _executedSql.Should().Contain(command =>
+            command.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
+            && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "lease ledger rows must be paged (LIMIT) by the database, not sliced in memory");
+
+        // The next page continues the descending sequence (April then March).
+        var page2 = await _sut.GetLedgerAsync(PortfolioId, lease.Id, skip: 2, take: 2, ct: CancellationToken.None);
+        page2!.Entries.Select(e => e.Date).Should().ContainInOrder(
+            new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc));
+        // Headline totals are the whole-set aggregate on every page (6 × $1,000 charged, nothing paid).
+        page2.TotalCharged.Should().Be(6000m);
+        page2.TotalPaid.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetLedgerAsync_ComputesPastDueCountOverWholeSet_NotJustThePage()
+    {
+        var lease = SeedLease();
+        // Two unmistakably past-due charges (a month ago) + one future + one already Paid.
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId, Lease = lease, PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled, Amount = 1000m,
+            DueDate = DateTime.UtcNow.Date.AddMonths(-1),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId, Lease = lease, PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late, Amount = 1000m,
+            DueDate = DateTime.UtcNow.Date.AddMonths(-2),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId, Lease = lease, PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled, Amount = 1000m,
+            DueDate = DateTime.UtcNow.Date.AddMonths(1),   // future → not past due
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId, Lease = lease, PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid, Amount = 1000m,
+            DueDate = DateTime.UtcNow.Date.AddMonths(-3),   // paid → not past due
+            PaidDate = DateTime.UtcNow.Date.AddMonths(-3),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        // Ask for a single-row page: the past-due count must still reflect ALL four payments, not the page.
+        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, skip: 0, take: 1, ct: CancellationToken.None);
+
+        ledger.Should().NotBeNull();
+        ledger!.Entries.Should().HaveCount(1);              // only the page materialized
+        ledger.PastDueCount.Should().Be(2);                 // computed over the whole set, DB-side
+    }
+
+    [Fact]
+    public async Task GetLedgerAsync_ReturnsOpeningBalanceAsSeparateAnchor_NotMixedIntoEntries()
+    {
+        var lease = SeedLease();
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId, Lease = lease, PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid, Amount = 1000m,
+            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = new DateTime(2026, 03, 02, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        _db.OpeningBalances.Add(new OpeningBalance
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = lease.Id,
+            Amount = 250m,   // tenant owed $250 carried over
+            AsOfDate = new DateTime(2026, 01, 01, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
+
+        ledger.Should().NotBeNull();
+        // The opening balance is returned as its own anchor, not appended to the paged entries.
+        ledger!.Opening.Should().NotBeNull();
+        ledger.Opening!.Type.Should().Be("Opening");
+        ledger.Opening.Amount.Should().Be(250m);
+        ledger.Entries.Should().OnlyContain(e => e.Type != "Opening");
+        ledger.Entries.Should().HaveCount(1);   // just the one payment row
+        // The opening amount is still folded into the headline totals ($1,000 paid + $250 opening owed).
+        ledger.TotalCharged.Should().Be(1250m);
+        ledger.TotalPaid.Should().Be(1000m);
+        ledger.Balance.Should().Be(250m);
+    }
+
+    [Fact]
     public async Task GetLedgerAsync_ReturnsNull_WhenLeaseNotInPortfolio()
     {
         var ledger = await _sut.GetLedgerAsync(PortfolioId, id: 9999, ct: CancellationToken.None);
