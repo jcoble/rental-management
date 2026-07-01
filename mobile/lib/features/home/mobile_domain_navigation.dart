@@ -25,6 +25,7 @@ enum MobileDestinationId {
   notices,
   messages,
   notifications,
+  activityHistory,
   assistant,
   team,
   settings,
