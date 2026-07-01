@@ -158,8 +158,11 @@ public sealed class PortfolioQaServiceTests : IDisposable
             question: "Who is overdue?");
 
         using var doc = JsonDocument.Parse(answer);
-        doc.RootElement.GetArrayLength().Should().Be(1);
-        doc.RootElement[0].GetProperty("leaseNumber").GetString().Should().Be("CURRENT-1");
+        doc.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+        var overdue = doc.RootElement.GetProperty("overdue");
+        overdue.GetArrayLength().Should().Be(1);
+        overdue[0].GetProperty("leaseNumber").GetString().Should().Be("CURRENT-1");
     }
 
     [Fact]
