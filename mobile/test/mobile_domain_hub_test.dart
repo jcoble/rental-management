@@ -6,6 +6,7 @@ import 'package:rental_command/features/home/mobile_destination.dart';
 import 'package:rental_command/features/home/mobile_domain_chrome.dart';
 import 'package:rental_command/features/home/mobile_domain_hub.dart';
 import 'package:rental_command/features/home/mobile_domain_navigation.dart';
+import 'package:rental_command/features/home/mobile_quick_action_fab.dart';
 
 void main() {
   tearDown(() {
@@ -187,6 +188,92 @@ void main() {
 
     expect(find.text('Transactions feed'), findsNothing);
     expect(find.text('Ledger'), findsOneWidget);
+  });
+
+  testWidgets('domain hub provides quick actions when destination has no FAB', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Rentals',
+            subtitle: 'Test',
+            destinations: [
+              MobileDestination(
+                id: MobileDestinationId.units,
+                icon: Symbols.home_work_rounded,
+                label: 'Units',
+                subtitle: 'Command centers',
+                builder: (_) =>
+                    const Scaffold(body: Center(child: Text('Units root'))),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    await tester.pump();
+
+    expect(find.text('Units root'), findsOneWidget);
+    expect(find.byTooltip('Open quick actions'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Record'), findsOneWidget);
+    expect(find.text('Scan'), findsOneWidget);
+  });
+
+  testWidgets('domain hub does not duplicate destination quick action FABs', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Work',
+            subtitle: 'Test',
+            destinations: [
+              MobileDestination(
+                id: MobileDestinationId.workOrders,
+                icon: Symbols.build_rounded,
+                label: 'Work orders',
+                subtitle: 'Open tickets',
+                builder: (_) => Scaffold(
+                  body: const Center(child: Text('Work orders root')),
+                  floatingActionButton: MobileQuickActionFab(
+                    primaryAction: MobileQuickAction(
+                      label: 'New work order',
+                      icon: Icons.add,
+                      onPressed: () {},
+                    ),
+                    onChat: () {},
+                    onRecord: () {},
+                    onScan: () {},
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    await tester.pump();
+
+    expect(find.text('Work orders root'), findsOneWidget);
+    expect(find.byTooltip('Open quick actions'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New work order'), findsOneWidget);
+    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Record'), findsOneWidget);
+    expect(find.text('Scan'), findsOneWidget);
   });
 
   testWidgets('browse destinations prefer registered shell tabs', (
