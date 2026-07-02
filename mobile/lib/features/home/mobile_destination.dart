@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../activity/activity_history_screen.dart';
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
 import '../applications/applications_list_screen.dart';
@@ -136,6 +137,10 @@ class MobileDestination {
     MobileDestinationId.notifications => (
       MobileShellTabId.inbox,
       MobileDestinationId.notifications,
+    ),
+    MobileDestinationId.activityHistory => (
+      MobileShellTabId.inbox,
+      MobileDestinationId.activityHistory,
     ),
     _ => null,
   };
@@ -318,6 +323,13 @@ const inboxHubDestinations = <MobileDestination>[
     subtitle: 'Unread alerts and system updates',
     builder: _notificationsBuilder,
   ),
+  MobileDestination(
+    id: MobileDestinationId.activityHistory,
+    icon: Symbols.history_rounded,
+    label: 'Activity history',
+    subtitle: 'Mobile audit trail and record changes',
+    builder: _activityHistoryBuilder,
+  ),
 ];
 
 const browseDestinationGroups = <MobileDestinationGroup>[
@@ -366,6 +378,8 @@ const browseDestinationGroups = <MobileDestinationGroup>[
 ];
 
 Widget _aiBuilder(BuildContext context) => const AiTab();
+Widget _activityHistoryBuilder(BuildContext context) =>
+    const ActivityHistoryScreen();
 Widget _applicationsBuilder(BuildContext context) =>
     const ApplicationsListScreen();
 Widget _appointmentsBuilder(BuildContext context) => const AppointmentsScreen();
