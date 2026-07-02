@@ -17,6 +17,7 @@ import '../notices/notices_screen.dart';
 import '../notifications/notifications_inbox_screen.dart';
 import '../onboarding/getting_started_screen.dart';
 import '../owner_reports/owner_reports_screen.dart';
+import '../owners/owners_list_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_tab.dart';
 import '../recurring_maintenance/recurring_maintenance_list_screen.dart';
@@ -62,6 +63,10 @@ class MobileDestination {
     MobileDestinationId.properties => (
       MobileShellTabId.rentals,
       MobileDestinationId.properties,
+    ),
+    MobileDestinationId.owners => (
+      MobileShellTabId.rentals,
+      MobileDestinationId.owners,
     ),
     MobileDestinationId.units => (
       MobileShellTabId.rentals,
@@ -182,6 +187,13 @@ const rentalDestinations = <MobileDestination>[
     label: 'Properties',
     subtitle: 'Buildings, units and details',
     builder: _propertiesBuilder,
+  ),
+  MobileDestination(
+    id: MobileDestinationId.owners,
+    icon: Symbols.account_balance_rounded,
+    label: 'Owners',
+    subtitle: 'Entities, contacts and property assignments',
+    builder: _ownersBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.units,
@@ -384,6 +396,7 @@ Widget _noticesBuilder(BuildContext context) => const NoticesScreen();
 Widget _notificationsBuilder(BuildContext context) =>
     const NotificationsInboxScreen();
 Widget _ownerReportsBuilder(BuildContext context) => const OwnerReportsScreen();
+Widget _ownersBuilder(BuildContext context) => const OwnersListScreen();
 Widget _paymentsBuilder(BuildContext context) => const PaymentsScreen();
 Widget _propertiesBuilder(BuildContext context) => const PropertiesTab();
 Widget _recurringMaintenanceBuilder(BuildContext context) =>

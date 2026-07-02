@@ -5,6 +5,7 @@ enum MobileShellTabId { today, rentals, money, work, inbox }
 enum MobileDestinationId {
   gettingStarted,
   properties,
+  owners,
   units,
   tenants,
   leases,
