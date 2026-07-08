@@ -55,6 +55,19 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_RejectsOwnerWithRecordedDistributions()
+    {
+        var owner = SeedOwner();
+        SeedOwnerDistribution(owner);
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, owner.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("distribution");
+        (await _sut.GetAsync(PortfolioId, owner.Id)).Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task DeleteAsync_SoftDeletesUnreferencedOwner()
     {
         var owner = SeedOwner();
@@ -99,5 +112,21 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
         _ctx.Db.Properties.Add(property);
         _ctx.Db.SaveChanges();
         return property.Id;
+    }
+
+    private void SeedOwnerDistribution(OwnerEntity owner)
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.OwnerDistributions.Add(new OwnerDistribution
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityId = owner.Id,
+            Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Amount = 100m,
+            Method = DistributionMethod.Check,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
     }
 }

@@ -461,6 +461,8 @@ export interface OwnerStatementSummary {
 	ownerId: number;
 	ownerName: string;
 	netToOwner: number;
+	totalDistributed: number;
+	undistributed: number;
 }
 
 export interface OwnerStatementPropertyLine {
@@ -481,6 +483,8 @@ export interface OwnerStatementReport {
 	totalExpenses: number;
 	totalManagementFee: number;
 	totalNetToOwner: number;
+	totalDistributed: number;
+	undistributed: number;
 }
 
 // --- Schedule E tax report types ---

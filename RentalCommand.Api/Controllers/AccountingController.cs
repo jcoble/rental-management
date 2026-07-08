@@ -211,7 +211,8 @@ public class AccountingController : ManagementControllerBase
 
     /// <summary>
     /// Downloads the owner statement as a CSV. Columns: Property, Income, Expenses, ManagementFee,
-    /// NetToOwner. A TOTAL row is appended at the end. Returns 404 if the owner is not found.
+    /// NetToOwner. Total, distributed, and undistributed rows are appended at the end. Returns 404 if
+    /// the owner is not found.
     /// Defaults to the current UTC year when <paramref name="year"/> is omitted.
     /// </summary>
     [HttpGet("owner-statement/export")]
@@ -270,13 +271,19 @@ public class AccountingController : ManagementControllerBase
                 $"{CsvField(line.NetToOwner.ToString("F2"))}");
         }
 
-        // TOTAL row
+        // TOTAL / distribution rows
         sb.AppendLine(
             $"{CsvField("TOTAL")}," +
             $"{CsvField(report.TotalIncome.ToString("F2"))}," +
             $"{CsvField(report.TotalExpenses.ToString("F2"))}," +
             $"{CsvField(report.TotalManagementFee.ToString("F2"))}," +
             $"{CsvField(report.TotalNetToOwner.ToString("F2"))}");
+        sb.AppendLine(
+            $"{CsvField("DISTRIBUTED")},,,," +
+            $"{CsvField(report.TotalDistributed.ToString("F2"))}");
+        sb.AppendLine(
+            $"{CsvField("UNDISTRIBUTED")},,,," +
+            $"{CsvField(report.Undistributed.ToString("F2"))}");
 
         return sb.ToString();
     }

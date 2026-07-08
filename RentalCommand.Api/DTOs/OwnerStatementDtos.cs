@@ -22,7 +22,14 @@ public class OwnerStatementReport
     public decimal TotalExpenses { get; set; }
     public decimal TotalManagementFee { get; set; }
     public decimal TotalNetToOwner { get; set; }
+    public decimal TotalDistributed { get; set; }
+    public decimal Undistributed { get; set; }
 }
 
 /// <summary>Lightweight summary for the owner picker/list: owner id, name, and year net distribution.</summary>
-public record OwnerStatementSummary(int OwnerId, string OwnerName, decimal NetToOwner);
+public record OwnerStatementSummary(
+    int OwnerId,
+    string OwnerName,
+    decimal NetToOwner,
+    decimal TotalDistributed = 0m,
+    decimal Undistributed = 0m);
