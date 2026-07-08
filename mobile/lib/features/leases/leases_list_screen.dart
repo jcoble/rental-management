@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -67,13 +69,71 @@ class LeasesListScreen extends ConsumerStatefulWidget {
 }
 
 class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String _sort = '-updatedAt';
+  String _period = MobileGridPeriod.all;
+  int _skip = 0;
+
+  LeaseListQuery get _query {
+    final dateRange = mobileGridDateRangeForPeriod(_period);
+    return LeaseListQuery(
+      skip: _skip,
+      take: _pageSize,
+      search: _search,
+      sort: _sort,
+      activeFrom: dateRange.from,
+      activeTo: dateRange.to,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(leasesProvider.notifier).load());
   }
 
-  Future<void> _refresh() => ref.read(leasesProvider.notifier).refresh();
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    await ref.read(leasesProvider.notifier).refresh();
+    return ref.refresh(leasesPageProvider(_query).future);
+  }
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setPeriod(String? period) {
+    if (period == null || period == _period) return;
+    setState(() {
+      _period = period;
+      _skip = 0;
+    });
+  }
 
   void _openDetail(BuildContext context, Lease lease) {
     openUnitCommandCenter(
@@ -92,16 +152,17 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => LeaseFormSheet(
-        onSaved: () => ref.read(leasesProvider.notifier).refresh(),
+        onSaved: () {
+          ref.read(leasesProvider.notifier).refresh();
+          ref.invalidate(leasesPageProvider);
+        },
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final leasesAsync = ref.watch(leasesProvider);
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
+    final leasesAsync = ref.watch(leasesPageProvider(_query));
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Leases')),
@@ -124,24 +185,79 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
             message: e is ApiException ? e.message : e.toString(),
             onRetry: _refresh,
           ),
-          data: (list) {
-            if (list.isEmpty) {
-              return _EmptyBody(onAdd: () => _showAddSheet(context));
+          data: (page) {
+            if (page.items.isEmpty) {
+              final bottomInset = MediaQuery.paddingOf(context).bottom;
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 160.0 + bottomInset),
+                children: [
+                  _LeasesGridControls(
+                    searchController: _searchCtrl,
+                    sort: _sort,
+                    period: _period,
+                    onSearch: _submitSearch,
+                    onClearSearch: _clearSearch,
+                    onSortChanged: _setSort,
+                    onPeriodChanged: _setPeriod,
+                  ),
+                  const SizedBox(height: 24),
+                  _EmptyBody(
+                    hasSearch: (_search ?? '').isNotEmpty,
+                    onAdd: () => _showAddSheet(context),
+                  ),
+                ],
+              );
             }
             final bottomInset = MediaQuery.paddingOf(context).bottom;
             return ListView.separated(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 160.0 + bottomInset),
-              itemCount: list.length,
-              separatorBuilder: (_, idx) =>
-                  _GroupedListDivider(colorScheme: colorScheme),
+              itemCount: page.items.length + 2,
+              separatorBuilder: (_, idx) {
+                if (idx == 0 || idx == page.items.length) {
+                  return const SizedBox(height: 8);
+                }
+                return const MobileM3ListDivider();
+              },
               itemBuilder: (context, index) {
-                final lease = list[index];
+                if (index == 0) {
+                  return _LeasesGridControls(
+                    searchController: _searchCtrl,
+                    sort: _sort,
+                    period: _period,
+                    onSearch: _submitSearch,
+                    onClearSearch: _clearSearch,
+                    onSortChanged: _setSort,
+                    onPeriodChanged: _setPeriod,
+                  );
+                }
+
+                if (index == page.items.length + 1) {
+                  return MobileGridPagingBar(
+                    totalCount: page.totalCount,
+                    skip: page.skip,
+                    itemCount: page.items.length,
+                    previousTooltip: 'Previous leases page',
+                    nextTooltip: 'Next leases page',
+                    onPrevious: page.hasPrevious
+                        ? () => setState(() {
+                            _skip = (_skip - _pageSize).clamp(0, _skip);
+                          })
+                        : null,
+                    onNext: page.hasNext
+                        ? () => setState(() => _skip += _pageSize)
+                        : null,
+                  );
+                }
+
+                final leaseIndex = index - 1;
+                final lease = page.items[leaseIndex];
                 return _LeaseCard(
                   lease: lease,
-                  colorScheme: colorScheme,
-                  theme: theme,
-                  first: index == 0,
-                  last: index == list.length - 1,
+                  position: MobileM3ListItemPositionForIndex.forIndex(
+                    leaseIndex,
+                    page.items.length,
+                  ),
                   onTap: () => _openDetail(context, lease),
                 );
               },
@@ -153,115 +269,113 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
   }
 }
 
+class _LeasesGridControls extends StatelessWidget {
+  const _LeasesGridControls({
+    required this.searchController,
+    required this.sort,
+    required this.period,
+    required this.onSearch,
+    required this.onClearSearch,
+    required this.onSortChanged,
+    required this.onPeriodChanged,
+  });
+
+  final TextEditingController searchController;
+  final String sort;
+  final String period;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onClearSearch;
+  final ValueChanged<String?> onSortChanged;
+  final ValueChanged<String?> onPeriodChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return MobileGridControlsBar(
+      keyPrefix: 'leases',
+      padding: EdgeInsets.zero,
+      searchController: searchController,
+      searchLabel: 'Search leases',
+      onSearch: onSearch,
+      onClearSearch: onClearSearch,
+      sort: sort,
+      defaultSort: '-updatedAt',
+      sortLabel: 'Sort leases',
+      sortOptions: const [
+        MobileGridControlOption(value: '-updatedAt', label: 'Updated recently'),
+        MobileGridControlOption(value: 'tenantName', label: 'Tenant A-Z'),
+        MobileGridControlOption(value: 'propertyName', label: 'Property A-Z'),
+        MobileGridControlOption(value: '-startDate', label: 'Start newest'),
+        MobileGridControlOption(value: 'startDate', label: 'Start oldest'),
+        MobileGridControlOption(value: '-monthlyRent', label: 'Rent high-low'),
+      ],
+      onSortChanged: onSortChanged,
+      period: period,
+      defaultPeriod: MobileGridPeriod.all,
+      periodLabel: 'Active period',
+      onPeriodChanged: onPeriodChanged,
+    );
+  }
+}
+
 // ── Lease card ────────────────────────────────────────────────────────────────
 
 class _LeaseCard extends StatelessWidget {
   const _LeaseCard({
     required this.lease,
-    required this.colorScheme,
-    required this.theme,
-    required this.first,
-    required this.last,
+    required this.position,
     required this.onTap,
   });
 
   final Lease lease;
-  final ColorScheme colorScheme;
-  final ThemeData theme;
-  final bool first;
-  final bool last;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final borderRadius = BorderRadius.vertical(
-      top: first ? const Radius.circular(20) : Radius.zero,
-      bottom: last ? const Radius.circular(20) : Radius.zero,
-    );
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final title = lease.tenantName ?? 'Lease #${lease.leaseNumber}';
+    final propertyLabel =
+        '${lease.propertyName ?? 'Property #${lease.propertyId}'}'
+        '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}';
+    final dateLabel =
+        '${_fmtDate(lease.startDate)} - ${_fmtDate(lease.endDate)}';
 
-    return Material(
-      color: colorScheme.surfaceContainerHigh,
-      borderRadius: borderRadius,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: borderRadius,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          lease.tenantName ?? 'Lease #${lease.leaseNumber}',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (lease.propertyName != null) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            '${lease.propertyName}'
-                            '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _StatusChip(status: lease.status, colorScheme: colorScheme),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  _MetaChip(
-                    icon: Icons.attach_money,
-                    label: '${_formatCurrency(lease.monthlyRent)}/mo',
-                  ),
-                  _MetaChip(
-                    icon: Icons.calendar_today_outlined,
-                    label:
-                        '${_fmtDate(lease.startDate)} – ${_fmtDate(lease.endDate)}',
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.description_outlined,
+        backgroundColor: colorScheme.primaryContainer,
+        foregroundColor: colorScheme.onPrimaryContainer,
       ),
-    );
-  }
-}
-
-class _GroupedListDivider extends StatelessWidget {
-  const _GroupedListDivider({required this.colorScheme});
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Divider(
-      height: 1,
-      thickness: 1,
-      indent: 16,
-      endIndent: 16,
-      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
+      title: Text(
+        title,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        Text(
+          propertyLabel,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(
+          '$dateLabel · ${_formatCurrency(lease.monthlyRent)}/mo',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+      trailing: _StatusChip(status: lease.status, colorScheme: colorScheme),
+      onTap: onTap,
     );
   }
 }
@@ -308,33 +422,14 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
-class _MetaChip extends StatelessWidget {
-  const _MetaChip({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.onSurfaceVariant;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: color),
-        const SizedBox(width: 3),
-        Text(label, style: TextStyle(fontSize: 12, color: color)),
-      ],
-    );
-  }
-}
-
 // ── Empty / Error ─────────────────────────────────────────────────────────────
 
 /// A15: a welcoming first-run empty state with a plain explanation and a
 /// primary "Create your first lease" button instead of a cold "tap +" hint.
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody({required this.onAdd});
+  const _EmptyBody({required this.hasSearch, required this.onAdd});
 
+  final bool hasSearch;
   final VoidCallback onAdd;
 
   @override
@@ -354,7 +449,7 @@ class _EmptyBody extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'No leases yet',
+              hasSearch ? 'No matching leases' : 'No leases yet',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: colorScheme.onSurface,
                 fontWeight: FontWeight.w700,
@@ -362,19 +457,23 @@ class _EmptyBody extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'A lease ties a tenant to a unit and sets the rent, dates, and '
-              'deposit. Create your first to start tracking rent.',
+              hasSearch
+                  ? 'Try another tenant, property, unit or lease number.'
+                  : 'A lease ties a tenant to a unit and sets the rent, dates, and '
+                        'deposit. Create your first to start tracking rent.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: onAdd,
-              icon: const Icon(Icons.add),
-              label: const Text('Create your first lease'),
-            ),
+            if (!hasSearch) ...[
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: onAdd,
+                icon: const Icon(Icons.add),
+                label: const Text('Create your first lease'),
+              ),
+            ],
           ],
         ),
       ),

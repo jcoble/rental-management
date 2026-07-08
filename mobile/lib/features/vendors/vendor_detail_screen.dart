@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../activity/activity_history_screen.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import 'rate_vendor_sheet.dart';
 import 'star_rating.dart';
+import 'vendor_form_sheet.dart';
 import 'vendors_models.dart';
 import 'vendors_repository.dart';
 
@@ -26,6 +28,7 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
   late Vendor _vendor;
   bool _requestingW9 = false;
   bool _savingW9OnFile = false;
+  bool _deleting = false;
 
   @override
   void initState() {
@@ -127,6 +130,92 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
     );
   }
 
+  void _openWebsite() {
+    final raw = _vendor.website!.trim();
+    final uri = Uri.tryParse(raw.contains('://') ? raw : 'https://$raw');
+    if (uri == null) return;
+    _launch(uri, 'Could not open website.');
+  }
+
+  void _showActivityHistory() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'Vendor',
+          entityId: _vendor.id,
+          title: 'Vendor activity',
+          subtitle: _vendor.name,
+        ),
+      ),
+    );
+  }
+
+  void _refreshVendorLists() {
+    ref.invalidate(vendorsProvider);
+    ref.invalidate(vendorsPageProvider);
+  }
+
+  void _showEditSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      useRootNavigator: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => VendorFormSheet(
+        existing: _vendor,
+        onSaved: _refreshVendorLists,
+        onVendorSaved: (updated) {
+          if (mounted) setState(() => _vendor = updated);
+        },
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete vendor?'),
+        content: Text('Delete ${_vendor.name}? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _deleting = true);
+    try {
+      await ref.read(vendorsRepositoryProvider).deleteVendor(_vendor.id);
+      _refreshVendorLists();
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Vendor deleted.')));
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -135,7 +224,26 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
     final scorecardAsync = ref.watch(vendorScorecardProvider(vendor.id));
 
     return Scaffold(
-      appBar: AppBar(title: Text(vendor.name)),
+      appBar: AppBar(
+        title: Text(vendor.name),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'Edit vendor',
+            onPressed: _deleting ? null : _showEditSheet,
+          ),
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View vendor activity',
+            onPressed: _deleting ? null : _showActivityHistory,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete vendor',
+            onPressed: _deleting ? null : _confirmDelete,
+          ),
+        ],
+      ),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'vendor-detail-fab',
         primaryAction: MobileQuickAction(
@@ -209,7 +317,7 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
                 ),
               ],
             ),
-            if (vendor.hasPhone || vendor.hasEmail) ...[
+            if (vendor.hasPhone || vendor.hasEmail || vendor.hasWebsite) ...[
               const SizedBox(height: 14),
               // Phone → tap to call; trailing icon texts. Hidden when no phone.
               if (vendor.hasPhone)
@@ -233,6 +341,14 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
                   cs: cs,
                   theme: theme,
                   onTap: _emailVendor,
+                ),
+              if (vendor.hasWebsite)
+                _ContactRow(
+                  icon: Icons.public_outlined,
+                  value: vendor.website!,
+                  cs: cs,
+                  theme: theme,
+                  onTap: _openWebsite,
                 ),
             ],
 
@@ -276,43 +392,54 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: cs.outlineVariant),
               ),
-              child: Column(
-                children: [
-                  SwitchListTile.adaptive(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    title: const Text('W-9 on file'),
-                    subtitle: Text(
-                      vendor.w9OnFile
-                          ? 'A signed W-9 has been collected.'
-                          : 'No W-9 collected yet.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
+              clipBehavior: Clip.antiAlias,
+              child: Material(
+                color: Colors.transparent,
+                child: Column(
+                  children: [
+                    SwitchListTile.adaptive(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
                       ),
-                    ),
-                    value: vendor.w9OnFile,
-                    onChanged: _savingW9OnFile ? null : (v) => _setW9OnFile(v),
-                  ),
-                  Divider(height: 1, color: cs.outlineVariant),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    leading: Icon(Icons.sms_outlined, color: cs.primary),
-                    title: const Text('Text W-9 request'),
-                    subtitle: Text(
-                      'Send the vendor a text asking for their W-9.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
+                      title: const Text('W-9 on file'),
+                      subtitle: Text(
+                        vendor.w9OnFile
+                            ? 'A signed W-9 has been collected.'
+                            : 'No W-9 collected yet.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
                       ),
+                      value: vendor.w9OnFile,
+                      onChanged: _savingW9OnFile
+                          ? null
+                          : (v) => _setW9OnFile(v),
                     ),
-                    trailing: _requestingW9
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.chevron_right),
-                    onTap: _requestingW9 ? null : _requestW9,
-                  ),
-                ],
+                    Divider(height: 1, color: cs.outlineVariant),
+                    ListTile(
+                      titleAlignment: ListTileTitleAlignment.center,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                      ),
+                      leading: Icon(Icons.sms_outlined, color: cs.primary),
+                      title: const Text('Text W-9 request'),
+                      subtitle: Text(
+                        'Send the vendor a text asking for their W-9.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                      trailing: _requestingW9
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.chevron_right),
+                      onTap: _requestingW9 ? null : _requestW9,
+                    ),
+                  ],
+                ),
               ),
             ),
           ],

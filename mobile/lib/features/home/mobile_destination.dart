@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../activity/activity_history_screen.dart';
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
 import '../applications/applications_list_screen.dart';
@@ -17,6 +18,7 @@ import '../notices/notices_screen.dart';
 import '../notifications/notifications_inbox_screen.dart';
 import '../onboarding/getting_started_screen.dart';
 import '../owner_reports/owner_reports_screen.dart';
+import '../owners/owners_list_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_tab.dart';
 import '../recurring_maintenance/recurring_maintenance_list_screen.dart';
@@ -62,6 +64,10 @@ class MobileDestination {
     MobileDestinationId.properties => (
       MobileShellTabId.rentals,
       MobileDestinationId.properties,
+    ),
+    MobileDestinationId.owners => (
+      MobileShellTabId.rentals,
+      MobileDestinationId.owners,
     ),
     MobileDestinationId.units => (
       MobileShellTabId.rentals,
@@ -137,6 +143,10 @@ class MobileDestination {
       MobileShellTabId.inbox,
       MobileDestinationId.notifications,
     ),
+    MobileDestinationId.activityHistory => (
+      MobileShellTabId.inbox,
+      MobileDestinationId.activityHistory,
+    ),
     _ => null,
   };
 }
@@ -184,6 +194,13 @@ const rentalDestinations = <MobileDestination>[
     builder: _propertiesBuilder,
   ),
   MobileDestination(
+    id: MobileDestinationId.owners,
+    icon: Symbols.account_balance_rounded,
+    label: 'Owners',
+    subtitle: 'Entities, contacts and property assignments',
+    builder: _ownersBuilder,
+  ),
+  MobileDestination(
     id: MobileDestinationId.units,
     icon: Symbols.home_work_rounded,
     label: 'Units',
@@ -215,18 +232,25 @@ const rentalDestinations = <MobileDestination>[
 
 const moneyHubDestinations = <MobileDestination>[
   MobileDestination(
+    id: MobileDestinationId.insights,
+    icon: Symbols.insights_rounded,
+    label: 'Portfolio',
+    subtitle: 'Occupancy, collections and trends',
+    builder: _insightsBuilder,
+  ),
+  MobileDestination(
     id: MobileDestinationId.moneyOverview,
-    icon: Symbols.dashboard_rounded,
-    label: 'Overview',
-    subtitle: 'Snapshot, past-due rent, and cash movement',
-    builder: _moneyBuilder,
+    icon: Symbols.insights_rounded,
+    label: 'Insights',
+    subtitle: 'Collection health and cash movement',
+    builder: _moneyInsightsBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.moneyLedger,
     icon: Symbols.receipt_long_rounded,
     label: 'Ledger',
     subtitle: 'Payments and expenses in one feed',
-    builder: _moneyBuilder,
+    builder: _moneyLedgerBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.deposits,
@@ -241,13 +265,6 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Banking',
     subtitle: 'Reconciliation and matches',
     builder: _bankingBuilder,
-  ),
-  MobileDestination(
-    id: MobileDestinationId.insights,
-    icon: Symbols.insights_rounded,
-    label: 'Insights',
-    subtitle: 'Occupancy, collections and trends',
-    builder: _insightsBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.reports,
@@ -318,6 +335,13 @@ const inboxHubDestinations = <MobileDestination>[
     subtitle: 'Unread alerts and system updates',
     builder: _notificationsBuilder,
   ),
+  MobileDestination(
+    id: MobileDestinationId.activityHistory,
+    icon: Symbols.history_rounded,
+    label: 'Activity history',
+    subtitle: 'Mobile audit trail and record changes',
+    builder: _activityHistoryBuilder,
+  ),
 ];
 
 const browseDestinationGroups = <MobileDestinationGroup>[
@@ -366,6 +390,8 @@ const browseDestinationGroups = <MobileDestinationGroup>[
 ];
 
 Widget _aiBuilder(BuildContext context) => const AiTab();
+Widget _activityHistoryBuilder(BuildContext context) =>
+    const ActivityHistoryScreen();
 Widget _applicationsBuilder(BuildContext context) =>
     const ApplicationsListScreen();
 Widget _appointmentsBuilder(BuildContext context) => const AppointmentsScreen();
@@ -379,11 +405,16 @@ Widget _inspectionsBuilder(BuildContext context) =>
     const InspectionsListScreen();
 Widget _leasesBuilder(BuildContext context) => const LeasesListScreen();
 Widget _messagesBuilder(BuildContext context) => const MessagesListScreen();
-Widget _moneyBuilder(BuildContext context) => const MoneyScreen();
+Widget _moneyInsightsBuilder(BuildContext context) => const MoneyScreen();
+Widget _moneyLedgerBuilder(BuildContext context) => const MoneyScreen(
+  initialView: MoneyScreenView.payments,
+  showTransactionSelector: true,
+);
 Widget _noticesBuilder(BuildContext context) => const NoticesScreen();
 Widget _notificationsBuilder(BuildContext context) =>
     const NotificationsInboxScreen();
 Widget _ownerReportsBuilder(BuildContext context) => const OwnerReportsScreen();
+Widget _ownersBuilder(BuildContext context) => const OwnersListScreen();
 Widget _paymentsBuilder(BuildContext context) => const PaymentsScreen();
 Widget _propertiesBuilder(BuildContext context) => const PropertiesTab();
 Widget _recurringMaintenanceBuilder(BuildContext context) =>

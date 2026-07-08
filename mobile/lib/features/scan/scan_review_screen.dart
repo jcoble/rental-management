@@ -137,6 +137,24 @@ const _applicationFieldOrder = <String>[
   'co_signer_name',
 ];
 
+// Loan-draft field group (target == 'Loan'). The property is supplied by the
+// property detail that launched the scan, so property_id/property_address are
+// not edited here.
+const _loanFieldOrder = <String>[
+  'lender',
+  'original_amount',
+  'current_balance',
+  'annual_interest_rate_pct',
+  'term_months',
+  'start_date',
+  'day_of_month_due',
+  'monthly_principal_interest',
+  'monthly_escrow',
+  'escrow_covers_taxes',
+  'escrow_covers_insurance',
+  'notes',
+];
+
 const _knownScalarFields = {
   'vendor_name',
   'vendor_address',
@@ -158,6 +176,18 @@ const _knownScalarFields = {
   'document_kind',
   'category',
   'notes',
+  'lender',
+  'original_amount',
+  'current_balance',
+  'annual_interest_rate_pct',
+  'term_months',
+  'day_of_month_due',
+  'monthly_principal_interest',
+  'monthly_escrow',
+  'escrow_covers_taxes',
+  'escrow_covers_insurance',
+  'property_id',
+  'property_address',
 };
 
 // Money fields use a decimal number keypad; date fields open a date picker so a
@@ -176,6 +206,12 @@ const _moneyFields = {
   'late_fee',
   // Applicant fields
   'monthly_income',
+  // Loan terms
+  'original_amount',
+  'current_balance',
+  'annual_interest_rate_pct',
+  'monthly_principal_interest',
+  'monthly_escrow',
 };
 
 const _dateFields = {
@@ -190,7 +226,7 @@ const _dateFields = {
 };
 
 // Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
-const _intFields = {'rent_due_day'};
+const _intFields = {'rent_due_day', 'term_months', 'day_of_month_due'};
 
 // Friendly label overrides for keys where plain Title Case reads awkwardly.
 const _labelOverrides = <String, String>{
@@ -225,6 +261,17 @@ const _labelOverrides = <String, String>{
   'desired_move_in_date': 'Desired move-in',
   'id_last4': 'ID last 4',
   'co_signer_name': 'Co-signer',
+  // Loan terms
+  'lender': 'Lender',
+  'original_amount': 'Original amount',
+  'current_balance': 'Current balance',
+  'annual_interest_rate_pct': 'Interest rate %',
+  'term_months': 'Term (months)',
+  'day_of_month_due': 'Day due',
+  'monthly_principal_interest': 'Monthly P&I',
+  'monthly_escrow': 'Monthly escrow',
+  'escrow_covers_taxes': 'Escrow covers taxes',
+  'escrow_covers_insurance': 'Escrow covers insurance',
 };
 
 /// Turns a raw snake_case field name into a human-readable label, e.g.
@@ -288,6 +335,7 @@ Map<String, dynamic> buildOverridesMap({
   required bool isWorkOrder,
   required bool isLease,
   required bool isApplication,
+  required bool isLoan,
   required bool isPaid,
   required int? selectedLeaseId,
   // Extracted, in-portfolio-validated property/unit link for an Application
@@ -299,6 +347,7 @@ Map<String, dynamic> buildOverridesMap({
   required int? selectedPropertyId,
   required int? selectedUnitId,
   required int? selectedTenantId,
+  required int? loanPropertyId,
   // Create-new-property fields (only used when createNewProperty is true).
   String? newPropertyName,
   String? newPropertyAddress,
@@ -346,6 +395,8 @@ Map<String, dynamic> buildOverridesMap({
     if (applicationUnitId != null) overrides['unitId'] = applicationUnitId;
   } else if (isPayment) {
     overrides['leaseId'] = selectedLeaseId;
+  } else if (isLoan) {
+    if (loanPropertyId != null) overrides['propertyId'] = loanPropertyId;
   } else if (!isWorkOrder) {
     overrides['is_paid'] = isPaid;
   }
@@ -357,9 +408,14 @@ Map<String, dynamic> buildOverridesMap({
 // ---------------------------------------------------------------------------
 
 class ScanReviewScreen extends ConsumerStatefulWidget {
-  const ScanReviewScreen({super.key, required this.draftId});
+  const ScanReviewScreen({
+    super.key,
+    required this.draftId,
+    this.loanPropertyId,
+  });
 
   final int draftId;
+  final int? loanPropertyId;
 
   @override
   ConsumerState<ScanReviewScreen> createState() => _ScanReviewScreenState();
@@ -393,6 +449,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // property_name/property_address/property_city.
   bool _createNewProperty = false;
 
+  // Loan scans launched from a property arrive with this preselected. Reopened
+  // drafts choose here so a pending mortgage scan never dead-ends after restart.
+  int? _selectedLoanPropertyId;
+
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
 
@@ -403,6 +463,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedLoanPropertyId = widget.loanPropertyId;
     _startPollingIfNeeded();
   }
 
@@ -534,6 +595,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isWorkOrder: draft.isWorkOrder,
         isLease: draft.isLease,
         isApplication: draft.isApplication,
+        isLoan: draft.isLoan,
         isPaid: _isPaid,
         selectedLeaseId: _selectedLeaseId,
         applicationPropertyId: _extractedInt(draft, 'property_id'),
@@ -542,6 +604,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         selectedPropertyId: _selectedPropertyId,
         selectedUnitId: _selectedUnitId,
         selectedTenantId: _selectedTenantId,
+        loanPropertyId: _selectedLoanPropertyId,
         newPropertyName: _editedFields['property_name'],
         newPropertyAddress: _editedFields['property_address'],
         newPropertyCity: _editedFields['property_city'],
@@ -561,6 +624,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 ? 'Lease created!'
                 : draft.isApplication
                 ? 'Application created!'
+                : draft.isLoan
+                ? 'Loan created!'
                 : 'Expense created!',
           ),
           backgroundColor: Colors.green,
@@ -740,6 +805,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           onUnitSelected: (id) => setState(() => _selectedUnitId = id),
           selectedTenantId: _selectedTenantId,
           onTenantSelected: (id) => setState(() => _selectedTenantId = id),
+          loanPropertyId: _selectedLoanPropertyId,
+          onLoanPropertySelected: (id) =>
+              setState(() => _selectedLoanPropertyId = id),
           confirming: _confirming,
           rejecting: _rejecting,
           onConfirm: () => _confirm(draft),
@@ -771,6 +839,8 @@ class _ReviewBody extends ConsumerWidget {
     required this.onUnitSelected,
     required this.selectedTenantId,
     required this.onTenantSelected,
+    required this.loanPropertyId,
+    required this.onLoanPropertySelected,
     required this.confirming,
     required this.rejecting,
     required this.onConfirm,
@@ -792,6 +862,8 @@ class _ReviewBody extends ConsumerWidget {
   final ValueChanged<int?> onUnitSelected;
   final int? selectedTenantId;
   final ValueChanged<int?> onTenantSelected;
+  final int? loanPropertyId;
+  final ValueChanged<int?> onLoanPropertySelected;
   final bool confirming;
   final bool rejecting;
   final VoidCallback onConfirm;
@@ -834,13 +906,15 @@ class _ReviewBody extends ConsumerWidget {
         !draft.isApplication ||
         ((editedFields['first_name']?.trim().isNotEmpty ?? false) &&
             (editedFields['last_name']?.trim().isNotEmpty ?? false));
+    final loanReady = !draft.isLoan || loanPropertyId != null;
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
         !isTerminal &&
         (!draft.isPayment || selectedLeaseId != null) &&
         leaseReady &&
-        applicationReady;
+        applicationReady &&
+        loanReady;
     // Reject stays available on Failed so a bad scan can always be cleared, but
     // never while processing, mid-action, or already terminal.
     final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
@@ -946,6 +1020,18 @@ class _ReviewBody extends ConsumerWidget {
                       editedFields: editedFields,
                       onFieldChanged: onFieldChanged,
                     ),
+                ] else if (draft.isLoan) ...[
+                  _LoanPropertyPicker(
+                    selectedPropertyId: loanPropertyId,
+                    onPropertySelected: onLoanPropertySelected,
+                  ),
+                  if (draft.scalarFields.isNotEmpty ||
+                      draft.status != 'Pending')
+                    _LoanFieldsSection(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    ),
                 ] else ...[
                   // ---- Extracted field groups ----
                   if (draft.scalarFields.isNotEmpty)
@@ -1021,6 +1107,15 @@ class _ReviewBody extends ConsumerWidget {
                   textAlign: TextAlign.center,
                 ),
               ),
+            if (draft.isLoan && !loanReady && !isTerminal)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Select a property to enable loan creation.',
+                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
+                  textAlign: TextAlign.center,
+                ),
+              ),
             // Surface the interim "Confirming" state (L19): the server is mid-
             // confirm even though this client didn't start it.
             if (draft.isInFlight && !isFailed && !confirming)
@@ -1076,6 +1171,8 @@ class _ReviewBody extends ConsumerWidget {
                               ? 'Create Lease'
                               : draft.isApplication
                               ? 'Create Application'
+                              : draft.isLoan
+                              ? 'Create Loan'
                               : 'Confirm & Create Expense',
                         ),
                 ),
@@ -2035,6 +2132,138 @@ class _ApplicantSection extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           ...ordered.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _FieldInput(
+                field: field,
+                value: editedFields[field.name] ?? field.value,
+                onChanged: (v) => onFieldChanged(field.name, v),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _LoanFieldsSection — editable loan fields in web form order
+// ---------------------------------------------------------------------------
+
+class _LoanPropertyPicker extends ConsumerWidget {
+  const _LoanPropertyPicker({
+    required this.selectedPropertyId,
+    required this.onPropertySelected,
+  });
+
+  final int? selectedPropertyId;
+  final ValueChanged<int?> onPropertySelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final propertiesAsync = ref.watch(_propertiesProvider);
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Which property does this loan belong to?',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Attach the mortgage or loan to one property before creating it.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _PickerLabel(text: 'Property', required: true),
+          propertiesAsync.when(
+            loading: () => const LinearProgressIndicator(),
+            error: (e, _) => Text(
+              'Could not load properties.',
+              style: TextStyle(color: colorScheme.error),
+            ),
+            data: (properties) {
+              if (properties.isEmpty) {
+                return Text(
+                  'Add a property before creating a loan from this scan.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.error,
+                  ),
+                );
+              }
+              final ids = properties.map((p) => p.id).toSet();
+              final value = ids.contains(selectedPropertyId)
+                  ? selectedPropertyId
+                  : null;
+              return DropdownButtonFormField<int>(
+                initialValue: value,
+                hint: const Text('Select a property'),
+                isExpanded: true,
+                decoration: _pickerDecoration,
+                items: properties
+                    .map(
+                      (p) => DropdownMenuItem(
+                        value: p.id,
+                        child: Text(p.name, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: onPropertySelected,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoanFieldsSection extends StatelessWidget {
+  const _LoanFieldsSection({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fieldMap = {for (final f in draft.scalarFields) f.name: f};
+
+    final fields = _loanFieldOrder.map((name) {
+      return fieldMap[name] ??
+          ScanField(name: name, value: editedFields[name] ?? '', confidence: 1);
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'LOAN DETAILS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...fields.map(
             (field) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: _FieldInput(

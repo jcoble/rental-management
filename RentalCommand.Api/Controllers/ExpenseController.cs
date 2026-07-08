@@ -8,7 +8,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for expenses within the caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim;
-/// list supports <c>?propertyId&amp;unitId&amp;workOrderId&amp;skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
+/// list supports <c>?propertyId&amp;unitId&amp;workOrderId&amp;skip&amp;take&amp;search&amp;sort&amp;incurredFrom&amp;incurredTo&amp;dueFrom&amp;dueTo&amp;paidFrom&amp;paidTo</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/expenses")]
@@ -29,7 +29,7 @@ public class ExpenseController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<ExpenseResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ExpenseResponse>>> List(
-        [FromQuery] ListQuery query,
+        [FromQuery] ExpenseListQuery query,
         [FromQuery] int? propertyId,
         [FromQuery] int? unitId,
         [FromQuery] int? workOrderId,
@@ -42,7 +42,7 @@ public class ExpenseController : ManagementControllerBase
     [HttpGet("page")]
     [ProducesResponseType(typeof(ExpenseListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ExpenseListResponse>> ListPage(
-        [FromQuery] ListQuery query,
+        [FromQuery] ExpenseListQuery query,
         [FromQuery] int? propertyId,
         [FromQuery] int? unitId,
         [FromQuery] int? workOrderId,

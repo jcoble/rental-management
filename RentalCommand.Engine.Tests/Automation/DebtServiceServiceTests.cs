@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Simulation;
@@ -18,9 +20,10 @@ namespace RentalCommand.Engine.Tests.Automation;
 /// </summary>
 public class DebtServiceServiceTests : IDisposable
 {
+    private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
 
-    public DebtServiceServiceTests() => _ctx = new SqliteTestContext();
+    public DebtServiceServiceTests() => _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
 
     public void Dispose() => _ctx.Dispose();
 
@@ -182,5 +185,47 @@ public class DebtServiceServiceTests : IDisposable
         var sut = BuildService();
         (await sut.GenerateAsync()).Should().Be(0);
         _ctx.Db.LoanPayments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateAsync_LoadsExistingLoanPaymentTailsInOneSqlQuery()
+    {
+        var property = SeedProperty();
+        var start = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(-1);
+        SeedLoan(property.Id, start);
+        SeedLoan(property.Id, start, original: 150_000m, pi: 899.10m);
+        SeedLoan(property.Id, start, original: 100_000m, pi: 699.10m);
+
+        var sut = BuildService();
+
+        _commands.Clear();
+        (await sut.GenerateAsync()).Should().Be(6);
+
+        _commands.Count(sql =>
+            sql.Contains("FROM \"LoanPayments\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "loan-payment tail lookup must be batched for every active loan");
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }

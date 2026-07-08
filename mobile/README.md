@@ -1,17 +1,27 @@
-# rental_command
+# Rental Command Mobile
 
-A new Flutter project.
+Flutter client for Rental Command.
 
-## Getting Started
+## Android Flavors
 
-This project is a starting point for a Flutter application.
+The Android app has separate package ids so dev installs can live next to the
+production app on a real phone:
 
-A few resources to get you started if this is your first Flutter project:
+- `prod`: `com.rentalcommand.rental_command`, label `Rental Command`
+- `dev`: `com.rentalcommand.rental_command.dev`, label `Rental Command Dev`
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Example local-device build:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter build apk --profile \
+  --flavor dev \
+  --target-platform android-arm64 \
+  --dart-define=FLAVOR=dev \
+  --dart-define=API_BASE_URL=https://<LAN-IP>:5666/api/v1
+
+adb install -r build/app/outputs/flutter-apk/app-dev-profile.apk
+```
+
+The dev flavor skips Android Google Services processing because the committed
+Firebase config only declares the production package. Push notifications fail
+soft in dev; Google login does not depend on Firebase.

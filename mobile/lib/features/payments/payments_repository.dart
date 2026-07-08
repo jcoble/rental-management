@@ -51,6 +51,114 @@ class AccountingSummary {
   }
 }
 
+class PaymentListQuery {
+  const PaymentListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.leaseId,
+    this.search,
+    this.sort = '-createdAt',
+    this.dueFrom,
+    this.dueTo,
+    this.paidFrom,
+    this.paidTo,
+  });
+
+  final int skip;
+  final int take;
+  final int? leaseId;
+  final String? search;
+  final String sort;
+  final String? dueFrom;
+  final String? dueTo;
+  final String? paidFrom;
+  final String? paidTo;
+
+  @override
+  bool operator ==(Object other) {
+    return other is PaymentListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.leaseId == leaseId &&
+        other.search == search &&
+        other.sort == sort &&
+        other.dueFrom == dueFrom &&
+        other.dueTo == dueTo &&
+        other.paidFrom == paidFrom &&
+        other.paidTo == paidTo;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    leaseId,
+    search,
+    sort,
+    dueFrom,
+    dueTo,
+    paidFrom,
+    paidTo,
+  );
+}
+
+class PaymentListPage {
+  const PaymentListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Payment> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory PaymentListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Payment.fromJson)
+              .toList()
+        : <Payment>[];
+
+    return PaymentListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
+class MarkLeasePastDuePaidResult {
+  const MarkLeasePastDuePaidResult({
+    required this.leaseId,
+    required this.markedPaidCount,
+    required this.paymentIds,
+  });
+
+  final int leaseId;
+  final int markedPaidCount;
+  final List<int> paymentIds;
+
+  factory MarkLeasePastDuePaidResult.fromJson(Map<String, dynamic> json) {
+    return MarkLeasePastDuePaidResult(
+      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      markedPaidCount: (json['markedPaidCount'] as num?)?.toInt() ?? 0,
+      paymentIds: (json['paymentIds'] as List<dynamic>? ?? const [])
+          .whereType<num>()
+          .map((id) => id.toInt())
+          .toList(),
+    );
+  }
+}
+
 class MoneySnapshot {
   const MoneySnapshot({
     required this.title,
@@ -122,11 +230,27 @@ class PaymentsRepository {
   Future<List<Payment>> listPayments({
     int? leaseId,
     String sort = '-createdAt',
+    String? dueFrom,
+    String? dueTo,
+    String? paidFrom,
+    String? paidTo,
   }) async {
     try {
       final params = <String, dynamic>{};
       if (leaseId != null) params['leaseId'] = leaseId;
       if (sort.isNotEmpty) params['sort'] = sort;
+      if (dueFrom != null && dueFrom.isNotEmpty) {
+        params['dueFrom'] = dueFrom;
+      }
+      if (dueTo != null && dueTo.isNotEmpty) {
+        params['dueTo'] = dueTo;
+      }
+      if (paidFrom != null && paidFrom.isNotEmpty) {
+        params['paidFrom'] = paidFrom;
+      }
+      if (paidTo != null && paidTo.isNotEmpty) {
+        params['paidTo'] = paidTo;
+      }
       final response = await _dio.get<List<dynamic>>(
         '/payments',
         queryParameters: params.isEmpty ? null : params,
@@ -136,6 +260,39 @@ class PaymentsRepository {
           .whereType<Map<String, dynamic>>()
           .map(Payment.fromJson)
           .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PaymentListPage> listPaymentsPage([
+    PaymentListQuery query = const PaymentListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'leaseId': query.leaseId,
+      'search': query.search,
+      'sort': query.sort,
+      'dueFrom': query.dueFrom,
+      'dueTo': query.dueTo,
+      'paidFrom': query.paidFrom,
+      'paidTo': query.paidTo,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/payments/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return PaymentListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -211,6 +368,14 @@ class PaymentsRepository {
     }
   }
 
+  Future<void> deletePayment(int id) async {
+    try {
+      await _dio.delete<void>('/payments/$id');
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// POST /payments/{id}/mark-paid
   /// body: { paidDate?, method?, externalReference?, notes? }
   Future<Payment> markPaid(
@@ -240,6 +405,44 @@ class PaymentsRepository {
         );
       }
       return Payment.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// POST /payments/leases/{leaseId}/past-due/mark-paid
+  /// body: { paidDate?, method?, externalReference?, notes? }
+  ///
+  /// The server owns the past-due predicate and updates the matching rows. The
+  /// mobile client must not fetch a lease payment list and filter it locally.
+  Future<MarkLeasePastDuePaidResult> markLeasePastDuePaid(
+    int leaseId, {
+    String? paidDate,
+    String? method,
+    String? externalReference,
+    String? notes,
+  }) async {
+    try {
+      final body = <String, dynamic>{};
+      if (paidDate != null) body['paidDate'] = paidDate;
+      if (method != null) body['method'] = method;
+      if (externalReference != null) {
+        body['externalReference'] = externalReference;
+      }
+      if (notes != null) body['notes'] = notes;
+
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/payments/leases/$leaseId/past-due/mark-paid',
+        data: body,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return MarkLeasePastDuePaidResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -353,6 +556,11 @@ final paymentsProvider =
     NotifierProvider<PaymentsNotifier, AsyncValue<List<Payment>>>(
       PaymentsNotifier.new,
     );
+
+final paymentsPageProvider = FutureProvider.autoDispose
+    .family<PaymentListPage, PaymentListQuery>((ref, query) {
+      return ref.watch(paymentsRepositoryProvider).listPaymentsPage(query);
+    });
 
 // ── Payments for a specific lease ─────────────────────────────────────────────
 

@@ -101,10 +101,12 @@ class _FakePaymentsRepository extends PaymentsRepository {
 
   @override
   Future<List<Payment>> listPayments({
-    int skip = 0,
-    int take = 100,
-    String? sort,
     int? leaseId,
+    String sort = '-createdAt',
+    String? dueFrom,
+    String? dueTo,
+    String? paidFrom,
+    String? paidTo,
   }) async {
     return [payment];
   }

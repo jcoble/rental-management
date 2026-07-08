@@ -765,6 +765,36 @@ public class ApplicationServiceTests : IDisposable
         portfolio.PublicApplicationToken.Should().Be(result.Token);
     }
 
+    [Fact]
+    public async Task DeleteAsync_SoftDeletesPortfolioApplicationAndHidesItFromReads()
+    {
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Rina",
+            LastName = "Park",
+            Email = "rina@example.local",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var deleted = await _sut.DeleteAsync(PortfolioId, app.Id, userId: 42);
+
+        deleted.Should().BeTrue();
+        (await _sut.GetAsync(PortfolioId, app.Id)).Should().BeNull();
+        var stored = await _db.RentalApplications
+            .IgnoreQueryFilters()
+            .SingleAsync(a => a.Id == app.Id);
+        stored.DeletedAt.Should().NotBeNull();
+        stored.UpdatedAt.Should().Be(stored.DeletedAt);
+        _audit.Calls.Should().Contain(c => c.entityType == "RentalApplication" && c.entityId == app.Id
+            && c.operation == AuditLogOperation.Deleted);
+    }
+
     private void SeedApplication(string firstName, string lastName, ApplicationStatus status)
     {
         _db.RentalApplications.Add(new RentalApplication

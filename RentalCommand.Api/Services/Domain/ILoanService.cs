@@ -9,6 +9,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface ILoanService
 {
     Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<LoanListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
     Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<LoanResponse?> CreateAsync(int portfolioId, CreateLoanRequest request, CancellationToken ct = default);
     Task<LoanResponse?> UpdateAsync(int portfolioId, int id, UpdateLoanRequest request, CancellationToken ct = default);

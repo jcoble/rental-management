@@ -1488,6 +1488,9 @@ public class ScanServiceTests : IDisposable
         public Task<ApplicationResponse?> WithdrawAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
+        public Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
         public Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
     }
@@ -1512,6 +1515,9 @@ public class ScanServiceTests : IDisposable
         }
 
         public Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LoanListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

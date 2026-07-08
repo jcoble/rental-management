@@ -8,7 +8,8 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for leases within the caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim;
-/// list supports <c>?tenantId&amp;propertyId&amp;skip&amp;take&amp;search&amp;sort</c>. Create validates the
+/// list supports <c>?tenantId&amp;propertyId&amp;skip&amp;take&amp;search&amp;sort</c> plus
+/// start/end/active-period date windows. Create validates the
 /// referenced property, unit, and tenant are in the portfolio. Removal is a soft-delete.
 /// </summary>
 [ApiController]
@@ -34,7 +35,7 @@ public class LeaseController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<LeaseResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<LeaseResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? tenantId, [FromQuery] int? propertyId, CancellationToken ct)
+        [FromQuery] LeaseListQuery query, [FromQuery] int? tenantId, [FromQuery] int? propertyId, CancellationToken ct)
     {
         var items = await _service.ListAsync(GetPortfolioId(), tenantId, propertyId, query, ct);
         return Ok(items);

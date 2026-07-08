@@ -7,7 +7,6 @@ import '../../core/auth/auth_controller.dart';
 import '../notifications/notifications_repository.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_navigation.dart';
-import 'more_tab.dart';
 
 /// AppBar notification bell with an unread-count badge. Tapping opens the
 /// addressable notification inbox so notification deep-link behavior remains
@@ -60,13 +59,6 @@ class MobileAccountMenu extends ConsumerWidget {
               destination.open(context);
             }
 
-            void closeAndBrowse() {
-              Navigator.of(sheetContext).pop();
-              Navigator.of(context).push<void>(
-                MaterialPageRoute<void>(builder: (_) => const MoreTab()),
-              );
-            }
-
             return SafeArea(
               child: ListView(
                 shrinkWrap: true,
@@ -77,12 +69,6 @@ class MobileAccountMenu extends ConsumerWidget {
                     label: 'Getting started',
                     subtitle: 'Set-up checklist',
                     onTap: () => closeAndOpen(gettingStartedDestination),
-                  ),
-                  _AccountMenuRow(
-                    icon: Symbols.travel_explore_rounded,
-                    label: 'Browse all',
-                    subtitle: 'Search every area',
-                    onTap: closeAndBrowse,
                   ),
                   const Divider(height: 20),
                   _AccountMenuRow(
@@ -136,6 +122,7 @@ class _AccountMenuRow extends StatelessWidget {
     final scheme = theme.colorScheme;
 
     return ListTile(
+      titleAlignment: ListTileTitleAlignment.center,
       leading: Icon(icon, color: scheme.primary, fill: 1),
       title: Text(label, style: theme.textTheme.titleSmall),
       subtitle: Text(

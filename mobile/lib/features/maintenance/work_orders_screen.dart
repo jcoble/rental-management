@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -81,13 +83,90 @@ class WorkOrdersScreen extends ConsumerStatefulWidget {
 }
 
 class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  WorkOrderFilter _filter = WorkOrderFilter.open;
+  String? _search;
+  String _sort = '-updatedAt';
+  String _period = MobileGridPeriod.all;
+  int _skip = 0;
+
+  WorkOrderListQuery get _query {
+    final dateRange = mobileGridDateRangeForPeriod(_period);
+    return WorkOrderListQuery(
+      skip: _skip,
+      take: _pageSize,
+      openOnly: _filter == WorkOrderFilter.open,
+      search: _search,
+      sort: _sort,
+      requestedFrom: dateRange.from,
+      requestedTo: dateRange.to,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(workOrdersProvider.notifier).load());
   }
 
-  Future<void> _refresh() => ref.read(workOrdersProvider.notifier).refresh();
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    await ref.read(workOrdersProvider.notifier).refresh();
+    return ref.refresh(workOrdersPageProvider(_query).future);
+  }
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setPeriod(String? period) {
+    if (period == null || period == _period) return;
+    setState(() {
+      _period = period;
+      _skip = 0;
+    });
+  }
+
+  void _setFilter(WorkOrderFilter filter) {
+    if (filter == _filter) return;
+    setState(() {
+      _filter = filter;
+      _skip = 0;
+    });
+    ref.read(workOrdersProvider.notifier).setFilter(filter);
+  }
+
+  void _setFilterValue(String? value) {
+    _setFilter(
+      value == WorkOrderFilter.all.name
+          ? WorkOrderFilter.all
+          : WorkOrderFilter.open,
+    );
+  }
 
   void _openDetail(BuildContext context, WorkOrder wo) {
     final unitId = wo.unitId;
@@ -112,31 +191,19 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
     showCreateWorkOrderSheet(
       context: context,
       ref: ref,
-      onSaved: () => ref.read(workOrdersProvider.notifier).refresh(),
+      onSaved: () {
+        ref.read(workOrdersProvider.notifier).refresh();
+        ref.invalidate(workOrdersPageProvider);
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final workOrdersAsync = ref.watch(workOrdersProvider);
-    final notifier = ref.read(workOrdersProvider.notifier);
-    final currentFilter = notifier.filter;
+    final workOrdersAsync = ref.watch(workOrdersPageProvider(_query));
+    final currentFilter = _filter;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final filterControl = SegmentedButton<WorkOrderFilter>(
-      segments: const [
-        ButtonSegment(value: WorkOrderFilter.open, label: Text('Open')),
-        ButtonSegment(value: WorkOrderFilter.all, label: Text('All')),
-      ],
-      selected: {currentFilter},
-      onSelectionChanged: (s) {
-        notifier.setFilter(s.first);
-      },
-      style: ButtonStyle(
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.compact,
-      ),
-    );
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(
@@ -144,13 +211,6 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
         // A6: one professional term for the "things to fix" concept across the
         // app — "Work Orders" (the bottom-nav tab stays the short "Work").
         title: const Text('Work Orders'),
-        actions: [
-          // Open / All toggle
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: filterControl,
-          ),
-        ],
       ),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'work-orders-fab',
@@ -165,7 +225,6 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
       ),
       body: Column(
         children: [
-          MobileDomainEmbeddedToolbar(children: [filterControl]),
           Expanded(
             child: RefreshIndicator(
               onRefresh: _refresh,
@@ -175,22 +234,83 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
                   message: e is ApiException ? e.message : e.toString(),
                   onRetry: _refresh,
                 ),
-                data: (list) {
-                  if (list.isEmpty) {
-                    return _EmptyBody(filter: currentFilter);
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+                      children: [
+                        _WorkOrdersGridControls(
+                          searchController: _searchCtrl,
+                          filter: currentFilter,
+                          sort: _sort,
+                          period: _period,
+                          onSearch: _submitSearch,
+                          onClearSearch: _clearSearch,
+                          onFilterChanged: _setFilterValue,
+                          onSortChanged: _setSort,
+                          onPeriodChanged: _setPeriod,
+                        ),
+                        _EmptyBody(filter: currentFilter),
+                      ],
+                    );
                   }
                   return ListView.separated(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-                    itemCount: list.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: 8),
-                    itemBuilder: (ctx, i) => _WorkOrderCard(
-                      workOrder: list[i],
-                      colorScheme: colorScheme,
-                      theme: theme,
-                      onTap: () => _openDetail(ctx, list[i]),
-                    ),
+                    itemCount: page.items.length + 2,
+                    separatorBuilder: (context, index) {
+                      if (index == 0) return const SizedBox(height: 12);
+                      if (index == page.items.length) {
+                        return const SizedBox(height: 14);
+                      }
+                      return const MobileM3ListDivider();
+                    },
+                    itemBuilder: (ctx, i) {
+                      if (i == 0) {
+                        return _WorkOrdersGridControls(
+                          searchController: _searchCtrl,
+                          filter: currentFilter,
+                          sort: _sort,
+                          period: _period,
+                          onSearch: _submitSearch,
+                          onClearSearch: _clearSearch,
+                          onFilterChanged: _setFilterValue,
+                          onSortChanged: _setSort,
+                          onPeriodChanged: _setPeriod,
+                        );
+                      }
+
+                      if (i == page.items.length + 1) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous work orders page',
+                          nextTooltip: 'Next work orders page',
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = (_skip - _pageSize).clamp(0, _skip);
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+
+                      final workOrder = page.items[i - 1];
+                      return _WorkOrderCard(
+                        workOrder: workOrder,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          i - 1,
+                          page.items.length,
+                        ),
+                        colorScheme: colorScheme,
+                        theme: theme,
+                        onTap: () => _openDetail(ctx, workOrder),
+                      );
+                    },
                   );
                 },
               ),
@@ -202,86 +322,140 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
   }
 }
 
+class _WorkOrdersGridControls extends StatelessWidget {
+  const _WorkOrdersGridControls({
+    required this.searchController,
+    required this.filter,
+    required this.sort,
+    required this.period,
+    required this.onSearch,
+    required this.onClearSearch,
+    required this.onFilterChanged,
+    required this.onSortChanged,
+    required this.onPeriodChanged,
+  });
+
+  final TextEditingController searchController;
+  final WorkOrderFilter filter;
+  final String sort;
+  final String period;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onClearSearch;
+  final ValueChanged<String?> onFilterChanged;
+  final ValueChanged<String?> onSortChanged;
+  final ValueChanged<String?> onPeriodChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return MobileGridControlsBar(
+      keyPrefix: 'work-orders',
+      padding: EdgeInsets.zero,
+      searchController: searchController,
+      searchLabel: 'Search work orders',
+      onSearch: onSearch,
+      onClearSearch: onClearSearch,
+      sort: sort,
+      defaultSort: '-updatedAt',
+      sortLabel: 'Sort work orders',
+      sortOptions: const [
+        MobileGridControlOption(value: '-updatedAt', label: 'Updated recently'),
+        MobileGridControlOption(
+          value: '-requestedAt',
+          label: 'Requested newest',
+        ),
+        MobileGridControlOption(
+          value: 'requestedAt',
+          label: 'Requested oldest',
+        ),
+        MobileGridControlOption(value: 'priority', label: 'Priority'),
+        MobileGridControlOption(value: 'status', label: 'Status'),
+        MobileGridControlOption(value: 'title', label: 'Title'),
+      ],
+      onSortChanged: onSortChanged,
+      period: period,
+      defaultPeriod: MobileGridPeriod.all,
+      periodLabel: 'Requested period',
+      onPeriodChanged: onPeriodChanged,
+      filters: [
+        MobileGridChoiceFilter(
+          id: 'view',
+          label: 'View',
+          value: filter.name,
+          defaultValue: WorkOrderFilter.open.name,
+          allLabel: 'Open',
+          options: [
+            MobileGridControlOption(
+              value: WorkOrderFilter.all.name,
+              label: 'All',
+            ),
+          ],
+          onChanged: onFilterChanged,
+        ),
+      ],
+    );
+  }
+}
+
 // ── Work Order Card ───────────────────────────────────────────────────────────
 
 class _WorkOrderCard extends StatelessWidget {
   const _WorkOrderCard({
     required this.workOrder,
+    required this.position,
     required this.colorScheme,
     required this.theme,
     required this.onTap,
   });
 
   final WorkOrder workOrder;
+  final MobileM3ListItemPosition position;
   final ColorScheme colorScheme;
   final ThemeData theme;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Text(
-                      workOrder.title,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _PriorityChip(
-                    priority: workOrder.priority,
-                    colorScheme: colorScheme,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              if (workOrder.propertyName != null)
-                Text(
-                  workOrder.propertyName!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  _StatusChip(
-                    status: workOrder.status,
-                    colorScheme: colorScheme,
-                  ),
-                  const SizedBox(width: 8),
-                  _CategoryChip(
-                    category: workOrder.category,
-                    colorScheme: colorScheme,
-                  ),
-                  const Spacer(),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 18,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.build_outlined,
+        backgroundColor: colorScheme.tertiaryContainer,
+        foregroundColor: colorScheme.onTertiaryContainer,
       ),
+      title: Text(
+        workOrder.title,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        if (workOrder.propertyName != null)
+          Text(
+            workOrder.propertyName!,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+      ],
+      meta: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          _PriorityChip(priority: workOrder.priority, colorScheme: colorScheme),
+          _StatusChip(status: workOrder.status, colorScheme: colorScheme),
+          _CategoryChip(category: workOrder.category, colorScheme: colorScheme),
+        ],
+      ),
+      trailing: Icon(
+        Icons.chevron_right,
+        size: 20,
+        color: colorScheme.onSurfaceVariant,
+      ),
+      onTap: onTap,
     );
   }
 }
@@ -376,36 +550,29 @@ class _EmptyBody extends StatelessWidget {
     final sub = filter == WorkOrderFilter.open
         ? 'All caught up! Tap + to create one.'
         : 'Tap + to create a work order.';
-    return ListView(
-      children: [
-        SizedBox(
-          height: 300,
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.build_outlined,
-                  size: 48,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  msg,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  sub,
-                  style: TextStyle(color: colorScheme.onSurfaceVariant),
-                ),
-              ],
+    return SizedBox(
+      height: 300,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.build_outlined,
+              size: 48,
+              color: colorScheme.onSurfaceVariant,
             ),
-          ),
+            const SizedBox(height: 12),
+            Text(
+              msg,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(sub, style: TextStyle(color: colorScheme.onSurfaceVariant)),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

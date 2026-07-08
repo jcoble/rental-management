@@ -1,5 +1,9 @@
 import { api } from '../client';
-import { buildListQuery, type ListParams } from '../list-params';
+import {
+	buildRecurringExpenseListPagePath,
+	buildRecurringExpenseListPath,
+	type RecurringExpenseListParams
+} from './recurring-expense-list-path';
 
 /** How often a recurring-expense template materializes into an expense row. */
 export type RecurringExpenseFrequency = 'Monthly' | 'Quarterly' | 'Annual';
@@ -29,11 +33,18 @@ export interface RecurringExpense {
 	testId: string;
 }
 
+export interface RecurringExpenseListResponse {
+	items: RecurringExpense[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export const recurringExpenses = {
-	list: (params?: ListParams & { propertyId?: number }) => {
-		const { propertyId, ...list } = params ?? {};
-		return api.get<RecurringExpense[]>(`/recurring-expenses${buildListQuery(list, { propertyId })}`);
-	},
+	list: (params?: RecurringExpenseListParams) =>
+		api.get<RecurringExpense[]>(buildRecurringExpenseListPath(params)),
+	listPage: (params?: RecurringExpenseListParams) =>
+		api.get<RecurringExpenseListResponse>(buildRecurringExpenseListPagePath(params)),
 	get: (id: number) => api.get<RecurringExpense>(`/recurring-expenses/${id}`),
 	create: (data: Record<string, unknown>) => api.post<RecurringExpense>('/recurring-expenses', data),
 	update: (id: number, data: Record<string, unknown>) =>

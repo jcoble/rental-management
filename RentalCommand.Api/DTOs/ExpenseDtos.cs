@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -108,6 +109,27 @@ public class ExpenseListResponse
     public int TotalCount { get; set; }
     public int Skip { get; set; }
     public int Take { get; set; }
+}
+
+public class ExpenseListQuery : ListQuery
+{
+    [FromQuery(Name = "incurredFrom")]
+    public DateTime? IncurredFrom { get; set; }
+
+    [FromQuery(Name = "incurredTo")]
+    public DateTime? IncurredTo { get; set; }
+
+    [FromQuery(Name = "dueFrom")]
+    public DateTime? DueFrom { get; set; }
+
+    [FromQuery(Name = "dueTo")]
+    public DateTime? DueTo { get; set; }
+
+    [FromQuery(Name = "paidFrom")]
+    public DateTime? PaidFrom { get; set; }
+
+    [FromQuery(Name = "paidTo")]
+    public DateTime? PaidTo { get; set; }
 }
 
 /// <summary>One typed line item returned on an <see cref="ExpenseResponse"/>.</summary>

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mortgage Statement {{loanNumber}}</title>
+<style>
+  html,body{margin:0;padding:0;background:#22262c;}
+  .stage{width:1200px;height:1600px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
+    padding:56px 64px;
+    background:
+      radial-gradient(130% 82% at 52% 10%, rgba(255,255,255,.06), rgba(0,0,0,.4) 72%),
+      linear-gradient(160deg,#3c414a 0%,#2a2e35 48%,#1d2127 100%);}
+  .paper{position:relative;background:#fdfdfb;color:#141414;width:800px;padding:44px 52px 56px;
+    transform:rotate(1.1deg);
+    box-shadow:0 34px 68px rgba(0,0,0,.56),0 10px 20px rgba(0,0,0,.4);
+    font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.5;
+    filter:contrast(1.04) blur(.3px);}
+  .paper::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 140px rgba(0,0,0,.14);}
+  .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #16457a;padding-bottom:12px;}
+  .hd .lender{font-size:24px;font-weight:800;color:#16457a;letter-spacing:.3px;}
+  .hd .doc{text-align:right;font-size:12px;color:#333;}
+  .doc b{font-size:15px;color:#111;}
+  .band{background:#eef3f8;border:1px solid #cdd9e6;padding:12px 16px;margin:16px 0;display:flex;justify-content:space-between;}
+  .band .amt{font-size:26px;font-weight:800;color:#16457a;}
+  h3{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:#16457a;margin:18px 0 6px;border-bottom:1px solid #ccc;padding-bottom:3px;}
+  table{width:100%;border-collapse:collapse;}
+  td{padding:4px 6px;}
+  td.k{color:#333;width:62%;}
+  td.v{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;}
+  .expl{display:flex;justify-content:space-between;}
+  .expl div{width:31%;background:#f6f6f2;border:1px solid #ddd;padding:10px;text-align:center;}
+  .expl .n{font-size:18px;font-weight:800;color:#16457a;}
+  .small{font-size:11px;color:#555;margin-top:14px;}
+</style>
+</head>
+<body>
+  <div class="stage"><div class="paper">
+    <div class="hd">
+      <div>
+        <div class="lender">{{lender}}</div>
+        <div style="font-size:12px;color:#333">Home Loan Servicing &middot; PO Box 4477, Columbus, OH 43216</div>
+      </div>
+      <div class="doc">
+        <b>MORTGAGE STATEMENT</b><br>
+        Statement date: {{statementDate}}<br>
+        Loan number: {{loanNumber}}<br>
+        Property: {{propertyAddress}}
+      </div>
+    </div>
+
+    <div class="band">
+      <div>
+        <div style="font-size:12px;color:#333">Payment due {{dueDate}}</div>
+        <div style="font-size:12px;color:#333">Amount due if received after {{dueDate}}: add late charge</div>
+      </div>
+      <div class="amt">${{totalPayment}}</div>
+    </div>
+
+    <h3>Account information</h3>
+    <table>
+      <tr><td class="k">Outstanding principal balance</td><td class="v">${{currentBalance}}</td></tr>
+      <tr><td class="k">Original loan amount</td><td class="v">${{originalAmount}}</td></tr>
+      <tr><td class="k">Interest rate (fixed)</td><td class="v">{{interestRate}}%</td></tr>
+      <tr><td class="k">Loan term</td><td class="v">{{termMonths}} months</td></tr>
+      <tr><td class="k">First payment / origination</td><td class="v">{{startDate}}</td></tr>
+      <tr><td class="k">Maturity date</td><td class="v">{{maturityDate}}</td></tr>
+    </table>
+
+    <h3>Explanation of amount due</h3>
+    <div class="expl">
+      <div><div class="n">${{principalInterest}}</div>Principal &amp; interest</div>
+      <div><div class="n">${{escrow}}</div>Escrow (taxes &amp; insurance)</div>
+      <div><div class="n">${{totalPayment}}</div>Total monthly payment</div>
+    </div>
+    <table style="margin-top:10px">
+      <tr><td class="k">&nbsp;&nbsp;&bull; of which principal (this period)</td><td class="v">${{principalPortion}}</td></tr>
+      <tr><td class="k">&nbsp;&nbsp;&bull; of which interest (this period)</td><td class="v">${{interestPortion}}</td></tr>
+      <tr><td class="k">Escrow covers</td><td class="v">{{escrowCovers}}</td></tr>
+    </table>
+
+    <div class="small">This statement reflects activity as of the statement date. Escrow disburses
+    county property taxes and hazard insurance on your behalf. Retain for your records.</div>
+  </div></div>
+</body>
+</html>

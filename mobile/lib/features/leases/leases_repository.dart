@@ -7,6 +7,115 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 
+class LeaseListQuery {
+  const LeaseListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.tenantId,
+    this.propertyId,
+    this.unitId,
+    this.status,
+    this.search,
+    this.sort = '-updatedAt',
+    this.startFrom,
+    this.startTo,
+    this.endFrom,
+    this.endTo,
+    this.activeOn,
+    this.activeFrom,
+    this.activeTo,
+  });
+
+  final int skip;
+  final int take;
+  final int? tenantId;
+  final int? propertyId;
+  final int? unitId;
+  final String? status;
+  final String? search;
+  final String sort;
+  final String? startFrom;
+  final String? startTo;
+  final String? endFrom;
+  final String? endTo;
+  final String? activeOn;
+  final String? activeFrom;
+  final String? activeTo;
+
+  @override
+  bool operator ==(Object other) {
+    return other is LeaseListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.tenantId == tenantId &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId &&
+        other.status == status &&
+        other.search == search &&
+        other.sort == sort &&
+        other.startFrom == startFrom &&
+        other.startTo == startTo &&
+        other.endFrom == endFrom &&
+        other.endTo == endTo &&
+        other.activeOn == activeOn &&
+        other.activeFrom == activeFrom &&
+        other.activeTo == activeTo;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    tenantId,
+    propertyId,
+    unitId,
+    status,
+    search,
+    sort,
+    startFrom,
+    startTo,
+    endFrom,
+    endTo,
+    activeOn,
+    activeFrom,
+    activeTo,
+  );
+}
+
+class LeaseListPage {
+  const LeaseListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Lease> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory LeaseListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Lease.fromJson)
+              .toList()
+        : <Lease>[];
+
+    return LeaseListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Repository for leases.
 ///
 /// Endpoints used:
@@ -27,12 +136,33 @@ class LeasesRepository {
 
   final Dio _dio;
 
-  Future<List<Lease>> listLeases({int? tenantId, int? propertyId}) async {
+  Future<List<Lease>> listLeases({
+    int? tenantId,
+    int? propertyId,
+    int? unitId,
+    String? status,
+    String? startFrom,
+    String? startTo,
+    String? endFrom,
+    String? endTo,
+    String? activeOn,
+    String? activeFrom,
+    String? activeTo,
+  }) async {
     try {
       final params = <String, dynamic>{
         'tenantId': tenantId,
         'propertyId': propertyId,
-      }..removeWhere((_, v) => v == null);
+        'unitId': unitId,
+        'status': status,
+        'startFrom': startFrom,
+        'startTo': startTo,
+        'endFrom': endFrom,
+        'endTo': endTo,
+        'activeOn': activeOn,
+        'activeFrom': activeFrom,
+        'activeTo': activeTo,
+      }..removeWhere((_, v) => v == null || (v is String && v.isEmpty));
       final response = await _dio.get<List<dynamic>>(
         '/leases',
         queryParameters: params.isNotEmpty ? params : null,
@@ -47,10 +177,48 @@ class LeasesRepository {
     }
   }
 
+  Future<LeaseListPage> listLeasesPage([
+    LeaseListQuery query = const LeaseListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'tenantId': query.tenantId,
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
+      'status': query.status,
+      'search': query.search,
+      'sort': query.sort,
+      'startFrom': query.startFrom,
+      'startTo': query.startTo,
+      'endFrom': query.endFrom,
+      'endTo': query.endTo,
+      'activeOn': query.activeOn,
+      'activeFrom': query.activeFrom,
+      'activeTo': query.activeTo,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/leases/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseListPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<Lease> getLease(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/leases/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/leases/$id');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -70,8 +238,10 @@ class LeasesRepository {
   ///   securityDeposit, lateFeeAmount, rentDueDay, status? }
   Future<Lease> createLease(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/leases', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/leases',
+        data: data,
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -349,9 +519,9 @@ class LeaseLedger {
     final rawEntries = json['entries'];
     final entries = rawEntries is List
         ? rawEntries
-            .whereType<Map<String, dynamic>>()
-            .map(LeaseLedgerEntry.fromJson)
-            .toList()
+              .whereType<Map<String, dynamic>>()
+              .map(LeaseLedgerEntry.fromJson)
+              .toList()
         : <LeaseLedgerEntry>[];
 
     return LeaseLedger(
@@ -482,8 +652,13 @@ class LeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
 
 final leasesProvider =
     NotifierProvider<LeasesNotifier, AsyncValue<List<Lease>>>(
-  LeasesNotifier.new,
-);
+      LeasesNotifier.new,
+    );
+
+final leasesPageProvider = FutureProvider.autoDispose
+    .family<LeaseListPage, LeaseListQuery>((ref, query) {
+      return ref.watch(leasesRepositoryProvider).listLeasesPage(query);
+    });
 
 // ── Leases for a specific tenant ──────────────────────────────────────────────
 
@@ -515,8 +690,8 @@ class TenantLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
 
 final tenantLeasesProvider =
     NotifierProvider.family<TenantLeasesNotifier, AsyncValue<List<Lease>>, int>(
-  TenantLeasesNotifier.new,
-);
+      TenantLeasesNotifier.new,
+    );
 
 // ── Single lease detail ───────────────────────────────────────────────────────
 
@@ -548,14 +723,15 @@ class LeaseDetailNotifier extends Notifier<AsyncValue<Lease>> {
 
 final leaseDetailProvider =
     NotifierProvider.family<LeaseDetailNotifier, AsyncValue<Lease>, int>(
-  LeaseDetailNotifier.new,
-);
+      LeaseDetailNotifier.new,
+    );
 
 // ── Lease ledger ──────────────────────────────────────────────────────────────
 
 /// Transparent ledger for a single lease, keyed by lease id. autoDispose so it
 /// refreshes whenever the ledger view is reopened.
-final leaseLedgerProvider =
-    FutureProvider.autoDispose.family<LeaseLedger, int>((ref, leaseId) {
-  return ref.watch(leasesRepositoryProvider).ledger(leaseId);
-});
+final leaseLedgerProvider = FutureProvider.autoDispose.family<LeaseLedger, int>(
+  (ref, leaseId) {
+    return ref.watch(leasesRepositoryProvider).ledger(leaseId);
+  },
+);

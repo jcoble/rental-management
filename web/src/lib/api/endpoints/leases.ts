@@ -1,9 +1,14 @@
 import type { EsignStatus, Lease, LeaseLedger, LeaseQuestionResponse, LeaseStatus } from '$lib/types';
 import { api, refreshToken } from '../client';
-import { buildListQuery, type ListParams } from '../list-params';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
+import {
+	buildLeaseListPagePath,
+	buildLeaseListPath,
+	type LeaseListPageParams,
+	type LeaseListParams
+} from './lease-list-path';
 
 /** Response from POST /api/v1/leases/{id}/generate-document. */
 export interface LeaseDocumentResponse {
@@ -58,15 +63,7 @@ export interface LeaseSignatureQueueItemResponse {
 	signingUrl?: string | null;
 }
 
-export interface LeaseListParams extends ListParams {
-	tenantId?: number;
-	propertyId?: number;
-}
-
-export interface LeaseListPageParams extends LeaseListParams {
-	unitId?: number;
-	status?: string;
-}
+export type { LeaseListPageParams, LeaseListParams } from './lease-list-path';
 
 export interface LeaseListResponse {
 	items: Lease[];
@@ -77,14 +74,10 @@ export interface LeaseListResponse {
 
 export const leases = {
 	list: (portfolioId: number, params?: LeaseListParams) => {
-		const { tenantId, propertyId, ...list } = params ?? {};
-		return api.get<Lease[]>(`/leases${buildListQuery(list, { portfolioId, tenantId, propertyId })}`);
+		return api.get<Lease[]>(buildLeaseListPath(portfolioId, params));
 	},
 	listPage: (portfolioId: number, params?: LeaseListPageParams) => {
-		const { tenantId, propertyId, unitId, status, ...list } = params ?? {};
-		return api.get<LeaseListResponse>(
-			`/leases/page${buildListQuery(list, { portfolioId, tenantId, propertyId, unitId, status })}`
-		);
+		return api.get<LeaseListResponse>(buildLeaseListPagePath(portfolioId, params));
 	},
 	get: (id: number) => api.get<Lease>(`/leases/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Lease>('/leases', data),

@@ -46,10 +46,7 @@ class NoticesRepository {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/notices/generate',
-        data: {
-          'tenantId': tenantId,
-          'noticeType': ?noticeType,
-        },
+        data: {'tenantId': tenantId, 'noticeType': ?noticeType},
       );
       final drafts = (response.data?['drafts'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()
@@ -66,14 +63,14 @@ class NoticesRepository {
     try {
       final response = await _dio.patch<Map<String, dynamic>>(
         '/notices/$id',
-        data: {
-          if (subject != null) 'subject': subject,
-          if (body != null) 'body': body,
-        },
+        data: {'subject': ?subject, 'body': ?body},
       );
       final data = response.data;
       if (data == null) {
-        throw const ApiException(statusCode: 0, message: 'Empty response from server.');
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
       }
       return NoticeDraft.fromJson(data);
     } on DioException catch (e) {
@@ -105,6 +102,8 @@ final noticesRepositoryProvider = Provider<NoticesRepository>((ref) {
   return NoticesRepository(ref.watch(dioProvider));
 });
 
-final noticeDraftsProvider = FutureProvider.autoDispose<List<NoticeDraft>>((ref) {
+final noticeDraftsProvider = FutureProvider.autoDispose<List<NoticeDraft>>((
+  ref,
+) {
   return ref.watch(noticesRepositoryProvider).list();
 });

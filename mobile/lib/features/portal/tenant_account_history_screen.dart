@@ -88,10 +88,9 @@ class _LeaseChooser extends StatelessWidget {
         for (final lease in leases)
           Card(
             child: ListTile(
+              titleAlignment: ListTileTitleAlignment.center,
               leading: const Icon(Icons.description_outlined),
-              title: Text(
-                lease.propertyName ?? 'Lease #${lease.leaseNumber}',
-              ),
+              title: Text(lease.propertyName ?? 'Lease #${lease.leaseNumber}'),
               subtitle: Text(
                 lease.unitNumber != null
                     ? 'Unit ${lease.unitNumber} · #${lease.leaseNumber}'

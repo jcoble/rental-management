@@ -271,7 +271,11 @@ https://localhost:5667**, **API https://localhost:5666** (http `5665`), **DB `re
   reaches it over Wi-Fi; the web SSR target stays cert-valid `localhost` (`WEB_API_URL`); `WEB_HOST=0.0.0.0`
   serves the UI on the LAN. (These are decoupled in `start-dev.sh` — binding the API to `0.0.0.0`
   must **not** point the web SSR at `0.0.0.0`, whose cert the mkcert cert doesn't cover.)
-- **Mobile to device**: `flutter build apk --profile --dart-define=API_BASE_URL=https://<LAN-IP>:5666/api/v1 --target-platform android-arm64` then `adb install -r …`. Rebuild after any API-surface change (old builds 404 against renamed endpoints).
+- **Mobile to device**: use the side-by-side dev flavor so it installs next to the prod app:
+  `flutter build apk --profile --flavor dev --dart-define=FLAVOR=dev --dart-define=API_BASE_URL=https://<LAN-IP>:5666/api/v1 --target-platform android-arm64`
+  then `adb install -r build/app/outputs/flutter-apk/app-dev-profile.apk`. Rebuild after any
+  API-surface change (old builds 404 against renamed endpoints). Prod release builds should pass
+  `--flavor prod --dart-define=FLAVOR=prod`.
 
 ## 17. Testing
 

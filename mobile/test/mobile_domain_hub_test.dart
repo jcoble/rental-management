@@ -19,6 +19,7 @@ void main() {
   test('rentals destinations place units next to properties', () {
     expect(rentalDestinations.map((destination) => destination.id), [
       MobileDestinationId.properties,
+      MobileDestinationId.owners,
       MobileDestinationId.units,
       MobileDestinationId.tenants,
       MobileDestinationId.leases,
@@ -86,6 +87,72 @@ void main() {
 
     expect(find.text('Leases root'), findsOneWidget);
     expect(find.text('Open lease'), findsNothing);
+  });
+
+  testWidgets('domain navigator pops selected detail to current root', (
+    tester,
+  ) async {
+    MobileDomainNavigator? controller;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Money',
+            subtitle: 'Test',
+            onControllerReady: (value) => controller = value,
+            destinations: [
+              MobileDestination(
+                id: MobileDestinationId.moneyLedger,
+                icon: Symbols.receipt_long_rounded,
+                label: 'Ledger',
+                subtitle: 'Transactions feed',
+                builder: (context) => Scaffold(
+                  body: Center(
+                    child: FilledButton(
+                      onPressed: () {
+                        MobileDomainNavigation.maybeOf(
+                          context,
+                        )!.openDestination(
+                          MobileDestinationId.moneyLedger,
+                          detailBuilder: (_) => const MobileDomainDetailHeader(
+                            title: 'Payment #42',
+                            subtitle: 'Paid rent',
+                            child: Scaffold(
+                              body: Center(child: Text('Payment detail')),
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('Open payment detail'),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(controller, isNotNull);
+    expect(find.text('Transactions feed'), findsOneWidget);
+
+    await tester.tap(find.text('Open payment detail'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment detail'), findsOneWidget);
+    expect(find.text('Payment #42'), findsOneWidget);
+    expect(find.byTooltip('Back'), findsOneWidget);
+
+    controller!.popToCurrentRoot();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment detail'), findsNothing);
+    expect(find.text('Payment #42'), findsNothing);
+    expect(find.byTooltip('Back'), findsNothing);
+    expect(find.text('Transactions feed'), findsOneWidget);
+    expect(find.text('Open payment detail'), findsOneWidget);
   });
 
   testWidgets('detail header replaces the destination header above top tabs', (
@@ -320,6 +387,18 @@ void main() {
                     },
                     child: const Text('Open units'),
                   ),
+                  FilledButton(
+                    onPressed: () {
+                      const MobileDestination(
+                        id: MobileDestinationId.owners,
+                        icon: Symbols.account_balance_rounded,
+                        label: 'Owners',
+                        subtitle: 'Standalone fallback',
+                        builder: _standaloneBuilder,
+                      ).open(context);
+                    },
+                    child: const Text('Open owners'),
+                  ),
                 ],
               ),
             ),
@@ -348,6 +427,18 @@ void main() {
         destination: MobileDestinationId.moneyLedger,
       ),
       (tab: MobileShellTabId.rentals, destination: MobileDestinationId.units),
+    ]);
+
+    await tester.tap(find.text('Open owners'));
+    await tester.pumpAndSettle();
+
+    expect(calls, [
+      (
+        tab: MobileShellTabId.money,
+        destination: MobileDestinationId.moneyLedger,
+      ),
+      (tab: MobileShellTabId.rentals, destination: MobileDestinationId.units),
+      (tab: MobileShellTabId.rentals, destination: MobileDestinationId.owners),
     ]);
   });
 }

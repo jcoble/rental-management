@@ -222,5 +222,9 @@ class _FakeVendorsRepository extends VendorsRepository {
   _FakeVendorsRepository() : super(Dio());
 
   @override
-  Future<List<vendors.Vendor>> list() async => [_vendor()];
+  Future<List<vendors.Vendor>> list({
+    int skip = 0,
+    int take = 50,
+    String sort = 'name',
+  }) async => [_vendor()];
 }

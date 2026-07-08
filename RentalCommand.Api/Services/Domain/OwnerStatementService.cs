@@ -47,7 +47,10 @@ public class OwnerStatementService : IOwnerStatementService
                         pay.PaymentType == PaymentType.Rent &&
                         pay.Status == PaymentStatus.Paid &&
                         pay.PaidDate != null &&
-                        pay.PaidDate.Value.Year == year &&
+                        // Sargable half-open year range (was .Year ==, which forced a per-row extract);
+                        // now index-usable via Payment (PortfolioId, PaidDate).
+                        pay.PaidDate.Value >= new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                        pay.PaidDate.Value < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
                         pay.Lease != null &&
                         pay.Lease.PropertyId == p.Id)
                     .Sum(pay => (decimal?)pay.Amount) ?? 0m,
@@ -56,7 +59,9 @@ public class OwnerStatementService : IOwnerStatementService
                         e.PortfolioId == portfolioId &&
                         e.PropertyId == p.Id &&
                         e.Status == ExpenseStatus.Paid &&
-                        (e.PaidAt ?? e.IncurredAt).Year == year)
+                        // Sargable half-open year range (was .Year ==).
+                        (e.PaidAt ?? e.IncurredAt) >= new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                        (e.PaidAt ?? e.IncurredAt) < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
             })
             .ToListAsync(ct);
@@ -172,7 +177,10 @@ public class OwnerStatementService : IOwnerStatementService
                         pay.PaymentType == PaymentType.Rent &&
                         pay.Status == PaymentStatus.Paid &&
                         pay.PaidDate != null &&
-                        pay.PaidDate.Value.Year == year &&
+                        // Sargable half-open year range (was .Year ==, which forced a per-row extract);
+                        // now index-usable via Payment (PortfolioId, PaidDate).
+                        pay.PaidDate.Value >= new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                        pay.PaidDate.Value < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
                         pay.Lease != null &&
                         pay.Lease.PropertyId == p.Id)
                     .Sum(pay => (decimal?)pay.Amount) ?? 0m,
@@ -181,7 +189,9 @@ public class OwnerStatementService : IOwnerStatementService
                         e.PortfolioId == portfolioId &&
                         e.PropertyId == p.Id &&
                         e.Status == ExpenseStatus.Paid &&
-                        (e.PaidAt ?? e.IncurredAt).Year == year)
+                        // Sargable half-open year range (was .Year ==).
+                        (e.PaidAt ?? e.IncurredAt) >= new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                        (e.PaidAt ?? e.IncurredAt) < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
             });
     }

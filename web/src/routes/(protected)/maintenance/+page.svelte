@@ -18,6 +18,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
@@ -46,6 +47,8 @@
 	let woSearch = $state(readGridParam(initialParams, 'q'));
 	let woStatusFilter = $state(readGridParam(initialParams, 'status'));
 	let woPriorityFilter = $state(readGridParam(initialParams, 'priority'));
+	let woFrom = $state(readGridParam(initialParams, 'from'));
+	let woTo = $state(readGridParam(initialParams, 'to'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedWoSearch = debounced(() => woSearch, 300);
@@ -56,6 +59,8 @@
 		woSearch;
 		woStatusFilter;
 		woPriorityFilter;
+		woFrom;
+		woTo;
 		if (!filterResetPrimed) {
 			filterResetPrimed = true;
 			return;
@@ -65,7 +70,7 @@
 
 	$effect(() => {
 		syncGridUrl(
-			{ q: woSearch, status: woStatusFilter, priority: woPriorityFilter, sort: gridSort, page: gridPage },
+			{ q: woSearch, status: woStatusFilter, priority: woPriorityFilter, from: woFrom, to: woTo, sort: gridSort, page: gridPage },
 			{ page: 1 }
 		);
 	});
@@ -78,6 +83,8 @@
 			debouncedWoSearch.value,
 			woStatusFilter,
 			woPriorityFilter,
+			woFrom,
+			woTo,
 			gridSort,
 			gridPage,
 			PAGE_SIZE,
@@ -86,6 +93,9 @@
 			search: debouncedWoSearch.value,
 			status: woStatusFilter || undefined,
 			priority: woPriorityFilter || undefined,
+			// The work-order grid date range filters on RequestedAt (when the request came in).
+			requestedFrom: woFrom || undefined,
+			requestedTo: woTo || undefined,
 			sort: gridSort || undefined,
 			skip: (gridPage - 1) * PAGE_SIZE,
 			take: PAGE_SIZE,
@@ -715,6 +725,14 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			<RangeDatePicker
+				bind:start={woFrom}
+				bind:end={woTo}
+				presets
+				placeholder="All dates"
+				align="end"
+				testid="work-order-date-range"
+			/>
 		{/snippet}
 	</DataGrid>
 

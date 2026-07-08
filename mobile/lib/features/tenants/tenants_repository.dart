@@ -5,6 +5,69 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 
+class TenantListQuery {
+  const TenantListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'name',
+    this.availableForLease,
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final bool? availableForLease;
+
+  @override
+  bool operator ==(Object other) {
+    return other is TenantListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort &&
+        other.availableForLease == availableForLease;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort, availableForLease);
+}
+
+class TenantPage {
+  const TenantPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Tenant> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory TenantPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Tenant.fromJson)
+              .toList()
+        : <Tenant>[];
+
+    return TenantPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Result of `POST /tenants/{id}/portal-invite`.
 class PortalInviteResult {
   const PortalInviteResult({this.email, required this.alreadyExisted});
@@ -46,6 +109,35 @@ class TenantsRepository {
     }
   }
 
+  Future<TenantPage> listPage([
+    TenantListQuery query = const TenantListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      'availableForLease': query.availableForLease,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenants/page',
+        queryParameters: parameters,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TenantPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<List<Tenant>> listAvailableForLeaseTenants({int take = 200}) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
@@ -69,8 +161,7 @@ class TenantsRepository {
 
   Future<Tenant> getTenant(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/tenants/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/tenants/$id');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -87,8 +178,10 @@ class TenantsRepository {
   /// Create body: { firstName, lastName, email?, phone?, emergencyContact? }
   Future<Tenant> createTenant(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/tenants', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/tenants',
+        data: data,
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -151,8 +244,9 @@ class TenantsRepository {
   /// (the API 400s otherwise).
   Future<PortalInviteResult> sendPortalInvite(int id) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/tenants/$id/portal-invite');
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/tenants/$id/portal-invite',
+      );
       final data = response.data ?? const <String, dynamic>{};
       return PortalInviteResult(
         email: data['email'] as String?,
@@ -193,14 +287,19 @@ class TenantsNotifier extends Notifier<AsyncValue<List<Tenant>>> {
 
 final tenantsProvider =
     NotifierProvider<TenantsNotifier, AsyncValue<List<Tenant>>>(
-  TenantsNotifier.new,
-);
+      TenantsNotifier.new,
+    );
 
 final availableForLeaseTenantsProvider =
     FutureProvider.autoDispose<List<Tenant>>((ref) {
       return ref
           .watch(tenantsRepositoryProvider)
           .listAvailableForLeaseTenants();
+    });
+
+final tenantsPageProvider = FutureProvider.autoDispose
+    .family<TenantPage, TenantListQuery>((ref, query) {
+      return ref.watch(tenantsRepositoryProvider).listPage(query);
     });
 
 // ── Single tenant ─────────────────────────────────────────────────────────────
@@ -233,5 +332,5 @@ class TenantDetailNotifier extends Notifier<AsyncValue<Tenant>> {
 
 final tenantDetailProvider =
     NotifierProvider.family<TenantDetailNotifier, AsyncValue<Tenant>, int>(
-  TenantDetailNotifier.new,
-);
+      TenantDetailNotifier.new,
+    );

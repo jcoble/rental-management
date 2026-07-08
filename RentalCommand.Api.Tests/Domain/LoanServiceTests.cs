@@ -121,6 +121,31 @@ public class LoanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersByStartDate_AndReturnsPagedMetadata()
+    {
+        var property = SeedProperty();
+        SeedLoan(property.Id, lender: "January Bank", startDate: new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc));
+        SeedLoan(property.Id, lender: "February Bank", startDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+        SeedLoan(property.Id, lender: "March Bank", startDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
+
+        var page = await _sut.ListPageAsync(PortfolioId, property.Id, new ListQuery
+        {
+            From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            To = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "-startDate",
+            Skip = 0,
+            Take = 1,
+        });
+
+        page.TotalCount.Should().Be(2);
+        page.Skip.Should().Be(0);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle();
+        page.Items[0].Lender.Should().Be("March Bank");
+        page.Items[0].PropertyName.Should().Be(property.Name);
+    }
+
+    [Fact]
     public async Task GetPaymentsAsync_ReturnsScheduleOrderedByPeriod()
     {
         var property = SeedProperty();
@@ -176,19 +201,23 @@ public class LoanServiceTests : IDisposable
         return property;
     }
 
-    private Loan SeedLoan(int propertyId)
+    private Loan SeedLoan(
+        int propertyId,
+        string lender = "Acme Bank",
+        DateTime? startDate = null,
+        decimal currentBalance = 200_000m)
     {
         var now = DateTime.UtcNow;
         var loan = new Loan
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
-            Lender = "Acme Bank",
+            Lender = lender,
             OriginalAmount = 200_000m,
-            CurrentBalance = 200_000m,
+            CurrentBalance = currentBalance,
             AnnualInterestRatePct = 6m,
             TermMonths = 360,
-            StartDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            StartDate = startDate ?? new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             DayOfMonthDue = 1,
             MonthlyPrincipalInterest = 1199.10m,
             Status = LoanStatus.Active,

@@ -11,6 +11,7 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IAccountingService"/>
 public class AccountingService : IAccountingService
 {
+    private const int ReportLedgerPreviewTake = 8;
     private const decimal Vendor1099Threshold = 600m;
     private const string KindExpense = "Expense";
     private const string KindPayment = "Payment";
@@ -836,11 +837,14 @@ public class AccountingService : IAccountingService
     {
         var generatedAt = _timeProvider.UtcNow();
 
-        var ledgerRows = await ReportLedgerQuery(portfolioId)
+        var ledgerQuery = ReportLedgerQuery(portfolioId);
+        var ledgerTotalCount = await ledgerQuery.CountAsync(ct);
+        var ledgerRows = await ledgerQuery
             .OrderByDescending(l => l.Date)
             .ThenByDescending(l => l.Id)
+            .Take(ReportLedgerPreviewTake)
             .ToListAsync(ct);
-        var ledger = ledgerRows.Select(ToLedgerTransaction).ToList();
+        var recentLedger = ledgerRows.Select(ToLedgerTransaction).ToList();
 
         // Per-property rollups stay in SQL as correlated aggregates. Only final DTO formatting and
         // the simple Net arithmetic happen after materialization.
@@ -970,7 +974,9 @@ public class AccountingService : IAccountingService
             TotalIncome = totalIncome,
             TotalExpenses = totalExpenses,
             NetCashFlow = totalIncome - totalExpenses,
-            Ledger = ledger,
+            LedgerTotalCount = ledgerTotalCount,
+            RecentLedger = recentLedger,
+            Ledger = recentLedger,
             Properties = propertyReports,
             ScheduleE = scheduleE,
             Vendors1099 = vendorReports,

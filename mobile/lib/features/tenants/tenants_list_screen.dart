@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -19,14 +21,19 @@ class TenantsListScreen extends ConsumerStatefulWidget {
 }
 
 class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
-  final _searchCtrl = TextEditingController();
-  String _query = '';
+  static const _pageSize = 20;
 
-  @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(tenantsProvider.notifier).load());
-  }
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String _sort = 'name';
+  int _skip = 0;
+
+  TenantListQuery get _listQuery => TenantListQuery(
+    skip: _skip,
+    take: _pageSize,
+    search: _search,
+    sort: _sort,
+  );
 
   @override
   void dispose() {
@@ -34,7 +41,10 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
     super.dispose();
   }
 
-  Future<void> _refresh() => ref.read(tenantsProvider.notifier).refresh();
+  Future<void> _refresh() async {
+    ref.invalidate(tenantsPageProvider);
+    ref.invalidate(tenantsProvider);
+  }
 
   void _openDetail(BuildContext context, Tenant tenant) {
     Navigator.of(context).push<void>(
@@ -52,25 +62,38 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => TenantFormSheet(
-        onSaved: () => ref.read(tenantsProvider.notifier).refresh(),
+        onSaved: () {
+          ref.invalidate(tenantsPageProvider);
+          ref.read(tenantsProvider.notifier).refresh();
+        },
       ),
     );
   }
 
-  List<Tenant> _filtered(List<Tenant> all) {
-    final q = _query.trim().toLowerCase();
-    if (q.isEmpty) return all;
-    return all.where((t) {
-      final name = '${t.firstName} ${t.lastName}'.toLowerCase();
-      final email = (t.email ?? '').toLowerCase();
-      final phone = (t.phone ?? '').toLowerCase();
-      return name.contains(q) || email.contains(q) || phone.contains(q);
-    }).toList();
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? value) {
+    if (value == null || value == _sort) return;
+    setState(() {
+      _sort = value;
+      _skip = 0;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantsAsync = ref.watch(tenantsPageProvider(_listQuery));
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -89,34 +112,29 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
       ),
       body: Column(
         children: [
-          // Search bar
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                hintText: 'Search by name, email, or phone',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: _query.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, size: 20),
-                        onPressed: () {
-                          _searchCtrl.clear();
-                          setState(() => _query = '');
-                        },
-                      )
-                    : null,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+          MobileGridControlsBar(
+            keyPrefix: 'tenants',
+            searchController: _searchCtrl,
+            searchLabel: 'Search tenants',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: 'name',
+            sortLabel: 'Sort tenants',
+            sortOptions: const [
+              MobileGridControlOption(value: 'name', label: 'Name A-Z'),
+              MobileGridControlOption(value: '-name', label: 'Name Z-A'),
+              MobileGridControlOption(
+                value: '-updatedAt',
+                label: 'Recently updated',
               ),
-              onChanged: (v) => setState(() => _query = v),
-            ),
+              MobileGridControlOption(
+                value: 'activeLeaseCount',
+                label: 'Fewest active leases',
+              ),
+            ],
+            onSortChanged: _setSort,
           ),
-
-          // List
           Expanded(
             child: RefreshIndicator(
               onRefresh: _refresh,
@@ -126,21 +144,28 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
                   message: e is ApiException ? e.message : e.toString(),
                   onRetry: _refresh,
                 ),
-                data: (list) {
-                  final filtered = _filtered(list);
-                  if (list.isEmpty) {
+                data: (page) {
+                  final tenants = page.items;
+                  if (page.totalCount == 0 && _search == null) {
                     return _EmptyBody(onAdd: () => _showAddSheet(context));
                   }
-                  if (filtered.isEmpty) {
-                    return Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'No tenants match "$_query".',
-                          style: TextStyle(color: colorScheme.onSurfaceVariant),
-                          textAlign: TextAlign.center,
+                  if (tenants.isEmpty) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _search == null
+                                ? 'No tenants on this page.'
+                                : 'No tenants match "$_search".',
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
-                      ),
+                      ],
                     );
                   }
                   final bottomInset = MediaQuery.paddingOf(context).bottom;
@@ -151,17 +176,35 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
                       16,
                       160.0 + bottomInset,
                     ),
-                    itemCount: filtered.length,
-                    separatorBuilder: (_, idx) =>
-                        _GroupedListDivider(colorScheme: colorScheme),
+                    itemCount: tenants.length + 1,
+                    separatorBuilder: (_, idx) => idx >= tenants.length - 1
+                        ? const SizedBox(height: 8)
+                        : const MobileM3ListDivider(),
                     itemBuilder: (context, index) {
-                      final tenant = filtered[index];
+                      if (index == tenants.length) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = _skip <= _pageSize
+                                      ? 0
+                                      : _skip - _pageSize;
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+                      final tenant = tenants[index];
                       return _TenantCard(
                         tenant: tenant,
-                        colorScheme: colorScheme,
-                        theme: theme,
-                        first: index == 0,
-                        last: index == filtered.length - 1,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          tenants.length,
+                        ),
                         onTap: () => _openDetail(context, tenant),
                       );
                     },
@@ -181,104 +224,61 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
 class _TenantCard extends StatelessWidget {
   const _TenantCard({
     required this.tenant,
-    required this.colorScheme,
-    required this.theme,
-    required this.first,
-    required this.last,
+    required this.position,
     required this.onTap,
   });
 
   final Tenant tenant;
-  final ColorScheme colorScheme;
-  final ThemeData theme;
-  final bool first;
-  final bool last;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final hasActiveLease = (tenant.activeLeaseCount ?? 0) > 0;
-    final borderRadius = BorderRadius.vertical(
-      top: first ? const Radius.circular(20) : Radius.zero,
-      bottom: last ? const Radius.circular(20) : Radius.zero,
-    );
+    final phone = tenant.phone;
+    final email = tenant.email;
 
-    return Material(
-      color: colorScheme.surfaceContainerHigh,
-      borderRadius: borderRadius,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: borderRadius,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: colorScheme.primaryContainer,
-                child: Text(
-                  _initials(tenant.firstName, tenant.lastName),
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: colorScheme.onPrimaryContainer,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${tenant.firstName} ${tenant.lastName}',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _LeaseStatusChip(
-                          active: hasActiveLease,
-                          count: tenant.activeLeaseCount ?? 0,
-                          colorScheme: colorScheme,
-                        ),
-                      ],
-                    ),
-                    if (tenant.email != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        tenant.email!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                    if (tenant.phone != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        tenant.phone!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right_outlined, size: 18),
-            ],
-          ),
-        ),
+    return MobileM3ListItem(
+      position: position,
+      leading: _TenantInitialsAvatar(
+        initials: _initials(tenant.firstName, tenant.lastName),
       ),
+      title: Text(
+        '${tenant.firstName} ${tenant.lastName}'.trim(),
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        if (email != null)
+          Text(
+            email,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        if (phone != null)
+          Text(
+            phone,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+      ],
+      trailing: _LeaseStatusChip(
+        active: hasActiveLease,
+        count: tenant.activeLeaseCount ?? 0,
+        colorScheme: colorScheme,
+      ),
+      onTap: onTap,
     );
   }
 
@@ -289,19 +289,30 @@ class _TenantCard extends StatelessWidget {
   }
 }
 
-class _GroupedListDivider extends StatelessWidget {
-  const _GroupedListDivider({required this.colorScheme});
+class _TenantInitialsAvatar extends StatelessWidget {
+  const _TenantInitialsAvatar({required this.initials});
 
-  final ColorScheme colorScheme;
+  final String initials;
 
   @override
   Widget build(BuildContext context) {
-    return Divider(
-      height: 1,
-      thickness: 1,
-      indent: 72,
-      endIndent: 16,
-      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        initials,
+        style: TextStyle(
+          color: colorScheme.onPrimaryContainer,
+          fontWeight: FontWeight.w800,
+          fontSize: 14,
+        ),
+      ),
     );
   }
 }

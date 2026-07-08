@@ -18,24 +18,38 @@ class MobileQuickActionController extends ChangeNotifier {
   bool _disposed = false;
   bool _notifyScheduled = false;
 
+  List<MobileQuickAction> get primaryActions {
+    for (final registration in _registrations.reversed) {
+      if (registration.actions.isNotEmpty) return registration.actions;
+    }
+    return const [];
+  }
+
   MobileQuickAction? get primaryAction =>
-      _registrations.isEmpty ? null : _registrations.last.action;
+      primaryActions.isEmpty ? null : primaryActions.first;
 
   void setPrimaryAction(Object owner, MobileQuickAction? action) {
+    setPrimaryActions(owner, action == null ? const [] : [action]);
+  }
+
+  void setPrimaryActions(Object owner, List<MobileQuickAction> actions) {
     if (_disposed) return;
 
     final index = _registrations.indexWhere(
       (entry) => identical(entry.owner, owner),
     );
     if (index == -1) {
-      _registrations.add(_MobileQuickActionRegistration(owner, action));
+      _registrations.add(_MobileQuickActionRegistration(owner, actions));
       _notifyChanged();
       return;
     }
 
     final existing = _registrations[index];
-    if (existing.action == action) return;
-    _registrations[index] = _MobileQuickActionRegistration(owner, action);
+    if (identical(existing.actions, actions) ||
+        _listEquals(existing.actions, actions)) {
+      return;
+    }
+    _registrations[index] = _MobileQuickActionRegistration(owner, actions);
     _notifyChanged();
   }
 
@@ -76,10 +90,18 @@ class MobileQuickActionController extends ChangeNotifier {
 }
 
 class _MobileQuickActionRegistration {
-  const _MobileQuickActionRegistration(this.owner, this.action);
+  const _MobileQuickActionRegistration(this.owner, this.actions);
 
   final Object owner;
-  final MobileQuickAction? action;
+  final List<MobileQuickAction> actions;
+}
+
+bool _listEquals<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 class MobileQuickActionScope
@@ -151,6 +173,7 @@ class MobileQuickActionFab extends StatefulWidget {
   const MobileQuickActionFab({
     super.key,
     this.primaryAction,
+    this.primaryActions = const [],
     required this.onChat,
     required this.onRecord,
     required this.onScan,
@@ -160,6 +183,7 @@ class MobileQuickActionFab extends StatefulWidget {
   });
 
   final MobileQuickAction? primaryAction;
+  final List<MobileQuickAction> primaryActions;
   final VoidCallback onChat;
   final VoidCallback onRecord;
   final VoidCallback onScan;
@@ -231,7 +255,7 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
     }
 
     if (_usesScope) {
-      _scopeController!.setPrimaryAction(_scopeOwner, widget.primaryAction);
+      _scopeController!.setPrimaryActions(_scopeOwner, _primaryActions);
     } else {
       _scopeController?.clearPrimaryAction(_scopeOwner);
     }
@@ -244,8 +268,13 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
     callback();
   }
 
-  List<MobileQuickAction> get _actions => [
+  List<MobileQuickAction> get _primaryActions => [
     ?widget.primaryAction,
+    ...widget.primaryActions,
+  ];
+
+  List<MobileQuickAction> get _actions => [
+    ..._primaryActions,
     MobileQuickAction(
       label: 'Chat',
       icon: Icons.auto_awesome,

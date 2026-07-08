@@ -17,7 +17,14 @@ import 'scan_repository.dart';
 /// This is a helper widget — host it as a modal bottom sheet or call the static
 /// helpers directly from [ScanListScreen].
 class ScanCaptureSheet extends ConsumerStatefulWidget {
-  const ScanCaptureSheet({super.key});
+  const ScanCaptureSheet({
+    super.key,
+    this.initialTargetEntityType = 'Expense',
+    this.lockTargetEntityType = false,
+  });
+
+  final String initialTargetEntityType;
+  final bool lockTargetEntityType;
 
   @override
   ConsumerState<ScanCaptureSheet> createState() => _ScanCaptureSheetState();
@@ -32,11 +39,15 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   bool _voiceUploading = false;
   String? _recordingPath;
 
-  /// What kind of record this scan will become: 'Expense' (receipt/bill),
-  /// 'Payment' (rent check), or 'WorkOrder' (maintenance request). Drives the
-  /// extraction + confirm flow. Defaults to 'Expense' since receipts/bills are
-  /// the most common capture.
-  String _targetEntityType = 'Expense';
+  /// What kind of record this scan will become. The global sheet offers
+  /// Expense/Payment/WorkOrder; contextual callers can lock this to Loan.
+  late String _targetEntityType;
+
+  @override
+  void initState() {
+    super.initState();
+    _targetEntityType = widget.initialTargetEntityType;
+  }
 
   @override
   void dispose() {
@@ -206,6 +217,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final lockedLoan =
+        widget.lockTargetEntityType && _targetEntityType == 'Loan';
 
     if (_uploading || _voiceUploading) {
       return Padding(
@@ -251,7 +264,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Scan a document',
+              lockedLoan ? 'Scan a mortgage statement' : 'Scan a document',
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -259,7 +272,9 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Take a photo of a receipt, bill, check, or maintenance issue.\nThe app will read the details for you.',
+              lockedLoan
+                  ? 'Take a photo of a mortgage statement or closing disclosure.\nThe app will read the loan details for review.'
+                  : 'Take a photo of a receipt, bill, check, or maintenance issue.\nThe app will read the details for you.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -279,18 +294,20 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
                 ),
               ),
             ],
-            const SizedBox(height: 24),
-            Text(
-              'What are you scanning?',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
+            if (!widget.lockTargetEntityType) ...[
+              const SizedBox(height: 24),
+              Text(
+                'What are you scanning?',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            _DocTypeSelector(
-              selected: _targetEntityType,
-              onChanged: (value) => setState(() => _targetEntityType = value),
-            ),
+              const SizedBox(height: 8),
+              _DocTypeSelector(
+                selected: _targetEntityType,
+                onChanged: (value) => setState(() => _targetEntityType = value),
+              ),
+            ],
             const SizedBox(height: 24),
             FilledButton.icon(
               icon: const Icon(Icons.camera_alt_outlined),
@@ -303,14 +320,18 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
               label: const Text('Choose from gallery'),
               onPressed: () => _pick(ImageSource.gallery),
             ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              icon: Icon(
-                _recording ? Icons.stop_circle_outlined : Icons.mic_outlined,
+            if (!lockedLoan) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                icon: Icon(
+                  _recording ? Icons.stop_circle_outlined : Icons.mic_outlined,
+                ),
+                label: Text(
+                  _recording ? 'Stop voice note' : 'Record voice note',
+                ),
+                onPressed: _toggleVoice,
               ),
-              label: Text(_recording ? 'Stop voice note' : 'Record voice note'),
-              onPressed: _toggleVoice,
-            ),
+            ],
             const SizedBox(height: 8),
           ],
         ),
@@ -427,11 +448,18 @@ class _DocTypeOption extends StatelessWidget {
 
 /// Shows [ScanCaptureSheet] as a modal bottom sheet and returns the new
 /// draft id, or null if the user cancelled.
-Future<int?> showScanCaptureSheet(BuildContext context) {
+Future<int?> showScanCaptureSheet(
+  BuildContext context, {
+  String initialTargetEntityType = 'Expense',
+  bool lockTargetEntityType = false,
+}) {
   return showModalBottomSheet<int>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    builder: (_) => const ScanCaptureSheet(),
+    builder: (_) => ScanCaptureSheet(
+      initialTargetEntityType: initialTargetEntityType,
+      lockTargetEntityType: lockTargetEntityType,
+    ),
   );
 }

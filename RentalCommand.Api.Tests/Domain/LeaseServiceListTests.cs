@@ -97,6 +97,41 @@ public class LeaseServiceListTests : IDisposable
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_ActivePeriodFilterUsesOverlapSemanticsInSql()
+    {
+        var unit = SeedLeaseHistoryUnit();
+        SeedLease(unit, "L-BEFORE", "Avery", "Ellis", LeaseStatus.Expired,
+            new DateTime(2025, 1, 1), new DateTime(2025, 12, 31));
+        SeedLease(unit, "L-OVERLAP-START", "Blair", "Kline", LeaseStatus.Active,
+            new DateTime(2025, 12, 15), new DateTime(2026, 1, 15));
+        SeedLease(unit, "L-INSIDE", "Casey", "Moss", LeaseStatus.Active,
+            new DateTime(2026, 1, 10), new DateTime(2026, 1, 20));
+        SeedLease(unit, "L-AFTER", "Devon", "Nash", LeaseStatus.Active,
+            new DateTime(2026, 2, 1), new DateTime(2026, 12, 31));
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new LeaseListQuery
+        {
+            ActiveFrom = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            ActiveTo = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "startDate",
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Select(l => l.LeaseNumber).Should().Equal("L-OVERLAP-START", "L-INSIDE");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("StartDate", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EndDate", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("StartDate", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
     private void SeedLease(string leaseNumber, string firstName, string lastName, LeaseStatus status)
     {
         var now = DateTime.UtcNow;

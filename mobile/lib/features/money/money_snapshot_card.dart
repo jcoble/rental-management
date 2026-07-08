@@ -247,18 +247,23 @@ class _PastDueRow extends StatelessWidget {
     final tenantWord = count == 1 ? 'tenant' : 'tenants';
 
     final row = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: cs.errorContainer,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            Icons.warning_amber_rounded,
-            size: 16,
-            color: cs.onErrorContainer,
+        SizedBox.square(
+          dimension: 40,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: cs.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                size: 16,
+                color: cs.onErrorContainer,
+              ),
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -287,9 +292,15 @@ class _PastDueRow extends StatelessWidget {
           ),
         ),
         if (onTap != null)
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Icon(Icons.chevron_right, color: cs.onSurfaceVariant, size: 18),
+          SizedBox.square(
+            dimension: 40,
+            child: Center(
+              child: Icon(
+                Icons.chevron_right,
+                color: cs.onSurfaceVariant,
+                size: 18,
+              ),
+            ),
           ),
       ],
     );

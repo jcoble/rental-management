@@ -12,8 +12,34 @@ export interface ExpenseListResponse {
 
 export const expenses = {
 	list: (portfolioId: number, params?: ExpenseListParams) => {
-		const { propertyId, unitId, workOrderId, ...list } = params ?? {};
-		return api.get<Expense[]>(`/expenses${buildListQuery(list, { portfolioId, propertyId, unitId, workOrderId })}`);
+		const {
+			propertyId,
+			unitId,
+			workOrderId,
+			workOrderLinkedOnly,
+			incurredFrom,
+			incurredTo,
+			dueFrom,
+			dueTo,
+			paidFrom,
+			paidTo,
+			...list
+		} = params ?? {};
+		return api.get<Expense[]>(
+			`/expenses${buildListQuery(list, {
+				portfolioId,
+				propertyId,
+				unitId,
+				workOrderId,
+				workOrderLinkedOnly: workOrderLinkedOnly ? 'true' : undefined,
+				incurredFrom,
+				incurredTo,
+				dueFrom,
+				dueTo,
+				paidFrom,
+				paidTo
+			})}`
+		);
 	},
 	listPage: (portfolioId: number, params?: ExpenseListParams) => {
 		return api.get<ExpenseListResponse>(buildExpenseListPagePath(portfolioId, params));

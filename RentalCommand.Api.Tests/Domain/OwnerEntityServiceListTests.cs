@@ -81,6 +81,29 @@ public class OwnerEntityServiceListTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersByOwnerEntityTypeDbSide()
+    {
+        SeedOwner("Alpha Holdings", OwnerEntityType.LLC);
+        SeedOwner("Bravo Trust", OwnerEntityType.Trust);
+        SeedOwner("Cedar Owner", OwnerEntityType.Person);
+        SeedOwner("Delta Holdings", OwnerEntityType.LLC);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new OwnerEntityListQuery
+        {
+            OwnerEntityType = OwnerEntityType.LLC,
+            Sort = "name",
+            Take = 10,
+        });
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Select(o => o.Name).Should().Equal("Alpha Holdings", "Delta Holdings");
+        _commands.Should().Contain(sql =>
+            sql.Contains("WHERE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OwnerEntityType", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GetAsync_ReturnsAssignedPropertyCount()
     {
         var owner = SeedOwner("Alpha Holdings", OwnerEntityType.LLC);
