@@ -215,7 +215,16 @@ class _FakeTenantsRepository extends TenantsRepository {
   _FakeTenantsRepository() : super(Dio());
 
   @override
-  Future<List<Tenant>> listTenants() async => [_tenant()];
+  Future<TenantPage> listPage([
+    TenantListQuery query = const TenantListQuery(),
+  ]) async {
+    return TenantPage(
+      items: [_tenant()],
+      totalCount: 1,
+      skip: query.skip,
+      take: query.take,
+    );
+  }
 }
 
 class _FakeVendorsRepository extends VendorsRepository {

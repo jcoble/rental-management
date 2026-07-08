@@ -310,10 +310,26 @@ public class WorkOrderService : IWorkOrderService
             return null;
         }
 
+        if (request.TenantId.HasValue &&
+            !await TenantMatchesLocationAsync(
+                portfolioId, request.TenantId.Value, request.PropertyId, request.UnitId, ct))
+        {
+            throw new DomainValidationException(
+                "The selected tenant does not belong to the selected unit or property.");
+        }
+
         if (request.LeaseId.HasValue &&
             !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
+        }
+
+        if (request.LeaseId.HasValue &&
+            !await LeaseMatchesLocationAsync(
+                portfolioId, request.LeaseId.Value, request.PropertyId, request.UnitId, ct))
+        {
+            throw new DomainValidationException(
+                "The selected lease does not belong to the selected unit or property.");
         }
 
         if (request.VendorId.HasValue &&
@@ -495,10 +511,47 @@ public class WorkOrderService : IWorkOrderService
             return null;
         }
 
+        var effectiveUnitId = request.ClearUnit ? null : request.UnitId ?? entity.UnitId;
+        var effectiveTenantId = request.ClearTenant ? null : request.TenantId ?? entity.TenantId;
+        var effectiveLeaseId = request.ClearLease ? null : request.LeaseId ?? entity.LeaseId;
+        if (request.TenantId.HasValue &&
+            !await TenantMatchesLocationAsync(
+                portfolioId, request.TenantId.Value, entity.PropertyId, effectiveUnitId, ct))
+        {
+            throw new DomainValidationException(
+                "The selected tenant does not belong to the selected unit or property.");
+        }
+
+        if ((request.UnitId.HasValue || request.ClearUnit || request.ClearTenant) &&
+            effectiveTenantId.HasValue &&
+            !await TenantMatchesLocationAsync(
+                portfolioId, effectiveTenantId.Value, entity.PropertyId, effectiveUnitId, ct))
+        {
+            throw new DomainValidationException(
+                "The selected tenant does not belong to the selected unit or property.");
+        }
+
         if (request.LeaseId.HasValue &&
             !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
+        }
+
+        if (request.LeaseId.HasValue &&
+            !await LeaseMatchesLocationAsync(
+                portfolioId, request.LeaseId.Value, entity.PropertyId, effectiveUnitId, ct))
+        {
+            throw new DomainValidationException(
+                "The selected lease does not belong to the selected unit or property.");
+        }
+
+        if ((request.UnitId.HasValue || request.ClearUnit || request.ClearLease) &&
+            effectiveLeaseId.HasValue &&
+            !await LeaseMatchesLocationAsync(
+                portfolioId, effectiveLeaseId.Value, entity.PropertyId, effectiveUnitId, ct))
+        {
+            throw new DomainValidationException(
+                "The selected lease does not belong to the selected unit or property.");
         }
 
         if (request.VendorId.HasValue &&
@@ -507,9 +560,32 @@ public class WorkOrderService : IWorkOrderService
             return null;
         }
 
-        if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
-        if (request.TenantId.HasValue) entity.TenantId = request.TenantId;
-        if (request.LeaseId.HasValue) entity.LeaseId = request.LeaseId;
+        var requestedScheduledFor = request.ScheduledFor.ToUtcDateTime();
+        var requestedScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime();
+        var scheduleChanged =
+            (request.ScheduledFor.HasValue && requestedScheduledFor != entity.ScheduledFor) ||
+            (request.ScheduledWindowEnd.HasValue && requestedScheduledWindowEnd != entity.ScheduledWindowEnd);
+        var detailsChanged =
+            (request.ClearUnit && entity.UnitId.HasValue) ||
+            (request.ClearTenant && entity.TenantId.HasValue) ||
+            (request.ClearLease && entity.LeaseId.HasValue) ||
+            (request.UnitId.HasValue && request.UnitId != entity.UnitId) ||
+            (request.TenantId.HasValue && request.TenantId != entity.TenantId) ||
+            (request.LeaseId.HasValue && request.LeaseId != entity.LeaseId) ||
+            (request.VendorId.HasValue && request.VendorId != entity.VendorId) ||
+            (request.Title != null && request.Title != entity.Title) ||
+            (request.Description != null && request.Description != entity.Description) ||
+            (request.Category != null && request.Category != entity.Category) ||
+            (request.Priority.HasValue && request.Priority.Value != entity.Priority) ||
+            (request.EstimatedCost.HasValue && request.EstimatedCost != entity.EstimatedCost) ||
+            (request.ActualCost.HasValue && request.ActualCost != entity.ActualCost);
+
+        if (request.ClearUnit) entity.UnitId = null;
+        else if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
+        if (request.ClearTenant) entity.TenantId = null;
+        else if (request.TenantId.HasValue) entity.TenantId = request.TenantId;
+        if (request.ClearLease) entity.LeaseId = null;
+        else if (request.LeaseId.HasValue) entity.LeaseId = request.LeaseId;
         if (request.VendorId.HasValue) entity.VendorId = request.VendorId;
         if (request.Title != null) entity.Title = request.Title;
         if (request.Description != null) entity.Description = request.Description;
@@ -528,8 +604,8 @@ public class WorkOrderService : IWorkOrderService
         var now = _timeProvider.UtcNow();
 
         if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
-        if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtcDateTime();
-        if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime();
+        if (request.ScheduledFor.HasValue) entity.ScheduledFor = requestedScheduledFor;
+        if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = requestedScheduledWindowEnd;
         if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
         var completedAtStampedFromStatus =
             statusChanged &&
@@ -575,6 +651,23 @@ public class WorkOrderService : IWorkOrderService
                 CreatedAtUtc = now,
             });
         }
+        else
+        {
+            var editNote = WorkOrderEditTimelineNote(scheduleChanged, detailsChanged);
+            if (editNote is not null)
+            {
+                entity.StatusEvents.Add(new WorkOrderStatusEvent
+                {
+                    PortfolioId = portfolioId,
+                    FromStatus = entity.Status,
+                    ToStatus = entity.Status,
+                    Note = editNote,
+                    ChangedByUserId = changedByUserId,
+                    ChangedByLabel = changedByLabel,
+                    CreatedAtUtc = now,
+                });
+            }
+        }
 
         await _db.SaveChangesAsync(ct);
 
@@ -595,6 +688,77 @@ public class WorkOrderService : IWorkOrderService
             throw new DomainValidationException(
                 $"A work order cannot be moved to {to}.");
         }
+    }
+
+    private static string? WorkOrderEditTimelineNote(bool scheduleChanged, bool detailsChanged)
+    {
+        return (scheduleChanged, detailsChanged) switch
+        {
+            (true, true) => "Schedule and details updated.",
+            (true, false) => "Schedule updated.",
+            (false, true) => "Details updated.",
+            _ => null,
+        };
+    }
+
+    private Task<bool> TenantMatchesLocationAsync(
+        int portfolioId,
+        int tenantId,
+        int propertyId,
+        int? unitId,
+        CancellationToken ct)
+    {
+        var tenants = _db.Tenants
+            .AsNoTracking()
+            .Where(t => t.Id == tenantId && t.PortfolioId == portfolioId);
+
+        if (unitId.HasValue)
+        {
+            var selectedUnitId = unitId.Value;
+            return tenants.AnyAsync(t =>
+                t.Leases.Any(l => l.PortfolioId == portfolioId
+                    && l.UnitId == selectedUnitId
+                    && (l.Status == LeaseStatus.Active ||
+                        l.Status == LeaseStatus.NoticeGiven)) ||
+                t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
+                    && lt.Lease != null
+                    && lt.Lease.PortfolioId == portfolioId
+                    && lt.Lease.UnitId == selectedUnitId
+                    && (lt.Lease.Status == LeaseStatus.Active ||
+                        lt.Lease.Status == LeaseStatus.NoticeGiven)), ct);
+        }
+
+        return tenants.AnyAsync(t =>
+            t.Leases.Any(l => l.PortfolioId == portfolioId
+                && l.PropertyId == propertyId
+                && (l.Status == LeaseStatus.Active ||
+                    l.Status == LeaseStatus.NoticeGiven)) ||
+            t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
+                && lt.Lease != null
+                && lt.Lease.PortfolioId == portfolioId
+                && lt.Lease.PropertyId == propertyId
+                && (lt.Lease.Status == LeaseStatus.Active ||
+                    lt.Lease.Status == LeaseStatus.NoticeGiven)), ct);
+    }
+
+    private Task<bool> LeaseMatchesLocationAsync(
+        int portfolioId,
+        int leaseId,
+        int propertyId,
+        int? unitId,
+        CancellationToken ct)
+    {
+        var leases = _db.Leases
+            .AsNoTracking()
+            .Where(l => l.Id == leaseId && l.PortfolioId == portfolioId && l.PropertyId == propertyId);
+
+        if (unitId.HasValue)
+        {
+            var selectedUnitId = unitId.Value;
+            leases = leases.Where(l => l.UnitId == selectedUnitId);
+        }
+
+        return leases.AnyAsync(ct);
     }
 
     // Validates the (RequestedAt, ScheduledFor, CompletedAt) timing on an update. A supplied CompletedAt

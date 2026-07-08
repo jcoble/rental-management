@@ -1177,7 +1177,6 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
         : 'General';
     Future.microtask(() {
       ref.read(propertiesForWoProvider.notifier).load();
-      ref.read(tenantsProvider.notifier).load();
     });
   }
 
@@ -1193,6 +1192,11 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   DateTime? _combine(DateTime? date, TimeOfDay? time) {
     if (date == null || time == null) return null;
     return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  DateTime? _scheduledStart(DateTime? date, TimeOfDay? time) {
+    if (date == null) return null;
+    return _combine(date, time) ?? DateTime(date.year, date.month, date.day);
   }
 
   static String _fmtEditDate(DateTime d) {
@@ -1235,6 +1239,26 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     return name.isEmpty ? 'Tenant #${tenant.id}' : name;
   }
 
+  TenantListQuery get _tenantQuery => TenantListQuery(
+    take: 200,
+    sort: 'name',
+    propertyId: _selectedPropertyId,
+    unitId: _selectedUnitId,
+  );
+
+  void _clearSelectedTenantIfMissing(List<Tenant> tenants) {
+    final tenantId = _selectedTenantId;
+    if (tenantId == null || tenants.any((tenant) => tenant.id == tenantId)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _selectedTenantId == tenantId) {
+        setState(() => _selectedTenantId = null);
+      }
+    });
+  }
+
   double? _parseOptionalAmount(TextEditingController controller) {
     final trimmed = controller.text.trim();
     if (trimmed.isEmpty) return null;
@@ -1242,7 +1266,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   }
 
   bool _validateArrivalWindow() {
-    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
     if (scheduledFor != null &&
         scheduledWindowEnd != null &&
@@ -1261,7 +1285,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
     if (!_validateArrivalWindow()) return;
 
@@ -1273,6 +1297,13 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     try {
       final estimatedCost = _parseOptionalAmount(_estCostCtrl);
       final actualCost = _parseOptionalAmount(_actualCostCtrl);
+      final clearUnit =
+          _selectedUnitId == null && widget.workOrder.unitId != null;
+      final clearTenant =
+          _selectedTenantId == null && widget.workOrder.tenantId != null;
+      final clearLease =
+          _selectedUnitId != widget.workOrder.unitId &&
+          widget.workOrder.leaseId != null;
       await ref
           .read(workOrdersRepositoryProvider)
           .updateWorkOrder(widget.workOrder.id, {
@@ -1281,7 +1312,10 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
             'priority': _priority,
             'category': _category,
             'unitId': ?_selectedUnitId,
+            'clearUnit': clearUnit,
             'tenantId': ?_selectedTenantId,
+            'clearTenant': clearTenant,
+            'clearLease': clearLease,
             'vendorId': ?_selectedVendorId,
             if (scheduledFor != null)
               'scheduledFor': localToWireIso(scheduledFor),
@@ -1304,7 +1338,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final propertiesAsync = ref.watch(propertiesForWoProvider);
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantsAsync = ref.watch(tenantsPageProvider(_tenantQuery));
     final vendorsAsync = ref.watch(vendorsProvider);
     final unitsAsync = ref.watch(unitsProvider(_selectedPropertyId));
     const gap = SizedBox(height: 12);
@@ -1375,7 +1409,10 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
               ),
             ),
           ],
-          onChanged: (value) => setState(() => _selectedUnitId = value),
+          onChanged: (value) => setState(() {
+            _selectedUnitId = value;
+            _selectedTenantId = null;
+          }),
         );
       },
     );
@@ -1389,24 +1426,17 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
         'Could not load tenants: ${e is ApiException ? e.message : e}',
         style: TextStyle(color: colorScheme.error, fontSize: 13),
       ),
-      data: (tenants) {
+      data: (page) {
+        final tenants = page.items;
+        _clearSelectedTenantIfMissing(tenants);
         final hasSelectedTenant =
             _selectedTenantId == null ||
             tenants.any((tenant) => tenant.id == _selectedTenantId);
         return DropdownButtonFormField<int?>(
-          initialValue: _selectedTenantId,
+          initialValue: hasSelectedTenant ? _selectedTenantId : null,
           decoration: const InputDecoration(labelText: 'Tenant (optional)'),
           items: [
             const DropdownMenuItem<int?>(value: null, child: Text('No tenant')),
-            if (!hasSelectedTenant)
-              DropdownMenuItem<int?>(
-                value: _selectedTenantId,
-                child: Text(
-                  widget.workOrder.tenantName ??
-                      'Tenant #${widget.workOrder.tenantId}',
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
             ...tenants.map(
               (tenant) => DropdownMenuItem<int?>(
                 value: tenant.id,
