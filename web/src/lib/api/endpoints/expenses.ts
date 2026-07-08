@@ -1,6 +1,7 @@
 import type { Expense } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import type { CapitalAsset, CapitalizeExpenseRequest } from './capital-assets';
 import { buildExpenseListPagePath, type ExpenseListParams } from './expense-list-path';
 
 export interface ExpenseListResponse {
@@ -47,6 +48,8 @@ export const expenses = {
 	get: (id: number) => api.get<Expense>(`/expenses/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Expense>('/expenses', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Expense>(`/expenses/${id}`, data),
+	capitalize: (id: number, data: CapitalizeExpenseRequest) =>
+		api.post<CapitalAsset>(`/expenses/${id}/capitalize`, data),
 	delete: (id: number) => api.delete(`/expenses/${id}`),
 	// Expense totals (by Schedule E category + grand total) live on the accounting summary;
 	// use the `accounting` endpoint module rather than an expenses-only summary route.

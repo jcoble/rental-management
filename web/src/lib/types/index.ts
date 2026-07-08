@@ -431,6 +431,7 @@ export interface Expense {
 	unitId?: number;
 	vendorId?: number;
 	workOrderId?: number;
+	capitalizedAssetId?: number | null;
 	category: string;
 	description: string;
 	status: ExpenseStatus;
