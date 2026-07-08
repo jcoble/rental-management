@@ -136,6 +136,86 @@ void main() {
     },
   );
 
+  testWidgets('controller hidden state suppresses the shell quick action FAB', (
+    tester,
+  ) async {
+    final controller = MobileQuickActionController();
+    final owner = Object();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MobileQuickActionScope(
+            controller: controller,
+            child: MobileQuickActionFab(
+              heroTag: 'embedded-fab',
+              primaryAction: MobileQuickAction(
+                label: 'New conversation',
+                icon: Icons.edit_outlined,
+                onPressed: () {},
+              ),
+              onChat: () {},
+              onRecord: () {},
+              onScan: () {},
+            ),
+          ),
+          floatingActionButton: AnimatedBuilder(
+            animation: controller,
+            builder: (context, _) {
+              if (controller.hidden) return const SizedBox.shrink();
+              return MobileQuickActionFab(
+                heroTag: 'shell-fab',
+                primaryActions: controller.primaryActions,
+                useNearestScope: false,
+                onChat: () {},
+                onRecord: () {},
+                onScan: () {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(controller.primaryAction?.label, 'New conversation');
+    expect(controller.hidden, isFalse);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+
+    controller.setHidden(owner, true);
+    await tester.pump();
+
+    expect(controller.primaryAction?.label, 'New conversation');
+    expect(controller.hidden, isTrue);
+    expect(find.byType(FloatingActionButton), findsNothing);
+
+    controller.setHidden(owner, false);
+    await tester.pump();
+
+    expect(controller.hidden, isFalse);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+
+  testWidgets('controller remains hidden until every owner clears', (
+    tester,
+  ) async {
+    final controller = MobileQuickActionController();
+    final firstOwner = Object();
+    final secondOwner = Object();
+    addTearDown(controller.dispose);
+
+    controller.setHidden(firstOwner, true);
+    controller.setHidden(secondOwner, true);
+    expect(controller.hidden, isTrue);
+
+    controller.setHidden(firstOwner, false);
+    expect(controller.hidden, isTrue);
+
+    controller.clearHidden(secondOwner);
+    expect(controller.hidden, isFalse);
+  });
+
   testWidgets('scoped primary action falls back when top action unmounts', (
     tester,
   ) async {
@@ -185,14 +265,17 @@ void main() {
             ),
             floatingActionButton: AnimatedBuilder(
               animation: controller,
-              builder: (context, _) => MobileQuickActionFab(
-                heroTag: 'shell-fab',
-                primaryAction: controller.primaryAction,
-                useNearestScope: false,
-                onChat: () {},
-                onRecord: () {},
-                onScan: () {},
-              ),
+              builder: (context, _) {
+                if (controller.hidden) return const SizedBox.shrink();
+                return MobileQuickActionFab(
+                  heroTag: 'shell-fab',
+                  primaryActions: controller.primaryActions,
+                  useNearestScope: false,
+                  onChat: () {},
+                  onRecord: () {},
+                  onScan: () {},
+                );
+              },
             ),
           ),
         ),

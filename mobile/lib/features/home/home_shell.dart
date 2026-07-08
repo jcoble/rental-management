@@ -150,6 +150,16 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
+  void _setTabQuickActionsHidden(
+    MobileShellTabId tab,
+    Object owner,
+    bool hidden,
+  ) {
+    final index = _tabIndexFor(tab);
+    if (index >= _quickActionControllers.length) return;
+    _quickActionControllers[index].setHidden(owner, hidden);
+  }
+
   Widget _quickActionScope(int index, Widget child) {
     return MobileQuickActionScope(
       controller: _quickActionControllers[index],
@@ -345,6 +355,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _shellNavigator = MobileShellNavigator(
       openTab: _openShellTab,
       openRoute: _openShellRoute,
+      setTabQuickActionsHidden: _setTabQuickActionsHidden,
     );
     MobileShellNavigationRegistry.attach(_shellNavigator);
     WidgetsBinding.instance.addObserver(this);
@@ -595,6 +606,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
             : AnimatedBuilder(
                 animation: quickActionController,
                 builder: (context, _) {
+                  if (quickActionController.hidden) {
+                    return const SizedBox.shrink();
+                  }
+
                   return MobileQuickActionFab(
                     heroTag: 'home-quick-action-fab-$selectedIndex',
                     primaryActions: quickActionController.primaryActions,
