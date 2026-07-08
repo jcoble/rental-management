@@ -49,6 +49,33 @@ public class TenantService : ITenantService
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
 
+        if (query.UnitId.HasValue)
+        {
+            var unitId = query.UnitId.Value;
+            q = q.Where(t =>
+                t.Leases.Any(l => l.PortfolioId == portfolioId
+                    && l.UnitId == unitId
+                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)) ||
+                t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
+                    && lt.Lease != null
+                    && lt.Lease.PortfolioId == portfolioId
+                    && lt.Lease.UnitId == unitId
+                    && (lt.Lease.Status == LeaseStatus.Active || lt.Lease.Status == LeaseStatus.NoticeGiven)));
+        }
+        else if (query.PropertyId.HasValue)
+        {
+            var propertyId = query.PropertyId.Value;
+            q = q.Where(t =>
+                t.Leases.Any(l => l.PortfolioId == portfolioId
+                    && l.PropertyId == propertyId
+                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)) ||
+                t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
+                    && lt.Lease != null
+                    && lt.Lease.PortfolioId == portfolioId
+                    && lt.Lease.PropertyId == propertyId
+                    && (lt.Lease.Status == LeaseStatus.Active || lt.Lease.Status == LeaseStatus.NoticeGiven)));
+        }
+
         if (query.AvailableForLease == true)
         {
             q = q.Where(t =>
@@ -131,6 +158,9 @@ public class TenantService : ITenantService
         Take = query.Take,
         Search = query.Search,
         Sort = query.Sort,
+        AvailableForLease = (query as TenantListQuery)?.AvailableForLease,
+        PropertyId = (query as TenantListQuery)?.PropertyId,
+        UnitId = (query as TenantListQuery)?.UnitId,
     };
 
     private static IReadOnlyList<string> SearchTokens(string search)

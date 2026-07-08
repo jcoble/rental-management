@@ -18,6 +18,7 @@ void main() {
     'unit work tab creates a work order with the current property and unit',
     (tester) async {
       final workOrdersRepo = _FakeWorkOrdersRepository();
+      final tenantsRepo = _FakeTenantsRepository();
 
       await tester.pumpWidget(
         ProviderScope(
@@ -26,9 +27,7 @@ void main() {
             propertiesRepositoryProvider.overrideWithValue(
               _FakePropertiesRepository(),
             ),
-            tenantsRepositoryProvider.overrideWithValue(
-              _FakeTenantsRepository(),
-            ),
+            tenantsRepositoryProvider.overrideWithValue(tenantsRepo),
             vendorsRepositoryProvider.overrideWithValue(
               _FakeVendorsRepository(),
             ),
@@ -43,7 +42,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('New work order'));
+      await tester.tap(find.byTooltip('Open quick actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New work order'));
       await tester.pumpAndSettle();
 
       expect(find.text('New Work Order'), findsOneWidget);
@@ -79,6 +80,8 @@ void main() {
 
       expect(workOrdersRepo.createdData?['propertyId'], 7);
       expect(workOrdersRepo.createdData?['unitId'], 42);
+      expect(tenantsRepo.lastQuery?.propertyId, 7);
+      expect(tenantsRepo.lastQuery?.unitId, 42);
     },
   );
 }
@@ -189,8 +192,20 @@ class _FakePropertiesRepository extends PropertiesRepository {
 class _FakeTenantsRepository extends TenantsRepository {
   _FakeTenantsRepository() : super(Dio());
 
+  TenantListQuery? lastQuery;
+
   @override
-  Future<List<Tenant>> listTenants() async => [];
+  Future<TenantPage> listPage([
+    TenantListQuery query = const TenantListQuery(),
+  ]) async {
+    lastQuery = query;
+    return TenantPage(
+      items: const [],
+      totalCount: 0,
+      skip: query.skip,
+      take: query.take,
+    );
+  }
 }
 
 class _FakeVendorsRepository extends VendorsRepository {

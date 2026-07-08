@@ -12,6 +12,8 @@ class TenantListQuery {
     this.search,
     this.sort = 'name',
     this.availableForLease,
+    this.propertyId,
+    this.unitId,
   });
 
   final int skip;
@@ -19,6 +21,8 @@ class TenantListQuery {
   final String? search;
   final String sort;
   final bool? availableForLease;
+  final int? propertyId;
+  final int? unitId;
 
   @override
   bool operator ==(Object other) {
@@ -27,11 +31,21 @@ class TenantListQuery {
         other.take == take &&
         other.search == search &&
         other.sort == sort &&
-        other.availableForLease == availableForLease;
+        other.availableForLease == availableForLease &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId;
   }
 
   @override
-  int get hashCode => Object.hash(skip, take, search, sort, availableForLease);
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    search,
+    sort,
+    availableForLease,
+    propertyId,
+    unitId,
+  );
 }
 
 class TenantPage {
@@ -118,6 +132,8 @@ class TenantsRepository {
       'search': query.search,
       'sort': query.sort,
       'availableForLease': query.availableForLease,
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
     }..removeWhere((_, value) => value == null || value == '');
 
     try {

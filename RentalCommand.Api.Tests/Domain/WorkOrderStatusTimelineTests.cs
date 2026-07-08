@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -186,14 +187,105 @@ public class WorkOrderStatusTimelineTests : IDisposable
                 Status = WorkOrderStatus.New,
             });
 
-        // Same status, plus an unrelated field change → no new timeline entry.
         await _service.UpdateAsync(
             PortfolioId,
             created!.Id,
-            new UpdateWorkOrderRequest { Status = WorkOrderStatus.New, Title = "Leaky kitchen faucet" });
+            new UpdateWorkOrderRequest { Status = WorkOrderStatus.New });
 
         var count = await _db.WorkOrderStatusEvents.CountAsync(e => e.WorkOrderId == created.Id);
         count.Should().Be(1, "only the initial create event should exist when status did not change");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_AppendsSameStatusEvent_WhenScheduleChanges()
+    {
+        var property = SeedProperty();
+        var created = await _service.CreateAsync(
+            PortfolioId,
+            new CreateWorkOrderRequest
+            {
+                PropertyId = property.Id,
+                Title = "Leaky faucet",
+                Description = "Kitchen sink drips",
+                Status = WorkOrderStatus.Scheduled,
+            });
+
+        var scheduledFor = new DateTimeOffset(2026, 7, 15, 9, 0, 0, TimeSpan.Zero);
+        await _service.UpdateAsync(
+            PortfolioId,
+            created!.Id,
+            new UpdateWorkOrderRequest { ScheduledFor = scheduledFor },
+            changedByUserId: 7,
+            changedByLabel: "Staff");
+
+        var events = await _db.WorkOrderStatusEvents.AsNoTracking()
+            .Where(e => e.WorkOrderId == created.Id)
+            .OrderBy(e => e.Id)
+            .ToListAsync();
+
+        events.Should().HaveCount(2);
+        var edit = events[1];
+        edit.FromStatus.Should().Be(WorkOrderStatus.Scheduled);
+        edit.ToStatus.Should().Be(WorkOrderStatus.Scheduled);
+        edit.Note.Should().Be("Schedule updated.");
+        edit.ChangedByUserId.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_AppendsSameStatusEvent_WhenDetailsChange()
+    {
+        var property = SeedProperty();
+        var created = await _service.CreateAsync(
+            PortfolioId,
+            new CreateWorkOrderRequest
+            {
+                PropertyId = property.Id,
+                Title = "Leaky faucet",
+                Description = "Kitchen sink drips",
+                Status = WorkOrderStatus.New,
+            });
+
+        await _service.UpdateAsync(
+            PortfolioId,
+            created!.Id,
+            new UpdateWorkOrderRequest { Title = "Leaky kitchen faucet" },
+            changedByLabel: "Staff");
+
+        var events = await _db.WorkOrderStatusEvents.AsNoTracking()
+            .Where(e => e.WorkOrderId == created.Id)
+            .OrderBy(e => e.Id)
+            .ToListAsync();
+
+        events.Should().HaveCount(2);
+        var edit = events[1];
+        edit.FromStatus.Should().Be(WorkOrderStatus.New);
+        edit.ToStatus.Should().Be(WorkOrderStatus.New);
+        edit.Note.Should().Be("Details updated.");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RejectsTenant_WhenUnitChangesOutsideTenantLease()
+    {
+        var (property, occupiedUnit, otherUnit, tenant) = SeedPropertyWithTenantLease();
+        var created = await _service.CreateAsync(
+            PortfolioId,
+            new CreateWorkOrderRequest
+            {
+                PropertyId = property.Id,
+                UnitId = occupiedUnit.Id,
+                TenantId = tenant.Id,
+                Title = "Leaky faucet",
+                Description = "Kitchen sink drips",
+                Status = WorkOrderStatus.New,
+            });
+
+        var act = async () => await _service.UpdateAsync(
+            PortfolioId,
+            created!.Id,
+            new UpdateWorkOrderRequest { UnitId = otherUnit.Id });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("tenant");
     }
 
     [Fact]
@@ -303,6 +395,13 @@ public class WorkOrderStatusTimelineTests : IDisposable
     {
         var property = SeedProperty();
         var now = DateTime.UtcNow;
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "1A",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
         var tenant = new Tenant
         {
             PortfolioId = PortfolioId,
@@ -312,8 +411,80 @@ public class WorkOrderStatusTimelineTests : IDisposable
             UpdatedAt = now,
         };
         _db.Tenants.Add(tenant);
+        _db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "Portal-work-order",
+            Status = LeaseStatus.Active,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
         _db.SaveChanges();
         return (property, tenant);
+    }
+
+    private (Property property, Unit occupiedUnit, Unit otherUnit, Tenant tenant) SeedPropertyWithTenantLease()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Tenant-scoped",
+            AddressLine1 = "10 Main",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var occupiedUnit = new Unit
+        {
+            Property = property,
+            UnitNumber = "1A",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var otherUnit = new Unit
+        {
+            Property = property,
+            UnitNumber = "2B",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Maria",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Tenants.Add(tenant);
+        _db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = occupiedUnit,
+            Tenant = tenant,
+            LeaseNumber = "WO-tenant-scope",
+            Status = LeaseStatus.Active,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Units.Add(otherUnit);
+        _db.SaveChanges();
+        return (property, occupiedUnit, otherUnit, tenant);
     }
 
     private sealed class NoopDataUpdateService : IDataUpdateService

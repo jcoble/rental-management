@@ -69,6 +69,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
     {
         var property = SeedProperty();
         var tenant = SeedTenant("Maria", "Tenant", phone: "+16145551212");
+        SeedActiveLease(property, tenant);
 
         // Eastern landlord schedules a 2 PM – 4 PM window. Wire value carries the -04:00 (EDT) offset.
         var start = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4));
@@ -106,6 +107,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
     {
         var property = SeedProperty();
         var tenant = SeedTenant("Sam", "Renter", phone: "+16145559999");
+        SeedActiveLease(property, tenant);
 
         await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
         {
@@ -154,6 +156,37 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         _db.Tenants.Add(tenant);
         _db.SaveChanges();
         return tenant;
+    }
+
+    private void SeedActiveLease(Property property, Tenant tenant)
+    {
+        var now = DateTime.UtcNow;
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = $"U-{tenant.Id}",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Units.Add(unit);
+        _db.SaveChanges();
+
+        _db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = $"SMS-{tenant.Id}",
+            Status = LeaseStatus.Active,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
     }
 
     private sealed class RecordingPublisher : IMessagePublisher
