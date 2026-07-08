@@ -2,26 +2,42 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_navigation.dart';
 import 'message_models.dart';
 import 'messages_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _months = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 /// Short timestamp under a bubble: "9:30 AM" or "Jun 1, 9:30 AM" if not today.
 String _fmtBubbleTime(DateTime d) {
   final local = d.toLocal();
   final now = DateTime.now();
-  final h = local.hour > 12 ? local.hour - 12 : (local.hour == 0 ? 12 : local.hour);
+  final h = local.hour > 12
+      ? local.hour - 12
+      : (local.hour == 0 ? 12 : local.hour);
   final min = local.minute.toString().padLeft(2, '0');
   final ampm = local.hour >= 12 ? 'PM' : 'AM';
   final time = '$h:$min $ampm';
   final sameDay =
-      local.year == now.year && local.month == now.month && local.day == now.day;
+      local.year == now.year &&
+      local.month == now.month &&
+      local.day == now.day;
   if (sameDay) return time;
   return '${_months[local.month]} ${local.day}, $time';
 }
@@ -64,6 +80,8 @@ class MessageDetailScreen extends ConsumerStatefulWidget {
 class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   final _scrollCtrl = ScrollController();
   final _composeCtrl = TextEditingController();
+  final _quickActionHiddenOwner = Object();
+  MobileShellNavigator? _shellNavigator;
 
   // Inline channel toggles for the NEXT send only. Portal on by default;
   // Email/SMS off (portfolio messaging defaults aren't loaded on mobile yet).
@@ -74,7 +92,30 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   bool _sending = false;
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextShellNavigator = mobileShellNavigatorOf(context);
+    if (identical(nextShellNavigator, _shellNavigator)) return;
+    _shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.inbox,
+      _quickActionHiddenOwner,
+      false,
+    );
+    _shellNavigator = nextShellNavigator;
+    _shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.inbox,
+      _quickActionHiddenOwner,
+      true,
+    );
+  }
+
+  @override
   void dispose() {
+    _shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.inbox,
+      _quickActionHiddenOwner,
+      false,
+    );
     _scrollCtrl.dispose();
     _composeCtrl.dispose();
     super.dispose();
@@ -98,10 +139,10 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   }
 
   List<String> _selectedChannels() => [
-        if (_portal) 'Portal',
-        if (_email) 'Email',
-        if (_sms) 'Sms',
-      ];
+    if (_portal) 'Portal',
+    if (_email) 'Email',
+    if (_sms) 'Sms',
+  ];
 
   Future<void> _send() async {
     final text = _composeCtrl.text.trim();
@@ -129,9 +170,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -167,8 +208,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
           children: [
             Text(
               headerTitle,
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -188,8 +230,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         children: [
           Expanded(
             child: convoAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => _ErrorBody(
                 message: e is ApiException ? e.message : e.toString(),
                 onRetry: () => ref
@@ -279,10 +320,10 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final mine = message.isFromLandlord;
     final align = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-    final bubbleColor =
-        mine ? colorScheme.primary : colorScheme.surfaceContainerHighest;
-    final textColor =
-        mine ? colorScheme.onPrimary : colorScheme.onSurface;
+    final bubbleColor = mine
+        ? colorScheme.primary
+        : colorScheme.surfaceContainerHighest;
+    final textColor = mine ? colorScheme.onPrimary : colorScheme.onSurface;
 
     final radius = BorderRadius.only(
       topLeft: const Radius.circular(16),
@@ -306,8 +347,7 @@ class _MessageBubble extends StatelessWidget {
               maxWidth: MediaQuery.sizeOf(context).width * 0.78,
             ),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: bubbleColor,
                 borderRadius: radius,
@@ -394,9 +434,7 @@ class _ComposeBar extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           color: colorScheme.surface,
-          border: Border(
-            top: BorderSide(color: colorScheme.outlineVariant),
-          ),
+          border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
         ),
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
         child: Column(
@@ -430,7 +468,6 @@ class _ComposeBar extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            // Text field + send
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -446,7 +483,9 @@ class _ComposeBar extends StatelessWidget {
                       filled: true,
                       fillColor: colorScheme.surfaceContainerHighest,
                       contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: BorderSide.none,
@@ -562,10 +601,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
