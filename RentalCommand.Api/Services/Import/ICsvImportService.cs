@@ -3,7 +3,7 @@ using RentalCommand.Api.DTOs;
 namespace RentalCommand.Api.Services.Import;
 
 /// <summary>
-/// Bulk CSV import for a migrating landlord: upload a spreadsheet of tenants / properties / units
+/// Bulk CSV import for a migrating landlord: upload a spreadsheet of core records and transactions
 /// and create them in bulk, with a dry-run preview (per-row validation + errors) before committing.
 /// Reuses the existing per-entity create services + their DataAnnotations validation — no field
 /// validation is duplicated here. Always portfolio-scoped (the id is supplied by the controller from
@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Services.Import;
 public interface ICsvImportService
 {
     /// <summary>The entity types this service can import (case-insensitive at the API edge).</summary>
-    static readonly IReadOnlyList<string> SupportedEntityTypes = ["Tenant", "Property", "Unit"];
+    static readonly IReadOnlyList<string> SupportedEntityTypes = ["Tenant", "Property", "Unit", "Payment", "Expense", "Loan"];
 
     /// <summary>
     /// Parses <paramref name="csv"/>, maps each row to the relevant create request, validates it
@@ -20,7 +20,7 @@ public interface ICsvImportService
     /// <paramref name="dryRun"/> is false — creates the valid rows via the existing domain service.
     /// Invalid rows are skipped with their errors collected; a single bad row never aborts the run.
     /// </summary>
-    /// <param name="entityType">"Tenant", "Property", or "Unit" (case-insensitive).</param>
+    /// <param name="entityType">Supported entity type (case-insensitive).</param>
     /// <exception cref="CsvFormatException">The CSV is structurally unusable (no header row).</exception>
     /// <exception cref="ArgumentException">The entity type is not supported.</exception>
     Task<CsvImportResult> ImportAsync(int portfolioId, string entityType, Stream csv, bool dryRun, CancellationToken ct = default);
