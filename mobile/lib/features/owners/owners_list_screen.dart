@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -22,13 +24,16 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
 
   final _searchCtrl = TextEditingController();
   String? _search;
+  OwnerEntityType? _typeFilter;
+  String _sort = 'name';
   int _skip = 0;
 
   OwnerListQuery get _query => OwnerListQuery(
     skip: _skip,
     take: _pageSize,
     search: _search,
-    sort: 'name',
+    sort: _sort,
+    ownerEntityType: _typeFilter,
   );
 
   @override
@@ -50,11 +55,28 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
     _submitSearch('');
   }
 
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setTypeFilter(OwnerEntityType? type) {
+    if (type == _typeFilter) return;
+    setState(() {
+      _typeFilter = type;
+      _skip = 0;
+    });
+  }
+
   void _showOwnerForm({OwnerEntity? owner}) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      useRootNavigator: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -63,52 +85,6 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
         onSaved: () => ref.invalidate(ownersPageProvider),
       ),
     );
-  }
-
-  Future<void> _confirmDelete(OwnerEntity owner) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final hasAssignments = owner.assignedPropertyCount > 0;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete owner?'),
-        content: Text(
-          hasAssignments
-              ? '${owner.name} is assigned to ${owner.assignedPropertyCount} '
-                    'properties. Delete this owner and clear those property '
-                    'assignments?'
-              : 'Delete ${owner.name}? This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text(hasAssignments ? 'Clear and delete' : 'Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true || !mounted) return;
-
-    try {
-      await ref
-          .read(ownersRepositoryProvider)
-          .deleteOwner(owner.id, clearPropertyAssignments: hasAssignments);
-      ref.invalidate(ownersPageProvider);
-      if (!mounted) return;
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Owner deleted.')));
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.message)));
-    }
   }
 
   void _openDetail(OwnerEntity owner) {
@@ -141,28 +117,42 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: TextField(
-              controller: _searchCtrl,
-              textInputAction: TextInputAction.search,
-              onSubmitted: _submitSearch,
-              decoration: InputDecoration(
-                labelText: 'Search owners',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: (_search ?? '').isEmpty
-                    ? IconButton(
-                        tooltip: 'Search owners',
-                        icon: const Icon(Icons.arrow_forward),
-                        onPressed: _submitSearch,
-                      )
-                    : IconButton(
-                        tooltip: 'Clear owner search',
-                        icon: const Icon(Icons.close),
-                        onPressed: _clearSearch,
-                      ),
+          MobileGridControlsBar(
+            keyPrefix: 'owners',
+            searchController: _searchCtrl,
+            searchLabel: 'Search owners',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: 'name',
+            sortOptions: const [
+              MobileGridControlOption(value: 'name', label: 'Name A-Z'),
+              MobileGridControlOption(value: '-name', label: 'Name Z-A'),
+              MobileGridControlOption(
+                value: '-updatedAt',
+                label: 'Updated recently',
               ),
-            ),
+              MobileGridControlOption(value: 'type', label: 'Owner type'),
+            ],
+            onSortChanged: _setSort,
+            filters: [
+              MobileGridChoiceFilter(
+                id: 'owner-type',
+                label: 'Owner type',
+                value: _typeFilter?.name,
+                allLabel: 'All owners',
+                options: [
+                  for (final type in OwnerEntityType.values)
+                    MobileGridControlOption(
+                      value: type.name,
+                      label: type.label,
+                    ),
+                ],
+                onChanged: (value) => _setTypeFilter(
+                  value == null ? null : OwnerEntityType.values.byName(value),
+                ),
+              ),
+            ],
           ),
           Expanded(
             child: RefreshIndicator(
@@ -179,6 +169,7 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
                   if (page.items.isEmpty) {
                     return _EmptyBody(
                       hasSearch: (_search ?? '').isNotEmpty,
+                      hasFilter: _typeFilter != null,
                       onAdd: () => _showOwnerForm(),
                     );
                   }
@@ -187,14 +178,20 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
                     itemCount: page.items.length + 1,
-                    separatorBuilder: (_, index) =>
-                        index == page.items.length - 1
-                        ? const SizedBox(height: 14)
-                        : const SizedBox(height: 8),
+                    separatorBuilder: (_, index) {
+                      if (index == page.items.length - 1) {
+                        return const SizedBox(height: 14);
+                      }
+                      return const MobileM3ListDivider();
+                    },
                     itemBuilder: (_, index) {
                       if (index == page.items.length) {
-                        return _PagingBar(
-                          page: page,
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous owners page',
+                          nextTooltip: 'Next owners page',
                           onPrevious: page.hasPrevious
                               ? () => setState(() {
                                   _skip = (_skip - _pageSize).clamp(0, _skip);
@@ -209,9 +206,11 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
                       final owner = page.items[index];
                       return _OwnerCard(
                         owner: owner,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          page.items.length,
+                        ),
                         onTap: () => _openDetail(owner),
-                        onEdit: () => _showOwnerForm(owner: owner),
-                        onDelete: () => _confirmDelete(owner),
                       );
                     },
                   );
@@ -228,121 +227,70 @@ class _OwnersListScreenState extends ConsumerState<OwnersListScreen> {
 class _OwnerCard extends StatelessWidget {
   const _OwnerCard({
     required this.owner,
+    required this.position,
     required this.onTap,
-    required this.onEdit,
-    required this.onDelete,
   });
 
   final OwnerEntity owner;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final colorScheme = theme.colorScheme;
     final assignmentLabel = owner.assignedPropertyCount == 1
         ? '1 property'
         : '${owner.assignedPropertyCount} properties';
 
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: cs.primaryContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.account_balance_outlined,
-                  color: cs.onPrimaryContainer,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            owner.name,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        if (owner.isPrimary) ...[
-                          const SizedBox(width: 6),
-                          Icon(
-                            Icons.verified_outlined,
-                            size: 16,
-                            color: cs.primary,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      owner.typeLabel,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 4,
-                      children: [
-                        _MetaChip(
-                          icon: Icons.apartment_outlined,
-                          label: assignmentLabel,
-                        ),
-                        if (owner.hasPhone)
-                          _MetaChip(
-                            icon: Icons.phone_outlined,
-                            label: owner.phone!,
-                          ),
-                        if (owner.hasEmail)
-                          _MetaChip(
-                            icon: Icons.email_outlined,
-                            label: owner.email!,
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined),
-                    tooltip: 'Edit owner',
-                    onPressed: onEdit,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    tooltip: 'Delete owner',
-                    onPressed: onDelete,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+    return MobileM3ListItem(
+      position: position,
+      onTap: onTap,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.account_balance_outlined,
+        backgroundColor: colorScheme.primaryContainer,
+        foregroundColor: colorScheme.onPrimaryContainer,
       ),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              owner.name,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (owner.isPrimary) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.verified_outlined, size: 16, color: colorScheme.primary),
+          ],
+        ],
+      ),
+      supporting: [
+        Text(
+          owner.typeLabel,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+      meta: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          _MetaChip(icon: Icons.apartment_outlined, label: assignmentLabel),
+          if (owner.hasPhone)
+            _MetaChip(icon: Icons.phone_outlined, label: owner.phone!),
+          if (owner.hasEmail)
+            _MetaChip(icon: Icons.email_outlined, label: owner.email!),
+        ],
+      ),
+      trailing: Icon(Icons.chevron_right, color: colorScheme.onSurfaceVariant),
     );
   }
 }
@@ -376,50 +324,15 @@ class _MetaChip extends StatelessWidget {
   }
 }
 
-class _PagingBar extends StatelessWidget {
-  const _PagingBar({
-    required this.page,
-    required this.onPrevious,
-    required this.onNext,
+class _EmptyBody extends StatelessWidget {
+  const _EmptyBody({
+    required this.hasSearch,
+    required this.hasFilter,
+    required this.onAdd,
   });
 
-  final OwnerEntityPage page;
-  final VoidCallback? onPrevious;
-  final VoidCallback? onNext;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final start = page.totalCount == 0 ? 0 : page.skip + 1;
-    final end = page.skip + page.items.length;
-
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            '$start-$end of ${page.totalCount}',
-            style: theme.textTheme.bodySmall,
-          ),
-        ),
-        IconButton(
-          tooltip: 'Previous owners page',
-          icon: const Icon(Icons.chevron_left),
-          onPressed: onPrevious,
-        ),
-        IconButton(
-          tooltip: 'Next owners page',
-          icon: const Icon(Icons.chevron_right),
-          onPressed: onNext,
-        ),
-      ],
-    );
-  }
-}
-
-class _EmptyBody extends StatelessWidget {
-  const _EmptyBody({required this.hasSearch, required this.onAdd});
-
   final bool hasSearch;
+  final bool hasFilter;
   final VoidCallback onAdd;
 
   @override
@@ -440,13 +353,15 @@ class _EmptyBody extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                hasSearch ? 'No matching owners.' : 'No owners yet.',
+                hasSearch || hasFilter
+                    ? 'No matching owners.'
+                    : 'No owners yet.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: cs.onSurfaceVariant),
               ),
               const SizedBox(height: 6),
               Text(
-                hasSearch
+                hasSearch || hasFilter
                     ? 'Try another name, email, phone or tax ID.'
                     : 'Add owners here, then assign them to properties.',
                 textAlign: TextAlign.center,
@@ -454,7 +369,7 @@ class _EmptyBody extends StatelessWidget {
                   color: cs.onSurfaceVariant,
                 ),
               ),
-              if (!hasSearch) ...[
+              if (!hasSearch && !hasFilter) ...[
                 const SizedBox(height: 18),
                 FilledButton.icon(
                   onPressed: onAdd,

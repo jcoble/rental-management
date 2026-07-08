@@ -35,24 +35,28 @@ class OwnerListQuery {
     this.take = 20,
     this.search,
     this.sort = 'name',
+    this.ownerEntityType,
   });
 
   final int skip;
   final int take;
   final String? search;
   final String sort;
+  final OwnerEntityType? ownerEntityType;
 
   OwnerListQuery copyWith({
     int? skip,
     int? take,
     String? search,
     String? sort,
+    OwnerEntityType? ownerEntityType,
   }) {
     return OwnerListQuery(
       skip: skip ?? this.skip,
       take: take ?? this.take,
       search: search ?? this.search,
       sort: sort ?? this.sort,
+      ownerEntityType: ownerEntityType ?? this.ownerEntityType,
     );
   }
 
@@ -62,11 +66,12 @@ class OwnerListQuery {
         other.skip == skip &&
         other.take == take &&
         other.search == search &&
-        other.sort == sort;
+        other.sort == sort &&
+        other.ownerEntityType == ownerEntityType;
   }
 
   @override
-  int get hashCode => Object.hash(skip, take, search, sort);
+  int get hashCode => Object.hash(skip, take, search, sort, ownerEntityType);
 }
 
 class OwnerEntity {

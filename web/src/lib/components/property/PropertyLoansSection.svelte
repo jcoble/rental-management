@@ -9,6 +9,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
@@ -17,14 +18,40 @@
 	let { propertyId }: { propertyId: number } = $props();
 
 	const queryClient = useQueryClient();
+	const PAGE_SIZE = 10;
+
+	let loanPage = $state(1);
+	let loanSort = $state('-startDate');
+	let loanFrom = $state('');
+	let loanTo = $state('');
+
+	let loanFilterResetPrimed = false;
+	$effect(() => {
+		propertyId;
+		loanFrom;
+		loanTo;
+		if (!loanFilterResetPrimed) {
+			loanFilterResetPrimed = true;
+			return;
+		}
+		loanPage = 1;
+	});
 
 	const loansQuery = createQuery(() => ({
-		queryKey: ['loans', propertyId],
-		queryFn: () => loans.list({ propertyId }),
+		queryKey: ['loans', propertyId, 'page', loanPage, loanSort, loanFrom, loanTo, PAGE_SIZE],
+		queryFn: () => loans.listPage({
+			propertyId,
+			skip: (loanPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: loanSort || undefined,
+			from: loanFrom || undefined,
+			to: loanTo || undefined
+		}),
 		enabled: !isNaN(propertyId) && propertyId > 0
 	}));
 
-	const loansList = $derived(loansQuery.data ?? []);
+	const loansList = $derived(loansQuery.data?.items ?? []);
+	const loansTotalCount = $derived(loansQuery.data?.totalCount ?? 0);
 
 	function fmtCurrency(value: number): string {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
@@ -215,6 +242,7 @@
 	const columns: ColumnDef<Loan>[] = [
 		{ key: 'lender', title: 'Lender', sortable: true, mobileRole: 'title' },
 		{ key: 'currentBalance', title: 'Balance', format: 'currency', sortable: true, mobileRole: 'metric' },
+		{ key: 'startDate', title: 'Start', format: 'date', sortable: true, mobileRole: 'meta' },
 		{ key: 'annualInterestRatePct', title: 'Rate %', format: 'number', sortable: true, mobileRole: 'meta' },
 		{ key: 'monthlyPrincipalInterest', title: 'P&I', format: 'currency', sortable: true, mobileRole: 'meta' },
 		{ key: 'monthlyEscrow', title: 'Escrow', format: 'currency', mobileRole: 'meta' },
@@ -256,14 +284,28 @@
 	<DataGrid
 		data={loansList}
 		{columns}
-		loading={loansQuery.isLoading}
+		loading={loansQuery.isLoading || loansQuery.isFetching}
 		emptyMessage="No loans on this property yet."
 		getRowKey={(l) => l.id}
-		pageSize={10}
+		pageSize={PAGE_SIZE}
+		page={loanPage}
+		totalCount={loansTotalCount}
+		serverSide
+		sort={loanSort}
+		onPageChange={(page) => (loanPage = page)}
+		onSortChange={(sort) => { loanSort = sort ?? ''; loanPage = 1; }}
 		data-testid="property-loans-grid"
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1"></div>
+			<RangeDatePicker
+				bind:start={loanFrom}
+				bind:end={loanTo}
+				presets
+				placeholder="Start dates"
+				align="end"
+				testid="property-loans-date-range"
+			/>
 			<Button
 				variant="outline"
 				class="gap-2 shrink-0"

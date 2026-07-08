@@ -39,15 +39,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final ok = await ref.read(notificationSettingsProvider.notifier).save();
       if (!mounted) return;
       if (ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Settings saved.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Settings saved.')));
       }
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -92,7 +92,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const SizedBox(height: 24),
               _SectionHeader(
                 title: 'Timing',
-                subtitle: 'How many days before or after to send each reminder.',
+                subtitle:
+                    'How many days before or after to send each reminder.',
               ),
               const SizedBox(height: 12),
               _TimingCard(settings: settings),
@@ -159,7 +160,10 @@ class _ChannelMatrixCard extends ConsumerWidget {
             ),
             for (var i = 0; i < settings.channelPreferences.length; i++) ...[
               if (i > 0)
-                Divider(height: 1, color: cs.outlineVariant.withValues(alpha: 0.5)),
+                Divider(
+                  height: 1,
+                  color: cs.outlineVariant.withValues(alpha: 0.5),
+                ),
               _MatrixRow(
                 pref: settings.channelPreferences[i],
                 onChanged: (updated) =>
@@ -216,8 +220,9 @@ class _MatrixRow extends StatelessWidget {
           Expanded(
             child: Text(
               pref.label,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           _CheckCell(
@@ -310,8 +315,9 @@ class _AutomationCard extends ConsumerWidget {
             title: 'Lease reminders',
             subtitle: 'Remind you before a lease expires.',
             value: settings.enableLeaseExpiryReminders,
-            onChanged: (v) => notifier
-                .patch((s) => s.copyWith(enableLeaseExpiryReminders: v)),
+            onChanged: (v) => notifier.patch(
+              (s) => s.copyWith(enableLeaseExpiryReminders: v),
+            ),
           ),
           const _TileDivider(),
           _ToggleTile(
@@ -445,13 +451,15 @@ class _DayStepper extends StatelessWidget {
               children: [
                 Text(
                   label,
-                  style: theme.textTheme.bodyLarge
-                      ?.copyWith(fontWeight: FontWeight.w600),
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 Text(
                   suffix,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: cs.onSurfaceVariant),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -459,8 +467,7 @@ class _DayStepper extends StatelessWidget {
           IconButton.filledTonal(
             tooltip: 'Decrease',
             iconSize: 22,
-            onPressed:
-                value > min ? () => onChanged(value - 1) : null,
+            onPressed: value > min ? () => onChanged(value - 1) : null,
             icon: const Icon(Icons.remove),
           ),
           SizedBox(
@@ -468,15 +475,15 @@ class _DayStepper extends StatelessWidget {
             child: Text(
               '$value',
               textAlign: TextAlign.center,
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           IconButton.filledTonal(
             tooltip: 'Increase',
             iconSize: 22,
-            onPressed:
-                value < max ? () => onChanged(value + 1) : null,
+            onPressed: value < max ? () => onChanged(value + 1) : null,
             icon: const Icon(Icons.add),
           ),
         ],
@@ -513,19 +520,19 @@ class _ProviderStatusCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    configured
-                        ? 'SMS is set up'
-                        : 'SMS is not fully set up',
-                    style: theme.textTheme.bodyLarge
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    configured ? 'SMS is set up' : 'SMS is not fully set up',
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     settings.signalWireFromNumber != null
                         ? 'Sending from ${settings.signalWireFromNumber}'
                         : 'Finish setup on the web app to send texts.',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -547,16 +554,23 @@ class _NoticeTemplatesCard extends StatelessWidget {
     final theme = Theme.of(context);
     return Card(
       child: ListTile(
+        titleAlignment: ListTileTitleAlignment.center,
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        leading: Icon(Icons.description_outlined, color: theme.colorScheme.primary),
+        leading: Icon(
+          Icons.description_outlined,
+          color: theme.colorScheme.primary,
+        ),
         title: Text(
           'Notice templates & auto-send',
-          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+          style: theme.textTheme.bodyLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
         ),
         subtitle: Text(
           'Edit each notice message and choose auto-send or ask-first.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => Navigator.of(context).push(
@@ -579,22 +593,24 @@ class _AccountSecurityCard extends StatelessWidget {
     final theme = Theme.of(context);
     return Card(
       child: ListTile(
+        titleAlignment: ListTileTitleAlignment.center,
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
         leading: Icon(Icons.lock_outline, color: theme.colorScheme.primary),
         title: Text(
           'Change password',
-          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+          style: theme.textTheme.bodyLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
         ),
         subtitle: Text(
           'Update the password you use to sign in.',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => const ChangePasswordScreen(),
-          ),
+          MaterialPageRoute<void>(builder: (_) => const ChangePasswordScreen()),
         ),
       ),
     );
@@ -617,8 +633,9 @@ class _SectionHeader extends StatelessWidget {
       children: [
         Text(
           title,
-          style: theme.textTheme.titleMedium
-              ?.copyWith(fontWeight: FontWeight.w700),
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
         const SizedBox(height: 2),
         Text(
@@ -639,7 +656,9 @@ class _TileDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Divider(
       height: 1,
-      color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5),
+      color: Theme.of(
+        context,
+      ).colorScheme.outlineVariant.withValues(alpha: 0.5),
     );
   }
 }
@@ -669,8 +688,9 @@ class _SaveBar extends StatelessWidget {
                 : const Icon(Icons.save_outlined),
             label: Text(
               saving ? 'Saving…' : 'Save changes',
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ),
@@ -702,10 +722,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: cs.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),

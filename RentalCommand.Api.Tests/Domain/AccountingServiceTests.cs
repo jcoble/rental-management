@@ -643,12 +643,44 @@ public class AccountingServiceTests : IDisposable
             sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("\"Payments\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("\"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("\"BankTransactions\"", StringComparison.OrdinalIgnoreCase));
+            sql.Contains("\"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
 
         ledgerSql.Should().NotBeNull("the report ledger must filter, combine, and sort rows as one DB-side query");
         ledgerSql!.Should().Contain("ORDER BY", "ledger sorting must run in SQL");
         ledgerSql.Should().Contain("\"MatchedPaymentId\" IS NULL", "matched bank rows must be suppressed before materialization");
         ledgerSql.Should().Contain("\"MatchedExpenseId\" IS NULL", "matched bank rows must be suppressed before materialization");
+    }
+
+    [Fact]
+    public async Task GetReportsAsync_ReturnsRecentLedgerPreviewAndTotalCount()
+    {
+        var now = new DateTime(2026, 07, 01, 12, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 10; i++)
+        {
+            SeedBankTransaction(
+                description: $"Deposit {i:D2}",
+                merchantName: "Tenant",
+                amount: 100m + i,
+                postedAt: now.AddDays(i),
+                category: "Deposit",
+                matchStatus: "Unmatched");
+        }
+
+        _commands.Clear();
+
+        var reports = await _sut.GetReportsAsync(PortfolioId, CancellationToken.None);
+
+        reports.LedgerTotalCount.Should().Be(10);
+        reports.RecentLedger.Should().HaveCount(8);
+        reports.Ledger.Should().HaveCount(8);
+        reports.RecentLedger[0].Description.Should().Be("Deposit 09");
+        reports.RecentLedger[^1].Description.Should().Be("Deposit 02");
+        _commands.Should().Contain(sql =>
+            sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase),
+            "the report ledger preview must be limited by the database, not sliced in the web page");
     }
 
     [Fact]

@@ -84,6 +84,8 @@ public class UnitHealthListResponse
 public class UnitHealthListQuery : ListQuery
 {
     public int? PropertyId { get; set; }
+    public string? Status { get; set; }
+    public string? Stage { get; set; }
 }
 
 public class CreateUnitRequest

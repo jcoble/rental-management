@@ -1,3 +1,23 @@
+class ActivityHistoryScope {
+  const ActivityHistoryScope({
+    required this.entityType,
+    required this.entityId,
+  });
+
+  final String entityType;
+  final int entityId;
+
+  @override
+  bool operator ==(Object other) {
+    return other is ActivityHistoryScope &&
+        other.entityType == entityType &&
+        other.entityId == entityId;
+  }
+
+  @override
+  int get hashCode => Object.hash(entityType, entityId);
+}
+
 class ActivityChange {
   const ActivityChange({
     required this.field,
@@ -73,18 +93,21 @@ class ActivityEntry {
 
 class ActivityHistoryFilter {
   const ActivityHistoryFilter({
+    this.sort = '-timestamp',
     this.search,
     this.operation,
     this.entityType,
     this.entityId,
   });
 
+  final String sort;
   final String? search;
   final String? operation;
   final String? entityType;
   final int? entityId;
 
   ActivityHistoryFilter copyWith({
+    String? sort,
     String? search,
     String? operation,
     String? entityType,
@@ -95,6 +118,7 @@ class ActivityHistoryFilter {
     bool clearEntityId = false,
   }) {
     return ActivityHistoryFilter(
+      sort: sort ?? this.sort,
       search: clearSearch ? null : (search ?? this.search),
       operation: clearOperation ? null : (operation ?? this.operation),
       entityType: clearEntityType ? null : (entityType ?? this.entityType),

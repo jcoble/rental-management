@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -32,39 +34,91 @@ String fmtInspectionDate(DateTime d) =>
 
 /// On-site inspections list: each row shows the property/unit, type, scheduled
 /// date and status. A "New inspection" flow picks a template + property/unit.
-class InspectionsListScreen extends ConsumerWidget {
+class InspectionsListScreen extends ConsumerStatefulWidget {
   const InspectionsListScreen({super.key});
 
-  Future<void> _newInspection(BuildContext context, WidgetRef ref) async {
+  @override
+  ConsumerState<InspectionsListScreen> createState() =>
+      _InspectionsListScreenState();
+}
+
+class _InspectionsListScreenState extends ConsumerState<InspectionsListScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String _sort = '-scheduledFor';
+  int _skip = 0;
+
+  InspectionListQuery get _query => InspectionListQuery(
+    skip: _skip,
+    take: _pageSize,
+    search: _search,
+    sort: _sort,
+  );
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _invalidateLists() {
+    ref.invalidate(inspectionsPageProvider);
+    ref.invalidate(inspectionsProvider);
+  }
+
+  Future<void> _refresh() async => _invalidateLists();
+
+  Future<void> _newInspection() async {
     final created = await Navigator.of(context).push<int>(
       MaterialPageRoute<int>(builder: (_) => const NewInspectionScreen()),
     );
-    if (created == null || !context.mounted) return;
-    ref.invalidate(inspectionsProvider);
+    if (created == null || !mounted) return;
+    _invalidateLists();
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => InspectionRunScreen(inspectionId: created),
       ),
     );
-    ref.invalidate(inspectionsProvider);
+    if (!mounted) return;
+    _invalidateLists();
   }
 
-  Future<void> _openDetail(
-    BuildContext context,
-    WidgetRef ref,
-    Inspection inspection,
-  ) async {
+  Future<void> _openDetail(Inspection inspection) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => InspectionRunScreen(inspectionId: inspection.id),
       ),
     );
-    ref.invalidate(inspectionsProvider);
+    if (!mounted) return;
+    _invalidateLists();
+  }
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? value) {
+    if (value == null || value == _sort) return;
+    setState(() {
+      _sort = value;
+      _skip = 0;
+    });
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final inspectionsAsync = ref.watch(inspectionsProvider);
+  Widget build(BuildContext context) {
+    final inspectionsAsync = ref.watch(inspectionsPageProvider(_query));
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Inspections')),
@@ -73,47 +127,128 @@ class InspectionsListScreen extends ConsumerWidget {
         primaryAction: MobileQuickAction(
           label: 'New inspection',
           icon: Icons.add,
-          onPressed: () => _newInspection(context, ref),
+          onPressed: _newInspection,
         ),
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),
       ),
-      body: RefreshIndicator(
-        onRefresh: () async => ref.invalidate(inspectionsProvider),
-        child: inspectionsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: () => ref.invalidate(inspectionsProvider),
-          ),
-          data: (inspections) {
-            if (inspections.isEmpty) {
-              return const _EmptyBody();
-            }
-            final sorted = List<Inspection>.from(inspections)
-              ..sort((a, b) => b.scheduledFor.compareTo(a.scheduledFor));
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-              itemCount: sorted.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (_, i) => _InspectionCard(
-                inspection: sorted[i],
-                onTap: () => _openDetail(context, ref, sorted[i]),
+      body: Column(
+        children: [
+          MobileGridControlsBar(
+            keyPrefix: 'inspections',
+            searchController: _searchCtrl,
+            searchLabel: 'Search inspections',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: '-scheduledFor',
+            sortLabel: 'Sort inspections',
+            sortOptions: const [
+              MobileGridControlOption(
+                value: '-scheduledFor',
+                label: 'Newest scheduled',
               ),
-            );
-          },
-        ),
+              MobileGridControlOption(
+                value: 'scheduledFor',
+                label: 'Oldest scheduled',
+              ),
+              MobileGridControlOption(value: 'status', label: 'Status'),
+              MobileGridControlOption(value: 'type', label: 'Type'),
+              MobileGridControlOption(
+                value: '-updatedAt',
+                label: 'Recently updated',
+              ),
+            ],
+            onSortChanged: _setSort,
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: inspectionsAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: _refresh,
+                ),
+                data: (page) {
+                  final inspections = page.items;
+                  if (inspections.isEmpty && _search == null && _skip == 0) {
+                    return const _EmptyBody();
+                  }
+                  if (inspections.isEmpty) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _search == null
+                                ? 'No inspections on this page.'
+                                : 'No inspections match "$_search".',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+                    itemCount: inspections.length + 1,
+                    separatorBuilder: (_, index) =>
+                        index == inspections.length - 1
+                        ? const SizedBox(height: 14)
+                        : const MobileM3ListDivider(),
+                    itemBuilder: (_, i) {
+                      if (i == inspections.length) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = _skip <= _pageSize
+                                      ? 0
+                                      : _skip - _pageSize;
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+                      final inspection = inspections[i];
+                      return _InspectionCard(
+                        inspection: inspection,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          i,
+                          inspections.length,
+                        ),
+                        onTap: () => _openDetail(inspection),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _InspectionCard extends StatelessWidget {
-  const _InspectionCard({required this.inspection, required this.onTap});
+  const _InspectionCard({
+    required this.inspection,
+    required this.position,
+    required this.onTap,
+  });
 
   final Inspection inspection;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
@@ -133,64 +268,48 @@ class _InspectionCard extends StatelessWidget {
       where.write('  ·  Unit #${i.unitId}');
     }
 
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Text(
-                      where.toString(),
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  InspectionStatusChip(status: i.status),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Icon(
-                    Icons.fact_check_outlined,
-                    size: 14,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    friendlyInspectionType(i.type),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Icon(
-                    Icons.schedule_outlined,
-                    size: 14,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    fmtInspectionDate(i.scheduledFor.toLocal()),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.fact_check_outlined,
+        backgroundColor: cs.secondaryContainer,
+        foregroundColor: cs.onSecondaryContainer,
+      ),
+      title: Text(
+        where.toString(),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
         ),
       ),
+      supporting: [
+        Row(
+          children: [
+            Flexible(
+              child: Text(
+                friendlyInspectionType(i.type),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Icon(Icons.schedule_outlined, size: 14, color: cs.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Text(
+              fmtInspectionDate(i.scheduledFor.toLocal()),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ],
+      trailing: InspectionStatusChip(status: i.status),
+      onTap: onTap,
     );
   }
 }

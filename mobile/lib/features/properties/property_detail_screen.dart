@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../activity/activity_history_screen.dart';
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
@@ -351,6 +352,19 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     }
   }
 
+  void _showActivityHistory() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'Property',
+          entityId: _property.id,
+          title: 'Property activity',
+          subtitle: _property.name,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final property = _property;
@@ -369,6 +383,11 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit property',
             onPressed: () => _showEditPropertySheet(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View property activity',
+            onPressed: _showActivityHistory,
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -879,7 +898,7 @@ class _LeaseTile extends StatelessWidget {
 
 // ── Loan tile ────────────────────────────────────────────────────────────────
 
-class _LoanTile extends StatelessWidget {
+class _LoanTile extends ConsumerStatefulWidget {
   const _LoanTile({
     required this.loan,
     required this.onEdit,
@@ -891,61 +910,292 @@ class _LoanTile extends StatelessWidget {
   final VoidCallback onDelete;
 
   @override
+  ConsumerState<_LoanTile> createState() => _LoanTileState();
+}
+
+class _LoanTileState extends ConsumerState<_LoanTile> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final loan = widget.loan;
     final statusIsActive = loan.status.toLowerCase() == 'active';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: CircleAvatar(
-          radius: 20,
-          backgroundColor: statusIsActive
-              ? colorScheme.primaryContainer
-              : colorScheme.surfaceContainerHighest,
-          child: Icon(
-            Icons.account_balance_outlined,
-            size: 18,
-            color: statusIsActive
-                ? colorScheme.onPrimaryContainer
-                : colorScheme.onSurfaceVariant,
+      child: Column(
+        children: [
+          ListTile(
+            onTap: () => setState(() => _expanded = !_expanded),
+            leading: CircleAvatar(
+              radius: 20,
+              backgroundColor: statusIsActive
+                  ? colorScheme.primaryContainer
+                  : colorScheme.surfaceContainerHighest,
+              child: Icon(
+                Icons.account_balance_outlined,
+                size: 18,
+                color: statusIsActive
+                    ? colorScheme.onPrimaryContainer
+                    : colorScheme.onSurfaceVariant,
+              ),
+            ),
+            title: Text(
+              loan.lender,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Text(
+              '${_formatCurrency(loan.currentBalance)} balance  ·  '
+              '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/mo  ·  '
+              '${_loanStatusLabel(loan.status)}',
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  key: Key('loan-schedule-toggle-${loan.id}'),
+                  icon: Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                  ),
+                  onPressed: () => setState(() => _expanded = !_expanded),
+                  tooltip: _expanded
+                      ? 'Hide amortization schedule'
+                      : 'View amortization schedule',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  onPressed: widget.onEdit,
+                  tooltip: 'Edit loan',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  onPressed: widget.onDelete,
+                  tooltip: 'Delete loan',
+                ),
+              ],
+            ),
+          ),
+          if (_expanded) ...[
+            const Divider(height: 1),
+            _LoanPaymentSchedule(loanId: loan.id),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LoanPaymentSchedule extends ConsumerWidget {
+  const _LoanPaymentSchedule({required this.loanId});
+
+  final int loanId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final paymentsAsync = ref.watch(loanPaymentsProvider(loanId));
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Padding(
+      key: Key('loan-amortization-schedule-$loanId'),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Amortization schedule',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          paymentsAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (e, _) => _InlineError(
+              message: e is ApiException ? e.message : e.toString(),
+            ),
+            data: (payments) {
+              if (payments.isEmpty) {
+                return Text(
+                  'No payments generated yet. The debt-service worker fills this in monthly.',
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                );
+              }
+              return Column(
+                children: [
+                  for (final payment in payments)
+                    _LoanPaymentRow(payment: payment),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoanPaymentRow extends StatelessWidget {
+  const _LoanPaymentRow({required this.payment});
+
+  final LoanPayment payment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final statusColor = payment.status.toLowerCase() == 'paid'
+        ? colorScheme.primary
+        : colorScheme.onSurfaceVariant;
+
+    return Container(
+      key: Key('loan-payment-row-${payment.id}'),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  payment.periodKey.isEmpty ? 'Period' : payment.periodKey,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                _formatCurrency(payment.totalAmount),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Due ${_formatDate(payment.dueDate)}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              Text(
+                _loanPaymentStatusLabel(payment.status),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: statusColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 14,
+            runSpacing: 4,
+            children: [
+              _ScheduleMetric(
+                label: 'Interest',
+                value: _formatCurrency(payment.interestAmount),
+              ),
+              _ScheduleMetric(
+                label: 'Principal',
+                value: _formatCurrency(payment.principalAmount),
+              ),
+              _ScheduleMetric(
+                label: 'Escrow',
+                value: _formatCurrency(payment.escrowAmount),
+              ),
+              _ScheduleMetric(
+                label: 'Balance',
+                value: _formatCurrency(payment.balanceAfter),
+              ),
+            ],
+          ),
+          if (payment.paymentDoesNotCoverInterest) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_outlined,
+                  size: 16,
+                  color: colorScheme.tertiary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    "Payment didn't cover interest this period.",
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.tertiary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ScheduleMetric extends StatelessWidget {
+  const _ScheduleMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
           ),
         ),
-        title: Text(
-          loan.lender,
-          style: theme.textTheme.bodyMedium?.copyWith(
+        Text(
+          value,
+          style: theme.textTheme.bodySmall?.copyWith(
             fontWeight: FontWeight.w600,
           ),
         ),
-        subtitle: Text(
-          '${_formatCurrency(loan.currentBalance)} balance  ·  '
-          '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/mo  ·  '
-          '${_loanStatusLabel(loan.status)}',
-          style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              onPressed: onEdit,
-              tooltip: 'Edit loan',
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline, size: 18),
-              onPressed: onDelete,
-              tooltip: 'Delete loan',
-            ),
-          ],
-        ),
-      ),
+      ],
     );
   }
 }
 
 String _loanStatusLabel(String status) => switch (status) {
   'PaidOff' => 'Paid off',
+  _ => status,
+};
+
+String _loanPaymentStatusLabel(String status) => switch (status) {
+  'Paid' => 'Paid',
+  'Scheduled' => 'Scheduled',
   _ => status,
 };
 

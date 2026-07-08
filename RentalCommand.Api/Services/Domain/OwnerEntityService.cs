@@ -36,6 +36,11 @@ public class OwnerEntityService : IOwnerEntityService
             .AsNoTracking()
             .Where(o => o.PortfolioId == portfolioId);
 
+        if (query is OwnerEntityListQuery { OwnerEntityType: { } ownerEntityType })
+        {
+            q = q.Where(o => o.OwnerEntityType == ownerEntityType);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();

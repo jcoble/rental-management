@@ -232,18 +232,25 @@ const rentalDestinations = <MobileDestination>[
 
 const moneyHubDestinations = <MobileDestination>[
   MobileDestination(
+    id: MobileDestinationId.insights,
+    icon: Symbols.insights_rounded,
+    label: 'Portfolio',
+    subtitle: 'Occupancy, collections and trends',
+    builder: _insightsBuilder,
+  ),
+  MobileDestination(
     id: MobileDestinationId.moneyOverview,
-    icon: Symbols.dashboard_rounded,
-    label: 'Overview',
-    subtitle: 'Snapshot, past-due rent, and cash movement',
-    builder: _moneyBuilder,
+    icon: Symbols.insights_rounded,
+    label: 'Insights',
+    subtitle: 'Collection health and cash movement',
+    builder: _moneyInsightsBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.moneyLedger,
     icon: Symbols.receipt_long_rounded,
     label: 'Ledger',
     subtitle: 'Payments and expenses in one feed',
-    builder: _moneyBuilder,
+    builder: _moneyLedgerBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.deposits,
@@ -258,13 +265,6 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Banking',
     subtitle: 'Reconciliation and matches',
     builder: _bankingBuilder,
-  ),
-  MobileDestination(
-    id: MobileDestinationId.insights,
-    icon: Symbols.insights_rounded,
-    label: 'Insights',
-    subtitle: 'Occupancy, collections and trends',
-    builder: _insightsBuilder,
   ),
   MobileDestination(
     id: MobileDestinationId.reports,
@@ -405,7 +405,11 @@ Widget _inspectionsBuilder(BuildContext context) =>
     const InspectionsListScreen();
 Widget _leasesBuilder(BuildContext context) => const LeasesListScreen();
 Widget _messagesBuilder(BuildContext context) => const MessagesListScreen();
-Widget _moneyBuilder(BuildContext context) => const MoneyScreen();
+Widget _moneyInsightsBuilder(BuildContext context) => const MoneyScreen();
+Widget _moneyLedgerBuilder(BuildContext context) => const MoneyScreen(
+  initialView: MoneyScreenView.payments,
+  showTransactionSelector: true,
+);
 Widget _noticesBuilder(BuildContext context) => const NoticesScreen();
 Widget _notificationsBuilder(BuildContext context) =>
     const NotificationsInboxScreen();

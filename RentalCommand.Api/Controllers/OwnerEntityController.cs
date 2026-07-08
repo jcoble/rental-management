@@ -6,7 +6,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for owner entities (Person/LLC/Trust) within the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
+/// <c>portfolioId</c> claim; list supports <c>?skip&amp;take&amp;search&amp;sort&amp;ownerEntityType</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/owner-entities")]
@@ -22,7 +22,7 @@ public class OwnerEntityController : ManagementControllerBase
 
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<OwnerEntityResponse>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<OwnerEntityResponse>>> List([FromQuery] ListQuery query, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<OwnerEntityResponse>>> List([FromQuery] OwnerEntityListQuery query, CancellationToken ct)
     {
         var items = await _service.ListAsync(GetPortfolioId(), query, ct);
         return Ok(items);
@@ -30,7 +30,7 @@ public class OwnerEntityController : ManagementControllerBase
 
     [HttpGet("page")]
     [ProducesResponseType(typeof(OwnerEntityListResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<OwnerEntityListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+    public async Task<ActionResult<OwnerEntityListResponse>> ListPage([FromQuery] OwnerEntityListQuery query, CancellationToken ct)
     {
         var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
         return Ok(page);

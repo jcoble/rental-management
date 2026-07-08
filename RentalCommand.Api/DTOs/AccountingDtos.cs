@@ -193,6 +193,8 @@ public class AccountingReportsResponse
     public decimal TotalIncome { get; set; }
     public decimal TotalExpenses { get; set; }
     public decimal NetCashFlow { get; set; }
+    public int LedgerTotalCount { get; set; }
+    public IReadOnlyList<LedgerTransactionResponse> RecentLedger { get; set; } = [];
     public IReadOnlyList<LedgerTransactionResponse> Ledger { get; set; } = [];
     public IReadOnlyList<PropertyFinancialSummaryResponse> Properties { get; set; } = [];
     public IReadOnlyList<ScheduleECategoryTotal> ScheduleE { get; set; } = [];

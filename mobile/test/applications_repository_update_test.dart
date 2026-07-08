@@ -40,6 +40,18 @@ void main() {
     expect(app.firstName, 'JESSE');
     expect(app.lastName, 'NATHANIEL COBLE');
   });
+
+  test('delete sends DELETE for an application', () async {
+    final adapter = _RecordingAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = ApplicationsRepository(dio);
+
+    await repo.delete(42);
+
+    expect(adapter.method, 'DELETE');
+    expect(adapter.path, '/applications/42');
+  });
 }
 
 class _RecordingAdapter implements HttpClientAdapter {
@@ -56,6 +68,10 @@ class _RecordingAdapter implements HttpClientAdapter {
     method = options.method;
     path = options.path;
     data = options.data;
+
+    if (options.method == 'DELETE') {
+      return ResponseBody.fromString('', 204);
+    }
 
     return ResponseBody.fromString(
       jsonEncode({

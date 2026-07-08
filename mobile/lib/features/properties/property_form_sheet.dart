@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../owners/owner_form_sheet.dart';
+import '../owners/owners_models.dart';
+import '../owners/owners_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import 'properties_repository.dart';
 import 'property_labels.dart';
@@ -16,6 +19,8 @@ Future<Property?> showPropertyFormSheet(
   return showModalBottomSheet<Property>(
     context: context,
     isScrollControlled: true,
+    useSafeArea: true,
+    useRootNavigator: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
@@ -78,6 +83,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
   int? _selectedOwnerEntityId;
   List<PropertyOwnerOption> _owners = const [];
   bool _ownersLoading = false;
+  bool _ownerActionLoading = false;
   bool _saving = false;
   String? _error;
   String? _addressError;
@@ -145,14 +151,24 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
         : 'Active';
   }
 
-  Future<void> _loadOwners() async {
+  Future<void> _loadOwners({
+    int? selectOwnerId,
+    PropertyOwnerOption? fallbackOwner,
+  }) async {
     setState(() => _ownersLoading = true);
     try {
-      final owners = await ref
-          .read(propertiesRepositoryProvider)
-          .listOwnerOptions();
+      final owners = [
+        ...await ref.read(propertiesRepositoryProvider).listOwnerOptions(),
+      ];
+      if (fallbackOwner != null &&
+          !owners.any((owner) => owner.id == fallbackOwner.id)) {
+        owners.insert(0, fallbackOwner);
+      }
       if (!mounted) return;
-      setState(() => _owners = owners);
+      setState(() {
+        _owners = owners;
+        if (selectOwnerId != null) _selectedOwnerEntityId = selectOwnerId;
+      });
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
@@ -174,6 +190,47 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
       );
     }
     return items;
+  }
+
+  Future<void> _showOwnerForm({OwnerEntity? owner}) async {
+    final saved = await showModalBottomSheet<OwnerEntity>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      useRootNavigator: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => OwnerFormSheet(existing: owner, onSaved: () {}),
+    );
+    if (saved == null || !mounted) return;
+    await _loadOwners(
+      selectOwnerId: saved.id,
+      fallbackOwner: PropertyOwnerOption(id: saved.id, name: saved.name),
+    );
+  }
+
+  Future<void> _editSelectedOwner() async {
+    final ownerId = _selectedOwnerEntityId;
+    if (ownerId == null || _ownerActionLoading) return;
+
+    setState(() {
+      _ownerActionLoading = true;
+      _error = null;
+    });
+
+    try {
+      final owner = await ref.read(ownersRepositoryProvider).getOwner(ownerId);
+      if (!mounted) return;
+      setState(() => _ownerActionLoading = false);
+      await _showOwnerForm(owner: owner);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _ownerActionLoading = false);
+    }
   }
 
   bool _validateAddressStep() {
@@ -420,27 +477,67 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
                 },
               ),
               gap,
-              DropdownButtonFormField<int?>(
-                key: const Key('property-owner-field'),
-                initialValue: _selectedOwnerEntityId,
-                decoration: InputDecoration(
-                  labelText: 'Owner',
-                  helperText: _ownersLoading ? 'Loading owners...' : null,
-                ),
-                items: [
-                  const DropdownMenuItem<int?>(
-                    value: null,
-                    child: Text('No owner assigned'),
-                  ),
-                  for (final owner in _ownerItems)
-                    DropdownMenuItem<int?>(
-                      value: owner.id,
-                      child: Text(owner.name),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<int?>(
+                      key: const Key('property-owner-field'),
+                      initialValue: _selectedOwnerEntityId,
+                      decoration: InputDecoration(
+                        labelText: 'Owner',
+                        helperText: _ownersLoading ? 'Loading owners...' : null,
+                      ),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('No owner assigned'),
+                        ),
+                        for (final owner in _ownerItems)
+                          DropdownMenuItem<int?>(
+                            value: owner.id,
+                            child: Text(owner.name),
+                          ),
+                      ],
+                      onChanged: _ownersLoading
+                          ? null
+                          : (value) =>
+                                setState(() => _selectedOwnerEntityId = value),
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: IconButton.filledTonal(
+                      key: const Key('property-owner-add-button'),
+                      tooltip: 'Add owner',
+                      icon: const Icon(Icons.person_add_alt_1_outlined),
+                      onPressed: _ownersLoading || _ownerActionLoading
+                          ? null
+                          : () => _showOwnerForm(),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: IconButton.outlined(
+                      key: const Key('property-owner-edit-button'),
+                      tooltip: 'Edit selected owner',
+                      icon: _ownerActionLoading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.edit_outlined),
+                      onPressed:
+                          _ownersLoading ||
+                              _ownerActionLoading ||
+                              _selectedOwnerEntityId == null
+                          ? null
+                          : _editSelectedOwner,
+                    ),
+                  ),
                 ],
-                onChanged: _ownersLoading
-                    ? null
-                    : (value) => setState(() => _selectedOwnerEntityId = value),
               ),
             ],
           ),

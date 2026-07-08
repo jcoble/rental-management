@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/models/models.dart';
+import 'package:rental_command/features/owners/owners_models.dart';
+import 'package:rental_command/features/owners/owners_repository.dart';
 import 'package:rental_command/features/properties/properties_list_screen.dart';
 import 'package:rental_command/features/properties/properties_repository.dart';
 
@@ -11,10 +13,14 @@ void main() {
     'property stepper includes web property fields in create payload',
     (tester) async {
       final repo = _FakePropertiesRepository();
+      final ownersRepo = _FakeOwnersRepository();
 
       await tester.pumpWidget(
         ProviderScope(
-          overrides: [propertiesRepositoryProvider.overrideWithValue(repo)],
+          overrides: [
+            propertiesRepositoryProvider.overrideWithValue(repo),
+            ownersRepositoryProvider.overrideWithValue(ownersRepo),
+          ],
           child: MaterialApp(
             home: Scaffold(
               body: Builder(
@@ -33,6 +39,14 @@ void main() {
 
       expect(find.text('Status'), findsOneWidget);
       expect(find.text('Owner'), findsOneWidget);
+      expect(
+        find.byKey(const Key('property-owner-add-button')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('property-owner-edit-button')),
+        findsOneWidget,
+      );
 
       await tester.enterText(
         find.byKey(const Key('property-name-field')),
@@ -141,6 +155,76 @@ void main() {
       expect(repo.createdUnits.single, containsPair('status', 'Vacant'));
     },
   );
+
+  testWidgets('property owner picker can add and edit owners in place', (
+    tester,
+  ) async {
+    final repo = _FakePropertiesRepository();
+    final ownersRepo = _FakeOwnersRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          propertiesRepositoryProvider.overrideWithValue(repo),
+          ownersRepositoryProvider.overrideWithValue(ownersRepo),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showAddPropertySheet(context),
+                child: const Text('Add property'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Add property'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('property-owner-add-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New Owner'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('owner-name-field')),
+      'Blue Door LLC',
+    );
+    await tester.tap(find.text('Next').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add Owner'));
+    await tester.pumpAndSettle();
+
+    expect(ownersRepo.createdPayload, containsPair('name', 'Blue Door LLC'));
+    expect(find.text('Blue Door LLC'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('property-owner-edit-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit Owner'), findsOneWidget);
+    expect(find.text('Blue Door LLC'), findsWidgets);
+    await tester.enterText(
+      find.byKey(const Key('owner-name-field')),
+      'Blue Door Holdings',
+    );
+    await tester.tap(find.text('Next').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save Owner'));
+    await tester.pumpAndSettle();
+
+    expect(ownersRepo.updatedOwnerId, 77);
+    expect(
+      ownersRepo.updatedPayload,
+      containsPair('name', 'Blue Door Holdings'),
+    );
+    expect(find.text('Blue Door Holdings'), findsOneWidget);
+  });
 }
 
 class _FakePropertiesRepository extends PropertiesRepository {
@@ -148,11 +232,12 @@ class _FakePropertiesRepository extends PropertiesRepository {
 
   Map<String, dynamic>? createdPayload;
   final createdUnits = <Map<String, dynamic>>[];
+  final ownerOptions = <PropertyOwnerOption>[
+    const PropertyOwnerOption(id: 42, name: 'North Coast Holdings'),
+  ];
 
   @override
-  Future<List<PropertyOwnerOption>> listOwnerOptions() async => const [
-    PropertyOwnerOption(id: 42, name: 'North Coast Holdings'),
-  ];
+  Future<List<PropertyOwnerOption>> listOwnerOptions() async => ownerOptions;
 
   @override
   Future<Property> createProperty(Map<String, dynamic> data) async {
@@ -177,6 +262,50 @@ class _FakePropertiesRepository extends PropertiesRepository {
       createdAt: DateTime(2026),
       updatedAt: DateTime(2026),
     );
+  }
+}
+
+class _FakeOwnersRepository extends OwnersRepository {
+  _FakeOwnersRepository() : super(Dio());
+
+  Map<String, dynamic>? createdPayload;
+  int? updatedOwnerId;
+  Map<String, dynamic>? updatedPayload;
+  OwnerEntity owner = const OwnerEntity(
+    id: 77,
+    portfolioId: 1,
+    ownerEntityType: OwnerEntityType.llc,
+    name: 'Blue Door LLC',
+  );
+
+  @override
+  Future<OwnerEntity> createOwner(Map<String, dynamic> data) async {
+    createdPayload = Map<String, dynamic>.from(data);
+    owner = OwnerEntity(
+      id: 77,
+      portfolioId: 1,
+      ownerEntityType: OwnerEntityType.fromJson(data['ownerEntityType']),
+      name: data['name'] as String? ?? 'Blue Door LLC',
+    );
+    return owner;
+  }
+
+  @override
+  Future<OwnerEntity> getOwner(int id) async => owner;
+
+  @override
+  Future<OwnerEntity> updateOwner(int id, Map<String, dynamic> data) async {
+    updatedOwnerId = id;
+    updatedPayload = Map<String, dynamic>.from(data);
+    owner = OwnerEntity(
+      id: id,
+      portfolioId: owner.portfolioId,
+      ownerEntityType:
+          OwnerEntityType.fromJson(data['ownerEntityType']) ??
+          owner.ownerEntityType,
+      name: data['name'] as String? ?? owner.name,
+    );
+    return owner;
   }
 }
 

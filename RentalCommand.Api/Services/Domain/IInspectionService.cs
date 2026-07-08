@@ -10,6 +10,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IInspectionService
 {
     Task<IReadOnlyList<InspectionResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<InspectionListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
 
     /// <summary>Inspection detail including its checklist <see cref="InspectionDetailResponse.Items"/>.</summary>
     Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);

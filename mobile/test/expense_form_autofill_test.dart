@@ -115,8 +115,16 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
     int? unitId,
     int? vendorId,
     bool openOnly = false,
+    int skip = 0,
     int take = 50,
+    String? search,
     String sort = '-updatedAt',
+    String? requestedFrom,
+    String? requestedTo,
+    String? scheduledFrom,
+    String? scheduledTo,
+    String? completedFrom,
+    String? completedTo,
   }) async {
     expect(take, lessThanOrEqualTo(100));
     expect(sort, '-updatedAt');
@@ -148,7 +156,11 @@ class _FakeVendorsRepository extends VendorsRepository {
   _FakeVendorsRepository() : super(Dio());
 
   @override
-  Future<List<Vendor>> list() async => const [
+  Future<List<Vendor>> list({
+    int skip = 0,
+    int take = 50,
+    String sort = 'name',
+  }) async => const [
     Vendor(
       id: 8,
       name: 'Akron Plumbing',

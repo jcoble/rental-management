@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CRUD for recurring-expense templates (insurance/tax/HOA/management fee entered once) within the
 /// caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim; list supports
-/// <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete. The Engine
+/// <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort&amp;from&amp;to</c>. Removal is a soft-delete. The Engine
 /// materializes due templates into expense rows.
 /// </summary>
 [ApiController]
@@ -29,6 +29,15 @@ public class RecurringExpenseController : AuthenticatedPortfolioControllerBase
     {
         var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
         return Ok(items);
+    }
+
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(RecurringExpenseListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<RecurringExpenseListResponse>> ListPage(
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, query, ct);
+        return Ok(page);
     }
 
     [HttpGet("{id:int}")]

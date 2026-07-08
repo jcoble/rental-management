@@ -1,10 +1,10 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'unit_navigation.dart';
 import 'units_repository.dart';
@@ -17,28 +17,58 @@ class UnitsListScreen extends ConsumerStatefulWidget {
 }
 
 class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
-  static const _pageSize = 100;
+  static const _pageSize = 20;
 
   final _searchCtrl = TextEditingController();
-  Timer? _searchDebounce;
-  String _search = '';
+  String? _search;
+  String _sort = 'propertyName';
+  String? _stageFilter;
+  int _skip = 0;
+
+  UnitHealthListQuery get _listQuery => UnitHealthListQuery(
+    search: _search,
+    sort: _sort,
+    stage: _stageFilter,
+    skip: _skip,
+    take: _pageSize,
+  );
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
 
-  void _setSearch(String value) {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 280), () {
-      if (mounted) setState(() => _search = value.trim());
+  Future<void> _refresh() {
+    return ref.refresh(unitHealthPageProvider(_listQuery).future);
+  }
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
     });
   }
 
-  Future<void> _refresh(UnitHealthListArgs args) {
-    return ref.refresh(unitHealthPageProvider(args).future);
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? value) {
+    if (value == null || value == _sort) return;
+    setState(() {
+      _sort = value;
+      _skip = 0;
+    });
+  }
+
+  void _setStageFilter(String? value) {
+    setState(() {
+      _stageFilter = value;
+      _skip = 0;
+    });
   }
 
   void _openUnit(UnitHealth unit) {
@@ -47,60 +77,88 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final args = (
-      search: _search.isEmpty ? null : _search,
-      skip: 0,
-      take: _pageSize,
-    );
-    final unitsAsync = ref.watch(unitHealthPageProvider(args));
+    final unitsAsync = ref.watch(unitHealthPageProvider(_listQuery));
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Units')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                hintText: 'Search unit or property',
-                prefixIcon: const Icon(Symbols.search_rounded, size: 20),
-                suffixIcon: _searchCtrl.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Symbols.close_rounded, size: 20),
-                        onPressed: () {
-                          _searchDebounce?.cancel();
-                          _searchCtrl.clear();
-                          setState(() => _search = '');
-                        },
-                      )
-                    : null,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+          MobileGridControlsBar(
+            keyPrefix: 'units',
+            searchController: _searchCtrl,
+            searchLabel: 'Search units',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: 'propertyName',
+            sortLabel: 'Sort units',
+            sortOptions: const [
+              MobileGridControlOption(
+                value: 'propertyName',
+                label: 'Property A-Z',
               ),
-              onChanged: (value) {
-                setState(() {});
-                _setSearch(value);
-              },
-            ),
+              MobileGridControlOption(
+                value: 'unitNumber',
+                label: 'Unit number',
+              ),
+              MobileGridControlOption(
+                value: '-updatedAt',
+                label: 'Updated recently',
+              ),
+              MobileGridControlOption(
+                value: '-openWorkOrderCount',
+                label: 'Most open work',
+              ),
+              MobileGridControlOption(
+                value: '-marketRent',
+                label: 'Highest rent',
+              ),
+              MobileGridControlOption(
+                value: 'status',
+                label: 'Occupancy status',
+              ),
+            ],
+            onSortChanged: _setSort,
+            filters: [
+              MobileGridChoiceFilter(
+                id: 'stage',
+                label: 'Stage',
+                value: _stageFilter,
+                allLabel: 'All stages',
+                options: const [
+                  MobileGridControlOption(value: 'Active', label: 'Active'),
+                  MobileGridControlOption(value: 'Renewal', label: 'Renewal'),
+                  MobileGridControlOption(value: 'Move-Out', label: 'Move-out'),
+                  MobileGridControlOption(value: 'Lease', label: 'Lease'),
+                  MobileGridControlOption(value: 'Vacant', label: 'Vacant'),
+                  MobileGridControlOption(value: 'Turnover', label: 'Turnover'),
+                ],
+                onChanged: _setStageFilter,
+              ),
+            ],
+            trailingActions: [
+              IconButton(
+                tooltip: 'Refresh units',
+                icon: const Icon(Icons.refresh),
+                onPressed: _refresh,
+              ),
+            ],
           ),
           Expanded(
             child: RefreshIndicator(
-              onRefresh: () => _refresh(args),
+              onRefresh: _refresh,
               child: unitsAsync.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) => _UnitsErrorBody(
                   message: e is ApiException ? e.message : e.toString(),
-                  onRetry: () => _refresh(args),
+                  onRetry: _refresh,
                 ),
                 data: (page) {
                   if (page.items.isEmpty) {
-                    return _UnitsEmptyBody(hasSearch: _search.isNotEmpty);
+                    return _UnitsEmptyBody(
+                      hasSearch: _search != null,
+                      hasFilter: _stageFilter != null,
+                    );
                   }
 
                   final bottomInset = MediaQuery.paddingOf(context).bottom;
@@ -111,15 +169,39 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
                       16,
                       160.0 + bottomInset,
                     ),
-                    itemCount: page.items.length,
+                    itemCount: page.items.length + 1,
                     separatorBuilder: (_, index) =>
-                        _GroupedListDivider(colorScheme: colorScheme),
+                        index >= page.items.length - 1
+                        ? const SizedBox(height: 8)
+                        : const MobileM3ListDivider(),
                     itemBuilder: (context, index) {
+                      if (index == page.items.length) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous units page',
+                          nextTooltip: 'Next units page',
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = _skip <= _pageSize
+                                      ? 0
+                                      : _skip - _pageSize;
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+
                       final unit = page.items[index];
                       return _UnitHealthRow(
                         unit: unit,
-                        first: index == 0,
-                        last: index == page.items.length - 1,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          page.items.length,
+                        ),
                         onTap: () => _openUnit(unit),
                       );
                     },
@@ -137,118 +219,81 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
 class _UnitHealthRow extends StatelessWidget {
   const _UnitHealthRow({
     required this.unit,
-    required this.first,
-    required this.last,
+    required this.position,
     required this.onTap,
   });
 
   final UnitHealth unit;
-  final bool first;
-  final bool last;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final borderRadius = BorderRadius.vertical(
-      top: first ? const Radius.circular(20) : Radius.zero,
-      bottom: last ? const Radius.circular(20) : Radius.zero,
-    );
 
-    return Material(
-      color: colorScheme.surfaceContainerHigh,
-      borderRadius: borderRadius,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: borderRadius,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  Symbols.home_work_rounded,
-                  color: colorScheme.onPrimaryContainer,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _unitLabel(unit),
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _ToneChip(label: unit.simpleStage),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      unit.propertyName,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        _MetaChip(
-                          icon: Symbols.payments_rounded,
-                          label: '${_formatCurrency(unit.marketRent)}/mo',
-                        ),
-                        _MetaChip(
-                          icon: Symbols.build_rounded,
-                          label: '${unit.openWorkOrderCount} open',
-                        ),
-                        if (unit.leaseEndsInDays != null)
-                          _MetaChip(
-                            icon: Symbols.event_rounded,
-                            label: _leaseEndsLabel(unit.leaseEndsInDays!),
-                          ),
-                        if (unit.docsNeedingReviewCount > 0)
-                          _MetaChip(
-                            icon: Symbols.folder_open_rounded,
-                            label: '${unit.docsNeedingReviewCount} docs',
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                Symbols.chevron_right_rounded,
-                color: colorScheme.onSurfaceVariant,
-                size: 20,
-              ),
-            ],
-          ),
-        ),
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: Symbols.home_work_rounded,
+        backgroundColor: colorScheme.primaryContainer,
+        foregroundColor: colorScheme.onPrimaryContainer,
       ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _unitLabel(unit),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 8),
+          _ToneChip(label: unit.simpleStage),
+        ],
+      ),
+      supporting: [
+        Text(
+          unit.propertyName,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+      meta: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          _MetaChip(
+            icon: Symbols.payments_rounded,
+            label: '${_formatCurrency(unit.marketRent)}/mo',
+          ),
+          _MetaChip(
+            icon: Symbols.build_rounded,
+            label: '${unit.openWorkOrderCount} open',
+          ),
+          if (unit.leaseEndsInDays != null)
+            _MetaChip(
+              icon: Symbols.event_rounded,
+              label: _leaseEndsLabel(unit.leaseEndsInDays!),
+            ),
+          if (unit.docsNeedingReviewCount > 0)
+            _MetaChip(
+              icon: Symbols.folder_open_rounded,
+              label: '${unit.docsNeedingReviewCount} docs',
+            ),
+        ],
+      ),
+      trailing: Icon(
+        Symbols.chevron_right_rounded,
+        color: colorScheme.onSurfaceVariant,
+      ),
+      onTap: onTap,
     );
   }
 }
@@ -312,27 +357,11 @@ class _MetaChip extends StatelessWidget {
   }
 }
 
-class _GroupedListDivider extends StatelessWidget {
-  const _GroupedListDivider({required this.colorScheme});
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Divider(
-      height: 1,
-      thickness: 1,
-      indent: 70,
-      endIndent: 16,
-      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
-    );
-  }
-}
-
 class _UnitsEmptyBody extends StatelessWidget {
-  const _UnitsEmptyBody({required this.hasSearch});
+  const _UnitsEmptyBody({required this.hasSearch, required this.hasFilter});
 
   final bool hasSearch;
+  final bool hasFilter;
 
   @override
   Widget build(BuildContext context) {
@@ -350,14 +379,14 @@ class _UnitsEmptyBody extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          hasSearch ? 'No units match that search.' : 'No units yet',
+          hasSearch || hasFilter ? 'No units match.' : 'No units yet',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 6),
         Text(
-          hasSearch
-              ? 'Try a different unit number or property name.'
+          hasSearch || hasFilter
+              ? 'Try a different unit, property, sort, or filter.'
               : 'Units live under a property. Add a property and its units to start managing them here.',
           textAlign: TextAlign.center,
           style: TextStyle(color: colorScheme.onSurfaceVariant),

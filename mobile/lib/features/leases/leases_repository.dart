@@ -7,6 +7,115 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 
+class LeaseListQuery {
+  const LeaseListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.tenantId,
+    this.propertyId,
+    this.unitId,
+    this.status,
+    this.search,
+    this.sort = '-updatedAt',
+    this.startFrom,
+    this.startTo,
+    this.endFrom,
+    this.endTo,
+    this.activeOn,
+    this.activeFrom,
+    this.activeTo,
+  });
+
+  final int skip;
+  final int take;
+  final int? tenantId;
+  final int? propertyId;
+  final int? unitId;
+  final String? status;
+  final String? search;
+  final String sort;
+  final String? startFrom;
+  final String? startTo;
+  final String? endFrom;
+  final String? endTo;
+  final String? activeOn;
+  final String? activeFrom;
+  final String? activeTo;
+
+  @override
+  bool operator ==(Object other) {
+    return other is LeaseListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.tenantId == tenantId &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId &&
+        other.status == status &&
+        other.search == search &&
+        other.sort == sort &&
+        other.startFrom == startFrom &&
+        other.startTo == startTo &&
+        other.endFrom == endFrom &&
+        other.endTo == endTo &&
+        other.activeOn == activeOn &&
+        other.activeFrom == activeFrom &&
+        other.activeTo == activeTo;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    tenantId,
+    propertyId,
+    unitId,
+    status,
+    search,
+    sort,
+    startFrom,
+    startTo,
+    endFrom,
+    endTo,
+    activeOn,
+    activeFrom,
+    activeTo,
+  );
+}
+
+class LeaseListPage {
+  const LeaseListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Lease> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory LeaseListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Lease.fromJson)
+              .toList()
+        : <Lease>[];
+
+    return LeaseListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Repository for leases.
 ///
 /// Endpoints used:
@@ -63,6 +172,45 @@ class LeasesRepository {
           .whereType<Map<String, dynamic>>()
           .map(Lease.fromJson)
           .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<LeaseListPage> listLeasesPage([
+    LeaseListQuery query = const LeaseListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'tenantId': query.tenantId,
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
+      'status': query.status,
+      'search': query.search,
+      'sort': query.sort,
+      'startFrom': query.startFrom,
+      'startTo': query.startTo,
+      'endFrom': query.endFrom,
+      'endTo': query.endTo,
+      'activeOn': query.activeOn,
+      'activeFrom': query.activeFrom,
+      'activeTo': query.activeTo,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/leases/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -506,6 +654,11 @@ final leasesProvider =
     NotifierProvider<LeasesNotifier, AsyncValue<List<Lease>>>(
       LeasesNotifier.new,
     );
+
+final leasesPageProvider = FutureProvider.autoDispose
+    .family<LeaseListPage, LeaseListQuery>((ref, query) {
+      return ref.watch(leasesRepositoryProvider).listLeasesPage(query);
+    });
 
 // ── Leases for a specific tenant ──────────────────────────────────────────────
 

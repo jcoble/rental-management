@@ -53,6 +53,14 @@ public class LoanResponse
     };
 }
 
+public class LoanListResponse
+{
+    public IReadOnlyList<LoanResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 /// <summary>One row of a loan's amortization schedule (read-only history).</summary>
 public class LoanPaymentResponse
 {

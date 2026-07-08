@@ -93,6 +93,15 @@ public class UnitService : IUnitService
                 (u.Property != null && EF.Functions.ILike(u.Property.Name, $"%{term}%")));
         }
 
+        if (!string.IsNullOrWhiteSpace(query.Status) &&
+            Enum.TryParse<UnitStatus>(query.Status, ignoreCase: true, out var status))
+        {
+            q = q.Where(u => u.Status == status);
+        }
+
+        var now = _timeProvider.UtcNow();
+        q = ApplyStageFilter(q, query.Stage, now);
+
         q = query.SortField switch
         {
             "unitnumber" => query.SortDescending ? q.OrderByDescending(u => u.UnitNumber) : q.OrderBy(u => u.UnitNumber),
@@ -111,7 +120,6 @@ public class UnitService : IUnitService
         };
 
         var totalCount = await q.CountAsync(ct);
-        var now = _timeProvider.UtcNow();
 
         // One projection query: the health badges are correlated subqueries (grouped counts + the active
         // lease's scalars). No per-unit dashboard call, no N+1 — the only in-memory step is formatting the
@@ -220,6 +228,71 @@ public class UnitService : IUnitService
         Sort = query.Sort,
         PropertyId = propertyId,
     };
+
+    private static IQueryable<Unit> ApplyStageFilter(IQueryable<Unit> q, string? stage, DateTime now)
+    {
+        if (string.IsNullOrWhiteSpace(stage))
+        {
+            return q;
+        }
+
+        var normalized = stage.Replace("-", string.Empty, StringComparison.Ordinal).Trim().ToLowerInvariant();
+        var renewalCutoff = now.AddDays(90);
+
+        return normalized switch
+        {
+            "turnover" => q.Where(u => u.Status == UnitStatus.Offline),
+            "moveout" => q.Where(u =>
+                u.Status != UnitStatus.Offline &&
+                !u.Leases.Any(l => l.Status == LeaseStatus.Active) &&
+                u.Leases.Any(l => l.Status == LeaseStatus.NoticeGiven)),
+            "renewal" => q.Where(u =>
+                u.Status != UnitStatus.Offline &&
+                u.Leases.Any(l => l.Status == LeaseStatus.Active) &&
+                u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active)
+                    .OrderByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => (DateTime?)l.EndDate)
+                    .FirstOrDefault() >= now &&
+                u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active)
+                    .OrderByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => (DateTime?)l.EndDate)
+                    .FirstOrDefault() <= renewalCutoff),
+            "active" => q.Where(u =>
+                u.Status != UnitStatus.Offline &&
+                u.Leases.Any(l => l.Status == LeaseStatus.Active) &&
+                (u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active)
+                    .OrderByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => (DateTime?)l.EndDate)
+                    .FirstOrDefault() < now ||
+                 u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active)
+                    .OrderByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => (DateTime?)l.EndDate)
+                    .FirstOrDefault() > renewalCutoff ||
+                 u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active)
+                    .OrderByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => (DateTime?)l.EndDate)
+                    .FirstOrDefault() == null)),
+            "lease" => q.Where(u =>
+                u.Status != UnitStatus.Offline &&
+                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) &&
+                u.Leases.Any(l => l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature)),
+            "vacant" => q.Where(u =>
+                u.Status != UnitStatus.Offline &&
+                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) &&
+                !u.Leases.Any(l => l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature)),
+            _ => q,
+        };
+    }
 
     /// <summary>
     /// Simplified list badge (NOT the full 9-stage detail derivation): a cheap label from the unit's

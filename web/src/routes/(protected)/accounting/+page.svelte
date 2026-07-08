@@ -705,7 +705,8 @@
 	);
 	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
 	const reports = $derived(accountingReportsQuery.data as AccountingReports | undefined);
-	const recentLedger = $derived((reports?.ledger ?? []).slice(0, 8));
+	const recentLedger = $derived(reports?.recentLedger ?? reports?.ledger ?? []);
+	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
 	const vendorReviewCount = $derived((reports?.vendors1099 ?? []).filter((v) => v.needsW9 || v.needs1099Review).length);
 
 	const selectedLeaseLabel = $derived.by(() => {
@@ -1075,7 +1076,7 @@
 			<Card.Root class="m3-tonal-card m3-tonal-card--violet gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Ledger rows</p>
-					<p class="text-2xl font-bold font-mono tabular-nums">{reports?.ledger.length ?? 0}</p>
+					<p class="text-2xl font-bold font-mono tabular-nums">{ledgerTotalCount}</p>
 					<p class="mt-1 text-xs text-muted-foreground">Recent payments and expenses</p>
 				</Card.Content>
 			</Card.Root>

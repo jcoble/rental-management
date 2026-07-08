@@ -100,6 +100,36 @@ public class WorkOrderServiceListTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FieldQueueSortsByPriorityThenRequestedDateInSql()
+    {
+        var day1 = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedWorkOrder("Normal older", "Cedar Point Flats", WorkOrderStatus.New, WorkOrderPriority.Normal, day1);
+        SeedWorkOrder("Emergency later", "Elm Ridge Homes", WorkOrderStatus.New, WorkOrderPriority.Emergency, day1.AddDays(3));
+        SeedWorkOrder("High earlier", "Harbor View Apartments", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(2));
+        SeedWorkOrder("High oldest", "West Market Lofts", WorkOrderStatus.New, WorkOrderPriority.High, day1.AddDays(1));
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new WorkOrderListQuery
+        {
+            OpenOnly = true,
+            Sort = "fieldQueue",
+            Take = 10,
+        });
+
+        result.Items.Select(w => w.Title).Should().Equal(
+            "Emergency later",
+            "High oldest",
+            "High earlier",
+            "Normal older");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Priority", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RequestedAt", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ListPageAsync_FiltersRequestedDateWindowInSql()
     {
         var day1 = new DateTime(2026, 4, 1, 12, 0, 0, DateTimeKind.Utc);

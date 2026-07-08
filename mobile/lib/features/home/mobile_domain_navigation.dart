@@ -231,13 +231,21 @@ void revealMobileShellIfDetached(BuildContext context) {
 }
 
 class MobileDomainNavigator {
-  const MobileDomainNavigator(this._openDestination);
+  const MobileDomainNavigator({
+    required void Function(
+      MobileDestinationId destination, {
+      MobileDetailBuilder? detailBuilder,
+    })
+    openDestination,
+    required this.popToCurrentRoot,
+  }) : _openDestination = openDestination;
 
   final void Function(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
   })
   _openDestination;
+  final VoidCallback popToCurrentRoot;
 
   void openDestination(
     MobileDestinationId destination, {

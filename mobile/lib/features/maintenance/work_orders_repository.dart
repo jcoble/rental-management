@@ -7,6 +7,111 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 
+class WorkOrderListQuery {
+  const WorkOrderListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.propertyId,
+    this.unitId,
+    this.vendorId,
+    this.openOnly = false,
+    this.search,
+    this.sort = '-updatedAt',
+    this.requestedFrom,
+    this.requestedTo,
+    this.scheduledFrom,
+    this.scheduledTo,
+    this.completedFrom,
+    this.completedTo,
+  });
+
+  final int skip;
+  final int take;
+  final int? propertyId;
+  final int? unitId;
+  final int? vendorId;
+  final bool openOnly;
+  final String? search;
+  final String sort;
+  final String? requestedFrom;
+  final String? requestedTo;
+  final String? scheduledFrom;
+  final String? scheduledTo;
+  final String? completedFrom;
+  final String? completedTo;
+
+  @override
+  bool operator ==(Object other) {
+    return other is WorkOrderListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId &&
+        other.vendorId == vendorId &&
+        other.openOnly == openOnly &&
+        other.search == search &&
+        other.sort == sort &&
+        other.requestedFrom == requestedFrom &&
+        other.requestedTo == requestedTo &&
+        other.scheduledFrom == scheduledFrom &&
+        other.scheduledTo == scheduledTo &&
+        other.completedFrom == completedFrom &&
+        other.completedTo == completedTo;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    propertyId,
+    unitId,
+    vendorId,
+    openOnly,
+    search,
+    sort,
+    requestedFrom,
+    requestedTo,
+    scheduledFrom,
+    scheduledTo,
+    completedFrom,
+    completedTo,
+  );
+}
+
+class WorkOrderListPage {
+  const WorkOrderListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<WorkOrder> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory WorkOrderListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(WorkOrder.fromJson)
+              .toList()
+        : <WorkOrder>[];
+
+    return WorkOrderListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Repository for work orders.
 ///
 /// Endpoints:
@@ -21,12 +126,52 @@ class WorkOrdersRepository {
 
   final Dio _dio;
 
+  Future<WorkOrderListPage> listWorkOrdersPage([
+    WorkOrderListQuery query = const WorkOrderListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'sort': query.sort,
+      'search': query.search,
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
+      'vendorId': query.vendorId,
+      if (query.openOnly) 'openOnly': true,
+      'requestedFrom': query.requestedFrom,
+      'requestedTo': query.requestedTo,
+      'scheduledFrom': query.scheduledFrom,
+      'scheduledTo': query.scheduledTo,
+      'completedFrom': query.completedFrom,
+      'completedTo': query.completedTo,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/work-orders/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrderListPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<List<WorkOrder>> listWorkOrders({
     int? propertyId,
     int? unitId,
     int? vendorId,
     bool openOnly = false,
+    int skip = 0,
     int take = 50,
+    String? search,
     String sort = '-updatedAt',
     String? requestedFrom,
     String? requestedTo,
@@ -35,42 +180,25 @@ class WorkOrdersRepository {
     String? completedFrom,
     String? completedTo,
   }) async {
-    try {
-      final params = <String, dynamic>{'take': take, 'sort': sort};
-      if (propertyId != null) params['propertyId'] = propertyId;
-      if (unitId != null) params['unitId'] = unitId;
-      if (vendorId != null) params['vendorId'] = vendorId;
-      if (openOnly) params['openOnly'] = true;
-      if (requestedFrom != null && requestedFrom.isNotEmpty) {
-        params['requestedFrom'] = requestedFrom;
-      }
-      if (requestedTo != null && requestedTo.isNotEmpty) {
-        params['requestedTo'] = requestedTo;
-      }
-      if (scheduledFrom != null && scheduledFrom.isNotEmpty) {
-        params['scheduledFrom'] = scheduledFrom;
-      }
-      if (scheduledTo != null && scheduledTo.isNotEmpty) {
-        params['scheduledTo'] = scheduledTo;
-      }
-      if (completedFrom != null && completedFrom.isNotEmpty) {
-        params['completedFrom'] = completedFrom;
-      }
-      if (completedTo != null && completedTo.isNotEmpty) {
-        params['completedTo'] = completedTo;
-      }
-      final response = await _dio.get<Map<String, dynamic>>(
-        '/work-orders/page',
-        queryParameters: params,
-      );
-      final data = response.data?['items'] as List<dynamic>? ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(WorkOrder.fromJson)
-          .toList();
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    final page = await listWorkOrdersPage(
+      WorkOrderListQuery(
+        propertyId: propertyId,
+        unitId: unitId,
+        vendorId: vendorId,
+        openOnly: openOnly,
+        skip: skip,
+        take: take,
+        search: search,
+        sort: sort,
+        requestedFrom: requestedFrom,
+        requestedTo: requestedTo,
+        scheduledFrom: scheduledFrom,
+        scheduledTo: scheduledTo,
+        completedFrom: completedFrom,
+        completedTo: completedTo,
+      ),
+    );
+    return page.items;
   }
 
   Future<WorkOrder> getWorkOrder(int id) async {
@@ -307,6 +435,11 @@ final workOrdersProvider =
     NotifierProvider<WorkOrdersNotifier, AsyncValue<List<WorkOrder>>>(
       WorkOrdersNotifier.new,
     );
+
+final workOrdersPageProvider = FutureProvider.autoDispose
+    .family<WorkOrderListPage, WorkOrderListQuery>((ref, query) {
+      return ref.watch(workOrdersRepositoryProvider).listWorkOrdersPage(query);
+    });
 
 // ── Single work order (with status timeline) ──────────────────────────────────
 

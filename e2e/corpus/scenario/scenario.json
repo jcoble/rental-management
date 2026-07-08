@@ -1,0 +1,144 @@
+{
+  "_meta": {
+    "purpose": "Frozen scenario — single source of truth for the E2E corpus. Consumed by tools/emit-finance (C#, authoritative loan/depreciation math) and tools/build-ledger.mjs (JS, events.csv). Money in dollars (2dp). Do not renumber codes.",
+    "company": "Okafor Property Group",
+    "market": "Springfield / Clark County, Ohio",
+    "timezone": "America/New_York",
+    "timeline": { "history": ["2023-01-01", "2024-12-31"], "onboarding_T0": "2025-01-01", "spine": ["2025-01-01", "2025-12-31"], "reconcile": "2025-12-31" },
+    "renewal_escalation_pct": 3
+  },
+  "users": [
+    { "name": "Dana R. Okafor", "role": "Admin" },
+    { "name": "Priya Nair", "role": "Manager" },
+    { "name": "Tomás Reyes", "role": "Agent" },
+    { "name": "Marcus Bell", "role": "Owner" }
+  ],
+  "owners": [
+    { "code": "OE-LLC",   "name": "Okafor Rentals LLC",        "type": "LLC",    "isPrimary": true,  "feePercent": 0 },
+    { "code": "OE-BELL",  "name": "Bell-Okafor Holdings LLC",  "type": "LLC",    "isPrimary": false, "feePercent": 8, "memo": "co-owned Marcus Bell + Dana; app models as ONE entity (gap #11 no fractional ownership)" },
+    { "code": "OE-TRUST", "name": "Okafor Family Trust",       "type": "Trust",  "isPrimary": false, "feePercent": 8 },
+    { "code": "OE-PERS",  "name": "Dana R. Okafor",            "type": "Person", "isPrimary": false, "feePercent": 0 }
+  ],
+  "properties": [
+    { "code": "P01", "name": "412 Maple St",       "type": "SingleFamily", "owner": "OE-LLC",   "acquired": "2016-04-01", "inServiceDate": "2016-04-01", "purchasePrice": 128000, "landValue": 22000, "feePercent": 0, "annualPropertyTax": 1960, "annualInsurance": 820,
+      "address": { "line1": "412 Maple St", "city": "Springfield", "state": "OH", "postal": "45504" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 3, "baths": 1.5, "sqft": 1180, "marketRent": 1250 } ],
+      "loan": { "lender": "Prairie State Bank", "loanNumber": "PSB-4471-0412", "originalAmount": 96000, "ratePct": 4.25, "termMonths": 360, "startDate": "2021-03-01", "dayDue": 1, "escrow": 310, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P02", "name": "418-420 Vine St",    "type": "MultiFamily", "owner": "OE-LLC",   "acquired": "2017-08-01", "inServiceDate": "2017-08-01", "purchasePrice": 175000, "landValue": 28000, "feePercent": 0, "annualPropertyTax": 2400, "annualInsurance": 1050,
+      "address": { "line1": "418-420 Vine St", "city": "Springfield", "state": "OH", "postal": "45504" },
+      "units": [ { "code": "A", "unitNumber": "A", "beds": 2, "baths": 1, "sqft": 900, "marketRent": 950 }, { "code": "B", "unitNumber": "B", "beds": 2, "baths": 1, "sqft": 900, "marketRent": 975 } ],
+      "loan": { "lender": "Prairie State Bank", "loanNumber": "PSB-4471-0418", "originalAmount": 140000, "ratePct": 4.50, "termMonths": 360, "startDate": "2017-08-01", "dayDue": 1, "escrow": 360, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P03", "name": "77 Birch Ave",       "type": "SingleFamily", "owner": "OE-TRUST", "acquired": "2015-06-01", "inServiceDate": "2015-06-01", "purchasePrice": 110000, "landValue": 20000, "feePercent": 8, "annualPropertyTax": 1600, "annualInsurance": 780,
+      "address": { "line1": "77 Birch Ave", "city": "Springfield", "state": "OH", "postal": "45503" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 3, "baths": 2, "sqft": 1320, "marketRent": 1150 } ],
+      "loan": null, "loanNote": "paid off — pays property tax + insurance DIRECTLY (escrow_covered=false)" },
+
+    { "code": "P04", "name": "1203 Oakwood Dr",    "type": "SingleFamily", "owner": "OE-LLC",   "acquired": "2019-03-01", "inServiceDate": "2019-03-01", "purchasePrice": 158000, "landValue": 30000, "feePercent": 0, "annualPropertyTax": 2150, "annualInsurance": 980,
+      "address": { "line1": "1203 Oakwood Dr", "city": "Springfield", "state": "OH", "postal": "45503" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 3, "baths": 2, "sqft": 1500, "marketRent": 1450 } ],
+      "loan": { "lender": "Clark County CU", "loanNumber": "CCCU-2031-1203", "originalAmount": 126000, "ratePct": 3.75, "termMonths": 360, "startDate": "2019-03-01", "dayDue": 1, "escrow": 395, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P05", "name": "305 Elm Court",      "type": "MultiFamily", "owner": "OE-BELL",  "acquired": "2018-11-01", "inServiceDate": "2018-11-01", "purchasePrice": 245000, "landValue": 35000, "feePercent": 8, "annualPropertyTax": 3100, "annualInsurance": 1450,
+      "address": { "line1": "305 Elm Court", "city": "Springfield", "state": "OH", "postal": "45505" },
+      "units": [ { "code": "1", "unitNumber": "1", "beds": 2, "baths": 1, "sqft": 850, "marketRent": 850 }, { "code": "2", "unitNumber": "2", "beds": 2, "baths": 1, "sqft": 850, "marketRent": 850 }, { "code": "3", "unitNumber": "3", "beds": 2, "baths": 1, "sqft": 850, "marketRent": 850 } ],
+      "loan": { "lender": "Prairie State Bank", "loanNumber": "PSB-4471-0305", "originalAmount": 196000, "ratePct": 4.75, "termMonths": 360, "startDate": "2018-11-01", "dayDue": 1, "escrow": 520, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P06", "name": "88 Cedar Ln",        "type": "SingleFamily", "owner": "OE-LLC",   "acquired": "2020-07-01", "inServiceDate": "2020-07-01", "purchasePrice": 172000, "landValue": 32000, "feePercent": 0, "annualPropertyTax": 2300, "annualInsurance": 1010,
+      "address": { "line1": "88 Cedar Ln", "city": "Springfield", "state": "OH", "postal": "45504" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 3, "baths": 2, "sqft": 1450, "marketRent": 1395 } ],
+      "loan": { "lender": "Clark County CU", "loanNumber": "CCCU-2031-0088", "originalAmount": 137600, "ratePct": 3.25, "termMonths": 360, "startDate": "2020-07-01", "dayDue": 1, "escrow": 410, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P07", "name": "210 Willow Way",     "type": "MultiFamily", "owner": "OE-BELL",  "acquired": "2021-05-01", "inServiceDate": "2021-05-01", "purchasePrice": 210000, "landValue": 34000, "feePercent": 8, "annualPropertyTax": 2650, "annualInsurance": 1180,
+      "address": { "line1": "210 Willow Way", "city": "Springfield", "state": "OH", "postal": "45503" },
+      "units": [ { "code": "A", "unitNumber": "A", "beds": 2, "baths": 1.5, "sqft": 1050, "marketRent": 1100 }, { "code": "B", "unitNumber": "B", "beds": 2, "baths": 1.5, "sqft": 1050, "marketRent": 1150 } ],
+      "loan": { "lender": "Fifth Third", "loanNumber": "FTB-8890-0210", "originalAmount": 168000, "ratePct": 3.50, "termMonths": 360, "startDate": "2021-05-01", "dayDue": 1, "escrow": 470, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P08", "name": "540 Sycamore St",    "type": "SingleFamily", "owner": "OE-PERS",  "acquired": "2015-09-01", "inServiceDate": "2015-09-01", "purchasePrice": 99000, "landValue": 18000, "feePercent": 0, "annualPropertyTax": 1400, "annualInsurance": 680,
+      "address": { "line1": "540 Sycamore St", "city": "Springfield", "state": "OH", "postal": "45505" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 2, "baths": 1, "sqft": 980, "marketRent": 1050 } ],
+      "loan": null, "loanNote": "paid off — pays property tax + insurance DIRECTLY (escrow_covered=false)" },
+
+    { "code": "P09", "name": "1450 Highland Blvd", "type": "MultiFamily", "owner": "OE-LLC",   "acquired": "2022-02-01", "inServiceDate": "2022-02-01", "purchasePrice": 340000, "landValue": 48000, "feePercent": 0, "annualPropertyTax": 4200, "annualInsurance": 2050,
+      "address": { "line1": "1450 Highland Blvd", "city": "Springfield", "state": "OH", "postal": "45505" },
+      "units": [ { "code": "1", "unitNumber": "1", "beds": 2, "baths": 1, "sqft": 780, "marketRent": 825 }, { "code": "2", "unitNumber": "2", "beds": 2, "baths": 1, "sqft": 780, "marketRent": 825 }, { "code": "3", "unitNumber": "3", "beds": 2, "baths": 1, "sqft": 780, "marketRent": 825 }, { "code": "4", "unitNumber": "4", "beds": 2, "baths": 1, "sqft": 780, "marketRent": 825 } ],
+      "loan": { "lender": "Fifth Third", "loanNumber": "FTB-8890-1450", "originalAmount": 272000, "ratePct": 5.50, "termMonths": 360, "startDate": "2022-02-01", "dayDue": 1, "escrow": 720, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P10", "name": "63 Chestnut St",     "type": "SingleFamily", "owner": "OE-LLC",   "acquired": "2023-06-01", "inServiceDate": "2023-06-01", "purchasePrice": 185000, "landValue": 33000, "feePercent": 0, "annualPropertyTax": 2450, "annualInsurance": 1080,
+      "address": { "line1": "63 Chestnut St", "city": "Springfield", "state": "OH", "postal": "45504" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 3, "baths": 2, "sqft": 1560, "marketRent": 1525 } ],
+      "loan": { "lender": "Clark County CU", "loanNumber": "CCCU-2031-0063", "originalAmount": 148000, "ratePct": 6.50, "termMonths": 360, "startDate": "2023-06-01", "dayDue": 1, "escrow": 430, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P11", "name": "9 Aspen Circle",     "type": "Condo",        "owner": "OE-LLC",   "acquired": "2019-10-01", "inServiceDate": "2019-10-01", "purchasePrice": 95000, "landValue": 0, "feePercent": 0, "annualPropertyTax": 1350, "annualInsurance": 320,
+      "address": { "line1": "9 Aspen Circle", "city": "Springfield", "state": "OH", "postal": "45503" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 2, "baths": 2, "sqft": 1100, "marketRent": 1100 } ],
+      "loan": { "lender": "Prairie State Bank", "loanNumber": "PSB-4471-0009", "originalAmount": 76000, "ratePct": 4.00, "termMonths": 360, "startDate": "2019-10-01", "dayDue": 1, "escrow": 180, "escrowCoversTaxes": true, "escrowCoversInsurance": false },
+      "insuranceNote": "condo: escrow covers TAX only; HO-6 insurance paid direct (escrow_covered=false). HOA dues are a separate recurring expense." },
+
+    { "code": "P12", "name": "1155 Riverside Dr",  "type": "SingleFamily", "owner": "OE-LLC",   "acquired": "2024-01-01", "inServiceDate": "2024-01-01", "purchasePrice": 198000, "landValue": 36000, "feePercent": 0, "annualPropertyTax": 2550, "annualInsurance": 1120,
+      "address": { "line1": "1155 Riverside Dr", "city": "Springfield", "state": "OH", "postal": "45504" },
+      "units": [ { "code": "U1", "unitNumber": "1", "beds": 4, "baths": 2.5, "sqft": 1850, "marketRent": 1600 } ],
+      "loan": { "lender": "Fifth Third", "loanNumber": "FTB-8890-1155", "originalAmount": 158400, "ratePct": 6.75, "termMonths": 360, "startDate": "2024-01-01", "dayDue": 1, "escrow": 460, "escrowCoversTaxes": true, "escrowCoversInsurance": true } },
+
+    { "code": "P13", "name": "330 Walnut St",      "type": "MultiFamily", "owner": "OE-LLC",   "acquired": "2018-03-01", "inServiceDate": "2018-03-01", "purchasePrice": 165000, "landValue": 27000, "feePercent": 0, "annualPropertyTax": 2250, "annualInsurance": 1000,
+      "address": { "line1": "330 Walnut St", "city": "Springfield", "state": "OH", "postal": "45505" },
+      "units": [ { "code": "A", "unitNumber": "A", "beds": 2, "baths": 1, "sqft": 900, "marketRent": 925 }, { "code": "B", "unitNumber": "B", "beds": 2, "baths": 1, "sqft": 900, "marketRent": 940 } ],
+      "loan": { "lender": "Clark County CU", "loanNumber": "CCCU-2031-0330", "originalAmount": 132000, "ratePct": 4.50, "termMonths": 360, "startDate": "2018-03-01", "dayDue": 1, "escrow": 350, "escrowCoversTaxes": true, "escrowCoversInsurance": true } }
+  ],
+  "leases": [
+    { "code": "L01", "property": "P01", "unit": "U1", "tenant": "James Whitfield",  "start": "2024-04-01", "end": "2025-03-31", "rent": 1250, "deposit": 1250, "lateFee": 75, "dueDay": 1,  "method": "Check",      "role": "renewal",   "renewalRent": 1287.50, "renewalDate": "2025-04-01" },
+    { "code": "L02", "property": "P02", "unit": "A",  "tenant": "Rosa Delgado",     "start": "2024-05-01", "end": "2025-04-30", "rent": 950,  "deposit": 950,  "lateFee": 50, "dueDay": 1,  "method": "ACH",        "role": "monthToMonth", "m2mDate": "2025-05-01" },
+    { "code": "L03", "property": "P02", "unit": "B",  "tenant": "Sam Klein",        "start": "2024-10-01", "end": "2025-09-30", "rent": 975,  "deposit": 975,  "lateFee": 50, "dueDay": 1,  "method": "Zelle",      "role": "renewal",   "renewalRent": 1004.25, "renewalDate": "2025-10-01" },
+    { "code": "L04", "property": "P03", "unit": "U1", "tenant": "John Abernathy",   "coTenants": ["Mary Abernathy"], "start": "2024-07-01", "end": "2025-06-30", "rent": 1150, "deposit": 1150, "lateFee": 50, "dueDay": 1, "method": "Check", "role": "renewal", "renewalRent": 1184.50, "renewalDate": "2025-07-01", "beat": "nsf-aug" },
+    { "code": "L05", "property": "P04", "unit": "U1", "tenant": "Michael Osei",     "start": "2024-06-01", "end": "2025-05-31", "rent": 1450, "deposit": 1450, "lateFee": 50, "dueDay": 1,  "method": "Cash",       "role": "nonRenewal", "moveOut": "2025-05-31" },
+    { "code": "L06", "property": "P05", "unit": "1",  "tenant": "Dominic Ferraro",  "start": "2024-08-01", "end": "2025-07-31", "rent": 850,  "deposit": 850,  "lateFee": 50, "dueDay": 1,  "method": "ACH",        "role": "renewal",   "renewalRent": 875.50,  "renewalDate": "2025-08-01" },
+    { "code": "L07", "property": "P05", "unit": "2",  "tenant": "Tomiko Nakamura",  "start": "2024-11-01", "end": "2025-10-31", "rent": 850,  "deposit": 850,  "lateFee": 50, "dueDay": 5,  "method": "MoneyOrder", "role": "renewal",   "renewalRent": 875.50,  "renewalDate": "2025-11-01" },
+    { "code": "L08", "property": "P05", "unit": "3",  "tenant": "Ravi Anand",       "start": "2025-03-01", "end": "2026-02-28", "rent": 850,  "deposit": 850,  "lateFee": 50, "dueDay": 1,  "method": "Check",      "role": "leaseUp",   "vacantAtT0": true, "moveIn": "2025-03-01" },
+    { "code": "L09", "property": "P06", "unit": "U1", "tenant": "Brian Kowalski",   "start": "2024-09-01", "end": "2025-08-31", "rent": 1395, "deposit": 1395, "lateFee": 50, "dueDay": 1,  "method": "Autopay",    "role": "renewal",   "renewalRent": 1436.85, "renewalDate": "2025-09-01", "autopay": true },
+    { "code": "L10", "property": "P07", "unit": "A",  "tenant": "Elena Santos",     "start": "2024-12-01", "end": "2025-11-30", "rent": 1100, "deposit": 1100, "lateFee": 50, "dueDay": 15, "method": "ACH",        "role": "renewal",   "renewalRent": 1133.00, "renewalDate": "2025-12-01" },
+    { "code": "L11", "property": "P07", "unit": "B",  "tenant": "Hien Pham",        "coTenants": ["Minh Pham"], "start": "2024-03-01", "end": "2025-02-28", "rent": 1150, "deposit": 1150, "lateFee": 60, "dueDay": 1, "method": "Check", "role": "renewal", "renewalRent": 1184.50, "renewalDate": "2025-03-01" },
+    { "code": "L12", "property": "P08", "unit": "U1", "tenant": "Carla Reynolds",   "start": "2025-01-01", "end": "2025-12-31", "rent": 1050, "deposit": 1050, "lateFee": 50, "dueDay": 5,  "method": "Zelle",      "role": "renewal",   "renewalRent": 1081.50, "renewalDate": "2026-01-01", "renewalOutOfSpine": true },
+    { "code": "L13", "property": "P09", "unit": "1",  "tenant": "Anthony Brooks",   "start": "2024-05-01", "end": "2025-04-30", "rent": 825,  "deposit": 825,  "lateFee": 50, "dueDay": 1,  "method": "Cash",       "role": "renewal",   "renewalRent": 849.75,  "renewalDate": "2025-05-01", "beat": "portal-maint-aug" },
+    { "code": "L14", "property": "P09", "unit": "2",  "tenant": "Lena Turner",      "start": "2024-08-01", "end": "2025-07-31", "rent": 825,  "deposit": 825,  "lateFee": 50, "dueDay": 1,  "method": "Check",      "role": "renewal",   "renewalRent": 849.75,  "renewalDate": "2025-08-01", "beat": "delinquency" },
+    { "code": "L15", "property": "P09", "unit": "3",  "tenant": "Grace Iverson",    "start": "2024-10-01", "end": "2025-09-30", "rent": 825,  "deposit": 825,  "lateFee": 50, "dueDay": 1,  "method": "ACH",        "role": "renewal",   "renewalRent": 849.75,  "renewalDate": "2025-10-01", "beat": "portal-maint-jun" },
+    { "code": "L16", "property": "P09", "unit": "4",  "tenant": "Sofia Marin",      "start": "2025-03-15", "end": "2026-03-14", "rent": 825,  "deposit": 825,  "lateFee": 50, "dueDay": 1,  "method": "ACH",        "role": "leaseUp",   "vacantAtT0": true, "moveIn": "2025-03-15", "proratedFirstMonth": true },
+    { "code": "L17", "property": "P10", "unit": "U1", "tenant": "Nia Adeyemi",      "start": "2024-07-01", "end": "2025-06-30", "rent": 1525, "deposit": 1525, "lateFee": 50, "dueDay": 1,  "method": "Autopay",    "role": "renewal",   "renewalRent": 1570.75, "renewalDate": "2025-07-01", "autopay": true },
+    { "code": "L18", "property": "P11", "unit": "U1", "tenant": "Will Foster",      "start": "2024-11-01", "end": "2025-10-31", "rent": 1100, "deposit": 1100, "lateFee": 50, "dueDay": 15, "method": "Zelle",      "role": "renewal",   "renewalRent": 1133.00, "renewalDate": "2025-11-01" },
+    { "code": "L19", "property": "P12", "unit": "U1", "tenant": "Kevin Malloy",     "coTenants": ["Dana Malloy"], "start": "2025-01-01", "end": "2025-12-31", "rent": 1600, "deposit": 1600, "lateFee": 50, "dueDay": 1, "method": "ACH", "role": "renewal", "renewalRent": 1648.00, "renewalDate": "2026-01-01", "renewalOutOfSpine": true },
+    { "code": "L20", "property": "P04", "unit": "U1", "tenant": "Derek Cole",       "start": "2025-07-01", "end": "2026-06-30", "rent": 1495, "deposit": 1495, "lateFee": 50, "dueDay": 1,  "method": "Zelle",      "role": "turnoverNew", "moveIn": "2025-07-01", "replacesLease": "L05" },
+    { "code": "L21", "property": "P13", "unit": "A",  "tenant": "Olivia Ricci",     "start": "2024-09-01", "end": "2025-08-31", "rent": 925,  "deposit": 925,  "lateFee": 50, "dueDay": 1,  "method": "Check",      "role": "renewal",   "renewalRent": 952.75,  "renewalDate": "2025-09-01" },
+    { "code": "L22", "property": "P13", "unit": "B",  "tenant": "Viktor Sokolov",   "start": "2024-06-01", "end": "2025-05-31", "rent": 940,  "deposit": 940,  "lateFee": 50, "dueDay": 1,  "method": "MoneyOrder", "role": "renewal",   "renewalRent": 968.20,  "renewalDate": "2025-06-01" }
+  ],
+  "recurring": [
+    { "code": "REC-HOA-P11",   "property": "P11", "category": "Other",               "description": "Condo HOA dues",       "amount": 185, "frequency": "Monthly",   "months": "all" },
+    { "code": "REC-TRASH",     "properties": ["P02","P05","P07","P09","P13"], "category": "Utilities", "description": "Trash collection", "amount": 45, "frequency": "Monthly", "months": "all" },
+    { "code": "REC-LAWN",      "properties": ["P04","P06","P10","P12"],       "category": "CleaningMaintenance", "description": "Lawn care", "amount": 120, "frequency": "Monthly", "months": [4,5,6,7,8,9,10], "note": "P01 excluded — tenant maintains lawn per lease" },
+    { "code": "REC-PEST",      "properties": ["P02","P05","P07","P09","P13"], "category": "CleaningMaintenance", "description": "Pest control", "amount": 90, "frequency": "Quarterly", "months": [1,4,7,10] }
+  ],
+  "directTaxInsurance": {
+    "note": "P03 & P08 are paid-off → property tax (semi-annual Feb/Jul) and insurance (annual Jan) paid DIRECTLY, escrow_covered=false. All other properties' tax/insurance are escrow-disbursed (escrow_covered=true) on the dates below.",
+    "escrowDisbursement": { "taxHalf1": "2025-02-05", "taxHalf2": "2025-07-10", "insurance": "2025-04-15" },
+    "directPayment": { "taxHalf1": "2025-02-05", "taxHalf2": "2025-07-10", "insurance": "2025-01-15" }
+  },
+  "storyBeats": {
+    "delinquency_L14": { "aprPartial": 400, "mayMissed": true, "junPartial": 400, "lateFeeMonths": ["2025-04","2025-05","2025-06","2025-07","2025-08"], "cureDate": "2025-09-05", "note": "escalating LateRentNotice first(≤7d)/second(≤20d)/final(>20d); lump catch-up clears all arrears + late fees" },
+    "turnover_P04": { "moveOut": "2025-05-31", "vacantMonth": "2025-06", "deposit_deduction": { "reason": "carpet damage beyond wear", "amount": 450 }, "makeReady": [ { "date": "2025-06-10", "vendor": "Freshcoat Painters", "category": "Repairs", "amount": 680, "desc": "interior repaint" }, { "date": "2025-06-10", "vendor": "Valley Carpet", "category": "CleaningMaintenance", "amount": 520, "desc": "carpet replacement" } ], "newLease": "L20" },
+    "leaseUps": [ { "lease": "L08", "unit": "P05·3", "appDate": "2025-02-01", "screenDate": "2025-02-10", "moveIn": "2025-03-01" }, { "lease": "L16", "unit": "P09·4", "appDate": "2025-02-01", "screenDate": "2025-02-20", "moveIn": "2025-03-15", "proratedFirstMonth": true } ],
+    "declinedApplicant": { "name": "Marcus Webb", "unit": "P05·3", "appDate": "2025-02-01", "declineDate": "2025-02-10", "adverseAction": true },
+    "nsf_L04": { "month": "2025-08", "note": "Aug check returns NSF → Payment Paid→Failed, NSF fee $35 (Other), tenant re-pays by Check" },
+    "oneOffRepairs": [
+      { "date": "2025-01-14", "property": "P09", "unit": "2", "vendor": "Rooter Brothers Plumbing", "category": "Repairs", "amount": 182.33, "desc": "kitchen faucet cartridge (L14 request)", "artifact": "receipt" },
+      { "date": "2025-06-14", "property": "P09", "unit": "3", "vendor": "CoolFlow HVAC", "category": "Repairs", "amount": 245.00, "desc": "AC recharge (L15 request)", "artifact": "receipt" },
+      { "date": "2025-08-15", "property": "P02", "unit": "A", "vendor": "Summit Roofing", "category": "Repairs", "amount": 640.00, "desc": "roof leak repair", "artifact": "receipt" },
+      { "date": "2025-09-18", "property": "P06", "unit": "U1", "vendor": "ApplianceCare", "category": "Repairs", "amount": 210.00, "desc": "dishwasher repair", "artifact": "receipt" },
+      { "date": "2025-11-10", "property": "P13", "unit": "A", "vendor": "Rooter Brothers Plumbing", "category": "Repairs", "amount": 985.00, "desc": "water heater replacement", "artifact": "receipt" },
+      { "date": "2025-11-20", "property": "P08", "unit": "U1", "vendor": "Handy Hank LLC", "category": "CleaningMaintenance", "amount": 140.00, "desc": "gutter cleaning", "artifact": "receipt" }
+    ],
+    "typedVoiceWorkOrders": [ { "date": "2025-08-20", "property": "P09", "unit": "1", "intake": "typed", "title": "Garbage disposal jammed", "vendor": "ApplianceCare" }, { "date": "2025-06-12", "property": "P09", "unit": "3", "intake": "voice", "title": "AC not cooling" } ],
+    "portalEvents": [ { "date": "2025-02-10", "lease": "L03", "type": "pay" }, { "date": "2025-03-25", "lease": "L02", "type": "message" }, { "date": "2025-04-10", "lease": "L10", "type": "message" }, { "date": "2025-08-10", "lease": "L12", "type": "pay" }, { "date": "2025-10-10", "lease": "L18", "type": "message" }, { "date": "2025-01-12", "lease": "L14", "type": "maintenance" } ],
+    "inspections": [ { "date": "2025-03-01", "lease": "L08", "type": "MoveIn" }, { "date": "2025-03-15", "lease": "L16", "type": "MoveIn" }, { "date": "2025-05-31", "lease": "L05", "type": "MoveOut" }, { "date": "2025-07-01", "lease": "L20", "type": "MoveIn" }, { "date": "2025-03-20", "property": "P07", "type": "AnnualSafety" }, { "date": "2025-07-15", "property": "P09", "type": "AnnualSafety" }, { "date": "2025-07-15", "property": "P05", "type": "AnnualSafety" }, { "date": "2025-12-10", "property": "P01", "type": "AnnualSafety" } ],
+    "autopayStripeScenario": { "leases": ["L09","L17"], "note": "marked Paid in the spine for determinism; flagged for a SEPARATE standalone Stripe-test-mode tester scenario (path coverage off the ledger)" },
+    "ownerDistributionMemo": { "note": "Owner distribution = app computed net (gap #2). Actual cash-to-Marcus recorded ONLY as memo in ledger, quarterly, never a P&L Expense.", "quarters": ["2025-03-31","2025-06-30","2025-09-30","2025-12-31"] }
+  }
+}

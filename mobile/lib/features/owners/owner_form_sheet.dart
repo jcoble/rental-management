@@ -7,9 +7,15 @@ import 'owners_models.dart';
 import 'owners_repository.dart';
 
 class OwnerFormSheet extends ConsumerStatefulWidget {
-  const OwnerFormSheet({super.key, required this.onSaved, this.existing});
+  const OwnerFormSheet({
+    super.key,
+    required this.onSaved,
+    this.onSavedOwner,
+    this.existing,
+  });
 
   final VoidCallback onSaved;
+  final ValueChanged<OwnerEntity>? onSavedOwner;
   final OwnerEntity? existing;
 
   @override
@@ -89,14 +95,16 @@ class _OwnerFormSheetState extends ConsumerState<OwnerFormSheet> {
 
     try {
       final repo = ref.read(ownersRepositoryProvider);
+      final OwnerEntity saved;
       if (_isEdit) {
-        await repo.updateOwner(widget.existing!.id, body);
+        saved = await repo.updateOwner(widget.existing!.id, body);
       } else {
-        await repo.createOwner(body);
+        saved = await repo.createOwner(body);
       }
       widget.onSaved();
+      widget.onSavedOwner?.call(saved);
       if (!mounted) return;
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(saved);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
