@@ -4,6 +4,7 @@ class Expense {
   final int? propertyId;
   final int? vendorId;
   final int? workOrderId;
+  final int? capitalizedAssetId;
   final String category;
   final String description;
   final String status;
@@ -30,6 +31,7 @@ class Expense {
     this.propertyId,
     this.vendorId,
     this.workOrderId,
+    this.capitalizedAssetId,
     required this.category,
     required this.description,
     required this.status,
@@ -58,13 +60,15 @@ class Expense {
       propertyId: (json['propertyId'] as num?)?.toInt(),
       vendorId: (json['vendorId'] as num?)?.toInt(),
       workOrderId: (json['workOrderId'] as num?)?.toInt(),
+      capitalizedAssetId: (json['capitalizedAssetId'] as num?)?.toInt(),
       category: json['category'] as String? ?? '',
       description: json['description'] as String? ?? '',
       status: json['status'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       subtotal: (json['subtotal'] as num?)?.toDouble(),
       taxAmount: (json['taxAmount'] as num?)?.toDouble(),
-      incurredAt: DateTime.tryParse(json['incurredAt'] as String? ?? '') ?? DateTime(0),
+      incurredAt:
+          DateTime.tryParse(json['incurredAt'] as String? ?? '') ?? DateTime(0),
       dueDate: DateTime.tryParse(json['dueDate'] as String? ?? ''),
       paidAt: DateTime.tryParse(json['paidAt'] as String? ?? ''),
       billableToOwner: json['billableToOwner'] as bool? ?? false,
@@ -73,8 +77,10 @@ class Expense {
       propertyName: json['propertyName'] as String?,
       vendorName: json['vendorName'] as String?,
       workOrderTitle: json['workOrderTitle'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
       hasReceipt: json['hasReceipt'] as bool?,
       receiptIsImage: json['receiptIsImage'] as bool?,
     );
@@ -86,6 +92,7 @@ class Expense {
       if (propertyId != null) 'propertyId': propertyId,
       if (vendorId != null) 'vendorId': vendorId,
       if (workOrderId != null) 'workOrderId': workOrderId,
+      if (capitalizedAssetId != null) 'capitalizedAssetId': capitalizedAssetId,
       'category': category,
       'description': description,
       'status': status,
@@ -93,7 +100,8 @@ class Expense {
       if (subtotal != null) 'subtotal': subtotal,
       if (taxAmount != null) 'taxAmount': taxAmount,
       'incurredAt': incurredAt.toIso8601String(),
-      if (dueDate != null) 'dueDate': dueDate!.toIso8601String().split('T').first,
+      if (dueDate != null)
+        'dueDate': dueDate!.toIso8601String().split('T').first,
       if (paidAt != null) 'paidAt': paidAt!.toIso8601String(),
       'billableToOwner': billableToOwner,
       if (notes != null) 'notes': notes,
