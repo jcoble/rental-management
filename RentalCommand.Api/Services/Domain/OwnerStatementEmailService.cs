@@ -101,6 +101,10 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
             sb.AppendLine(
                 $"{"TOTAL",-30} {FormatMoney(report.TotalIncome),12} {FormatMoney(report.TotalExpenses),12} " +
                 $"{FormatMoney(report.TotalManagementFee),12} {FormatMoney(report.TotalNetToOwner),12}");
+            sb.AppendLine(
+                $"{"DISTRIBUTED",-30} {"",12} {"",12} {"",12} {FormatMoney(report.TotalDistributed),12}");
+            sb.AppendLine(
+                $"{"UNDISTRIBUTED",-30} {"",12} {"",12} {"",12} {FormatMoney(report.Undistributed),12}");
         }
 
         sb.AppendLine();

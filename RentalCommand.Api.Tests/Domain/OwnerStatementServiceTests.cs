@@ -107,6 +107,8 @@ public class OwnerStatementServiceTests : IDisposable
         report.TotalExpenses.Should().Be(450m);         // 300 + 150
         report.TotalManagementFee.Should().Be(240m);
         report.TotalNetToOwner.Should().Be(2610m);      // 1860 + 750
+        report.TotalDistributed.Should().Be(0m);
+        report.Undistributed.Should().Be(2610m);
 
         var propertyLineSql = _commands.FirstOrDefault(sql =>
             sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
@@ -122,6 +124,37 @@ public class OwnerStatementServiceTests : IDisposable
         report.TotalExpenses.Should().Be(report.Properties.Sum(p => p.Expenses));
         report.TotalManagementFee.Should().Be(report.Properties.Sum(p => p.ManagementFee));
         report.TotalNetToOwner.Should().Be(report.Properties.Sum(p => p.NetToOwner));
+    }
+
+    [Fact]
+    public async Task GetForOwnerAsync_SubtractsOwnerDistributionsWithoutCountingThemAsExpenses()
+    {
+        var owner = SeedOwner("Distribution Holdings");
+        var prop = SeedProperty(owner.Id, "Willow Fourplex", managementFeePercent: 10m);
+        SeedRent(SeedLease(prop, "L-D"), 2000m, paidInYear: true);
+        SeedExpense(prop.Id, 300m);
+        SeedOwnerDistribution(owner.Id, 1000m, propertyId: prop.Id);
+        SeedOwnerDistribution(owner.Id, 500m, year: Year - 1, propertyId: prop.Id);
+
+        var otherOwner = SeedOwner("Other Owner");
+        SeedOwnerDistribution(otherOwner.Id, 750m);
+
+        _commands.Clear();
+
+        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        report!.TotalIncome.Should().Be(2000m);
+        report.TotalExpenses.Should().Be(300m, "owner payouts are distributions, not operating expenses");
+        report.TotalManagementFee.Should().Be(200m);
+        report.TotalNetToOwner.Should().Be(1500m);
+        report.TotalDistributed.Should().Be(1000m);
+        report.Undistributed.Should().Be(500m);
+
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "recorded owner distributions must be summed in SQL, not materialized and summed in memory");
     }
 
     [Fact]
@@ -179,6 +212,8 @@ public class OwnerStatementServiceTests : IDisposable
         summaries.Single(s => s.OwnerName == "Acme Holdings").NetToOwner.Should().Be(1300m);
         // Owner2: 1000 income - 250 expenses - 0 mgmt = 750.
         summaries.Single(s => s.OwnerName == "Beta Estates").NetToOwner.Should().Be(750m);
+        summaries.Single(s => s.OwnerName == "Acme Holdings").Undistributed.Should().Be(1300m);
+        summaries.Single(s => s.OwnerName == "Beta Estates").Undistributed.Should().Be(750m);
 
         var ownerSummarySql = _commands.FirstOrDefault(sql =>
             sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
@@ -187,6 +222,44 @@ public class OwnerStatementServiceTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
 
         ownerSummarySql.Should().NotBeNull("owner net summaries must group and sum per owner in SQL");
+    }
+
+    [Fact]
+    public async Task ListOwnersWithNetAsync_IncludesDistributedAndUndistributedFromGroupedSql()
+    {
+        var owner1 = SeedOwner("Acme Holdings");
+        var owner2 = SeedOwner("Beta Estates");
+
+        var p1 = SeedProperty(owner1.Id, "Maple Duplex", managementFeePercent: 10m);
+        SeedRent(SeedLease(p1, "L-1"), 2000m, paidInYear: true);
+        SeedExpense(p1.Id, 500m);
+        SeedOwnerDistribution(owner1.Id, 300m, propertyId: p1.Id);
+        SeedOwnerDistribution(owner1.Id, 999m, year: Year - 1, propertyId: p1.Id);
+
+        var p2 = SeedProperty(owner2.Id, "Oak Cottage", managementFeePercent: 0m);
+        SeedRent(SeedLease(p2, "L-2"), 1000m, paidInYear: true);
+        SeedExpense(p2.Id, 250m);
+        SeedOwnerDistribution(owner2.Id, 100m, propertyId: p2.Id);
+
+        _commands.Clear();
+
+        var summaries = await _sut.ListOwnersWithNetAsync(PortfolioId, Year, CancellationToken.None);
+
+        var acme = summaries.Single(s => s.OwnerName == "Acme Holdings");
+        acme.NetToOwner.Should().Be(1300m);
+        acme.TotalDistributed.Should().Be(300m);
+        acme.Undistributed.Should().Be(1000m);
+
+        var beta = summaries.Single(s => s.OwnerName == "Beta Estates");
+        beta.NetToOwner.Should().Be(750m);
+        beta.TotalDistributed.Should().Be(100m);
+        beta.Undistributed.Should().Be(650m);
+
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "distribution totals per owner must be grouped and summed in SQL");
     }
 
     [Fact]
@@ -318,6 +391,23 @@ public class OwnerStatementServiceTests : IDisposable
             Status = ExpenseStatus.Paid,
             Amount = amount,
             IncurredAt = new DateTime(Year, 5, 5, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+    }
+
+    private void SeedOwnerDistribution(int ownerEntityId, decimal amount, int? year = null, int? propertyId = null)
+    {
+        var y = year ?? Year;
+        _db.OwnerDistributions.Add(new OwnerDistribution
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityId = ownerEntityId,
+            PropertyId = propertyId,
+            Date = new DateTime(y, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+            Amount = amount,
+            Method = DistributionMethod.Ach,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });

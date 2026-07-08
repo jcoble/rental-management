@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IScheduleEService, ScheduleEService>();
         // Year-end accountant packet PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IYearEndPacketPdfGenerator, YearEndPacketPdfGenerator>();
+        services.AddScoped<IOwnerDistributionService, OwnerDistributionService>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         // Reports Hub: read-only report queries over existing data (rent roll, ledger, aging, cash flow,

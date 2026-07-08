@@ -1383,6 +1383,13 @@ public class ReportsService : IReportsService
         // Reuse OwnerStatementService's net-per-owner computation so distributions reconcile exactly with
         // the per-owner statement.
         var summaries = await _ownerStatements.ListOwnersWithNetAsync(portfolioId, year, ct);
+        var totalNetToOwners = await _ownerStatements.GetTotalNetToOwnersAsync(portfolioId, year, ct);
+        var start = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var end = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var totalDistributed = await _db.OwnerDistributions
+            .AsNoTracking()
+            .Where(d => d.PortfolioId == portfolioId && d.Date >= start && d.Date < end)
+            .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
 
         var rows = summaries
             .Select(s => new OwnerDistributionRow
@@ -1390,6 +1397,8 @@ public class ReportsService : IReportsService
                 OwnerId = s.OwnerId,
                 OwnerName = s.OwnerName,
                 NetToOwner = s.NetToOwner,
+                TotalDistributed = s.TotalDistributed,
+                Undistributed = s.Undistributed,
             })
             .ToList();
 
@@ -1397,7 +1406,9 @@ public class ReportsService : IReportsService
         {
             Year = year,
             Rows = rows,
-            TotalNetToOwners = await _ownerStatements.GetTotalNetToOwnersAsync(portfolioId, year, ct),
+            TotalNetToOwners = totalNetToOwners,
+            TotalDistributed = totalDistributed,
+            TotalUndistributed = totalNetToOwners - totalDistributed,
         };
     }
 

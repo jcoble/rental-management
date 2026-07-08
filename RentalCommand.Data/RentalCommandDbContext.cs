@@ -17,6 +17,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Owner> Owners => Set<Owner>();
     public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
+    public DbSet<OwnerDistribution> OwnerDistributions => Set<OwnerDistribution>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<UnitListing> UnitListings => Set<UnitListing>();
@@ -205,6 +206,29 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(p => p.OwnerEntities)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OwnerDistribution>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Method).HasConversion<int>();
+            entity.Property(e => e.Memo).HasMaxLength(500);
+            entity.HasIndex(e => new { e.PortfolioId, e.OwnerEntityId, e.Date });
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.OwnerEntity)
+                .WithMany()
+                .HasForeignKey(e => e.OwnerEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<StoredFile>(entity =>

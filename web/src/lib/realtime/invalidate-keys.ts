@@ -33,6 +33,7 @@ const entityQueryKeys: Record<string, string[][]> = {
 	Appointment: [['appointments'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Vendor: [['vendors']],
 	OwnerEntity: [['owners'], ['dashboard']],
+	OwnerDistribution: [['owner-distributions'], ['owner-statements'], ['owner-statement'], ['report'], ['dashboard']],
 	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],
 	// A confirmed scan creates an Expense (the backend also broadcasts that
 	// `Expense` event), so refresh the expense list + accounting summary too -
@@ -64,6 +65,7 @@ const entityDetailKey: Record<string, string> = {
 	Appointment: 'appointment',
 	Vendor: 'vendor',
 	OwnerEntity: 'owner',
+	OwnerDistribution: 'owner-distribution',
 	Portfolio: 'portfolio',
 	ScanDraft: 'scan',
 	Conversation: 'conversation'

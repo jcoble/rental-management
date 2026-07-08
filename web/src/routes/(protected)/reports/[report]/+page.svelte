@@ -272,8 +272,8 @@
 			headers = ['Vendor', 'Tax ID', 'Total Paid', '1099 Eligible', 'W-9 On File', 'Needs W-9', 'Needs 1099 Review'];
 			rows = vendor1099.rows.map((r) => [r.vendorName, r.taxId ?? '', r.totalPaid, r.is1099Eligible ? 'Yes' : 'No', r.w9OnFile ? 'Yes' : 'No', r.needsW9 ? 'Yes' : 'No', r.needs1099Review ? 'Yes' : 'No']);
 		} else if (ownerDist) {
-			headers = ['Owner', 'Net Distribution'];
-			rows = ownerDist.rows.map((r) => [r.ownerName, r.netToOwner]);
+			headers = ['Owner', 'Net to Owner', 'Distributed', 'Undistributed'];
+			rows = ownerDist.rows.map((r) => [r.ownerName, r.netToOwner, r.totalDistributed, r.undistributed]);
 		} else if (workOrders) {
 			headers = ['Property', 'Unit', 'Title', 'Category', 'Priority', 'Status', 'Vendor', 'Requested', 'Completed', 'Actual Cost'];
 			rows = workOrders.rows.map((r) => [r.propertyName, r.unitNumber ?? '', r.title, r.category, r.priorityName, r.statusName, r.vendorName ?? '', formatDate(r.requestedAt), r.completedAt ? formatDate(r.completedAt) : '', r.actualCost ?? '']);
@@ -798,7 +798,9 @@
 							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
 								<tr>
 									<th class="px-3 py-2 font-medium">Owner</th>
-									<th class="px-3 py-2 text-right font-medium">Net Distribution</th>
+									<th class="px-3 py-2 text-right font-medium">Net to owner</th>
+									<th class="px-3 py-2 text-right font-medium">Distributed</th>
+									<th class="px-3 py-2 text-right font-medium">Undistributed</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -806,6 +808,8 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{r.ownerName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.netToOwner)}">{money(r.netToOwner)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.totalDistributed)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.undistributed)}">{money(r.undistributed)}</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -813,6 +817,8 @@
 								<tr>
 									<td class="px-3 py-2">Total to owners</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(ownerDist.totalNetToOwners)}">{money(ownerDist.totalNetToOwners)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(ownerDist.totalDistributed)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(ownerDist.totalUndistributed)}">{money(ownerDist.totalUndistributed)}</td>
 								</tr>
 							</tfoot>
 
