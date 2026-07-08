@@ -446,6 +446,7 @@ class LeaseLedgerEntry {
     required this.amount,
     required this.status,
     required this.explanation,
+    required this.isProrated,
     this.propertyName,
     this.counterparty,
     this.category,
@@ -463,6 +464,7 @@ class LeaseLedgerEntry {
 
   /// Ready-to-show plain-English "why" for this entry.
   final String explanation;
+  final bool isProrated;
 
   final String? propertyName;
   final String? counterparty;
@@ -478,6 +480,7 @@ class LeaseLedgerEntry {
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       status: json['status'] as String? ?? '',
       explanation: json['explanation'] as String? ?? '',
+      isProrated: json['isProrated'] == true,
       propertyName: json['propertyName'] as String?,
       counterparty: json['counterparty'] as String?,
       category: json['category'] as String?,

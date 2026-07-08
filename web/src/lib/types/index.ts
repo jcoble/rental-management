@@ -649,6 +649,8 @@ export interface LedgerTransaction {
 	category?: string;
 	status: string;
 	sourceHref: string;
+	/** Rent row was reduced for a partial first/final billing period. */
+	isProrated?: boolean;
 	/** Plain-English "why this is here", derived deterministically (no LLM). */
 	explanation: string;
 }
