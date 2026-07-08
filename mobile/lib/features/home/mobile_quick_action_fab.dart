@@ -15,8 +15,11 @@ class MobileQuickAction {
 
 class MobileQuickActionController extends ChangeNotifier {
   final List<_MobileQuickActionRegistration> _registrations = [];
+  final Set<Object> _hiddenOwners = <Object>{};
   bool _disposed = false;
   bool _notifyScheduled = false;
+
+  bool get hidden => _hiddenOwners.isNotEmpty;
 
   List<MobileQuickAction> get primaryActions {
     for (final registration in _registrations.reversed) {
@@ -60,6 +63,19 @@ class MobileQuickActionController extends ChangeNotifier {
     _registrations.removeWhere((entry) => identical(entry.owner, owner));
     if (_registrations.length == previousLength) return;
     _notifyChanged();
+  }
+
+  void setHidden(Object owner, bool hidden) {
+    if (_disposed) return;
+
+    final changed = hidden
+        ? _hiddenOwners.add(owner)
+        : _hiddenOwners.remove(owner);
+    if (changed) _notifyChanged();
+  }
+
+  void clearHidden(Object owner) {
+    setHidden(owner, false);
   }
 
   void _notifyChanged() {

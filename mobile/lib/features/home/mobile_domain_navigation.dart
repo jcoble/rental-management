@@ -172,7 +172,11 @@ class _MobileDomainDetailHeaderState extends State<MobileDomainDetailHeader> {
 }
 
 class MobileShellNavigator {
-  const MobileShellNavigator({required this.openTab, required this.openRoute});
+  const MobileShellNavigator({
+    required this.openTab,
+    required this.openRoute,
+    this.setTabQuickActionsHidden,
+  });
 
   final void Function(
     MobileShellTabId tab, {
@@ -182,6 +186,8 @@ class MobileShellNavigator {
   openTab;
 
   final bool Function(String route) openRoute;
+  final void Function(MobileShellTabId tab, Object owner, bool hidden)?
+  setTabQuickActionsHidden;
 }
 
 class MobileShellNavigation extends InheritedWidget {
