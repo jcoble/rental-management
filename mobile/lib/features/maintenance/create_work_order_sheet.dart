@@ -23,7 +23,6 @@ Future<void> showCreateWorkOrderSheet({
   String? initialUnitLabel,
 }) {
   ref.read(propertiesForWoProvider.notifier).load();
-  ref.read(tenantsProvider.notifier).load();
 
   return showModalBottomSheet<void>(
     context: context,
@@ -123,6 +122,11 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     return DateTime(date.year, date.month, date.day, time.hour, time.minute);
   }
 
+  DateTime? _scheduledStart(DateTime? date, TimeOfDay? time) {
+    if (date == null) return null;
+    return _combine(date, time) ?? DateTime(date.year, date.month, date.day);
+  }
+
   static String _fmtDate(DateTime d) {
     const months = [
       '',
@@ -160,7 +164,9 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       lastDate: DateTime(now.year + 5),
     );
     if (picked == null || !mounted) return;
-    setState(() => _scheduledDate = picked);
+    setState(
+      () => _scheduledDate = DateTime(picked.year, picked.month, picked.day),
+    );
   }
 
   Future<void> _pickTime({required bool isStart}) async {
@@ -203,8 +209,39 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     return 'image/jpeg';
   }
 
+  String _tenantLabel(Tenant tenant) {
+    final fullName = tenant.fullName?.trim();
+    if (fullName != null && fullName.isNotEmpty) return fullName;
+    final name = '${tenant.firstName} ${tenant.lastName}'.trim();
+    return name.isEmpty ? 'Tenant #${tenant.id}' : name;
+  }
+
+  TenantListQuery? get _tenantQuery {
+    final propertyId = _selectedPropertyId;
+    if (propertyId == null) return null;
+    return TenantListQuery(
+      take: 200,
+      sort: 'name',
+      propertyId: propertyId,
+      unitId: _selectedUnitId,
+    );
+  }
+
+  void _clearSelectedTenantIfMissing(List<Tenant> tenants) {
+    final tenantId = _selectedTenantId;
+    if (tenantId == null || tenants.any((tenant) => tenant.id == tenantId)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _selectedTenantId == tenantId) {
+        setState(() => _selectedTenantId = null);
+      }
+    });
+  }
+
   bool _validateArrivalWindow() {
-    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
     if (scheduledFor != null &&
@@ -226,7 +263,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       throw StateError('Work order form validation failed.');
     }
 
-    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledFor = _scheduledStart(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
     if (!_validateArrivalWindow()) {
@@ -280,7 +317,10 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesForWoProvider);
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantQuery = _tenantQuery;
+    final tenantsAsync = tenantQuery == null
+        ? null
+        : ref.watch(tenantsPageProvider(tenantQuery));
     final vendorsAsync = ref.watch(vendorsProvider);
     final unitsAsync = _selectedPropertyId == null || _unitLocked
         ? null
@@ -327,6 +367,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
           onChanged: (v) => setState(() {
             _selectedPropertyId = v;
             _selectedUnitId = null;
+            _selectedTenantId = null;
           }),
           validator: (v) => v == null ? 'Please select a property' : null,
         );
@@ -378,37 +419,64 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                   ),
                 ),
               ],
-              onChanged: (v) => setState(() => _selectedUnitId = v),
+              onChanged: (v) => setState(() {
+                _selectedUnitId = v;
+                _selectedTenantId = null;
+              }),
             ),
           );
 
-    final tenantField = tenantsAsync.when(
-      loading: () => const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: LinearProgressIndicator(),
-      ),
-      error: (e, _) => Text(
-        'Could not load tenants: ${e is ApiException ? e.message : e}',
-        style: TextStyle(color: colorScheme.error, fontSize: 13),
-      ),
-      data: (tenants) => DropdownButtonFormField<int?>(
-        initialValue: _selectedTenantId,
-        decoration: const InputDecoration(labelText: 'Tenant (optional)'),
-        items: [
-          const DropdownMenuItem<int?>(value: null, child: Text('No tenant')),
-          ...tenants.map(
-            (t) => DropdownMenuItem<int?>(
-              value: t.id,
-              child: Text(
-                t.fullName ?? '${t.firstName} ${t.lastName}'.trim(),
-                overflow: TextOverflow.ellipsis,
-              ),
+    final tenantField = tenantsAsync == null
+        ? DropdownButtonFormField<int?>(
+            initialValue: null,
+            decoration: const InputDecoration(
+              labelText: 'Tenant (optional)',
+              hintText: 'Select a property first',
             ),
-          ),
-        ],
-        onChanged: (v) => setState(() => _selectedTenantId = v),
-      ),
-    );
+            items: const [],
+            onChanged: null,
+          )
+        : tenantsAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: LinearProgressIndicator(),
+            ),
+            error: (e, _) => Text(
+              'Could not load tenants: ${e is ApiException ? e.message : e}',
+              style: TextStyle(color: colorScheme.error, fontSize: 13),
+            ),
+            data: (page) {
+              final tenants = page.items;
+              _clearSelectedTenantIfMissing(tenants);
+              final visibleTenantId =
+                  _selectedTenantId != null &&
+                      tenants.any((tenant) => tenant.id == _selectedTenantId)
+                  ? _selectedTenantId
+                  : null;
+              return DropdownButtonFormField<int?>(
+                initialValue: visibleTenantId,
+                decoration: const InputDecoration(
+                  labelText: 'Tenant (optional)',
+                ),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('No tenant'),
+                  ),
+                  ...tenants.map(
+                    (t) => DropdownMenuItem<int?>(
+                      value: t.id,
+                      child: Text(
+                        _tenantLabel(t),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (v) => setState(() => _selectedTenantId = v),
+              );
+            },
+          );
 
     final vendorField = vendorsAsync.when(
       loading: () => const Padding(

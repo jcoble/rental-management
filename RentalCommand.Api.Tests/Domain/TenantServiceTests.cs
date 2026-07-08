@@ -242,6 +242,40 @@ public class TenantServiceTests : IDisposable
             sql.Contains("LeaseTenants", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_UnitFilterReturnsCurrentOccupantsInSql()
+    {
+        var (property, targetUnit, otherUnit) = SeedPropertyWithUnits();
+        var activeTenant = SeedTenant("Avery", "Active", activeLeaseCount: 0);
+        var memberTenant = SeedTenant("Blair", "Member", activeLeaseCount: 0);
+        var otherUnitTenant = SeedTenant("Casey", "Other", activeLeaseCount: 0);
+        var expiredTenant = SeedTenant("Devon", "Expired", activeLeaseCount: 0);
+        SeedLeaseOnUnit(activeTenant, property, targetUnit, LeaseStatus.Active);
+        SeedLeaseOnUnit(memberTenant, property, targetUnit, LeaseStatus.NoticeGiven, withSeparatePrimaryTenant: true);
+        SeedLeaseOnUnit(otherUnitTenant, property, otherUnit, LeaseStatus.Active);
+        SeedLeaseOnUnit(expiredTenant, property, targetUnit, LeaseStatus.Expired);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            UnitId = targetUnit.Id,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(3);
+        result.Items.Select(t => $"{t.FirstName} {t.LastName}")
+            .Should().Equal("Avery Active", "Blair Primary Holder", "Blair Member");
+
+        _commands.Should().HaveCount(2);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("LeaseTenants", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData(LeaseStatus.Active)]
     [InlineData(LeaseStatus.NoticeGiven)]
@@ -457,6 +491,96 @@ public class TenantServiceTests : IDisposable
                 },
             ],
         };
+
+        _ctx.Db.Leases.Add(lease);
+        _ctx.Db.SaveChanges();
+    }
+
+    private (Property property, Unit targetUnit, Unit otherUnit) SeedPropertyWithUnits()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Scoped Property",
+            AddressLine1 = "100 Main Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var targetUnit = new Unit
+        {
+            Property = property,
+            UnitNumber = "1A",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var otherUnit = new Unit
+        {
+            Property = property,
+            UnitNumber = "2B",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Units.AddRange(targetUnit, otherUnit);
+        _ctx.Db.SaveChanges();
+        return (property, targetUnit, otherUnit);
+    }
+
+    private void SeedLeaseOnUnit(
+        Tenant tenant,
+        Property property,
+        Unit unit,
+        LeaseStatus status,
+        bool withSeparatePrimaryTenant = false)
+    {
+        var now = DateTime.UtcNow;
+        var primaryTenant = tenant;
+        if (withSeparatePrimaryTenant)
+        {
+            primaryTenant = new Tenant
+            {
+                PortfolioId = PortfolioId,
+                FirstName = $"{tenant.FirstName} Primary",
+                LastName = "Holder",
+                Email = $"{tenant.FirstName.ToLowerInvariant()}-primary@example.local",
+                Phone = "555-0102",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _ctx.Db.Tenants.Add(primaryTenant);
+            _ctx.Db.SaveChanges();
+        }
+
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = primaryTenant.Id,
+            LeaseNumber = $"{tenant.FirstName}-{unit.UnitNumber}-{status}",
+            Status = status,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        if (withSeparatePrimaryTenant)
+        {
+            lease.LeaseTenants.Add(new LeaseTenant
+            {
+                PortfolioId = PortfolioId,
+                TenantId = tenant.Id,
+                IsPrimary = false,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
 
         _ctx.Db.Leases.Add(lease);
         _ctx.Db.SaveChanges();

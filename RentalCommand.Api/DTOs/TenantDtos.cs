@@ -60,6 +60,8 @@ public class TenantListResponse
 public class TenantListQuery : ListQuery
 {
     public bool? AvailableForLease { get; set; }
+    public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
 }
 
 public class CreateTenantRequest
