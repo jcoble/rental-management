@@ -61,6 +61,35 @@
 			columns: 'propertyName, propertyId, unitNumber, bedrooms, bathrooms, marketRent',
 			listHref: '/properties',
 			listLabel: 'properties'
+		},
+		{
+			value: 'payment',
+			label: 'Payments',
+			recordLabel: 'payment',
+			recordPluralLabel: 'payments',
+			columns:
+				'leaseNumber, propertyName, unitNumber, paymentType, amount, paidDate, method, externalReference, notes',
+			listHref: '/accounting',
+			listLabel: 'accounting ledger'
+		},
+		{
+			value: 'expense',
+			label: 'Expenses',
+			recordLabel: 'expense',
+			recordPluralLabel: 'expenses',
+			columns: 'propertyName, category, description, amount, incurredAt, paidAt, notes',
+			listHref: '/accounting',
+			listLabel: 'accounting ledger'
+		},
+		{
+			value: 'loan',
+			label: 'Loans',
+			recordLabel: 'loan',
+			recordPluralLabel: 'loans',
+			columns:
+				'propertyName, lender, originalAmount, currentBalance, annualInterestRatePct, termMonths, startDate, dayOfMonthDue, monthlyPrincipalInterest, monthlyEscrow',
+			listHref: '/properties',
+			listLabel: 'property loans'
 		}
 	];
 
@@ -147,9 +176,29 @@
 	}
 
 	function runImport() {
-		if (selectedFile && (preview?.validRows ?? 0) > 0) {
+		if (selectedFile && importableRows(preview) > 0) {
 			importMutation.mutate(selectedFile);
 		}
+	}
+
+	function duplicateRows(result: ImportResult | null): number {
+		return Math.max(result?.duplicateRows ?? 0, 0);
+	}
+
+	function invalidRows(result: ImportResult | null): number {
+		return Math.max((result?.totalRows ?? 0) - (result?.validRows ?? 0), 0);
+	}
+
+	function importableRows(result: ImportResult | null): number {
+		return Math.max((result?.validRows ?? 0) - duplicateRows(result), 0);
+	}
+
+	function skippedRows(result: ImportResult | null): number {
+		return duplicateRows(result) + invalidRows(result);
+	}
+
+	function rowsNeedingAttention(result: ImportResult | null): ImportResult['rows'] {
+		return result?.rows.filter((row) => !row.valid || row.isDuplicate) ?? [];
 	}
 
 	function onEntityChange(value: ImportEntityType) {
@@ -176,6 +225,10 @@
 			label: 'Looks good',
 			class: 'm3-tone-chip border m3-tone--success'
 		},
+		Duplicate: {
+			label: 'Duplicate',
+			class: 'm3-tone-chip border m3-tone--warning'
+		},
 		Problem: {
 			label: 'Needs a fix',
 			class: 'm3-tone-chip border m3-tone--error'
@@ -197,9 +250,8 @@
 			<div>
 				<h1 class="text-2xl font-bold" data-testid="import-title">Import from a spreadsheet</h1>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Already have your tenants, properties, or units in a spreadsheet? Save it as a CSV and
-					upload it here — we'll check every row and let you fix any problems before anything is
-					added.
+					Already have tenants, properties, units, payments, expenses, or loans in a spreadsheet?
+					Save it as a CSV and upload it here — we'll check every row before anything is added.
 				</p>
 			</div>
 		</div>
@@ -208,7 +260,7 @@
 		<Card.Root class="mb-4">
 			<Card.Content class="p-6">
 				<h2 class="mb-1 text-sm font-semibold">1. What are you importing?</h2>
-				<div class="mt-3 grid gap-3 sm:grid-cols-3" data-testid="import-entity-type">
+				<div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="import-entity-type">
 					{#each ENTITY_OPTIONS as opt}
 						<button
 							type="button"
@@ -336,12 +388,14 @@
 								{imported.createdRows === 1
 									? selectedOption.recordLabel
 									: selectedOption.recordPluralLabel}.
-								{#if imported.totalRows - imported.createdRows > 0}
-									{imported.totalRows - imported.createdRows} row{imported.totalRows -
-										imported.createdRows ===
-									1
+								{#if skippedRows(imported) > 0}
+									{skippedRows(imported)} row{skippedRows(imported) === 1
 										? ''
-										: 's'} skipped — see the errors below.
+										: 's'} skipped.
+									{#if duplicateRows(imported) > 0}
+										{duplicateRows(imported)} duplicate{duplicateRows(imported) === 1 ? '' : 's'}
+										were left unchanged.
+									{/if}
 								{/if}
 							</p>
 							<div class="mt-4 flex flex-wrap items-center gap-2">
@@ -360,10 +414,10 @@
 						</div>
 					</div>
 
-					{#if imported.rows.some((r) => !r.valid)}
+					{#if rowsNeedingAttention(imported).length > 0}
 						<div class="mt-6">
 							<h3 class="mb-2 text-sm font-semibold">Rows that were skipped</h3>
-							{@render rowsTable(imported.rows.filter((r) => !r.valid))}
+							{@render rowsTable(rowsNeedingAttention(imported))}
 						</div>
 					{/if}
 				</Card.Content>
@@ -387,22 +441,33 @@
 					{:else}
 						<div class="flex flex-wrap items-start justify-between gap-3">
 							<div class="flex items-start gap-3">
-								{#if preview.validRows === preview.totalRows}
+								{#if importableRows(preview) === preview.totalRows}
 									<CheckCircle2 class="mt-0.5 h-6 w-6 shrink-0 text-success" />
 								{:else}
 									<AlertCircle class="mt-0.5 h-6 w-6 shrink-0 text-warning" />
 								{/if}
 								<div>
 									<h2 class="text-lg font-semibold" data-testid="import-preview-summary">
-										{preview.validRows} of {preview.totalRows} row{preview.totalRows === 1 ? '' : 's'}
-										{preview.totalRows === 1 ? 'looks' : 'look'} good
+										{importableRows(preview)} of {preview.totalRows} row{preview.totalRows === 1
+											? ''
+											: 's'}
+										{preview.totalRows === 1 ? 'is' : 'are'} ready to import
 									</h2>
 									<p class="mt-1 text-sm text-muted-foreground">
-										{#if preview.validRows === preview.totalRows}
+										{#if importableRows(preview) === preview.totalRows}
 											Everything checks out. Click below to add them.
-										{:else if preview.validRows > 0}
-											We'll add the good rows. Fix the rows with problems and re-upload to bring in the
-											rest.
+										{:else if importableRows(preview) > 0}
+											We'll add the new rows.
+											{#if duplicateRows(preview) > 0}
+												{duplicateRows(preview)} duplicate row{duplicateRows(preview) === 1
+													? ''
+													: 's'} will be skipped.
+											{/if}
+											{#if invalidRows(preview) > 0}
+												Fix the rows with problems and re-upload to bring in the rest.
+											{/if}
+										{:else if duplicateRows(preview) > 0 && invalidRows(preview) === 0}
+											Every row already exists, so there is nothing new to import.
 										{:else}
 											None of the rows can be imported yet. Fix the problems below and upload the file
 											again.
@@ -413,12 +478,12 @@
 							<Button
 								class="gap-1.5"
 								data-testid="import-commit"
-								disabled={preview.validRows === 0 || busy}
+								disabled={importableRows(preview) === 0 || busy}
 								onclick={runImport}
 							>
 								{importMutation.isPending
 									? 'Importing…'
-									: `Import ${preview.validRows} valid row${preview.validRows === 1 ? '' : 's'}`}
+									: `Import ${importableRows(preview)} row${importableRows(preview) === 1 ? '' : 's'}`}
 							</Button>
 						</div>
 
@@ -446,10 +511,17 @@
 				<Table.Row data-testid="import-row" data-row-valid={row.valid}>
 					<Table.Cell class="font-medium text-muted-foreground">{row.rowNumber}</Table.Cell>
 					<Table.Cell>
-						<StatusBadge status={row.valid ? 'Good' : 'Problem'} map={rowStatusMap} />
+						<StatusBadge
+							status={row.isDuplicate ? 'Duplicate' : row.valid ? 'Good' : 'Problem'}
+							map={rowStatusMap}
+						/>
 					</Table.Cell>
 					<Table.Cell>
-						{#if row.valid}
+						{#if row.isDuplicate}
+							<span class="text-sm text-muted-foreground">
+								{row.skipReason ?? 'Skipped because this row already exists.'}
+							</span>
+						{:else if row.valid}
 							<span class="text-sm text-muted-foreground">Ready to import</span>
 						{:else}
 							<ul class="space-y-0.5 text-sm text-destructive" data-testid="import-row-errors">
