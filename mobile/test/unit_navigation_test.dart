@@ -235,7 +235,10 @@ void main() {
     await tester.drag(find.byType(ListView), const Offset(0, -500));
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip('New turnover task'), findsOneWidget);
+    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New turnover task'), findsOneWidget);
   });
 }
 
