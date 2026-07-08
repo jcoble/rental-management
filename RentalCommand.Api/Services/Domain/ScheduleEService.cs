@@ -66,6 +66,7 @@ public class ScheduleEService : IScheduleEService
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
+                e.CapitalizedAssetId == null &&
                 e.IncurredAt >= yearStart &&
                 e.IncurredAt < yearEndExclusive);
         if (propertyId.HasValue)
@@ -130,6 +131,42 @@ public class ScheduleEService : IScheduleEService
                 year);
             if (result.Amount > 0m)
                 depreciationByProperty[b.Id] = result;
+        }
+
+        var capitalAssetQuery = _db.CapitalAssets
+            .AsNoTracking()
+            .Where(a =>
+                a.PortfolioId == portfolioId &&
+                a.InServiceDate < yearEndExclusive &&
+                a.DisposedOnDate == null);
+        if (propertyId.HasValue)
+            capitalAssetQuery = capitalAssetQuery.Where(a => a.PropertyId == propertyId.Value);
+
+        var capitalAssets = await capitalAssetQuery
+            .Select(a => new
+            {
+                a.PropertyId,
+                a.CostBasis,
+                a.InServiceDate,
+                a.Method,
+                a.RecoveryYears,
+                a.Convention,
+                a.AccumulatedDepreciation,
+            })
+            .ToListAsync(ct);
+
+        foreach (var asset in capitalAssets)
+        {
+            var result = DepreciationCalculator.AnnualForYear(
+                asset.CostBasis,
+                asset.InServiceDate,
+                asset.Method,
+                asset.RecoveryYears,
+                asset.Convention,
+                asset.AccumulatedDepreciation,
+                year);
+            if (result.Amount > 0m)
+                AddDepreciation(depreciationByProperty, asset.PropertyId, result);
         }
 
         var depreciationPropertyIds = depreciationByProperty
@@ -291,4 +328,18 @@ public class ScheduleEService : IScheduleEService
         TotalExpenses = 0m,
         NetIncome = 0m,
     };
+
+    private static void AddDepreciation(
+        IDictionary<int, DepreciationResult> byProperty, int propertyId, DepreciationResult result)
+    {
+        if (byProperty.TryGetValue(propertyId, out var existing))
+        {
+            byProperty[propertyId] = new DepreciationResult(
+                existing.Amount + result.Amount,
+                existing.IsFirstYearEstimate || result.IsFirstYearEstimate);
+            return;
+        }
+
+        byProperty[propertyId] = result;
+    }
 }

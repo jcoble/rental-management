@@ -16,12 +16,18 @@ namespace RentalCommand.Api.Controllers;
 public class ExpenseController : ManagementControllerBase
 {
     private readonly IExpenseService _service;
+    private readonly ICapitalAssetService _capitalAssets;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
 
-    public ExpenseController(IExpenseService service, RentalCommandDbContext db, IFileStorage files)
+    public ExpenseController(
+        IExpenseService service,
+        ICapitalAssetService capitalAssets,
+        RentalCommandDbContext db,
+        IFileStorage files)
     {
         _service = service;
+        _capitalAssets = capitalAssets;
         _db = db;
         _files = files;
     }
@@ -90,6 +96,18 @@ public class ExpenseController : ManagementControllerBase
     {
         var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Expense not found" });
+    }
+
+    [HttpPost("{id:int}/capitalize")]
+    [ProducesResponseType(typeof(CapitalAssetResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<CapitalAssetResponse>> Capitalize(
+        int id, [FromBody] CapitalizeExpenseRequest request, CancellationToken ct)
+    {
+        var created = await _capitalAssets.CapitalizeExpenseAsync(GetPortfolioId(), id, request, ct);
+        return created is null
+            ? NotFound(new { error = "Expense not found, already capitalized, or not linked to a property" })
+            : CreatedAtAction("Get", "CapitalAssets", new { id = created.Id }, created);
     }
 
     // -------------------------------------------------------------------------

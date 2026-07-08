@@ -1027,12 +1027,46 @@ public class AccountingService : IAccountingService
                 depreciationByProperty[basis.Id] = depreciation.Amount;
         }
 
+        var capitalAssets = await _db.CapitalAssets
+            .AsNoTracking()
+            .Where(a =>
+                a.PortfolioId == portfolioId &&
+                a.InServiceDate < yearEndExclusive &&
+                a.DisposedOnDate == null)
+            .Select(a => new
+            {
+                a.PropertyId,
+                a.CostBasis,
+                a.InServiceDate,
+                a.Method,
+                a.RecoveryYears,
+                a.Convention,
+                a.AccumulatedDepreciation,
+            })
+            .ToListAsync(ct);
+
+        foreach (var asset in capitalAssets)
+        {
+            var depreciation = DepreciationCalculator.AnnualForYear(
+                asset.CostBasis,
+                asset.InServiceDate,
+                asset.Method,
+                asset.RecoveryYears,
+                asset.Convention,
+                asset.AccumulatedDepreciation,
+                year);
+            if (depreciation.Amount > 0m)
+                depreciationByProperty[asset.PropertyId] =
+                    depreciationByProperty.GetValueOrDefault(asset.PropertyId) + depreciation.Amount;
+        }
+
         var depreciationPropertyIds = depreciationByProperty.Keys.ToArray();
 
         var expenseTotals = await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
+                e.CapitalizedAssetId == null &&
                 e.IncurredAt >= yearStart &&
                 e.IncurredAt < yearEndExclusive &&
                 !(e.Category == ScheduleECategory.MortgageInterest &&
@@ -1415,8 +1449,12 @@ public class AccountingService : IAccountingService
                         (p.PaidDate ?? p.DueDate).Year == year)
             .GroupBy(p => (p.PaidDate ?? p.DueDate).Month)
             // Paid contributes full Amount; Partial contributes the collected AmountPaid.
-            .Select(g => new { Month = g.Key, Total = g.Sum(p =>
-                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
+            .Select(g => new
+            {
+                Month = g.Key,
+                Total = g.Sum(p =>
+                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount)
+            })
             .ToListAsync(ct))
             .ToDictionary(g => g.Month, g => g.Total);
 

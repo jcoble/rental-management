@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -109,15 +110,27 @@ public class ScheduleEServiceTests : IDisposable
         for (var m = 1; m <= 12; m++)
             _db.Payments.Add(new Payment
             {
-                PortfolioId = PortfolioId, LeaseId = lease.Id, PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Paid, Amount = 1_000m, DueDate = D(Year, m, 1), PaidDate = D(Year, m, 1),
-                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                PortfolioId = PortfolioId,
+                LeaseId = lease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Paid,
+                Amount = 1_000m,
+                DueDate = D(Year, m, 1),
+                PaidDate = D(Year, m, 1),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
             });
         _db.Payments.Add(new Payment
         {
-            PortfolioId = PortfolioId, LeaseId = lease.Id, PaymentType = PaymentType.SecurityDeposit,
-            Status = PaymentStatus.Paid, Amount = 1_500m, DueDate = D(Year, 1, 1), PaidDate = D(Year, 1, 1),
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            PortfolioId = PortfolioId,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.SecurityDeposit,
+            Status = PaymentStatus.Paid,
+            Amount = 1_500m,
+            DueDate = D(Year, 1, 1),
+            PaidDate = D(Year, 1, 1),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
         });
 
         // Expenses: 1,000 repairs (counts) + a 5,000 manual MortgageInterest + 3,000 manual Depreciation
@@ -130,10 +143,19 @@ public class ScheduleEServiceTests : IDisposable
         // A loan with 2 payments this year: interest 600 + 590 = 1,190 deducted; principal NOT deducted.
         var loan = new Loan
         {
-            PortfolioId = PortfolioId, PropertyId = property.Id, Lender = "Bank",
-            OriginalAmount = 100_000m, CurrentBalance = 100_000m, AnnualInterestRatePct = 6m,
-            TermMonths = 360, StartDate = D(Year, 1, 1), DayOfMonthDue = 1, MonthlyPrincipalInterest = 600m,
-            Status = LoanStatus.Active, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Lender = "Bank",
+            OriginalAmount = 100_000m,
+            CurrentBalance = 100_000m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = D(Year, 1, 1),
+            DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 600m,
+            Status = LoanStatus.Active,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
         };
         _db.Loans.Add(loan);
         _db.SaveChanges();
@@ -195,6 +217,77 @@ public class ScheduleEServiceTests : IDisposable
             command.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
             command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
         orderedPropertySql.Should().NotBeNull("Schedule E property ordering must come from SQL before DTO shaping");
+    }
+
+    [Fact]
+    public async Task GetReportAsync_CapitalizedExpenseDropsFromRepairsAndAddsAssetDepreciation()
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Roof House",
+            AddressLine1 = "4 Roof",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+
+        var roof = new CapitalAsset
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Description = "Roof replacement",
+            CostBasis = 9_900m,
+            InServiceDate = D(Year, 8, 1),
+            Method = DepreciationMethod.StraightLine,
+            RecoveryYears = RecoveryClass.ResidentialBuilding,
+            Convention = DepreciationConvention.MidMonth,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.CapitalAssets.Add(roof);
+        _db.SaveChanges();
+
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                CapitalizedAssetId = roof.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Capitalized roof invoice",
+                Status = ExpenseStatus.Paid,
+                Amount = 9_900m,
+                IncurredAt = D(Year, 8, 1),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Small repair",
+                Status = ExpenseStatus.Paid,
+                Amount = 100m,
+                IncurredAt = D(Year, 8, 2),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            });
+        _db.SaveChanges();
+
+        var report = await _sut.GetReportAsync(PortfolioId, Year, ct: CancellationToken.None);
+
+        var p = report.Properties.Single();
+        p.Depreciation.Should().Be(135.00m);
+        p.TotalExpenses.Should().Be(235.00m);
+        p.ExpensesByCategory.Should().Contain(c => c.Category == "Depreciation" && c.Amount == 135.00m);
+        p.ExpensesByCategory.Should().Contain(c => c.Category == "Repairs" && c.Amount == 100m);
+        p.ExpensesByCategory.Should().NotContain(c => c.Category == "Repairs" && c.Amount == 9_900m);
     }
 
     [Fact]

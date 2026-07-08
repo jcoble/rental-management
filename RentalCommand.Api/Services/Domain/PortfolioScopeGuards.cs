@@ -55,4 +55,8 @@ internal static class PortfolioScopeGuards
     /// <summary>The referenced owner entity (legal owner) must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureOwnerEntityInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int ownerEntityId, CancellationToken ct)
         => db.OwnerEntities.AnyAsync(e => e.Id == ownerEntityId && e.PortfolioId == portfolioId, ct);
+
+    /// <summary>The referenced capital asset must live in the caller's portfolio.</summary>
+    public static Task<bool> EnsureCapitalAssetInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int capitalAssetId, CancellationToken ct)
+        => db.CapitalAssets.AnyAsync(a => a.Id == capitalAssetId && a.PortfolioId == portfolioId, ct);
 }
