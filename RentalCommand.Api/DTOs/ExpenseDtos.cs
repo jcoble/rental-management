@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -14,6 +15,7 @@ public class ExpenseResponse
     public int? UnitId { get; set; }
     public int? VendorId { get; set; }
     public int? WorkOrderId { get; set; }
+    public int? CapitalizedAssetId { get; set; }
     public ScheduleECategory Category { get; set; }
     public string Description { get; set; } = string.Empty;
     public ExpenseStatus Status { get; set; }
@@ -79,6 +81,7 @@ public class ExpenseResponse
         UnitId = e.UnitId,
         VendorId = e.VendorId,
         WorkOrderId = e.WorkOrderId,
+        CapitalizedAssetId = e.CapitalizedAssetId,
         Category = e.Category,
         Description = e.Description,
         Status = e.Status,
@@ -296,4 +299,22 @@ public class UpdateExpenseLineItem
     public decimal? Quantity { get; set; }
     public decimal? UnitPrice { get; set; }
     public decimal? Amount { get; set; }
+}
+
+public class CapitalizeExpenseRequest
+{
+    [Required]
+    public DateTime InServiceDate { get; set; }
+
+    [EnumDataType(typeof(DepreciationMethod))]
+    public DepreciationMethod Method { get; set; } = DepreciationMethod.StraightLine;
+
+    [Range(1, 40)]
+    public decimal RecoveryYears { get; set; } = RecoveryClass.ResidentialBuilding;
+
+    [EnumDataType(typeof(DepreciationConvention))]
+    public DepreciationConvention Convention { get; set; } = DepreciationConvention.MidMonth;
+
+    [MaxLength(500)]
+    public string? Description { get; set; }
 }

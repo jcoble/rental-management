@@ -7,6 +7,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -496,6 +497,37 @@ public class AccountingServiceTests : IDisposable
         });
         _db.SaveChanges();
 
+        var roof = new CapitalAsset
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Description = "Roof replacement",
+            CostBasis = 9_900m,
+            InServiceDate = new DateTime(year, 08, 01, 0, 0, 0, DateTimeKind.Utc),
+            Method = DepreciationMethod.StraightLine,
+            RecoveryYears = RecoveryClass.ResidentialBuilding,
+            Convention = DepreciationConvention.MidMonth,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.CapitalAssets.Add(roof);
+        _db.SaveChanges();
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            CapitalizedAssetId = roof.Id,
+            Category = ScheduleECategory.Repairs,
+            Description = "Capitalized roof invoice",
+            Status = ExpenseStatus.Paid,
+            Amount = 9_900m,
+            IncurredAt = now,
+            PaidAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
         var loan = new Loan
         {
             PortfolioId = PortfolioId,
@@ -557,7 +589,7 @@ public class AccountingServiceTests : IDisposable
             c.Total == 1_190m);
         reports.ScheduleE.Should().Contain(c =>
             c.Category == ScheduleECategory.Depreciation &&
-            c.Total == 8_727.27m);
+            c.Total == 8_862.27m);
         _commands.Should().Contain(sql =>
             sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),

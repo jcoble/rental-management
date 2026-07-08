@@ -29,6 +29,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<ExpenseLineItem> ExpenseLineItems => Set<ExpenseLineItem>();
+    public DbSet<CapitalAsset> CapitalAssets => Set<CapitalAsset>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<VendorDispatch> VendorDispatches => Set<VendorDispatch>();
     public DbSet<VendorRating> VendorRatings => Set<VendorRating>();
@@ -1150,6 +1151,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.WorkOrderId);
+            entity.HasIndex(e => e.CapitalizedAssetId);
             entity.HasIndex(e => e.Status);
             // #2 Every financial report + the grid Expense date-range filter buckets expenses by
             // IncurredAt (accrual) and PaidAt (cash-basis / Schedule E), portfolio-scoped.
@@ -1183,6 +1185,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(w => w.Expenses)
                 .HasForeignKey(e => e.WorkOrderId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.CapitalizedAsset)
+                .WithMany()
+                .HasForeignKey(e => e.CapitalizedAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
             entity.HasMany(e => e.LineItems)
                 .WithOne(li => li.Expense)
                 .HasForeignKey(li => li.ExpenseId)
@@ -1197,6 +1203,39 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.HasIndex(e => e.ExpenseId);
+        });
+
+        modelBuilder.Entity<CapitalAsset>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.CostBasis).HasPrecision(18, 2);
+            entity.Property(e => e.Method).HasConversion<int>();
+            entity.Property(e => e.RecoveryYears).HasPrecision(9, 2);
+            entity.Property(e => e.Convention).HasConversion<int>();
+            entity.Property(e => e.AccumulatedDepreciation).HasPrecision(18, 2);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.UnitId);
+            entity.HasIndex(e => e.SourceExpenseId);
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.InServiceDate })
+                  .HasDatabaseName("IX_CapitalAssets_Portfolio_Property_InServiceDate");
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany(p => p.CapitalAssets)
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.SourceExpense)
+                .WithMany()
+                .HasForeignKey(e => e.SourceExpenseId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Loan>(entity =>
