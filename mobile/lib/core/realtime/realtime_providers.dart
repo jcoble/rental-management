@@ -12,6 +12,7 @@ import '../../features/messages/messages_repository.dart';
 import '../../features/money/money_repository.dart';
 import '../../features/notifications/notifications_repository.dart';
 import '../../features/onboarding/getting_started_provider.dart';
+import '../../features/owner_reports/owner_reports_repository.dart';
 import '../../features/owners/owners_repository.dart';
 import '../../features/payments/payments_repository.dart';
 import '../../features/properties/property_loans_repository.dart';
@@ -128,6 +129,12 @@ void _invalidateForEntity(Ref ref, String entityType) {
       ref.invalidate(ownersPageProvider);
       ref.invalidate(ownerDetailProvider);
       ref.invalidate(gettingStartedSignalsProvider);
+
+    case 'OwnerDistribution':
+      _refreshIfAlive(ref, ownerSummariesProvider);
+      _refreshIfAlive(ref, ownerStatementProvider);
+      ref.invalidate(ownerDistributionsProvider);
+      _refreshIfAlive(ref, accountingSummaryProvider);
 
     case 'Loan':
       ref.invalidate(propertyLoansProvider);
