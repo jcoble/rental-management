@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:label="rental_command"
+        android:label="${appLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -60,8 +60,8 @@
                 android:resource="@xml/shortcuts" />
         </activity>
         <!-- Default channel for system-tray (background/killed) FCM notifications.
-             Must match PushService.kAndroidNotificationChannelId. No google-services
-             gradle plugin is added — Firebase init is fail-soft at runtime. -->
+             Must match PushService.kAndroidNotificationChannelId. Prod uses Google
+             Services; dev skips that Gradle task until a dev FCM app exists. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="rental_command_default" />

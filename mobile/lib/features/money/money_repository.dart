@@ -8,6 +8,111 @@ import '../../core/api/dio_client.dart';
 import 'expense_models.dart';
 import 'transaction_models.dart';
 
+class ExpenseListQuery {
+  const ExpenseListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.propertyId,
+    this.unitId,
+    this.workOrderId,
+    this.workOrderLinkedOnly = false,
+    this.search,
+    this.sort = '-incurredAt',
+    this.incurredFrom,
+    this.incurredTo,
+    this.dueFrom,
+    this.dueTo,
+    this.paidFrom,
+    this.paidTo,
+  });
+
+  final int skip;
+  final int take;
+  final int? propertyId;
+  final int? unitId;
+  final int? workOrderId;
+  final bool workOrderLinkedOnly;
+  final String? search;
+  final String sort;
+  final String? incurredFrom;
+  final String? incurredTo;
+  final String? dueFrom;
+  final String? dueTo;
+  final String? paidFrom;
+  final String? paidTo;
+
+  @override
+  bool operator ==(Object other) {
+    return other is ExpenseListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.propertyId == propertyId &&
+        other.unitId == unitId &&
+        other.workOrderId == workOrderId &&
+        other.workOrderLinkedOnly == workOrderLinkedOnly &&
+        other.search == search &&
+        other.sort == sort &&
+        other.incurredFrom == incurredFrom &&
+        other.incurredTo == incurredTo &&
+        other.dueFrom == dueFrom &&
+        other.dueTo == dueTo &&
+        other.paidFrom == paidFrom &&
+        other.paidTo == paidTo;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    skip,
+    take,
+    propertyId,
+    unitId,
+    workOrderId,
+    workOrderLinkedOnly,
+    search,
+    sort,
+    incurredFrom,
+    incurredTo,
+    dueFrom,
+    dueTo,
+    paidFrom,
+    paidTo,
+  );
+}
+
+class ExpenseListPage {
+  const ExpenseListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Expense> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory ExpenseListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Expense.fromJson)
+              .toList()
+        : <Expense>[];
+
+    return ExpenseListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Repository for the Money tab: the unified accounting ledger plus full
 /// expense CRUD and receipt streaming.
 ///
@@ -65,11 +170,35 @@ class MoneyRepository {
     int? propertyId,
     int? unitId,
     int take = 100,
+    String? incurredFrom,
+    String? incurredTo,
+    String? dueFrom,
+    String? dueTo,
+    String? paidFrom,
+    String? paidTo,
   }) async {
     try {
       final params = <String, dynamic>{'take': take, 'sort': '-incurredAt'};
       if (propertyId != null) params['propertyId'] = propertyId;
       if (unitId != null) params['unitId'] = unitId;
+      if (incurredFrom != null && incurredFrom.isNotEmpty) {
+        params['incurredFrom'] = incurredFrom;
+      }
+      if (incurredTo != null && incurredTo.isNotEmpty) {
+        params['incurredTo'] = incurredTo;
+      }
+      if (dueFrom != null && dueFrom.isNotEmpty) {
+        params['dueFrom'] = dueFrom;
+      }
+      if (dueTo != null && dueTo.isNotEmpty) {
+        params['dueTo'] = dueTo;
+      }
+      if (paidFrom != null && paidFrom.isNotEmpty) {
+        params['paidFrom'] = paidFrom;
+      }
+      if (paidTo != null && paidTo.isNotEmpty) {
+        params['paidTo'] = paidTo;
+      }
       final response = await _dio.get<List<dynamic>>(
         '/expenses',
         queryParameters: params,
@@ -79,6 +208,44 @@ class MoneyRepository {
           .whereType<Map<String, dynamic>>()
           .map(Expense.fromJson)
           .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ExpenseListPage> listExpensesPage([
+    ExpenseListQuery query = const ExpenseListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'propertyId': query.propertyId,
+      'unitId': query.unitId,
+      'workOrderId': query.workOrderId,
+      if (query.workOrderLinkedOnly) 'workOrderLinkedOnly': true,
+      'search': query.search,
+      'sort': query.sort,
+      'incurredFrom': query.incurredFrom,
+      'incurredTo': query.incurredTo,
+      'dueFrom': query.dueFrom,
+      'dueTo': query.dueTo,
+      'paidFrom': query.paidFrom,
+      'paidTo': query.paidTo,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/expenses/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ExpenseListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -176,6 +343,11 @@ final moneyRepositoryProvider = Provider<MoneyRepository>((ref) {
 final expensesListProvider = FutureProvider.autoDispose<List<Expense>>((ref) {
   return ref.watch(moneyRepositoryProvider).listExpenses();
 });
+
+final expensesPageProvider = FutureProvider.autoDispose
+    .family<ExpenseListPage, ExpenseListQuery>((ref, query) {
+      return ref.watch(moneyRepositoryProvider).listExpensesPage(query);
+    });
 
 /// Unit-scoped operating costs, filtered and capped by the API.
 final unitExpensesProvider = FutureProvider.autoDispose

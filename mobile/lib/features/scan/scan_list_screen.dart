@@ -239,6 +239,7 @@ class _DraftTile extends StatelessWidget {
     final colorScheme = theme.colorScheme;
 
     return ListTile(
+      titleAlignment: ListTileTitleAlignment.center,
       onTap: onTap,
       leading: CircleAvatar(
         backgroundColor: _statusColor(
@@ -263,6 +264,7 @@ class _DraftTile extends StatelessWidget {
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           _StatusChip(status: draft.status),
           const SizedBox(width: 4),

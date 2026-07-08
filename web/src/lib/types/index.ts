@@ -595,6 +595,8 @@ export interface AccountingReports {
 	totalIncome: number;
 	totalExpenses: number;
 	netCashFlow: number;
+	ledgerTotalCount: number;
+	recentLedger: LedgerTransaction[];
 	ledger: LedgerTransaction[];
 	properties: PropertyFinancialSummary[];
 	scheduleE: ScheduleECategoryTotal[];

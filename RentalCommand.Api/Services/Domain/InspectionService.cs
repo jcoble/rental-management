@@ -43,6 +43,12 @@ public class InspectionService : IInspectionService
 
     public async Task<IReadOnlyList<InspectionResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, propertyId, query, ct);
+        return page.Items;
+    }
+
+    public async Task<InspectionListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
         var q = _db.Inspections
             .AsNoTracking()
             .Include(i => i.Property)
@@ -73,12 +79,20 @@ public class InspectionService : IInspectionService
             _ => query.SortDescending ? q.OrderByDescending(i => i.ScheduledFor) : q.OrderBy(i => i.ScheduledFor),
         };
 
+        var totalCount = await q.CountAsync(ct);
+
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(InspectionResponse.FromEntity).ToList();
+        return new InspectionListResponse
+        {
+            Items = items.Select(InspectionResponse.FromEntity).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
 
     public async Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

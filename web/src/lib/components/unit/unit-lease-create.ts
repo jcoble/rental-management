@@ -1,4 +1,4 @@
-import { defaultLeaseNumber } from '$lib/leases/lease-number';
+import { defaultLeaseNumber } from '../../leases/lease-number.ts';
 
 export type UnitLeaseCreateContext = {
 	unit: {

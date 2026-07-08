@@ -28,30 +28,17 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
 
   /// Marks every past-due payment on [lease] as paid, then refreshes the list and
   /// the dashboard KPI together so the count and the rows stay in lockstep.
-  ///
-  /// Mark-paid is a per-payment mutation (not an aggregate), so we resolve this
-  /// lease's still-owed payments and settle them. A lease has only a handful of
-  /// open payments, so this is a small, bounded set — not an N+1 over the list.
   Future<void> _markLeasePaid(PastDueLease lease) async {
     if (_busyLeaseId != null) return;
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busyLeaseId = lease.leaseId);
     try {
       final repo = ref.read(paymentsRepositoryProvider);
-      final leasePayments = await repo.listPayments(leaseId: lease.leaseId);
       final today = DateTime.now().toIso8601String().split('T').first;
-      final now = DateTime.now();
-      final overdue = leasePayments.where((p) {
-        final s = p.status.toLowerCase();
-        if (s == 'paid' || s == 'waived' || s == 'refunded' || s == 'failed') {
-          return false;
-        }
-        return s == 'late' || (p.dueDate.year > 1 && p.dueDate.isBefore(now));
-      }).toList();
-
-      for (final p in overdue) {
-        await repo.markPaid(p.id, paidDate: today);
-      }
+      final result = await repo.markLeasePastDuePaid(
+        lease.leaseId,
+        paidDate: today,
+      );
 
       // Refresh the shared sources so the KPI count and this list update together.
       ref.invalidate(pastDueProvider);
@@ -62,9 +49,9 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
         ..showSnackBar(
           SnackBar(
             content: Text(
-              overdue.length <= 1
+              result.markedPaidCount <= 1
                   ? 'Marked paid.'
-                  : 'Marked ${overdue.length} payments paid.',
+                  : 'Marked ${result.markedPaidCount} payments paid.',
             ),
           ),
         );
@@ -109,8 +96,11 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
                   Center(
                     child: Column(
                       children: [
-                        Icon(Icons.check_circle_outline,
-                            size: 48, color: Colors.green.shade600),
+                        Icon(
+                          Icons.check_circle_outline,
+                          size: 48,
+                          color: Colors.green.shade600,
+                        ),
                         const SizedBox(height: 12),
                         const Text('Everyone is current. Nice.'),
                       ],
@@ -193,8 +183,9 @@ class _OverdueLeaseCard extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final days = _daysLate;
-    final paymentsWord =
-        lease.overduePaymentCount == 1 ? 'payment' : 'payments';
+    final paymentsWord = lease.overduePaymentCount == 1
+        ? 'payment'
+        : 'payments';
 
     return Card(
       child: Padding(
@@ -207,11 +198,12 @@ class _OverdueLeaseCard extends StatelessWidget {
               // can view/edit it or mark it paid individually.
               onTap: lease.oldestPaymentId > 0
                   ? () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              PaymentDetailScreen(paymentId: lease.oldestPaymentId),
+                      MaterialPageRoute<void>(
+                        builder: (_) => PaymentDetailScreen(
+                          paymentId: lease.oldestPaymentId,
                         ),
-                      )
+                      ),
+                    )
                   : null,
               child: Row(
                 children: [
@@ -221,8 +213,11 @@ class _OverdueLeaseCard extends StatelessWidget {
                       color: cs.errorContainer,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.person_outline,
-                        color: cs.onErrorContainer, size: 20),
+                    child: Icon(
+                      Icons.person_outline,
+                      color: cs.onErrorContainer,
+                      size: 20,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -231,8 +226,9 @@ class _OverdueLeaseCard extends StatelessWidget {
                       children: [
                         Text(
                           lease.displayName,
-                          style: theme.textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         Text(
                           '${moneyFmt(lease.pastDueAmount)} · '
@@ -281,7 +277,9 @@ class _OverdueLeaseCard extends StatelessWidget {
                           )
                         : const Icon(Icons.check_circle_outline, size: 18),
                     label: Text(
-                      lease.overduePaymentCount > 1 ? 'Mark all paid' : 'Mark paid',
+                      lease.overduePaymentCount > 1
+                          ? 'Mark all paid'
+                          : 'Mark paid',
                     ),
                   ),
                 ),
@@ -313,7 +311,9 @@ class _OverdueLeaseCard extends StatelessWidget {
     // Pre-fill the recipient when we have a phone on file; otherwise let the
     // landlord pick the contact in their messaging app.
     final phone = lease.tenantPhone?.trim() ?? '';
-    final uri = Uri.parse(phone.isEmpty ? 'sms:?body=$body' : 'sms:$phone?body=$body');
+    final uri = Uri.parse(
+      phone.isEmpty ? 'sms:?body=$body' : 'sms:$phone?body=$body',
+    );
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri);
     } else {

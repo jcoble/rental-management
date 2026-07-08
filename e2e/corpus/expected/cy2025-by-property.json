@@ -1,0 +1,696 @@
+{
+  "meta": {
+    "generated": "derive-expected.mjs",
+    "basis": "ledger/events.csv + emit-finance CSVs",
+    "spine": "CY2025 cent-exact",
+    "asOf": "2025-12-31"
+  },
+  "byProperty": {
+    "P01": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 15337.5,
+        "deductibleByCategory": {
+          "Taxes": 1960,
+          "Insurance": 820
+        },
+        "deductibleExpenses": 2780,
+        "mortgageInterest": 3762.9,
+        "depreciation": 3854.55,
+        "totalExpenses": 10397.45,
+        "netIncome": 4940.05
+      },
+      "cashflowPnl": {
+        "income": 15337.5,
+        "expense": 2780,
+        "net": 12557.5
+      },
+      "trueCashFlow": {
+        "income": 15337.5,
+        "operatingExpenses": 0,
+        "noi": 15337.5,
+        "debtService": 9387.12,
+        "cashFlow": 5950.38
+      },
+      "propertyPnl": {
+        "income": 15337.5,
+        "expense": 2780,
+        "net": 12557.5
+      }
+    },
+    "P02": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 23187.75,
+        "deductibleByCategory": {
+          "Utilities": 540,
+          "CleaningMaintenance": 360,
+          "Taxes": 2400,
+          "Insurance": 1050,
+          "Repairs": 640
+        },
+        "deductibleExpenses": 4990,
+        "mortgageInterest": 5360.97,
+        "depreciation": 5345.45,
+        "totalExpenses": 15696.42,
+        "netIncome": 7491.33
+      },
+      "cashflowPnl": {
+        "income": 23187.75,
+        "expense": 4990,
+        "net": 18197.75
+      },
+      "trueCashFlow": {
+        "income": 23187.75,
+        "operatingExpenses": 1540,
+        "noi": 21647.75,
+        "debtService": 12832.32,
+        "cashFlow": 8815.43
+      },
+      "propertyPnl": {
+        "income": 23187.75,
+        "expense": 4990,
+        "net": 18197.75
+      }
+    },
+    "P03": {
+      "owner": "OE-TRUST",
+      "scheduleE": {
+        "income": 14007,
+        "deductibleByCategory": {
+          "Insurance": 780,
+          "Taxes": 1600
+        },
+        "deductibleExpenses": 2380,
+        "mortgageInterest": 0,
+        "depreciation": 3272.73,
+        "totalExpenses": 5652.73,
+        "netIncome": 8354.27
+      },
+      "cashflowPnl": {
+        "income": 14007,
+        "expense": 2380,
+        "net": 11627
+      },
+      "trueCashFlow": {
+        "income": 14007,
+        "operatingExpenses": 2380,
+        "noi": 11627,
+        "debtService": 0,
+        "cashFlow": 11627
+      },
+      "propertyPnl": {
+        "income": 14042,
+        "expense": 2380,
+        "net": 11662
+      }
+    },
+    "P04": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 16220,
+        "deductibleByCategory": {
+          "Taxes": 2150,
+          "CleaningMaintenance": 1360,
+          "Insurance": 980,
+          "Repairs": 680
+        },
+        "deductibleExpenses": 5170,
+        "mortgageInterest": 4119.9,
+        "depreciation": 4654.55,
+        "totalExpenses": 13944.45,
+        "netIncome": 2275.55
+      },
+      "cashflowPnl": {
+        "income": 16220,
+        "expense": 5170,
+        "net": 11050
+      },
+      "trueCashFlow": {
+        "income": 16220,
+        "operatingExpenses": 2040,
+        "noi": 14180,
+        "debtService": 11742.36,
+        "cashFlow": 2437.64
+      },
+      "propertyPnl": {
+        "income": 16220,
+        "expense": 5170,
+        "net": 11050
+      }
+    },
+    "P05": {
+      "owner": "OE-BELL",
+      "scheduleE": {
+        "income": 29078.5,
+        "deductibleByCategory": {
+          "Utilities": 540,
+          "CleaningMaintenance": 360,
+          "Taxes": 3100,
+          "Insurance": 1450
+        },
+        "deductibleExpenses": 5450,
+        "mortgageInterest": 8217.75,
+        "depreciation": 7636.36,
+        "totalExpenses": 21304.11,
+        "netIncome": 7774.39
+      },
+      "cashflowPnl": {
+        "income": 29078.5,
+        "expense": 5450,
+        "net": 23628.5
+      },
+      "trueCashFlow": {
+        "income": 29078.5,
+        "operatingExpenses": 900,
+        "noi": 28178.5,
+        "debtService": 18509.16,
+        "cashFlow": 9669.34
+      },
+      "propertyPnl": {
+        "income": 29078.5,
+        "expense": 5450,
+        "net": 23628.5
+      }
+    },
+    "P06": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 16907.4,
+        "deductibleByCategory": {
+          "Taxes": 2300,
+          "CleaningMaintenance": 840,
+          "Insurance": 1010,
+          "Repairs": 210
+        },
+        "deductibleExpenses": 4360,
+        "mortgageInterest": 3997.99,
+        "depreciation": 5090.91,
+        "totalExpenses": 13448.9,
+        "netIncome": 3458.5
+      },
+      "cashflowPnl": {
+        "income": 16907.4,
+        "expense": 4360,
+        "net": 12547.4
+      },
+      "trueCashFlow": {
+        "income": 16907.4,
+        "operatingExpenses": 1050,
+        "noi": 15857.4,
+        "debtService": 12106.08,
+        "cashFlow": 3751.32
+      },
+      "propertyPnl": {
+        "income": 16907.4,
+        "expense": 4360,
+        "net": 12547.4
+      }
+    },
+    "P07": {
+      "owner": "OE-BELL",
+      "scheduleE": {
+        "income": 27378,
+        "deductibleByCategory": {
+          "Utilities": 540,
+          "CleaningMaintenance": 360,
+          "Taxes": 2650,
+          "Insurance": 1180
+        },
+        "deductibleExpenses": 4730,
+        "mortgageInterest": 5387.79,
+        "depreciation": 6400,
+        "totalExpenses": 16517.79,
+        "netIncome": 10860.21
+      },
+      "cashflowPnl": {
+        "income": 27378,
+        "expense": 4730,
+        "net": 22648
+      },
+      "trueCashFlow": {
+        "income": 27378,
+        "operatingExpenses": 900,
+        "noi": 26478,
+        "debtService": 14692.8,
+        "cashFlow": 11785.2
+      },
+      "propertyPnl": {
+        "income": 27378,
+        "expense": 4730,
+        "net": 22648
+      }
+    },
+    "P08": {
+      "owner": "OE-PERS",
+      "scheduleE": {
+        "income": 12600,
+        "deductibleByCategory": {
+          "Insurance": 680,
+          "Taxes": 1400,
+          "CleaningMaintenance": 140
+        },
+        "deductibleExpenses": 2220,
+        "mortgageInterest": 0,
+        "depreciation": 2945.45,
+        "totalExpenses": 5165.45,
+        "netIncome": 7434.55
+      },
+      "cashflowPnl": {
+        "income": 12600,
+        "expense": 2220,
+        "net": 10380
+      },
+      "trueCashFlow": {
+        "income": 12600,
+        "operatingExpenses": 2220,
+        "noi": 10380,
+        "debtService": 0,
+        "cashFlow": 10380
+      },
+      "propertyPnl": {
+        "income": 12600,
+        "expense": 2220,
+        "net": 10380
+      }
+    },
+    "P09": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 37373.67,
+        "deductibleByCategory": {
+          "Utilities": 540,
+          "CleaningMaintenance": 360,
+          "Repairs": 427.33,
+          "Taxes": 4200,
+          "Insurance": 2050
+        },
+        "deductibleExpenses": 7577.33,
+        "mortgageInterest": 14232.56,
+        "depreciation": 10618.18,
+        "totalExpenses": 32428.07,
+        "netIncome": 4945.6
+      },
+      "cashflowPnl": {
+        "income": 37373.67,
+        "expense": 7577.33,
+        "net": 29796.34
+      },
+      "trueCashFlow": {
+        "income": 37373.67,
+        "operatingExpenses": 1327.33,
+        "noi": 36046.34,
+        "debtService": 27172.68,
+        "cashFlow": 8873.66
+      },
+      "propertyPnl": {
+        "income": 37373.67,
+        "expense": 7577.33,
+        "net": 29796.34
+      }
+    },
+    "P10": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 18574.5,
+        "deductibleByCategory": {
+          "Taxes": 2450,
+          "CleaningMaintenance": 840,
+          "Insurance": 1080
+        },
+        "deductibleExpenses": 4370,
+        "mortgageInterest": 9392.49,
+        "depreciation": 5527.27,
+        "totalExpenses": 19289.76,
+        "netIncome": -715.26
+      },
+      "cashflowPnl": {
+        "income": 18574.5,
+        "expense": 4370,
+        "net": 14204.5
+      },
+      "trueCashFlow": {
+        "income": 18574.5,
+        "operatingExpenses": 840,
+        "noi": 17734.5,
+        "debtService": 16385.52,
+        "cashFlow": 1348.98
+      },
+      "propertyPnl": {
+        "income": 18574.5,
+        "expense": 4370,
+        "net": 14204.5
+      }
+    },
+    "P11": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 13266,
+        "deductibleByCategory": {
+          "Other": 2220,
+          "Insurance": 320,
+          "Taxes": 1350
+        },
+        "deductibleExpenses": 3890,
+        "mortgageInterest": 2703.47,
+        "depreciation": 3454.55,
+        "totalExpenses": 10048.02,
+        "netIncome": 3217.98
+      },
+      "cashflowPnl": {
+        "income": 13266,
+        "expense": 3890,
+        "net": 9376
+      },
+      "trueCashFlow": {
+        "income": 13266,
+        "operatingExpenses": 2540,
+        "noi": 10726,
+        "debtService": 6514.08,
+        "cashFlow": 4211.92
+      },
+      "propertyPnl": {
+        "income": 13266,
+        "expense": 3890,
+        "net": 9376
+      }
+    },
+    "P12": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 19200,
+        "deductibleByCategory": {
+          "Taxes": 2550,
+          "CleaningMaintenance": 840,
+          "Insurance": 1120
+        },
+        "deductibleExpenses": 4510,
+        "mortgageInterest": 10522.85,
+        "depreciation": 5890.91,
+        "totalExpenses": 20923.76,
+        "netIncome": -1723.76
+      },
+      "cashflowPnl": {
+        "income": 19200,
+        "expense": 4510,
+        "net": 14690
+      },
+      "trueCashFlow": {
+        "income": 19200,
+        "operatingExpenses": 840,
+        "noi": 18360,
+        "debtService": 17848.56,
+        "cashFlow": 511.44
+      },
+      "propertyPnl": {
+        "income": 19200,
+        "expense": 4510,
+        "net": 14690
+      }
+    },
+    "P13": {
+      "owner": "OE-LLC",
+      "scheduleE": {
+        "income": 22688.4,
+        "deductibleByCategory": {
+          "Utilities": 540,
+          "CleaningMaintenance": 360,
+          "Taxes": 2250,
+          "Insurance": 1000,
+          "Repairs": 985
+        },
+        "deductibleExpenses": 5135,
+        "mortgageInterest": 5131.48,
+        "depreciation": 5018.18,
+        "totalExpenses": 15284.66,
+        "netIncome": 7403.74
+      },
+      "cashflowPnl": {
+        "income": 22688.4,
+        "expense": 5135,
+        "net": 17553.4
+      },
+      "trueCashFlow": {
+        "income": 22688.4,
+        "operatingExpenses": 1885,
+        "noi": 20803.4,
+        "debtService": 12225.84,
+        "cashFlow": 8577.56
+      },
+      "propertyPnl": {
+        "income": 22688.4,
+        "expense": 5135,
+        "net": 17553.4
+      }
+    }
+  },
+  "divergenceChecks": [
+    {
+      "prop": "P01",
+      "DIV1": {
+        "delta": 7617.45,
+        "expect": 7617.45,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 2780,
+        "expect": 2780,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 1010.33,
+        "expect": 1010.33,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P02",
+      "DIV1": {
+        "delta": 10706.42,
+        "expect": 10706.42,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3450,
+        "expect": 3450,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 1324.1,
+        "expect": 1324.1,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P03",
+      "DIV1": {
+        "delta": 3307.73,
+        "expect": 3307.73,
+        "ok": true,
+        "nonScheduleEIncome": 35
+      },
+      "DIV2": {
+        "delta": 0,
+        "expect": 0,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 3272.73,
+        "expect": 3272.73,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P04",
+      "DIV1": {
+        "delta": 8774.45,
+        "expect": 8774.45,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3130,
+        "expect": 3130,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 162.09,
+        "expect": 162.09,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P05",
+      "DIV1": {
+        "delta": 15854.11,
+        "expect": 15854.11,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 4550,
+        "expect": 4550,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 1894.95,
+        "expect": 1894.95,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P06",
+      "DIV1": {
+        "delta": 9088.9,
+        "expect": 9088.9,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3310,
+        "expect": 3310,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 292.82,
+        "expect": 292.82,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P07",
+      "DIV1": {
+        "delta": 11787.79,
+        "expect": 11787.79,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3830,
+        "expect": 3830,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 924.99,
+        "expect": 924.99,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P08",
+      "DIV1": {
+        "delta": 2945.45,
+        "expect": 2945.45,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 0,
+        "expect": 0,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 2945.45,
+        "expect": 2945.45,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P09",
+      "DIV1": {
+        "delta": 24850.74,
+        "expect": 24850.74,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 6250,
+        "expect": 6250,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 3928.06,
+        "expect": 3928.06,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P10",
+      "DIV1": {
+        "delta": 14919.76,
+        "expect": 14919.76,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3530,
+        "expect": 3530,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 2064.24,
+        "expect": 2064.24,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P11",
+      "DIV1": {
+        "delta": 6158.02,
+        "expect": 6158.02,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 1350,
+        "expect": 1350,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 993.94,
+        "expect": 993.94,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P12",
+      "DIV1": {
+        "delta": 16413.76,
+        "expect": 16413.76,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3670,
+        "expect": 3670,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 2235.2,
+        "expect": 2235.2,
+        "ok": true
+      }
+    },
+    {
+      "prop": "P13",
+      "DIV1": {
+        "delta": 10149.66,
+        "expect": 10149.66,
+        "ok": true,
+        "nonScheduleEIncome": 0
+      },
+      "DIV2": {
+        "delta": 3250,
+        "expect": 3250,
+        "ok": true
+      },
+      "DIV3": {
+        "delta": 1173.82,
+        "expect": 1173.82,
+        "ok": true
+      }
+    }
+  ]
+}

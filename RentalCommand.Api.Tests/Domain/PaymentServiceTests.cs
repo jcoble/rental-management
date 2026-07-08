@@ -106,6 +106,37 @@ public class PaymentServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersDueDateWindowInSql()
+    {
+        var day1 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        SeedPayment(LeaseId, "Due Jan 1", day1, 100m);
+        SeedPayment(LeaseId, "Due Jan 2", day1.AddDays(1), 200m);
+        SeedPayment(LeaseId, "Due Jan 3", day1.AddDays(2), 300m);
+        SeedPayment(LeaseId, "Due Jan 4", day1.AddDays(3), 400m);
+        SeedPayment(LeaseId, "Due Jan 5", day1.AddDays(4), 500m);
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(PortfolioId, leaseId: null, new PaymentListQuery
+        {
+            DueFrom = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+            DueTo = new DateTime(2026, 1, 4, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "dueDate",
+            Take = 10,
+        });
+
+        page.TotalCount.Should().Be(3);
+        page.Items.Select(p => p.ExternalReference).Should().Equal("Due Jan 2", "Due Jan 3", "Due Jan 4");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DueDate", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DueDate", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task CreateAsync_FromScannedRentCheck_PersistsPayerCheckBankMethodAndExtras()
     {
         var now = DateTime.UtcNow;

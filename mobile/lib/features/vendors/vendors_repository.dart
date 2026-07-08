@@ -21,9 +21,16 @@ class VendorsRepository {
 
   final Dio _dio;
 
-  Future<List<Vendor>> list() async {
+  Future<List<Vendor>> list({
+    int skip = 0,
+    int take = 50,
+    String sort = 'name',
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>('/vendors');
+      final response = await _dio.get<List<dynamic>>(
+        '/vendors',
+        queryParameters: {'skip': skip, 'take': take, 'sort': sort},
+      );
       return (response.data ?? [])
           .whereType<Map<String, dynamic>>()
           .map(Vendor.fromJson)
@@ -33,10 +40,40 @@ class VendorsRepository {
     }
   }
 
+  Future<VendorPage> listPage([
+    VendorListQuery query = const VendorListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/vendors/page',
+        queryParameters: parameters,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VendorPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<Vendor> createVendor(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/vendors', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/vendors',
+        data: data,
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -79,8 +116,9 @@ class VendorsRepository {
 
   Future<VendorScorecard> scorecard(int vendorId) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/vendors/$vendorId/scorecard');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/vendors/$vendorId/scorecard',
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -182,8 +220,18 @@ final vendorsProvider = FutureProvider.autoDispose<List<Vendor>>((ref) {
   return ref.watch(vendorsRepositoryProvider).list();
 });
 
+final vendorsBySortProvider = FutureProvider.autoDispose
+    .family<List<Vendor>, String>((ref, sort) {
+      return ref.watch(vendorsRepositoryProvider).list(sort: sort);
+    });
+
+final vendorsPageProvider = FutureProvider.autoDispose
+    .family<VendorPage, VendorListQuery>((ref, query) {
+      return ref.watch(vendorsRepositoryProvider).listPage(query);
+    });
+
 /// Performance scorecard for a single vendor.
 final vendorScorecardProvider = FutureProvider.autoDispose
     .family<VendorScorecard, int>((ref, vendorId) {
-  return ref.watch(vendorsRepositoryProvider).scorecard(vendorId);
-});
+      return ref.watch(vendorsRepositoryProvider).scorecard(vendorId);
+    });

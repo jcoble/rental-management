@@ -66,6 +66,8 @@ public interface IApplicationService
 
     Task<ApplicationResponse?> WithdrawAsync(int portfolioId, int id, int userId, CancellationToken ct = default);
 
+    Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default);
+
     /// <summary>Generates or rotates the portfolio's public application token and returns the apply link.</summary>
     Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default);
 }

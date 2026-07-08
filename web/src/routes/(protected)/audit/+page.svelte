@@ -5,6 +5,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { overfetchPage } from '$lib/audit/pagination';
 	import * as Card from '$lib/components/ui/card';
@@ -41,6 +42,8 @@
 	let search = $state('');
 	let operationFilter = $state('');
 	let entityTypeFilter = $state('');
+	let dateFrom = $state('');
+	let dateTo = $state('');
 	let skip = $state(0);
 
 	const debouncedSearch = debounced(() => search, 300);
@@ -50,16 +53,20 @@
 		debouncedSearch.value;
 		operationFilter;
 		entityTypeFilter;
+		dateFrom;
+		dateTo;
 		skip = 0;
 	});
 
 	const auditQuery = createQuery(() => ({
-		queryKey: ['audit', portfolioId, debouncedSearch.value, operationFilter, entityTypeFilter, skip],
+		queryKey: ['audit', portfolioId, debouncedSearch.value, operationFilter, entityTypeFilter, dateFrom, dateTo, skip],
 		queryFn: () =>
 			audit.list(portfolioId, {
 				search: debouncedSearch.value || undefined,
 				operation: operationFilter || undefined,
 				entityType: entityTypeFilter || undefined,
+				from: dateFrom || undefined,
+				to: dateTo || undefined,
 				skip,
 				take: REQUEST_SIZE,
 				sort: '-timestamp',
@@ -195,6 +202,14 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			<RangeDatePicker
+				bind:start={dateFrom}
+				bind:end={dateTo}
+				presets
+				placeholder="All dates"
+				align="end"
+				testid="audit-date-range"
+			/>
 		</div>
 
 		<!-- Entry list -->

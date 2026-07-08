@@ -31,6 +31,57 @@ void main() {
       expect(orders.single.title, 'Kitchen sink leak');
     },
   );
+
+  test('listWorkOrdersPage preserves server-side page metadata', () async {
+    final adapter = _RecordingAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = WorkOrdersRepository(dio);
+
+    final page = await repo.listWorkOrdersPage(
+      const WorkOrderListQuery(
+        skip: 25,
+        take: 25,
+        search: 'sink',
+        openOnly: true,
+        sort: '-requestedAt',
+        requestedFrom: '2026-07-01',
+        requestedTo: '2026-07-31',
+      ),
+    );
+
+    expect(adapter.path, '/work-orders/page');
+    expect(adapter.queryParameters, containsPair('skip', 25));
+    expect(adapter.queryParameters, containsPair('take', 25));
+    expect(adapter.queryParameters, containsPair('search', 'sink'));
+    expect(adapter.queryParameters, containsPair('openOnly', true));
+    expect(adapter.queryParameters, containsPair('sort', '-requestedAt'));
+    expect(
+      adapter.queryParameters,
+      containsPair('requestedFrom', '2026-07-01'),
+    );
+    expect(adapter.queryParameters, containsPair('requestedTo', '2026-07-31'));
+    expect(page.totalCount, 1);
+    expect(page.skip, 25);
+    expect(page.take, 25);
+    expect(page.items.single.id, 17);
+  });
+
+  test('listWorkOrdersPage sends field queue sort to the server', () async {
+    final adapter = _RecordingAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = WorkOrdersRepository(dio);
+
+    await repo.listWorkOrdersPage(
+      const WorkOrderListQuery(openOnly: true, take: 5, sort: 'fieldQueue'),
+    );
+
+    expect(adapter.path, '/work-orders/page');
+    expect(adapter.queryParameters, containsPair('openOnly', true));
+    expect(adapter.queryParameters, containsPair('take', 5));
+    expect(adapter.queryParameters, containsPair('sort', 'fieldQueue'));
+  });
 }
 
 class _RecordingAdapter implements HttpClientAdapter {
@@ -63,8 +114,8 @@ class _RecordingAdapter implements HttpClientAdapter {
           },
         ],
         'totalCount': 1,
-        'skip': 0,
-        'take': 25,
+        'skip': options.queryParameters['skip'] ?? 0,
+        'take': options.queryParameters['take'] ?? 25,
       }),
       200,
       headers: {

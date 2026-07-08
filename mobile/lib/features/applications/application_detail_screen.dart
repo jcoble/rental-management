@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
+import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../tenants/tenant_detail_screen.dart';
 import '../units/unit_command_center_screen.dart';
@@ -168,6 +169,64 @@ class _ApplicationDetailScreenState
     }
   }
 
+  void _showActivityHistory(RentalApplication app) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'RentalApplication',
+          entityId: app.id,
+          title: 'Application activity',
+          subtitle: app.fullName,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete(RentalApplication app) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete application?'),
+        content: Text('Delete ${app.fullName}? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref.read(applicationsRepositoryProvider).delete(app.id);
+      ref.invalidate(applicationDetailProvider(app.id));
+      ref.invalidate(applicationScreeningProvider(app.id));
+      ref.invalidate(applicationsPageProvider);
+      ref.invalidate(applicationsProvider(null));
+      ref.invalidate(applicationsProvider(app.status));
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Application deleted.')));
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   // ── Screening ─────────────────────────────────────────────────────────────
 
   Future<void> _runScreening() async {
@@ -259,6 +318,16 @@ class _ApplicationDetailScreenState
                       onPressed: _busy ? null : () => _edit(app),
                       icon: const Icon(Icons.edit_outlined),
                     ),
+                  IconButton(
+                    tooltip: 'View application activity',
+                    onPressed: _busy ? null : () => _showActivityHistory(app),
+                    icon: const Icon(Icons.history_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete application',
+                    onPressed: _busy ? null : () => _confirmDelete(app),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
                   ApplicationStatusChip(status: app.status),
                 ],
               ) ??

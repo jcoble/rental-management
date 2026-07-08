@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Residential Lease {{leaseNumber}}</title>
+<style>
+  @page { size: Letter; margin: 0.85in 0.9in; }
+  * { box-sizing: border-box; }
+  body { font-family: "Times New Roman", Georgia, serif; color: #111; font-size: 11.5pt; line-height: 1.45; }
+  h1 { font-size: 17pt; text-align: center; margin: 0 0 2pt; letter-spacing: .5px; }
+  .sub { text-align: center; color: #444; font-size: 10pt; margin: 0 0 18pt; }
+  h2 { font-size: 12pt; border-bottom: 1px solid #999; padding-bottom: 2pt; margin: 16pt 0 6pt; }
+  .grid { width: 100%; border-collapse: collapse; margin: 4pt 0 8pt; }
+  .grid td { padding: 3pt 6pt; vertical-align: top; }
+  .grid td.k { color: #333; width: 34%; }
+  .grid td.v { font-weight: bold; }
+  .terms td.k { width: 55%; }
+  .money { font-variant-numeric: tabular-nums; }
+  p { margin: 5pt 0; text-align: justify; }
+  .clause { margin: 4pt 0; }
+  .clause b { display: inline-block; min-width: 130px; }
+  .sig { margin-top: 26pt; }
+  .sigline { border-top: 1px solid #222; width: 260px; padding-top: 3pt; margin-top: 34pt; font-size: 10pt; }
+  .pb { page-break-before: always; }
+  .foot { color: #666; font-size: 8.5pt; text-align: center; margin-top: 10pt; }
+</style>
+</head>
+<body>
+  <h1>RESIDENTIAL LEASE AGREEMENT</h1>
+  <p class="sub">State of Ohio &nbsp;&middot;&nbsp; Lease No. {{leaseNumber}} &nbsp;&middot;&nbsp; {{managementCompany}}</p>
+
+  <p>This Residential Lease Agreement ("Agreement") is made and entered into on
+  <b>{{signDate}}</b> by and between <b>{{managementCompany}}</b>, as agent for the owner
+  ("Landlord"), and <b>{{tenantName}}</b> ("Tenant"), for the residential premises described below.</p>
+
+  <h2>1. Parties &amp; Premises</h2>
+  <table class="grid">
+    <tr><td class="k">Landlord / Agent</td><td class="v">{{managementCompany}}</td></tr>
+    <tr><td class="k">Tenant</td><td class="v">{{tenantName}}</td></tr>
+    <tr><td class="k">Tenant email</td><td class="v">{{tenantEmail}}</td></tr>
+    <tr><td class="k">Tenant phone</td><td class="v">{{tenantPhone}}</td></tr>
+    <tr><td class="k">Premises address</td><td class="v">{{propertyAddress}}, Unit {{unitNumber}}<br>{{propertyCity}}, {{propertyState}} {{propertyPostal}}</td></tr>
+    <tr><td class="k">Unit details</td><td class="v">{{bedrooms}} bd / {{bathrooms}} ba &middot; {{squareFeet}} sq ft</td></tr>
+  </table>
+
+  <h2>2. Term</h2>
+  <table class="grid terms">
+    <tr><td class="k">Lease commencement date</td><td class="v">{{startDate}}</td></tr>
+    <tr><td class="k">Lease expiration date</td><td class="v">{{endDate}}</td></tr>
+    <tr><td class="k">Type of tenancy</td><td class="v">Fixed term, twelve (12) months</td></tr>
+  </table>
+
+  <h2>3. Rent &amp; Charges</h2>
+  <table class="grid terms">
+    <tr><td class="k">Monthly rent</td><td class="v money">${{monthlyRent}}</td></tr>
+    <tr><td class="k">Rent due day of month</td><td class="v">The {{rentDueDayOrdinal}} of each month</td></tr>
+    <tr><td class="k">Security deposit</td><td class="v money">${{securityDeposit}}</td></tr>
+    <tr><td class="k">Late fee (flat, if rent unpaid after grace)</td><td class="v money">${{lateFee}}</td></tr>
+    <tr><td class="k">Accepted payment methods</td><td class="v">{{paymentMethod}}, check, ACH, or money order</td></tr>
+  </table>
+  <p>Tenant agrees to pay the Monthly Rent stated above in advance on or before the due day of
+  each calendar month. Rent not received within five (5) days after the due date is subject to
+  the flat Late Fee stated above, as permitted under Ohio law.</p>
+
+  <h2>4. Security Deposit</h2>
+  <p>Tenant has deposited with Landlord the Security Deposit stated in Section 3, to be held and
+  applied in accordance with Ohio Revised Code &sect; 5321.16. The deposit is not a substitute for
+  the final month's rent. Within thirty (30) days after termination and delivery of possession,
+  Landlord shall return the deposit less any itemized deductions for unpaid rent or damage beyond
+  ordinary wear and tear.</p>
+
+  <div class="pb"></div>
+  <h2>5. Use, Maintenance &amp; Entry</h2>
+  <p>The Premises shall be used solely as a private residence for the Tenant and the authorized
+  occupants named in this Agreement. Tenant shall keep the Premises clean and sanitary, promptly
+  report maintenance issues, and permit Landlord reasonable access upon twenty-four (24) hours'
+  notice for inspection or repair, except in emergencies.</p>
+
+  <h2>6. Utilities</h2>
+  <p class="clause"><b>Tenant pays:</b> electricity, gas, and internet/cable.</p>
+  <p class="clause"><b>Landlord pays:</b> water, sewer, and trash collection.</p>
+
+  <h2>7. Renewal &amp; Notice</h2>
+  <p>Unless either party gives written notice of non-renewal at least thirty (30) days before the
+  expiration date, this Agreement may be renewed or converted to a month-to-month tenancy on the
+  terms then offered by Landlord. Any renewal rent adjustment will be stated in a written renewal
+  offer delivered before expiration.</p>
+
+  <h2>8. Additional Provisions</h2>
+  <p>{{additionalProvisions}}</p>
+
+  <div class="sig">
+    <h2>9. Signatures</h2>
+    <table style="width:100%"><tr>
+      <td><div class="sigline">Tenant &mdash; {{tenantName}}</div></td>
+      <td><div class="sigline">Landlord / Agent &mdash; {{managementCompany}}</div></td>
+    </tr></table>
+    <p style="margin-top:16pt">Executed on {{signDate}} at {{propertyCity}}, {{propertyState}}.</p>
+  </div>
+  <p class="foot">Lease {{leaseNumber}} &middot; generated for E2E test corpus &middot; not a real legal instrument</p>
+</body>
+</html>

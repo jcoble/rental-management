@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "generated": "derive-expected.mjs",
+    "basis": "ledger/events.csv + emit-finance CSVs",
+    "spine": "CY2025 cent-exact",
+    "asOf": "2025-12-31"
+  },
+  "spotcheck": {
+    "2023": {
+      "scheduleE": {
+        "income": 221995,
+        "totalExpenses": 171276.2,
+        "netIncome": 50718.8
+      },
+      "note": "history year — spot-check only (held-flat rent; not cent-exact)"
+    },
+    "2024": {
+      "scheduleE": {
+        "income": 248820,
+        "totalExpenses": 197646.47,
+        "netIncome": 51173.53
+      },
+      "note": "history year — spot-check only (held-flat rent; not cent-exact)"
+    }
+  }
+}

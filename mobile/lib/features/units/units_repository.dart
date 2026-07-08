@@ -60,6 +60,9 @@ class UnitHealthPage {
   final int skip;
   final int take;
 
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
   factory UnitHealthPage.fromJson(Map<String, dynamic> json) {
     final items = (json['items'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
@@ -574,7 +577,37 @@ class SaveUnitListingRequest {
   };
 }
 
-typedef UnitHealthListArgs = ({String? search, int skip, int take});
+class UnitHealthListQuery {
+  const UnitHealthListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'propertyName',
+    this.status,
+    this.stage,
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final String? status;
+  final String? stage;
+
+  @override
+  bool operator ==(Object other) {
+    return other is UnitHealthListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort &&
+        other.status == status &&
+        other.stage == stage;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort, status, stage);
+}
 
 class UnitsRepository {
   UnitsRepository(this._dio);
@@ -583,14 +616,19 @@ class UnitsRepository {
 
   Future<UnitHealthPage> listWithHealthPage({
     String? search,
+    String sort = 'propertyName',
+    String? status,
+    String? stage,
     int skip = 0,
-    int take = 100,
+    int take = 20,
   }) async {
     final query = <String, dynamic>{
       'skip': skip,
       'take': take,
-      'sort': 'propertyName',
+      'sort': sort,
       if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+      if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
+      if (stage != null && stage.trim().isNotEmpty) 'stage': stage.trim(),
     };
 
     try {
@@ -687,13 +725,16 @@ final unitsRepositoryProvider = Provider<UnitsRepository>((ref) {
 });
 
 final unitHealthPageProvider = FutureProvider.autoDispose
-    .family<UnitHealthPage, UnitHealthListArgs>((ref, args) {
+    .family<UnitHealthPage, UnitHealthListQuery>((ref, query) {
       return ref
           .watch(unitsRepositoryProvider)
           .listWithHealthPage(
-            search: args.search,
-            skip: args.skip,
-            take: args.take,
+            search: query.search,
+            sort: query.sort,
+            status: query.status,
+            stage: query.stage,
+            skip: query.skip,
+            take: query.take,
           );
     });
 

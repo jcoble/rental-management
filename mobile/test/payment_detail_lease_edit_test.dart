@@ -52,6 +52,35 @@ void main() {
 
     expect(repo.lastUpdate?['leaseId'], 22);
   });
+
+  testWidgets('payment detail exposes delete from the detail toolbar', (
+    tester,
+  ) async {
+    final repo = _FakePaymentsRepository(
+      payment: _payment(leaseId: 10, propertyName: 'Maple Ridge', unit: '1A'),
+      leases: [_lease(id: 10, propertyName: 'Maple Ridge', unit: '1A')],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [paymentsRepositoryProvider.overrideWithValue(repo)],
+        child: const MaterialApp(home: PaymentDetailScreen(paymentId: 8)),
+      ),
+    );
+
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Delete payment'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Delete payment?'), findsOneWidget);
+
+    await tester.tap(find.text('Delete').last);
+    await tester.pumpAndSettle();
+
+    expect(repo.deletedPaymentId, 8);
+  });
 }
 
 class _FakePaymentsRepository extends PaymentsRepository {
@@ -61,12 +90,27 @@ class _FakePaymentsRepository extends PaymentsRepository {
   Payment payment;
   final List<Lease> leases;
   Map<String, dynamic>? lastUpdate;
+  int? deletedPaymentId;
 
   @override
   Future<Payment> getPayment(int id) async => payment;
 
   @override
   Future<List<Lease>> listLeases() async => leases;
+
+  @override
+  Future<AccountingSummary> accountingSummary() async {
+    return const AccountingSummary(
+      portfolioId: 1,
+      collected: 0,
+      outstanding: 0,
+      overdue: 0,
+      overdueCount: 0,
+      totalExpenses: 0,
+      expensesByCategory: [],
+      snapshot: MoneySnapshot(title: '', summary: '', bullets: []),
+    );
+  }
 
   @override
   Future<Payment> updatePayment(int id, Map<String, dynamic> data) async {
@@ -78,6 +122,11 @@ class _FakePaymentsRepository extends PaymentsRepository {
       unit: lease.unitNumber ?? '',
     );
     return payment;
+  }
+
+  @override
+  Future<void> deletePayment(int id) async {
+    deletedPaymentId = id;
   }
 }
 

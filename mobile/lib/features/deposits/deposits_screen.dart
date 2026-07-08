@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -129,11 +130,15 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
             }
             return ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
               itemCount: list.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (_, i) => _DepositCard(
+              separatorBuilder: (context, index) => const MobileM3ListDivider(),
+              itemBuilder: (_, i) => _DepositListItem(
                 deposit: list[i],
+                position: MobileM3ListItemPositionForIndex.forIndex(
+                  i,
+                  list.length,
+                ),
                 onTap: () => _showDetail(list[i]),
               ),
             );
@@ -144,12 +149,17 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
   }
 }
 
-// ── Deposit Card ──────────────────────────────────────────────────────────────
+// ── Deposit List Item ─────────────────────────────────────────────────────────
 
-class _DepositCard extends StatelessWidget {
-  const _DepositCard({required this.deposit, required this.onTap});
+class _DepositListItem extends StatelessWidget {
+  const _DepositListItem({
+    required this.deposit,
+    required this.position,
+    required this.onTap,
+  });
 
   final SecurityDeposit deposit;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
@@ -158,69 +168,55 @@ class _DepositCard extends StatelessWidget {
     final cs = theme.colorScheme;
     final isReturned = deposit.status.toLowerCase() == 'returned';
 
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          deposit.leaseNumber != null
-                              ? 'Lease ${deposit.leaseNumber}'
-                              : 'Deposit #${deposit.id}',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _StatusChip(status: deposit.status),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text(
-                          _fmtCurrency(deposit.amount),
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        if (deposit.totalDeductions > 0) ...[
-                          const SizedBox(width: 6),
-                          Text(
-                            '− ${_fmtCurrency(deposit.totalDeductions)} deductions',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: cs.error,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isReturned
-                          ? 'Returned ${deposit.returnedAt != null ? _fmtDate(deposit.returnedAt!) : ''}'
-                          : 'Held since ${_fmtDate(deposit.heldAt)}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.account_balance_wallet_outlined,
+        backgroundColor: isReturned
+            ? cs.secondaryContainer
+            : cs.primaryContainer,
+        foregroundColor: isReturned
+            ? cs.onSecondaryContainer
+            : cs.onPrimaryContainer,
+      ),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              deposit.leaseNumber != null
+                  ? 'Lease ${deposit.leaseNumber}'
+                  : 'Deposit #${deposit.id}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
               ),
-              Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
-            ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _StatusChip(status: deposit.status),
+        ],
+      ),
+      supporting: [
+        Text(
+          deposit.totalDeductions > 0
+              ? '${_fmtCurrency(deposit.amount)} held · ${_fmtCurrency(deposit.totalDeductions)} deductions'
+              : '${_fmtCurrency(deposit.amount)} held',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: deposit.totalDeductions > 0 ? cs.error : cs.onSurfaceVariant,
           ),
         ),
+      ],
+      meta: Text(
+        isReturned
+            ? 'Returned ${deposit.returnedAt != null ? _fmtDate(deposit.returnedAt!) : ''}'
+            : 'Held since ${_fmtDate(deposit.heldAt)}',
+        style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
       ),
+      trailing: Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+      onTap: onTap,
     );
   }
 }

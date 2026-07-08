@@ -48,6 +48,7 @@ class TransactionsState {
 /// Drives the unified ledger: first page, append-on-scroll, and filtering.
 class TransactionsNotifier extends Notifier<TransactionsState> {
   static const _pageSize = 40;
+  int _loadGeneration = 0;
 
   @override
   TransactionsState build() => const TransactionsState();
@@ -55,20 +56,36 @@ class TransactionsNotifier extends Notifier<TransactionsState> {
   MoneyRepository get _repo => ref.read(moneyRepositoryProvider);
 
   /// Loads (or reloads) the first page with the current filter.
-  Future<void> load() async {
-    state = state.copyWith(loading: true, clearError: true);
+  Future<void> load({
+    TransactionsFilter? filter,
+    bool clearItems = false,
+  }) async {
+    final nextFilter = filter ?? state.filter;
+    final generation = ++_loadGeneration;
+
+    state = state.copyWith(
+      filter: nextFilter,
+      items: clearItems ? const [] : state.items,
+      totalCount: clearItems ? 0 : state.totalCount,
+      loading: true,
+      loadingMore: false,
+      clearError: true,
+    );
     try {
       final page = await _repo.transactions(
         skip: 0,
         take: _pageSize,
-        filter: state.filter,
+        filter: nextFilter,
       );
+      if (generation != _loadGeneration) return;
       state = state.copyWith(
         items: page.items,
         totalCount: page.totalCount,
         loading: false,
+        loadingMore: false,
       );
     } on ApiException catch (e) {
+      if (generation != _loadGeneration) return;
       state = state.copyWith(loading: false, error: e.message);
     }
   }
@@ -78,31 +95,34 @@ class TransactionsNotifier extends Notifier<TransactionsState> {
   /// Appends the next page, if any.
   Future<void> loadMore() async {
     if (state.loadingMore || state.loading || !state.hasMore) return;
+    final generation = _loadGeneration;
+    final filter = state.filter;
+    final skip = state.items.length;
     state = state.copyWith(loadingMore: true);
     try {
       final page = await _repo.transactions(
-        skip: state.items.length,
+        skip: skip,
         take: _pageSize,
-        filter: state.filter,
+        filter: filter,
       );
+      if (generation != _loadGeneration) return;
       state = state.copyWith(
         items: [...state.items, ...page.items],
         totalCount: page.totalCount,
         loadingMore: false,
       );
     } on ApiException catch (e) {
+      if (generation != _loadGeneration) return;
       state = state.copyWith(loadingMore: false, error: e.message);
     }
   }
 
   /// Replaces the filter and reloads from the first page.
-  Future<void> setFilter(TransactionsFilter filter) async {
-    state = state.copyWith(filter: filter);
-    await load();
-  }
+  Future<void> setFilter(TransactionsFilter filter) =>
+      load(filter: filter, clearItems: true);
 }
 
 final transactionsProvider =
     NotifierProvider<TransactionsNotifier, TransactionsState>(
-  TransactionsNotifier.new,
-);
+      TransactionsNotifier.new,
+    );

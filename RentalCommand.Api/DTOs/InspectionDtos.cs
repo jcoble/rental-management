@@ -58,6 +58,14 @@ public class InspectionResponse
     };
 }
 
+public class InspectionListResponse
+{
+    public IReadOnlyList<InspectionResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 /// <summary>One checklist item on an inspection.</summary>
 public class InspectionItemResponse
 {

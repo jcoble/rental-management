@@ -93,6 +93,12 @@ public class WorkOrderListQuery : ListQuery
     public bool OpenOnly { get; set; }
     public WorkOrderStatus? Status { get; set; }
     public WorkOrderPriority? Priority { get; set; }
+    public DateTime? RequestedFrom { get; set; }
+    public DateTime? RequestedTo { get; set; }
+    public DateTime? ScheduledFrom { get; set; }
+    public DateTime? ScheduledTo { get; set; }
+    public DateTime? CompletedFrom { get; set; }
+    public DateTime? CompletedTo { get; set; }
 }
 
 /// <summary>One entry in a work order's status timeline (oldest → newest in the parent list).</summary>

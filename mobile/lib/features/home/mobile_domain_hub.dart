@@ -127,7 +127,10 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
       ..addListener(_handleHeaderChanged);
     _quickActionFabRegistry = MobileQuickActionFabRegistry()
       ..addListener(_handleQuickActionFabChanged);
-    _domainNavigator = MobileDomainNavigator(_openDestination);
+    _domainNavigator = MobileDomainNavigator(
+      openDestination: _openDestination,
+      popToCurrentRoot: _popToCurrentRoot,
+    );
     widget.onControllerReady?.call(_domainNavigator);
     _scheduleQuickActionFallbackCheck();
   }
@@ -258,6 +261,13 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     if (rootNavigator.canPop()) {
       rootNavigator.pop();
     }
+  }
+
+  void _popToCurrentRoot() {
+    _headerController.clearActiveDetail();
+    _contentNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+    if (!mounted) return;
+    setState(() => _headerCollapsed = false);
   }
 
   Widget _appBarTitle(BuildContext context) {

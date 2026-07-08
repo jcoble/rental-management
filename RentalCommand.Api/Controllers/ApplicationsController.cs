@@ -133,6 +133,15 @@ public class ApplicationsController : ManagementControllerBase
         }
     }
 
+    [HttpDelete("{id:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, GetUserId(), ct);
+        return deleted ? NoContent() : NotFound(new { error = "Application not found" });
+    }
+
     /// <summary>
     /// Runs a background/credit screening (FCRA) for the application. Requires recorded FCRA consent
     /// (400 otherwise). The screening provider is gated: when no key is configured this returns 503

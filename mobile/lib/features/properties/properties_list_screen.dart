@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -63,8 +64,6 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesProvider);
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Properties')),
@@ -95,16 +94,15 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
             return ListView.separated(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 160.0 + bottomInset),
               itemCount: list.length,
-              separatorBuilder: (context, index) =>
-                  _GroupedListDivider(colorScheme: colorScheme),
+              separatorBuilder: (context, index) => const MobileM3ListDivider(),
               itemBuilder: (context, index) {
                 final property = list[index];
                 return _PropertyCard(
                   property: property,
-                  colorScheme: colorScheme,
-                  theme: theme,
-                  first: index == 0,
-                  last: index == list.length - 1,
+                  position: MobileM3ListItemPositionForIndex.forIndex(
+                    index,
+                    list.length,
+                  ),
                   onTap: () => _openDetail(context, property),
                 );
               },
@@ -121,109 +119,64 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
 class _PropertyCard extends StatelessWidget {
   const _PropertyCard({
     required this.property,
-    required this.colorScheme,
-    required this.theme,
-    required this.first,
-    required this.last,
+    required this.position,
     required this.onTap,
   });
 
   final Property property;
-  final ColorScheme colorScheme;
-  final ThemeData theme;
-  final bool first;
-  final bool last;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final unitCount = property.unitCount ?? 0;
     final occupied = property.occupiedUnits ?? 0;
-    final borderRadius = BorderRadius.vertical(
-      top: first ? const Radius.circular(20) : Radius.zero,
-      bottom: last ? const Radius.circular(20) : Radius.zero,
-    );
 
-    return Material(
-      color: colorScheme.surfaceContainerHigh,
-      borderRadius: borderRadius,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: borderRadius,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      property.name,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _StatusChip(
-                    status: property.status,
-                    colorScheme: colorScheme,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  _MetaChip(
-                    icon: Icons.apartment_outlined,
-                    label: '$unitCount ${unitCount == 1 ? 'unit' : 'units'}',
-                  ),
-                  _MetaChip(
-                    icon: Icons.person_outline,
-                    label: '$occupied occupied',
-                  ),
-                  _MetaChip(
-                    icon: Icons.home_outlined,
-                    label: _formatPropertyType(property.type),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+    return MobileM3ListItem(
+      position: position,
+      onTap: onTap,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.apartment_outlined,
+        backgroundColor: colorScheme.primaryContainer,
+        foregroundColor: colorScheme.onPrimaryContainer,
       ),
-    );
-  }
-}
-
-class _GroupedListDivider extends StatelessWidget {
-  const _GroupedListDivider({required this.colorScheme});
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Divider(
-      height: 1,
-      thickness: 1,
-      indent: 16,
-      endIndent: 16,
-      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
+      title: Text(
+        property.name,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        Text(
+          '${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+      meta: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          _StatusChip(status: property.status, colorScheme: colorScheme),
+          _MetaChip(
+            icon: Icons.apartment_outlined,
+            label: '$unitCount ${unitCount == 1 ? 'unit' : 'units'}',
+          ),
+          _MetaChip(icon: Icons.person_outline, label: '$occupied occupied'),
+          _MetaChip(
+            icon: Icons.home_outlined,
+            label: _formatPropertyType(property.type),
+          ),
+        ],
+      ),
+      trailing: Icon(Icons.chevron_right, color: colorScheme.onSurfaceVariant),
     );
   }
 }

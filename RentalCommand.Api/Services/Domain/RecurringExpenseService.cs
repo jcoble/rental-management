@@ -25,6 +25,37 @@ public class RecurringExpenseService : IRecurringExpenseService
 
     public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, propertyId, query, ct);
+        return page.Items;
+    }
+
+    public async Task<RecurringExpenseListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(portfolioId, propertyId, query);
+        var totalCount = await filtered.CountAsync(ct);
+
+        var items = await ApplySort(filtered, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .Select(t => new { Template = t, PropertyName = t.Property != null ? t.Property.Name : null })
+            .ToListAsync(ct);
+
+        return new RecurringExpenseListResponse
+        {
+            Items = items.Select(x =>
+            {
+                var r = RecurringExpenseResponse.FromEntity(x.Template);
+                r.PropertyName = x.PropertyName;
+                return r;
+            }).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private IQueryable<RecurringExpense> BuildListQuery(int portfolioId, int? propertyId, ListQuery query)
+    {
         var q = _db.RecurringExpenses
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
@@ -38,27 +69,31 @@ public class RecurringExpenseService : IRecurringExpenseService
             q = q.Where(t => EF.Functions.ILike(t.Description, $"%{term}%"));
         }
 
-        q = query.SortField switch
+        var (from, to) = ListDateRange.UtcDay(query.From, query.To);
+        if (from is { } fromUtc)
+            q = q.Where(t => t.NextRunDate >= fromUtc);
+        if (to is { } toUtcExclusive)
+            q = q.Where(t => t.NextRunDate < toUtcExclusive);
+
+        return q;
+    }
+
+    private static IQueryable<RecurringExpense> ApplySort(IQueryable<RecurringExpense> q, ListQuery query)
+    {
+        var ordered = query.SortField switch
         {
             "description" => query.SortDescending ? q.OrderByDescending(t => t.Description) : q.OrderBy(t => t.Description),
             "amount" => query.SortDescending ? q.OrderByDescending(t => t.Amount) : q.OrderBy(t => t.Amount),
             "category" => query.SortDescending ? q.OrderByDescending(t => t.Category) : q.OrderBy(t => t.Category),
+            "frequency" => query.SortDescending ? q.OrderByDescending(t => t.Frequency) : q.OrderBy(t => t.Frequency),
+            "startdate" => query.SortDescending ? q.OrderByDescending(t => t.StartDate) : q.OrderBy(t => t.StartDate),
             "nextrundate" => query.SortDescending ? q.OrderByDescending(t => t.NextRunDate) : q.OrderBy(t => t.NextRunDate),
+            "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
+            "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
         };
 
-        var items = await q
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .Select(t => new { Template = t, PropertyName = t.Property != null ? t.Property.Name : null })
-            .ToListAsync(ct);
-
-        return items.Select(x =>
-        {
-            var r = RecurringExpenseResponse.FromEntity(x.Template);
-            r.PropertyName = x.PropertyName;
-            return r;
-        }).ToList();
+        return ordered.ThenBy(t => t.Id);
     }
 
     public async Task<RecurringExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

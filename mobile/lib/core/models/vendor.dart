@@ -9,6 +9,7 @@ class Vendor {
   final String? postalCode;
   final String? email;
   final String? phone;
+  final String? website;
   final String? taxId;
   final bool is1099Eligible;
   final bool w9OnFile;
@@ -28,6 +29,7 @@ class Vendor {
     this.postalCode,
     this.email,
     this.phone,
+    this.website,
     this.taxId,
     required this.is1099Eligible,
     required this.w9OnFile,
@@ -49,6 +51,7 @@ class Vendor {
       postalCode: json['postalCode'] as String?,
       email: json['email'] as String?,
       phone: json['phone'] as String?,
+      website: json['website'] as String?,
       taxId: json['taxId'] as String?,
       is1099Eligible: json['is1099Eligible'] as bool? ?? false,
       w9OnFile: json['w9OnFile'] as bool? ?? false,

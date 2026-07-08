@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart' hide Vendor;
 import '../../core/utils/date_wire.dart';
+import '../activity/activity_history_screen.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/dispatch_vendor_sheet.dart';
@@ -362,9 +363,23 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
     );
   }
 
+  void _showActivityHistory({String? subtitle}) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'WorkOrder',
+          entityId: widget.workOrderId,
+          title: 'Work order activity',
+          subtitle: subtitle,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final detailAsync = ref.watch(workOrderDetailProvider(widget.workOrderId));
+    final detail = detailAsync.asData?.value;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -372,6 +387,12 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
       appBar: AppBar(
         title: const Text('Work Order'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View work order activity',
+            onPressed: () =>
+                _showActivityHistory(subtitle: detail?.workOrder.title),
+          ),
           detailAsync.whenOrNull(
                 data: (detail) => IconButton(
                   icon: const Icon(Icons.edit_outlined),

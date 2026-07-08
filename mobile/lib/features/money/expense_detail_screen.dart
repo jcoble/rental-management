@@ -3,12 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../activity/activity_history_screen.dart';
 import 'expense_models.dart';
 import 'money_format.dart';
 import 'money_repository.dart';
 import 'receipt_attachment_repository.dart';
 import 'receipt_upload_sheet.dart';
 import 'receipt_viewer_screen.dart';
+import 'transactions_controller.dart';
 
 /// Detail page for one expense — view, inline edit, delete, and receipt viewer.
 ///
@@ -27,23 +29,24 @@ class ExpenseDetailScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Expense'),
         actions: [
-          async.maybeWhen(
-            data: (e) => PopupMenuButton<String>(
-              onSelected: (value) async {
-                if (value == 'delete') {
-                  await _confirmDelete(context, ref, e);
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(
-                  value: 'delete',
-                  child: ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.delete_outline),
-                    title: Text('Delete'),
-                  ),
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View expense activity',
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => ActivityHistoryScreen(
+                  entityType: 'Expense',
+                  entityId: expenseId,
+                  title: 'Expense activity',
                 ),
-              ],
+              ),
+            ),
+          ),
+          async.maybeWhen(
+            data: (expense) => IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete expense',
+              onPressed: () => _confirmDelete(context, ref, expense),
             ),
             orElse: () => const SizedBox.shrink(),
           ),
@@ -92,6 +95,8 @@ class ExpenseDetailScreen extends ConsumerWidget {
     try {
       await ref.read(moneyRepositoryProvider).deleteExpense(expense.id);
       ref.invalidate(expensesListProvider);
+      ref.invalidate(expensesPageProvider);
+      ref.invalidate(transactionsProvider);
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('Expense deleted.')));
@@ -121,6 +126,8 @@ class _ExpenseBody extends ConsumerWidget {
     if (saved == true) {
       ref.invalidate(expenseDetailProvider(expense.id));
       ref.invalidate(expensesListProvider);
+      ref.invalidate(expensesPageProvider);
+      ref.invalidate(transactionsProvider);
     }
   }
 
@@ -146,6 +153,8 @@ class _ExpenseBody extends ConsumerWidget {
     ref.invalidate(expenseDetailProvider(expense.id));
     ref.invalidate(expenseReceiptProvider(expense.id));
     ref.invalidate(expensesListProvider);
+    ref.invalidate(expensesPageProvider);
+    ref.invalidate(transactionsProvider);
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Receipt uploaded.')));

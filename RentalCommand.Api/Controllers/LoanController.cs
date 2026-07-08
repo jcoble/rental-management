@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CRUD for per-property loans (mortgages) within the caller's portfolio, plus read access to a
 /// loan's amortization schedule. Scope comes from the JWT <c>portfolioId</c> claim; list supports
-/// <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
+/// <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort&amp;from&amp;to</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/loans")]
@@ -28,6 +28,15 @@ public class LoanController : AuthenticatedPortfolioControllerBase
     {
         var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
         return Ok(items);
+    }
+
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(LoanListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<LoanListResponse>> ListPage(
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, query, ct);
+        return Ok(page);
     }
 
     [HttpGet("{id:int}")]

@@ -9,9 +9,15 @@ describe('buildExpenseListPagePath', () => {
 				unitId: 3,
 				take: 20,
 				sort: '-incurredAt',
-				workOrderLinkedOnly: true
+				workOrderLinkedOnly: true,
+				incurredFrom: '2026-02-01',
+				incurredTo: '2026-02-28',
+				dueFrom: '2026-03-01',
+				dueTo: '2026-03-15',
+				paidFrom: '2026-03-05',
+				paidTo: '2026-03-20'
 			}),
-			'/expenses/page?take=20&sort=-incurredAt&portfolioId=2&unitId=3&workOrderLinkedOnly=true'
+			'/expenses/page?take=20&sort=-incurredAt&portfolioId=2&unitId=3&workOrderLinkedOnly=true&incurredFrom=2026-02-01&incurredTo=2026-02-28&dueFrom=2026-03-01&dueTo=2026-03-15&paidFrom=2026-03-05&paidTo=2026-03-20'
 		);
 	});
 

@@ -32,6 +32,15 @@ public class InspectionController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(InspectionListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<InspectionListResponse>> ListPage(
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, query, ct);
+        return Ok(page);
+    }
+
     /// <summary>Available checklist templates (built-ins + any portfolio-custom), each with their items.</summary>
     [HttpGet("templates")]
     [ProducesResponseType(typeof(IReadOnlyList<InspectionTemplateResponse>), StatusCodes.Status200OK)]

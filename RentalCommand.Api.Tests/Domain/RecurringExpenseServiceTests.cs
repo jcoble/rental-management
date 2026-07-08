@@ -114,6 +114,31 @@ public class RecurringExpenseServiceTests : IDisposable
         _ctx.Db.RecurringExpenses.IgnoreQueryFilters().Should().HaveCount(1);
     }
 
+    [Fact]
+    public async Task ListPageAsync_FiltersByNextRunDate_AndReturnsPagedMetadata()
+    {
+        var property = SeedProperty();
+        SeedTemplate(property.Id, description: "January insurance", nextRunDate: new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc));
+        SeedTemplate(property.Id, description: "February insurance", nextRunDate: new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+        SeedTemplate(property.Id, description: "March insurance", nextRunDate: new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc));
+
+        var page = await _sut.ListPageAsync(PortfolioId, property.Id, new ListQuery
+        {
+            From = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            To = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc),
+            Sort = "-nextRunDate",
+            Skip = 0,
+            Take = 1,
+        });
+
+        page.TotalCount.Should().Be(2);
+        page.Skip.Should().Be(0);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle();
+        page.Items[0].Description.Should().Be("March insurance");
+        page.Items[0].PropertyName.Should().Be(property.Name);
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -151,19 +176,23 @@ public class RecurringExpenseServiceTests : IDisposable
         return property;
     }
 
-    private RecurringExpense SeedTemplate(int propertyId)
+    private RecurringExpense SeedTemplate(
+        int propertyId,
+        string description = "Monthly insurance",
+        DateTime? nextRunDate = null)
     {
         var now = DateTime.UtcNow;
+        var nextRun = nextRunDate ?? now.Date;
         var template = new RecurringExpense
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
             Category = ScheduleECategory.Insurance,
-            Description = "Monthly insurance",
+            Description = description,
             Amount = 250m,
             Frequency = RecurringExpenseFrequency.Monthly,
-            StartDate = now.Date,
-            NextRunDate = now.Date,
+            StartDate = nextRun,
+            NextRunDate = nextRun,
             Active = true,
             CreatedAt = now,
             UpdatedAt = now,

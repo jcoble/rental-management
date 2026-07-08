@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,12 +14,14 @@ public class AuditQueryService : IAuditQueryService
     private readonly RentalCommandDbContext _db;
     private readonly AuditDescriber _describer;
     private readonly AuditDiffBuilder _diff;
+    private readonly IAppTimeZoneProvider _tz;
 
-    public AuditQueryService(RentalCommandDbContext db, AuditDescriber describer, AuditDiffBuilder diff)
+    public AuditQueryService(RentalCommandDbContext db, AuditDescriber describer, AuditDiffBuilder diff, IAppTimeZoneProvider tz)
     {
         _db = db;
         _describer = describer;
         _diff = diff;
+        _tz = tz;
     }
 
     public async Task<IReadOnlyList<AuditEntryResponse>> ListAsync(
@@ -272,6 +275,16 @@ public class AuditQueryService : IAuditQueryService
         {
             q = ApplySearch(q, query.Search.Trim());
         }
+
+        // Grid date-range filter on Timestamp — a true INSTANT (real time-of-day), so the picked
+        // [from, to] day span is interpreted in the landlord's business timezone and converted to UTC
+        // instants (half-open). "This month" is the landlord's local month: an 11pm-ET-Dec-31 event
+        // stays in December, not the next UTC year. DB-side, one predicate.
+        var (fromUtc, toUtcExclusive) = ListDateRange.BusinessTzDay(query.From, query.To, _tz.BusinessTimeZone);
+        if (fromUtc is { } f)
+            q = q.Where(a => a.Timestamp >= f);
+        if (toUtcExclusive is { } t)
+            q = q.Where(a => a.Timestamp < t);
 
         return q;
     }

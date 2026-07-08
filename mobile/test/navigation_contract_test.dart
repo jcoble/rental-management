@@ -62,4 +62,14 @@ void main() {
       );
     }
   });
+
+  test('account menu does not expose duplicate Browse all navigation', () {
+    final source = File(
+      'lib/features/home/mobile_shell_actions.dart',
+    ).readAsStringSync();
+
+    expect(source, isNot(contains("import 'more_tab.dart';")));
+    expect(source, isNot(contains("label: 'Browse all'")));
+    expect(source, isNot(contains('const MoreTab()')));
+  });
 }

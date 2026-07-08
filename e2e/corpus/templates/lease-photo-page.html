@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lease photo {{pageLabel}}</title>
+<style>
+  html,body{margin:0;padding:0;background:#22262c;}
+  .stage{width:1200px;height:1600px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;
+    padding:52px 60px;
+    background:
+      radial-gradient(120% 85% at 44% 6%, rgba(255,255,255,.06), rgba(0,0,0,.44) 74%),
+      linear-gradient(150deg,#3f444c 0%,#2b2f36 45%,#1e2228 100%);}
+  .paper{position:relative;background:#fbfbf6;color:#161616;width:760px;min-height:1360px;padding:56px 62px;
+    transform:rotate({{rotate}}deg);
+    box-shadow:0 36px 70px rgba(0,0,0,.58),0 12px 22px rgba(0,0,0,.42);
+    font-family:"Times New Roman",Georgia,serif;font-size:16px;line-height:1.5;
+    filter:contrast(1.05) blur(.35px);}
+  .paper::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 150px rgba(0,0,0,.17);}
+  h1{font-size:24px;text-align:center;margin:0 0 4px;}
+  .sub{text-align:center;color:#444;font-size:13px;margin:0 0 20px;}
+  h2{font-size:17px;border-bottom:1px solid #999;padding-bottom:3px;margin:20px 0 8px;}
+  table{width:100%;border-collapse:collapse;margin:6px 0;}
+  td{padding:4px 6px;vertical-align:top;}
+  td.k{color:#333;width:46%;}
+  td.v{font-weight:bold;}
+  p{margin:7px 0;text-align:justify;}
+  .sigline{border-top:1px solid #222;width:280px;padding-top:4px;margin-top:44px;font-size:13px;}
+  .pagefoot{position:absolute;bottom:22px;right:40px;color:#777;font-size:12px;}
+</style>
+</head>
+<body>
+  <div class="stage"><div class="paper">
+    {{bodyHtml}}
+    <div class="pagefoot">Lease {{leaseNumber}} &middot; {{pageLabel}}</div>
+  </div></div>
+</body>
+</html>

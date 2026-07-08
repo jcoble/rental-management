@@ -7,12 +7,79 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import 'applications_models.dart';
 
+class ApplicationListQuery {
+  const ApplicationListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.status,
+    this.unitId,
+    this.search,
+    this.sort = '-submittedAt',
+  });
+
+  final int skip;
+  final int take;
+  final String? status;
+  final int? unitId;
+  final String? search;
+  final String sort;
+
+  @override
+  bool operator ==(Object other) {
+    return other is ApplicationListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.status == status &&
+        other.unitId == unitId &&
+        other.search == search &&
+        other.sort == sort;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, status, unitId, search, sort);
+}
+
+class ApplicationListPage {
+  const ApplicationListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<RentalApplication> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory ApplicationListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(RentalApplication.fromJson)
+              .toList()
+        : <RentalApplication>[];
+
+    return ApplicationListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Repository for rental applications (landlord-facing review).
 ///
 /// Endpoints used (all JWT-scoped, portfolio from claim):
 ///   GET    /applications?status=     — list, optionally filtered by status
 ///   GET    /applications/{id}        — single application
 ///   PATCH  /applications/{id}        — landlord corrections before decision
+///   DELETE /applications/{id}        — soft-delete a landlord application
 ///   POST   /applications/{id}/approve  — approve (also creates a Tenant)
 ///   POST   /applications/{id}/decline  — decline with optional { reason }
 ///   POST   /applications/{id}/withdraw — withdraw
@@ -34,6 +101,36 @@ class ApplicationsRepository {
           .whereType<Map<String, dynamic>>()
           .map(RentalApplication.fromJson)
           .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ApplicationListPage> listPage([
+    ApplicationListQuery query = const ApplicationListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'status': query.status,
+      'unitId': query.unitId,
+      'search': query.search,
+      'sort': query.sort,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/applications/page',
+        queryParameters: parameters,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicationListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -72,6 +169,14 @@ class ApplicationsRepository {
         );
       }
       return RentalApplication.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> delete(int id) async {
+    try {
+      await _dio.delete<void>('/applications/$id');
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -298,6 +403,11 @@ final applicationsRepositoryProvider = Provider<ApplicationsRepository>((ref) {
 final applicationsProvider = FutureProvider.autoDispose
     .family<List<RentalApplication>, String?>((ref, status) {
       return ref.watch(applicationsRepositoryProvider).list(status: status);
+    });
+
+final applicationsPageProvider = FutureProvider.autoDispose
+    .family<ApplicationListPage, ApplicationListQuery>((ref, query) {
+      return ref.watch(applicationsRepositoryProvider).listPage(query);
     });
 
 /// A single application by id.

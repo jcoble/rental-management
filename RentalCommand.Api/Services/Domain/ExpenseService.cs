@@ -115,7 +115,52 @@ public class ExpenseService : IExpenseService
                 (e.Notes != null && EF.Functions.ILike(e.Notes, $"%{term}%")));
         }
 
+        if (query is ExpenseListQuery expenseQuery)
+        {
+            if (expenseQuery.IncurredFrom.HasValue)
+            {
+                var incurredFrom = expenseQuery.IncurredFrom.Value.ToUtc();
+                q = q.Where(e => e.IncurredAt >= incurredFrom);
+            }
+
+            if (expenseQuery.IncurredTo.HasValue)
+            {
+                var incurredToExclusive = ToExclusiveUpperBound(expenseQuery.IncurredTo.Value);
+                q = q.Where(e => e.IncurredAt < incurredToExclusive);
+            }
+
+            if (expenseQuery.DueFrom.HasValue)
+            {
+                var dueFrom = expenseQuery.DueFrom.Value.ToUtc();
+                q = q.Where(e => e.DueDate != null && e.DueDate >= dueFrom);
+            }
+
+            if (expenseQuery.DueTo.HasValue)
+            {
+                var dueToExclusive = ToExclusiveUpperBound(expenseQuery.DueTo.Value);
+                q = q.Where(e => e.DueDate != null && e.DueDate < dueToExclusive);
+            }
+
+            if (expenseQuery.PaidFrom.HasValue)
+            {
+                var paidFrom = expenseQuery.PaidFrom.Value.ToUtc();
+                q = q.Where(e => e.PaidAt != null && e.PaidAt >= paidFrom);
+            }
+
+            if (expenseQuery.PaidTo.HasValue)
+            {
+                var paidToExclusive = ToExclusiveUpperBound(expenseQuery.PaidTo.Value);
+                q = q.Where(e => e.PaidAt != null && e.PaidAt < paidToExclusive);
+            }
+        }
+
         return q;
+    }
+
+    private static DateTime ToExclusiveUpperBound(DateTime value)
+    {
+        var utc = value.ToUtc();
+        return value.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1) : utc;
     }
 
     private static IQueryable<Expense> ApplySort(IQueryable<Expense> q, ListQuery query) =>
@@ -126,6 +171,8 @@ public class ExpenseService : IExpenseService
             "status" => query.SortDescending ? q.OrderByDescending(e => e.Status) : q.OrderBy(e => e.Status),
             "amount" => query.SortDescending ? q.OrderByDescending(e => e.Amount) : q.OrderBy(e => e.Amount),
             "incurredat" => query.SortDescending ? q.OrderByDescending(e => e.IncurredAt) : q.OrderBy(e => e.IncurredAt),
+            "duedate" => query.SortDescending ? q.OrderByDescending(e => e.DueDate) : q.OrderBy(e => e.DueDate),
+            "paidat" or "paiddate" => query.SortDescending ? q.OrderByDescending(e => e.PaidAt) : q.OrderBy(e => e.PaidAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(e => e.UpdatedAt) : q.OrderBy(e => e.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(e => e.CreatedAt) : q.OrderBy(e => e.CreatedAt),
         };

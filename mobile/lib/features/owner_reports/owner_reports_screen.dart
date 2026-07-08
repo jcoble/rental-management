@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
+import '../../core/theme/app_tokens.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../accounting/accounting_repository.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'owner_reports_repository.dart';
@@ -147,18 +149,21 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                     itemCount: list.length + 1,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: 8),
+                    separatorBuilder: (context, index) {
+                      if (index == 0) return const SizedBox(height: 16);
+                      return const MobileM3ListDivider();
+                    },
                     itemBuilder: (_, i) {
                       if (i == 0) {
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: packetCard,
-                        );
+                        return packetCard;
                       }
                       final owner = list[i - 1];
-                      return _OwnerSummaryCard(
+                      return _OwnerSummaryListItem(
                         owner: owner,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          i - 1,
+                          list.length,
+                        ),
                         onTap: () => _showStatement(owner),
                       );
                     },
@@ -227,88 +232,109 @@ class _YearEndPacketCard extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    return Card(
-      color: cs.secondaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.picture_as_pdf_outlined,
-                  color: cs.onSecondaryContainer,
-                  size: 22,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Year-end packet (PDF)',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: cs.onSecondaryContainer,
+    return AnimatedContainer(
+      duration: M3Motion.medium2,
+      curve: M3Motion.emphasizedDecelerate,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: M3Shape.radiusLargeIncreased,
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.36)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  MobileM3LeadingIcon(
+                    icon: Icons.picture_as_pdf_outlined,
+                    backgroundColor: cs.primaryContainer,
+                    foregroundColor: cs.onPrimaryContainer,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Year-end packet (PDF)',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Hand your accountant a clean PDF: Schedule E, P&L, '
-              'cash flow, rent roll.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: cs.onSecondaryContainer.withValues(alpha: 0.85),
+                ],
               ),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Text(
-                  'Tax year',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: cs.onSecondaryContainer.withValues(alpha: 0.85),
-                  ),
+              const SizedBox(height: 6),
+              Text(
+                'Hand your accountant a clean PDF: Schedule E, P&L, '
+                'cash flow, rent roll.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
                 ),
-                const SizedBox(width: 10),
-                DropdownButton<int>(
-                  value: year,
-                  underline: const SizedBox.shrink(),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: cs.onSecondaryContainer,
-                    fontWeight: FontWeight.w600,
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Text(
+                    'Tax year',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
-                  dropdownColor: cs.surface,
-                  items: years
-                      .map((y) => DropdownMenuItem(value: y, child: Text('$y')))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) onYearChanged(v);
-                  },
-                ),
-                const Spacer(),
-                Flexible(
-                  child: FilledButton.icon(
-                    onPressed: onOpen,
-                    icon: const Icon(Icons.download_outlined, size: 18),
-                    label: const Text('Download'),
+                  const SizedBox(width: 10),
+                  DropdownButton<int>(
+                    value: year,
+                    underline: const SizedBox.shrink(),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: cs.onSurface,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    dropdownColor: cs.surface,
+                    items: years
+                        .map(
+                          (y) => DropdownMenuItem(value: y, child: Text('$y')),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) onYearChanged(v);
+                    },
                   ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(56),
+                    textStyle: theme.textTheme.labelLarge,
+                  ),
+                  onPressed: onOpen,
+                  icon: const Icon(Icons.download_outlined, size: 20),
+                  label: const Text('Download packet'),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-// ── Owner Summary Card ────────────────────────────────────────────────────────
+// ── Owner Summary List Item ───────────────────────────────────────────────────
 
-class _OwnerSummaryCard extends StatelessWidget {
-  const _OwnerSummaryCard({required this.owner, required this.onTap});
+class _OwnerSummaryListItem extends StatelessWidget {
+  const _OwnerSummaryListItem({
+    required this.owner,
+    required this.position,
+    required this.onTap,
+  });
 
   final OwnerSummary owner;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
@@ -317,68 +343,45 @@ class _OwnerSummaryCard extends StatelessWidget {
     final cs = theme.colorScheme;
     final isPositive = owner.netToOwner >= 0;
 
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: cs.primaryContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.person_outline,
-                  color: cs.onPrimaryContainer,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      owner.ownerName,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Net to owner',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    _fmtCurrency(owner.netToOwner),
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: isPositive ? null : cs.error,
-                    ),
-                  ),
-                  Icon(
-                    Icons.chevron_right,
-                    color: cs.onSurfaceVariant,
-                    size: 18,
-                  ),
-                ],
-              ),
-            ],
-          ),
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: Icons.person_outline,
+        backgroundColor: cs.primaryContainer,
+        foregroundColor: cs.onPrimaryContainer,
+      ),
+      title: Text(
+        owner.ownerName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
         ),
       ),
+      supporting: [
+        Text(
+          'Net to owner',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+      ],
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            _fmtCurrency(owner.netToOwner),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: isPositive ? null : cs.error,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(Icons.chevron_right, color: cs.onSurfaceVariant, size: 18),
+        ],
+      ),
+      onTap: onTap,
     );
   }
 }
