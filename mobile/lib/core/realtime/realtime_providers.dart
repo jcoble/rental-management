@@ -15,6 +15,7 @@ import '../../features/onboarding/getting_started_provider.dart';
 import '../../features/owner_reports/owner_reports_repository.dart';
 import '../../features/owners/owners_repository.dart';
 import '../../features/payments/payments_repository.dart';
+import '../../features/properties/capital_assets_repository.dart';
 import '../../features/properties/property_loans_repository.dart';
 import '../../features/properties/properties_repository.dart';
 import '../../features/scan/scan_repository.dart';
@@ -138,6 +139,10 @@ void _invalidateForEntity(Ref ref, String entityType) {
 
     case 'Loan':
       ref.invalidate(propertyLoansProvider);
+
+    case 'CapitalAsset':
+      ref.invalidate(propertyCapitalAssetsProvider);
+      _refreshIfAlive(ref, accountingSummaryProvider);
 
     case 'Portfolio':
       ref.invalidate(gettingStartedSignalsProvider);
