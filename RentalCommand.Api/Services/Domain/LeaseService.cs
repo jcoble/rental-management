@@ -2,9 +2,11 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -88,6 +90,7 @@ public class LeaseService : ILeaseService
     private readonly IAuditTrailService _audit;
     private readonly ILogger<LeaseService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAppTimeZoneProvider _tz;
 
     public LeaseService(
         RentalCommandDbContext db,
@@ -97,7 +100,8 @@ public class LeaseService : ILeaseService
         IAuditTrailService audit,
         ILogger<LeaseService> logger,
         TimeProvider timeProvider,
-        ILeaseAgreementRenderer? agreementRenderer = null)
+        ILeaseAgreementRenderer? agreementRenderer = null,
+        IAppTimeZoneProvider? tz = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -107,6 +111,7 @@ public class LeaseService : ILeaseService
         _audit = audit;
         _logger = logger;
         _timeProvider = timeProvider;
+        _tz = tz ?? UtcAppTimeZoneProvider.Instance;
     }
 
     // A lease is a legal contract, so high-stakes events (create / edit / terminate) get an explicit
@@ -194,6 +199,102 @@ public class LeaseService : ILeaseService
         return trackingStart.Value;
     }
 
+    private static DateTime EffectiveRentEndDate(Lease lease)
+    {
+        var end = lease.EndDate.Date;
+        if (lease.MoveOutDate.HasValue && lease.MoveOutDate.Value.Date < end)
+        {
+            return lease.MoveOutDate.Value.Date;
+        }
+
+        return end;
+    }
+
+    private static decimal RentAmountForPeriod(
+        Lease lease,
+        RentChargePeriod period,
+        ProrationConvention convention)
+        => period.IsPartial
+            ? ProrationCalculator.Prorate(lease.MonthlyRent, period.PeriodStart, period.PeriodEnd, convention)
+            : lease.MonthlyRent;
+
+    private async Task<ProrationConvention> GetProrationConventionAsync(int portfolioId, CancellationToken ct)
+    {
+        var settings = await _db.Portfolios
+            .AsNoTracking()
+            .Where(p => p.Id == portfolioId)
+            .Select(p => p.Settings)
+            .FirstOrDefaultAsync(ct);
+
+        return PortfolioProrationSettings.ReadConvention(settings);
+    }
+
+    private async Task AdjustFinalRentChargeForProrationAsync(Lease lease, CancellationToken ct)
+    {
+        if (lease.MonthlyRent <= 0m)
+        {
+            return;
+        }
+
+        var rentEnd = EffectiveRentEndDate(lease);
+        var finalOccupiedDate = rentEnd.AddDays(-1);
+        if (finalOccupiedDate < lease.StartDate.Date)
+        {
+            return;
+        }
+
+        var finalMonthStart = new DateTime(
+            finalOccupiedDate.Year,
+            finalOccupiedDate.Month,
+            1,
+            0,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var cutoff = RentChargeSchedule.GetDueDate(finalOccupiedDate.Year, finalOccupiedDate.Month, lease.RentDueDay);
+        var finalPeriod = RentChargeSchedule.GetDuePeriods(
+                lease.StartDate,
+                rentEnd,
+                lease.RentDueDay,
+                cutoff,
+                generationStart: finalMonthStart)
+            .FirstOrDefault(p => p.PeriodKey == cutoff.ToString("yyyy-MM"));
+
+        if (finalPeriod.PeriodKey is null || !finalPeriod.IsPartial)
+        {
+            return;
+        }
+
+        var payment = await _db.Payments
+            .FirstOrDefaultAsync(p => p.PortfolioId == lease.PortfolioId
+                && p.LeaseId == lease.Id
+                && p.PaymentType == PaymentType.Rent
+                && p.PeriodKey == finalPeriod.PeriodKey
+                && (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late),
+                ct);
+        if (payment is null)
+        {
+            return;
+        }
+
+        var convention = await GetProrationConventionAsync(lease.PortfolioId, ct);
+        var proratedAmount = RentAmountForPeriod(lease, finalPeriod, convention);
+        if (payment.Amount == proratedAmount)
+        {
+            return;
+        }
+
+        payment.Amount = proratedAmount;
+        payment.UpdatedAt = _timeProvider.UtcNow();
+        await _db.SaveChangesAsync(ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(
+            lease.PortfolioId,
+            PaymentEntityType,
+            payment.Id,
+            PaymentResponse.FromEntity(payment),
+            ct);
+    }
+
     private static DateTime? ResolveRentTrackingStartDate(
         DateTime leaseStart,
         RentTrackingStartMode mode,
@@ -215,6 +316,12 @@ public class LeaseService : ILeaseService
 
     private static DateTime MaxDate(DateTime left, DateTime right)
         => left >= right ? left : right;
+
+    private sealed class UtcAppTimeZoneProvider : IAppTimeZoneProvider
+    {
+        public static readonly UtcAppTimeZoneProvider Instance = new();
+        public TimeZoneInfo BusinessTimeZone => TimeZoneInfo.Utc;
+    }
 
     private static bool HasOpeningBalanceRequest(decimal? amount, DateTime? asOfDate, string? note)
         => amount.HasValue || asOfDate.HasValue || note is not null;
@@ -303,10 +410,11 @@ public class LeaseService : ILeaseService
         }
 
         var periods = RentChargeSchedule.GetDuePeriods(
-            RentChargeGenerationStart(lease),
-            lease.EndDate,
+            lease.StartDate,
+            EffectiveRentEndDate(lease),
             lease.RentDueDay,
-            _timeProvider.UtcNow().Date);
+            _timeProvider.BusinessToday(_tz),
+            generationStart: RentChargeGenerationStart(lease));
         if (periods.Count == 0)
         {
             return [];
@@ -326,6 +434,7 @@ public class LeaseService : ILeaseService
             .ToListAsync(ct);
 
         var existing = existingPeriodKeys.ToHashSet(StringComparer.Ordinal);
+        var convention = await GetProrationConventionAsync(lease.PortfolioId, ct);
         var now = _timeProvider.UtcNow();
         var created = periods
             .Where(p => !existing.Contains(p.PeriodKey))
@@ -335,7 +444,7 @@ public class LeaseService : ILeaseService
                 LeaseId = lease.Id,
                 PaymentType = PaymentType.Rent,
                 Status = PaymentStatus.Scheduled,
-                Amount = lease.MonthlyRent,
+                Amount = RentAmountForPeriod(lease, period, convention),
                 DueDate = period.DueDate,
                 PeriodKey = period.PeriodKey,
                 CreatedAt = now,
@@ -793,6 +902,7 @@ public class LeaseService : ILeaseService
                 p.DueDate,
                 p.PaidDate,
                 p.Method,
+                p.PeriodKey,
                 LedgerDate = p.PaidDate ?? p.DueDate,
             })
             .OrderByDescending(p => p.LedgerDate)
@@ -826,6 +936,9 @@ public class LeaseService : ILeaseService
                 // as "still owed".
                 var isCollected = p.Status == PaymentStatus.Paid;
                 var signedAmount = isCollected ? p.Amount : -p.Amount;
+                var isProratedRent = p.PaymentType == PaymentType.Rent
+                    && p.PeriodKey != null
+                    && p.Amount != lease.MonthlyRent;
 
                 var rows = new List<LedgerTransactionResponse>
                 {
@@ -842,6 +955,7 @@ public class LeaseService : ILeaseService
                         Category = p.PaymentType.ToString(),
                         Status = p.Status.ToString(),
                         SourceHref = $"/accounting/payments/{p.Id}",
+                        IsProrated = isProratedRent,
                         Explanation = LedgerExplanation.ForPayment(
                             p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
                     },
@@ -869,6 +983,7 @@ public class LeaseService : ILeaseService
                         Category = p.PaymentType.ToString(),
                         Status = p.Status.ToString(),
                         SourceHref = $"/accounting/payments/{p.Id}",
+                        IsProrated = isProratedRent,
                         Explanation = LedgerExplanation.ForPartialCollected(
                             p.PaymentType, collectedSoFar, p.Amount, p.PaidDate, p.DueDate, p.Method),
                     });
@@ -1209,6 +1324,13 @@ public class LeaseService : ILeaseService
             || (entity.Status == LeaseStatus.Active && rentTrackingMode.HasValue))
         {
             await EnsureRentChargesThroughTodayAsync(entity, ct);
+        }
+
+        if (entity.EndDate != prevEnd
+            || entity.MoveOutDate != prevMoveOutDate
+            || entity.MonthlyRent != prevRent)
+        {
+            await AdjustFinalRentChargeForProrationAsync(entity, ct);
         }
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity, includeNavigations: true);

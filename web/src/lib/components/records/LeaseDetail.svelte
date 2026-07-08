@@ -1576,6 +1576,11 @@
 											<div class="min-w-0">
 												<div class="flex items-center gap-1.5">
 													<p class="truncate text-sm font-medium">{entry.description}</p>
+													{#if entry.isProrated}
+														<span class="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="lease-ledger-prorated-chip">
+															Prorated
+														</span>
+													{/if}
 													{#if entry.explanation}
 														<HelpTooltip text={entry.explanation} label="Why this is here" />
 													{/if}
