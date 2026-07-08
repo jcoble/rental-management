@@ -468,38 +468,39 @@ class _ComposeBar extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    minLines: 1,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.newline,
-                    keyboardType: TextInputType.multiline,
-                    decoration: InputDecoration(
-                      hintText: 'Message…',
-                      filled: true,
-                      fillColor: colorScheme.surfaceContainerHighest,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
+            TextField(
+              controller: controller,
+              minLines: 1,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              keyboardType: TextInputType.multiline,
+              decoration: InputDecoration(
+                hintText: 'Message…',
+                filled: true,
+                fillColor: colorScheme.surfaceContainerHighest,
+                contentPadding: const EdgeInsetsDirectional.fromSTEB(
+                  16,
+                  10,
+                  8,
+                  10,
+                ),
+                suffixIcon: Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 4),
+                  child: _SendButton(
+                    sending: sending,
+                    onSend: onSend,
+                    colorScheme: colorScheme,
                   ),
                 ),
-                const SizedBox(width: 6),
-                _SendButton(
-                  sending: sending,
-                  onSend: onSend,
-                  colorScheme: colorScheme,
+                suffixIconConstraints: const BoxConstraints(
+                  minWidth: 52,
+                  minHeight: 48,
                 ),
-              ],
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+              ),
             ),
           ],
         ),
