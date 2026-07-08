@@ -43,21 +43,32 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Edit Work Order'), findsOneWidget);
-      final tabs = find.byType(TabBar);
       expect(
-        find.descendant(of: tabs, matching: find.text('Details')),
+        find.descendant(
+          of: find.byKey(const Key('tabbed-form-step-0')),
+          matching: find.text('Details'),
+        ),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: tabs, matching: find.text('Schedule')),
+        find.descendant(
+          of: find.byKey(const Key('tabbed-form-step-1')),
+          matching: find.text('Schedule'),
+        ),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: tabs, matching: find.text('Costs')),
+        find.descendant(
+          of: find.byKey(const Key('tabbed-form-step-2')),
+          matching: find.text('Costs'),
+        ),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: tabs, matching: find.text('Assign')),
+        find.descendant(
+          of: find.byKey(const Key('tabbed-form-step-3')),
+          matching: find.text('Assign'),
+        ),
         findsOneWidget,
       );
 
