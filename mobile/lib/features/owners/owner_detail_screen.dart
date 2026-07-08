@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -51,6 +52,7 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      useRootNavigator: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -60,6 +62,19 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
           widget.onChanged?.call();
           _refreshOwner();
         },
+      ),
+    );
+  }
+
+  void _showActivityHistory() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'OwnerEntity',
+          entityId: _owner.id,
+          title: 'Owner activity',
+          subtitle: _owner.name,
+        ),
       ),
     );
   }
@@ -154,12 +169,41 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
     final owner = _owner;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final embedded = MobileDomainChromeScope.isEmbedded(context);
+
+    Widget editButton() {
+      return IconButton(
+        icon: const Icon(Icons.edit_outlined),
+        tooltip: 'Edit owner',
+        onPressed: _showEditForm,
+      );
+    }
+
+    Widget activityButton() {
+      return IconButton(
+        icon: const Icon(Icons.history_outlined),
+        tooltip: 'View owner activity',
+        onPressed: _showActivityHistory,
+      );
+    }
+
+    Widget deleteButton() {
+      return IconButton(
+        icon: const Icon(Icons.delete_outline),
+        tooltip: 'Delete owner',
+        onPressed: _confirmDelete,
+      );
+    }
 
     return MobileDomainDetailHeader(
       title: owner.name,
       subtitle: '${owner.typeLabel} owner',
       child: Scaffold(
-        appBar: mobileDomainRootAppBar(context, title: Text(owner.name)),
+        appBar: mobileDomainRootAppBar(
+          context,
+          title: Text(owner.name),
+          actions: [editButton(), activityButton(), deleteButton()],
+        ),
         floatingActionButton: MobileQuickActionFab(
           heroTag: 'owner-detail-fab',
           primaryAction: MobileQuickAction(
@@ -177,6 +221,13 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
             children: [
+              if (embedded) ...[
+                MobileDomainEmbeddedToolbar(
+                  padding: EdgeInsets.zero,
+                  children: [editButton(), activityButton(), deleteButton()],
+                ),
+                const SizedBox(height: 8),
+              ],
               Row(
                 children: [
                   Container(
@@ -268,26 +319,6 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
                   ],
                 ),
               ],
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _showEditForm,
-                      icon: const Icon(Icons.edit_outlined),
-                      label: const Text('Edit'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _confirmDelete,
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('Delete'),
-                    ),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
@@ -316,6 +347,7 @@ class _ContactRow extends StatelessWidget {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ListTile(
+        titleAlignment: ListTileTitleAlignment.center,
         leading: Icon(icon, color: cs.primary),
         title: Text(value),
         trailing: trailing,

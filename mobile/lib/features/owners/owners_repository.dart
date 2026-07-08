@@ -18,6 +18,7 @@ class OwnersRepository {
       'take': query.take,
       'search': query.search,
       'sort': query.sort,
+      'ownerEntityType': query.ownerEntityType?.wireName,
     }..removeWhere((_, value) => value == null || value == '');
 
     try {

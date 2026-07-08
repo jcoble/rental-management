@@ -62,6 +62,74 @@ public class UnitServiceListTests : IDisposable
     }
 
     [Fact]
+    public async Task ListWithHealthPageAsync_AppliesStatusAndStageFiltersInSqlWindow()
+    {
+        var now = DateTime.UtcNow;
+        var tenant = SeedTenant(now);
+        var (renewalProperty, renewalUnit) = SeedUnitShell("2A", "Cedar Point Flats", UnitStatus.Occupied, now);
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = renewalProperty,
+            Unit = renewalUnit,
+            Tenant = tenant,
+            LeaseNumber = "L-RENEWAL",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-10),
+            EndDate = now.AddDays(45),
+            MonthlyRent = 1450m,
+            SecurityDeposit = 1450m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        var (activeProperty, activeUnit) = SeedUnitShell("3B", "Cedar Point Flats", UnitStatus.Occupied, now);
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = activeProperty,
+            Unit = activeUnit,
+            Tenant = tenant,
+            LeaseNumber = "L-ACTIVE",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-2),
+            EndDate = now.AddDays(180),
+            MonthlyRent = 1500m,
+            SecurityDeposit = 1500m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        SeedUnitShell("4C", "Harbor View Apartments", UnitStatus.Vacant, now);
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var result = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery
+        {
+            Status = "Occupied",
+            Stage = "Renewal",
+            Sort = "unitNumber",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(1);
+        result.Items.Should().ContainSingle();
+        result.Items[0].UnitNumber.Should().Be("2A");
+        result.Items[0].SimpleStage.Should().Be("Renewal");
+
+        _commands.Should().HaveCount(2);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("FROM \"Units\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ListWithHealthPageAsync_NoticeGivenOccupiedUnitDoesNotFallBackToVacant()
     {
         var now = DateTime.UtcNow;

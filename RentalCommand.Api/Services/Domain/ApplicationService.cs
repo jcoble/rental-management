@@ -661,6 +661,33 @@ public sealed class ApplicationService : IApplicationService
         return response;
     }
 
+    public async Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
+    {
+        var entity = await _db.RentalApplications
+            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        if (entity == null)
+        {
+            return false;
+        }
+
+        var now = _timeProvider.UtcNow();
+        entity.DeletedAt = now;
+        entity.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(
+            portfolioId,
+            EntityType,
+            id,
+            AuditLogOperation.Deleted,
+            userId: userId,
+            changeReason: $"Application #{id} deleted",
+            ct: ct);
+
+        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        return true;
+    }
+
     public async Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
     {
         var portfolio = await _db.Portfolios

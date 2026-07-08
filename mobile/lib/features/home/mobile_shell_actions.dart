@@ -122,6 +122,7 @@ class _AccountMenuRow extends StatelessWidget {
     final scheme = theme.colorScheme;
 
     return ListTile(
+      titleAlignment: ListTileTitleAlignment.center,
       leading: Icon(icon, color: scheme.primary, fill: 1),
       title: Text(label, style: theme.textTheme.titleSmall),
       subtitle: Text(

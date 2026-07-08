@@ -9,6 +9,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IRecurringExpenseService
 {
     Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<RecurringExpenseListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
     Task<RecurringExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<RecurringExpenseResponse?> CreateAsync(int portfolioId, CreateRecurringExpenseRequest request, CancellationToken ct = default);
     Task<RecurringExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateRecurringExpenseRequest request, CancellationToken ct = default);

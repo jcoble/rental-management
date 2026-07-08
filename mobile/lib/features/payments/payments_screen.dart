@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -83,6 +85,26 @@ class PaymentsScreen extends ConsumerStatefulWidget {
 }
 
 class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String _sort = '-createdAt';
+  String _period = MobileGridPeriod.all;
+  int _skip = 0;
+
+  PaymentListQuery get _query {
+    final dateRange = mobileGridDateRangeForPeriod(_period);
+    return PaymentListQuery(
+      skip: _skip,
+      take: _pageSize,
+      search: _search,
+      sort: _sort,
+      dueFrom: dateRange.from,
+      dueTo: dateRange.to,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -92,11 +114,47 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
     });
   }
 
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _refresh() async {
     await Future.wait([
       ref.read(accountingSummaryProvider.notifier).refresh(),
       ref.read(paymentsProvider.notifier).refresh(),
+      ref.refresh(paymentsPageProvider(_query).future),
     ]);
+  }
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setPeriod(String? period) {
+    if (period == null || period == _period) return;
+    setState(() {
+      _period = period;
+      _skip = 0;
+    });
   }
 
   /// Opens the full payment detail screen (I9: the standalone list was a
@@ -117,13 +175,17 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
   }
 
   void _showCreateSheet(BuildContext context) {
-    showCreatePaymentSheet(context, ref);
+    showCreatePaymentSheet(
+      context,
+      ref,
+      onSaved: () => ref.invalidate(paymentsPageProvider),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final summaryAsync = ref.watch(accountingSummaryProvider);
-    final paymentsAsync = ref.watch(paymentsProvider);
+    final paymentsAsync = ref.watch(paymentsPageProvider(_query));
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -179,25 +241,90 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
                   onRetry: () => ref.read(paymentsProvider.notifier).refresh(),
                 ),
               ),
-              data: (list) {
-                if (list.isEmpty) {
-                  return const SliverFillRemaining(child: _EmptyBody());
+              data: (page) {
+                if (page.items.isEmpty) {
+                  return SliverFillRemaining(
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
+                      children: [
+                        _PaymentsGridControls(
+                          searchController: _searchCtrl,
+                          sort: _sort,
+                          period: _period,
+                          onSearch: _submitSearch,
+                          onClearSearch: _clearSearch,
+                          onSortChanged: _setSort,
+                          onPeriodChanged: _setPeriod,
+                        ),
+                        _EmptyBody(hasSearch: (_search ?? '').isNotEmpty),
+                      ],
+                    ),
+                  );
                 }
                 return SliverPadding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
                   sliver: SliverList.separated(
-                    itemCount: list.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: 8),
-                    itemBuilder: (ctx, i) => _PaymentCard(
-                      payment: list[i],
-                      colorScheme: colorScheme,
-                      theme: theme,
-                      onMarkPaid: () => ref
-                          .read(paymentsProvider.notifier)
-                          .markPaid(list[i].id),
-                      onTap: () => _openDetail(ctx, list[i].id),
-                    ),
+                    itemCount: page.items.length + 2,
+                    separatorBuilder: (context, index) {
+                      if (index == 0) return const SizedBox(height: 12);
+                      if (index == page.items.length) {
+                        return const SizedBox(height: 14);
+                      }
+                      return const MobileM3ListDivider();
+                    },
+                    itemBuilder: (ctx, i) {
+                      if (i == 0) {
+                        return _PaymentsGridControls(
+                          searchController: _searchCtrl,
+                          sort: _sort,
+                          period: _period,
+                          onSearch: _submitSearch,
+                          onClearSearch: _clearSearch,
+                          onSortChanged: _setSort,
+                          onPeriodChanged: _setPeriod,
+                        );
+                      }
+
+                      if (i == page.items.length + 1) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous payments page',
+                          nextTooltip: 'Next payments page',
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = (_skip - _pageSize).clamp(0, _skip);
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+
+                      final payment = page.items[i - 1];
+                      return _PaymentCard(
+                        payment: payment,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          i - 1,
+                          page.items.length,
+                        ),
+                        colorScheme: colorScheme,
+                        theme: theme,
+                        onMarkPaid: () async {
+                          await ref
+                              .read(paymentsProvider.notifier)
+                              .markPaid(payment.id);
+                          ref.invalidate(paymentsPageProvider);
+                          ref
+                              .read(accountingSummaryProvider.notifier)
+                              .refresh();
+                        },
+                        onTap: () => _openDetail(ctx, payment.id),
+                      );
+                    },
                   ),
                 );
               },
@@ -205,6 +332,54 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _PaymentsGridControls extends StatelessWidget {
+  const _PaymentsGridControls({
+    required this.searchController,
+    required this.sort,
+    required this.period,
+    required this.onSearch,
+    required this.onClearSearch,
+    required this.onSortChanged,
+    required this.onPeriodChanged,
+  });
+
+  final TextEditingController searchController;
+  final String sort;
+  final String period;
+  final ValueChanged<String> onSearch;
+  final VoidCallback onClearSearch;
+  final ValueChanged<String?> onSortChanged;
+  final ValueChanged<String?> onPeriodChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return MobileGridControlsBar(
+      keyPrefix: 'payments',
+      padding: EdgeInsets.zero,
+      searchController: searchController,
+      searchLabel: 'Search payments',
+      onSearch: onSearch,
+      onClearSearch: onClearSearch,
+      sort: sort,
+      defaultSort: '-createdAt',
+      sortLabel: 'Sort payments',
+      sortOptions: const [
+        MobileGridControlOption(value: '-createdAt', label: 'Entered recently'),
+        MobileGridControlOption(value: '-dueDate', label: 'Due newest'),
+        MobileGridControlOption(value: 'dueDate', label: 'Due oldest'),
+        MobileGridControlOption(value: '-amount', label: 'Amount high-low'),
+        MobileGridControlOption(value: 'amount', label: 'Amount low-high'),
+        MobileGridControlOption(value: 'status', label: 'Status'),
+      ],
+      onSortChanged: onSortChanged,
+      period: period,
+      defaultPeriod: MobileGridPeriod.all,
+      periodLabel: 'Due period',
+      onPeriodChanged: onPeriodChanged,
     );
   }
 }
@@ -350,6 +525,7 @@ class _SummaryCard extends StatelessWidget {
 class _PaymentCard extends StatelessWidget {
   const _PaymentCard({
     required this.payment,
+    required this.position,
     required this.colorScheme,
     required this.theme,
     required this.onMarkPaid,
@@ -357,6 +533,7 @@ class _PaymentCard extends StatelessWidget {
   });
 
   final Payment payment;
+  final MobileM3ListItemPosition position;
   final ColorScheme colorScheme;
   final ThemeData theme;
   final VoidCallback onMarkPaid;
@@ -371,84 +548,72 @@ class _PaymentCard extends StatelessWidget {
         : payment.tenantName ?? 'Payment #${payment.id}';
     final subtitle = leaseDisplay.isNotEmpty ? payment.tenantName : null;
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Lease location / tenant info
-                    Text(
-                      title,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (subtitle != null && subtitle.isNotEmpty)
-                      Text(
-                        subtitle,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Text(
-                          _fmtCurrency(payment.amount),
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        _StatusChip(
-                          status: payment.status,
-                          colorScheme: colorScheme,
-                        ),
-                        const SizedBox(width: 8),
-                        _TypeChip(type: payment.type, colorScheme: colorScheme),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Due ${_fmtDate(payment.dueDate)}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!isPaid)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: FilledButton.tonal(
-                    onPressed: onMarkPaid,
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: const TextStyle(fontSize: 12),
-                    ),
-                    child: const Text('Mark paid'),
-                  ),
-                ),
-            ],
+    return MobileM3ListItem(
+      position: position,
+      leading: MobileM3LeadingIcon(
+        icon: isPaid ? Icons.check_circle_outline : Icons.payments_outlined,
+        backgroundColor: isPaid
+            ? colorScheme.primaryContainer
+            : colorScheme.secondaryContainer,
+        foregroundColor: isPaid
+            ? colorScheme.onPrimaryContainer
+            : colorScheme.onSecondaryContainer,
+      ),
+      title: Text(
+        title,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        if (subtitle != null && subtitle.isNotEmpty)
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        Text(
+          'Due ${_fmtDate(payment.dueDate)}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
           ),
         ),
+      ],
+      meta: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            _fmtCurrency(payment.amount),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          _StatusChip(status: payment.status, colorScheme: colorScheme),
+          _TypeChip(type: payment.type, colorScheme: colorScheme),
+        ],
       ),
+      actions: [
+        if (!isPaid)
+          FilledButton.tonal(
+            onPressed: onMarkPaid,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(48, 48),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              textStyle: theme.textTheme.labelSmall,
+            ),
+            child: const Text('Mark paid'),
+          ),
+      ],
+      onTap: onTap,
     );
   }
 }
@@ -520,7 +685,9 @@ class _Chip extends StatelessWidget {
 // ── Empty / Error ─────────────────────────────────────────────────────────────
 
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody();
+  const _EmptyBody({required this.hasSearch});
+
+  final bool hasSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -536,14 +703,17 @@ class _EmptyBody extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'No payments yet',
+            hasSearch ? 'No matching payments' : 'No payments yet',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Tap + to record a payment.',
+            hasSearch
+                ? 'Try another method, reference or note.'
+                : 'Tap + to record a payment.',
+            textAlign: TextAlign.center,
             style: TextStyle(color: colorScheme.onSurfaceVariant),
           ),
         ],

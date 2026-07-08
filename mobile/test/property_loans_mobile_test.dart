@@ -57,6 +57,24 @@ void main() {
     },
   );
 
+  test('property loans repository loads amortization schedule', () async {
+    final adapter = _RecordingAdapter(
+      responseBody: jsonEncode([_paymentJson()]),
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = PropertyLoansRepository(dio);
+
+    final payments = await repo.getLoanPayments(42);
+
+    expect(adapter.method, 'GET');
+    expect(adapter.path, '/loans/42/payments');
+    expect(adapter.query, isEmpty);
+    expect(payments.single.periodKey, '2026-07');
+    expect(payments.single.principalAmount, 825.25);
+    expect(payments.single.balanceAfter, 195674.75);
+  });
+
   test(
     'property loans provider requests additional pages server-side',
     () async {
@@ -122,9 +140,20 @@ void main() {
     expect(find.textContaining(r'$196,500'), findsOneWidget);
     expect(find.byTooltip('Add loan'), findsOneWidget);
     expect(find.byTooltip('Scan mortgage statement'), findsOneWidget);
+    expect(find.byTooltip('View property activity'), findsOneWidget);
     expect(find.byTooltip('Edit loan'), findsOneWidget);
     expect(find.byTooltip('Delete loan'), findsOneWidget);
     expect(loansRepo.lastListedPropertyId, 7);
+
+    await tester.tap(find.byTooltip('View amortization schedule'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Amortization schedule'), findsOneWidget);
+    expect(find.text('2026-07'), findsOneWidget);
+    expect(find.text('Principal'), findsOneWidget);
+    expect(find.text(r'$825'), findsOneWidget);
+    expect(find.text(r'$195,675'), findsOneWidget);
+    expect(loansRepo.lastPaymentLoanId, 42);
 
     await tester.tap(find.byTooltip('Scan mortgage statement'));
     await tester.pumpAndSettle();
@@ -176,6 +205,21 @@ Map<String, dynamic> _loanPayload({String lender = 'First Federal'}) => {
   'escrowCoversInsurance': false,
   'status': 'Active',
   'notes': 'Imported statement verified.',
+};
+
+Map<String, dynamic> _paymentJson() => {
+  'id': 501,
+  'loanId': 42,
+  'periodKey': '2026-07',
+  'dueDate': '2026-07-01T00:00:00.000Z',
+  'paidDate': null,
+  'interestAmount': 653,
+  'principalAmount': 825.25,
+  'escrowAmount': 420,
+  'totalAmount': 1898.25,
+  'balanceAfter': 195674.75,
+  'status': 'Scheduled',
+  'paymentDoesNotCoverInterest': false,
 };
 
 Property _property() {
@@ -264,6 +308,7 @@ class _FakePropertyLoansRepository extends PropertyLoansRepository {
   final List<List<PropertyLoan>>? _pages;
   final requests = <Map<String, Object?>>[];
   int? lastListedPropertyId;
+  int? lastPaymentLoanId;
 
   @override
   Future<List<PropertyLoan>> listLoans({
@@ -286,5 +331,11 @@ class _FakePropertyLoansRepository extends PropertyLoansRepository {
       return pageIndex < pages.length ? pages[pageIndex] : const [];
     }
     return [PropertyLoan.fromJson(_loanJson())];
+  }
+
+  @override
+  Future<List<LoanPayment>> getLoanPayments(int loanId) async {
+    lastPaymentLoanId = loanId;
+    return [LoanPayment.fromJson(_paymentJson())];
   }
 }

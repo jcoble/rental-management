@@ -10,25 +10,44 @@ import 'package:rental_command/features/owners/owners_models.dart';
 import 'package:rental_command/features/owners/owners_repository.dart';
 
 void main() {
-  testWidgets('owners screen exposes native add, edit, and delete actions', (
+  testWidgets('owners screen exposes native add action and server controls', (
     tester,
   ) async {
+    final repository = _FakeOwnersRepository();
+
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          ownersRepositoryProvider.overrideWithValue(_FakeOwnersRepository()),
-        ],
+        overrides: [ownersRepositoryProvider.overrideWithValue(repository)],
         child: const MaterialApp(home: OwnersListScreen()),
       ),
     );
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('owners-controls-button')), findsOneWidget);
+    expect(repository.queries.single.sort, 'name');
+
+    await tester.tap(find.byKey(const Key('owners-controls-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('owners-filter-owner-type-llc')));
+    await tester.tap(find.byKey(const Key('owners-apply-controls')));
+    await tester.pumpAndSettle();
+
+    expect(repository.queries.last.ownerEntityType, OwnerEntityType.llc);
+
+    await tester.tap(find.byKey(const Key('owners-controls-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('owners-sort--updatedAt')));
+    await tester.tap(find.byKey(const Key('owners-apply-controls')));
+    await tester.pumpAndSettle();
+
+    expect(repository.queries.last.sort, '-updatedAt');
+
     await tester.tap(find.byTooltip('Open quick actions'));
     await tester.pumpAndSettle();
 
     expect(find.text('Add owner'), findsOneWidget);
-    expect(find.byTooltip('Edit owner'), findsOneWidget);
-    expect(find.byTooltip('Delete owner'), findsOneWidget);
+    expect(find.byTooltip('Edit owner'), findsNothing);
+    expect(find.byTooltip('Delete owner'), findsNothing);
     expect(find.textContaining('Add owners on the web'), findsNothing);
   });
 
@@ -44,6 +63,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Maya Chen'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Edit owner'), findsOneWidget);
+    expect(find.byTooltip('View owner activity'), findsOneWidget);
+    expect(find.byTooltip('Delete owner'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Delete owner'));
     await tester.pumpAndSettle();
@@ -72,6 +98,7 @@ void main() {
           take: 20,
           search: 'maya',
           sort: '-updatedAt',
+          ownerEntityType: OwnerEntityType.llc,
         ),
       );
 
@@ -86,6 +113,10 @@ void main() {
       expect(
         adapter.requests.single.queryParameters,
         containsPair('sort', '-updatedAt'),
+      );
+      expect(
+        adapter.requests.single.queryParameters,
+        containsPair('ownerEntityType', 'LLC'),
       );
       expect(page.totalCount, 1);
       expect(page.items.single.id, 12);
@@ -128,11 +159,13 @@ class _FakeOwnersRepository extends OwnersRepository {
 
   int? deletedOwnerId;
   bool? clearPropertyAssignments;
+  final queries = <OwnerListQuery>[];
 
   @override
   Future<OwnerEntityPage> listPage([
     OwnerListQuery query = const OwnerListQuery(),
   ]) async {
+    queries.add(query);
     return const OwnerEntityPage(
       items: [
         OwnerEntity(

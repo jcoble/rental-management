@@ -14,12 +14,14 @@ void main() {
         'city': 'Columbus',
         'state': 'OH',
         'postalCode': '43215',
+        'website': 'https://acme.example',
       });
 
       expect(vendor.addressLine1, '123 Service Rd');
       expect(vendor.city, 'Columbus');
       expect(vendor.state, 'OH');
       expect(vendor.postalCode, '43215');
+      expect(vendor.website, 'https://acme.example');
     },
   );
 
@@ -33,6 +35,7 @@ void main() {
       'city': 'Columbus',
       'state': 'OH',
       'postalCode': '43215',
+      'website': 'https://acme.example',
       'createdAt': '2026-06-26T00:00:00Z',
       'updatedAt': '2026-06-26T00:00:00Z',
     });
@@ -41,5 +44,6 @@ void main() {
     expect(vendor.city, 'Columbus');
     expect(vendor.state, 'OH');
     expect(vendor.postalCode, '43215');
+    expect(vendor.website, 'https://acme.example');
   });
 }

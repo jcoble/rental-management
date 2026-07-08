@@ -168,6 +168,10 @@ class _FakePaymentsRepository extends PaymentsRepository {
   Future<List<Payment>> listPayments({
     int? leaseId,
     String sort = '-createdAt',
+    String? dueFrom,
+    String? dueTo,
+    String? paidFrom,
+    String? paidTo,
   }) async {
     return const [];
   }

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/push/notification_routing.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'notification_models.dart';
 import 'notifications_repository.dart';
@@ -93,9 +94,14 @@ class _NotificationsInboxScreenState
                   return ListView.separated(
                     controller: _scrollController,
                     physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                     itemCount: items.length + (hasMore ? 1 : 0),
-                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    separatorBuilder: (_, index) {
+                      if (index >= items.length - 1) {
+                        return const SizedBox(height: 12);
+                      }
+                      return const MobileM3ListDivider();
+                    },
                     itemBuilder: (context, index) {
                       if (index >= items.length) {
                         return const Padding(
@@ -105,6 +111,10 @@ class _NotificationsInboxScreenState
                       }
                       return _NotificationTile(
                         notification: items[index],
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          items.length,
+                        ),
                         onTap: () => _open(items[index]),
                       );
                     },
@@ -120,9 +130,14 @@ class _NotificationsInboxScreenState
 }
 
 class _NotificationTile extends StatelessWidget {
-  const _NotificationTile({required this.notification, required this.onTap});
+  const _NotificationTile({
+    required this.notification,
+    required this.position,
+    required this.onTap,
+  });
 
   final AppNotification notification;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   @override
@@ -132,51 +147,57 @@ class _NotificationTile extends StatelessWidget {
     final unread = !notification.isRead;
     final (icon, tint) = _severityVisual(notification.severity, cs);
 
-    return ListTile(
+    return MobileM3ListItem(
+      position: position,
       onTap: onTap,
-      leading: CircleAvatar(
+      promoted: unread,
+      leading: MobileM3LeadingIcon(
+        icon: icon,
         backgroundColor: tint.withValues(alpha: 0.16),
         foregroundColor: tint,
-        child: Icon(icon, size: 20),
       ),
       title: Text(
         notification.title.isEmpty ? notification.type : notification.title,
-        style: theme.textTheme.bodyLarge?.copyWith(
+        style: theme.textTheme.titleSmall?.copyWith(
           fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (notification.message.isNotEmpty)
-            Text(
-              notification.message,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: cs.onSurfaceVariant,
-              ),
-            ),
-          const SizedBox(height: 2),
+      supporting: [
+        if (notification.message.isNotEmpty)
           Text(
-            _relativeTime(notification.createdAt),
-            style: theme.textTheme.labelSmall?.copyWith(
+            notification.message,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(
               color: cs.onSurfaceVariant,
             ),
           ),
-        ],
-      ),
-      trailing: unread
-          ? Container(
+        Text(
+          _relativeTime(notification.createdAt),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+      ],
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (unread) ...[
+            Container(
               width: 10,
               height: 10,
               decoration: BoxDecoration(
                 color: cs.primary,
                 shape: BoxShape.circle,
               ),
-            )
-          : null,
-      tileColor: unread ? cs.primary.withValues(alpha: 0.04) : null,
+            ),
+            const SizedBox(width: 12),
+          ],
+          Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+        ],
+      ),
     );
   }
 }

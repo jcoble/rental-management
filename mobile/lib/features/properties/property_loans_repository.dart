@@ -80,6 +80,55 @@ class PropertyLoan {
   }
 }
 
+class LoanPayment {
+  const LoanPayment({
+    required this.id,
+    required this.loanId,
+    required this.periodKey,
+    required this.dueDate,
+    this.paidDate,
+    required this.interestAmount,
+    required this.principalAmount,
+    required this.escrowAmount,
+    required this.totalAmount,
+    required this.balanceAfter,
+    required this.status,
+    required this.paymentDoesNotCoverInterest,
+  });
+
+  final int id;
+  final int loanId;
+  final String periodKey;
+  final DateTime dueDate;
+  final DateTime? paidDate;
+  final double interestAmount;
+  final double principalAmount;
+  final double escrowAmount;
+  final double totalAmount;
+  final double balanceAfter;
+  final String status;
+  final bool paymentDoesNotCoverInterest;
+
+  factory LoanPayment.fromJson(Map<String, dynamic> json) {
+    return LoanPayment(
+      id: (json['id'] as num).toInt(),
+      loanId: (json['loanId'] as num).toInt(),
+      periodKey: json['periodKey'] as String? ?? '',
+      dueDate:
+          DateTime.tryParse(json['dueDate'] as String? ?? '') ?? DateTime(0),
+      paidDate: DateTime.tryParse(json['paidDate'] as String? ?? ''),
+      interestAmount: (json['interestAmount'] as num?)?.toDouble() ?? 0,
+      principalAmount: (json['principalAmount'] as num?)?.toDouble() ?? 0,
+      escrowAmount: (json['escrowAmount'] as num?)?.toDouble() ?? 0,
+      totalAmount: (json['totalAmount'] as num?)?.toDouble() ?? 0,
+      balanceAfter: (json['balanceAfter'] as num?)?.toDouble() ?? 0,
+      status: json['status'] as String? ?? 'Scheduled',
+      paymentDoesNotCoverInterest:
+          json['paymentDoesNotCoverInterest'] as bool? ?? false,
+    );
+  }
+}
+
 class PropertyLoansRepository {
   PropertyLoansRepository(this._dio);
 
@@ -162,6 +211,19 @@ class PropertyLoansRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  Future<List<LoanPayment>> getLoanPayments(int loanId) async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/loans/$loanId/payments');
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(LoanPayment.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 const _propertyLoansPageSize = 20;
@@ -185,6 +247,11 @@ final propertyLoansRepositoryProvider = Provider<PropertyLoansRepository>((
 ) {
   return PropertyLoansRepository(ref.watch(dioProvider));
 });
+
+final loanPaymentsProvider = FutureProvider.autoDispose
+    .family<List<LoanPayment>, int>((ref, loanId) {
+      return ref.watch(propertyLoansRepositoryProvider).getLoanPayments(loanId);
+    });
 
 class PropertyLoansNotifier extends Notifier<AsyncValue<PropertyLoansPage>> {
   PropertyLoansNotifier(this._propertyId);

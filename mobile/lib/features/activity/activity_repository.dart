@@ -52,11 +52,19 @@ final activityRepositoryProvider = Provider<ActivityRepository>((ref) {
 });
 
 class ActivityHistoryNotifier extends Notifier<ActivityHistoryState> {
+  ActivityHistoryNotifier(this._scope);
+
   static const _pageSize = 20;
+  final ActivityHistoryScope? _scope;
   int _requestGeneration = 0;
 
   @override
-  ActivityHistoryState build() => const ActivityHistoryState();
+  ActivityHistoryState build() => ActivityHistoryState(
+    filter: ActivityHistoryFilter(
+      entityType: _scope?.entityType,
+      entityId: _scope?.entityId,
+    ),
+  );
 
   ActivityRepository get _repo => ref.read(activityRepositoryProvider);
 
@@ -75,7 +83,7 @@ class ActivityHistoryNotifier extends Notifier<ActivityHistoryState> {
       final page = await _repo.list(
         skip: 0,
         take: _pageSize,
-        sort: '-timestamp',
+        sort: filter.sort,
         search: filter.search,
         operation: filter.operation,
         entityType: filter.entityType,
@@ -104,7 +112,7 @@ class ActivityHistoryNotifier extends Notifier<ActivityHistoryState> {
       final page = await _repo.list(
         skip: skip,
         take: _pageSize,
-        sort: '-timestamp',
+        sort: filter.sort,
         search: filter.search,
         operation: filter.operation,
         entityType: filter.entityType,
@@ -142,9 +150,19 @@ class ActivityHistoryNotifier extends Notifier<ActivityHistoryState> {
     );
     await refresh();
   }
+
+  Future<void> setSort(String sort) async {
+    if (sort == state.filter.sort) return;
+    state = state.copyWith(filter: state.filter.copyWith(sort: sort));
+    await refresh();
+  }
 }
 
-final activityHistoryProvider =
-    NotifierProvider<ActivityHistoryNotifier, ActivityHistoryState>(
-      ActivityHistoryNotifier.new,
-    );
+final activityHistoryScopedProvider =
+    NotifierProvider.family<
+      ActivityHistoryNotifier,
+      ActivityHistoryState,
+      ActivityHistoryScope?
+    >(ActivityHistoryNotifier.new);
+
+final activityHistoryProvider = activityHistoryScopedProvider(null);

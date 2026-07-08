@@ -76,31 +76,12 @@ final _latestMessagesProvider = FutureProvider.autoDispose<List<Conversation>>((
 final _fieldQueueProvider = FutureProvider.autoDispose<List<WorkOrder>>((
   ref,
 ) async {
-  final orders = await ref.watch(workOrdersRepositoryProvider).listWorkOrders();
-  final open = orders
-      .where((w) => !{'Completed', 'Cancelled'}.contains(w.status))
-      .toList();
-
-  int priorityRank(WorkOrder w) {
-    switch (w.priority.toLowerCase()) {
-      case 'emergency':
-        return 0;
-      case 'high':
-        return 1;
-      case 'normal':
-        return 2;
-      default:
-        return 3;
-    }
-  }
-
-  open.sort((a, b) {
-    final priority = priorityRank(a).compareTo(priorityRank(b));
-    if (priority != 0) return priority;
-    return a.requestedAt.compareTo(b.requestedAt);
-  });
-
-  return open.take(5).toList();
+  final page = await ref
+      .watch(workOrdersRepositoryProvider)
+      .listWorkOrdersPage(
+        const WorkOrderListQuery(openOnly: true, take: 5, sort: 'fieldQueue'),
+      );
+  return page.items;
 });
 
 Future<void> _openGoLiveSheetAndRefreshHome(
@@ -186,6 +167,29 @@ class _HomeShellState extends ConsumerState<HomeShell>
     };
   }
 
+  MobileShellTabId? _landlordTabForIndex(int index) {
+    return switch (index) {
+      0 => MobileShellTabId.today,
+      1 => MobileShellTabId.rentals,
+      2 => MobileShellTabId.money,
+      3 => MobileShellTabId.work,
+      4 => MobileShellTabId.inbox,
+      _ => null,
+    };
+  }
+
+  void _handleBottomNavigationSelected(int index, {required bool tenantMode}) {
+    if (_selectedIndex != index) {
+      setState(() => _selectedIndex = index);
+      return;
+    }
+
+    if (tenantMode) return;
+    final tab = _landlordTabForIndex(index);
+    if (tab == null) return;
+    _domainNavigators[tab]?.popToCurrentRoot();
+  }
+
   void _openShellTab(
     MobileShellTabId tab, {
     MobileDestinationId? destination,
@@ -261,7 +265,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       case '/money':
         _openShellTab(
           MobileShellTabId.money,
-          destination: MobileDestinationId.moneyOverview,
+          destination: MobileDestinationId.insights,
         );
         return true;
       case '/inbox':
@@ -593,7 +597,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 builder: (context, _) {
                   return MobileQuickActionFab(
                     heroTag: 'home-quick-action-fab-$selectedIndex',
-                    primaryAction: quickActionController.primaryAction,
+                    primaryActions: quickActionController.primaryActions,
                     useNearestScope: false,
                     onChat: _openAssistant,
                     onRecord: _openRecord,
@@ -608,7 +612,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
           tabs: tabs,
           selectedIndex: selectedIndex,
           centerGap: false,
-          onSelected: (index) => setState(() => _selectedIndex = index),
+          onSelected: (index) =>
+              _handleBottomNavigationSelected(index, tenantMode: tenantMode),
         ),
       ),
     );
@@ -1559,6 +1564,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
                     .map(
                       (w) => Card(
                         child: ListTile(
+                          titleAlignment: ListTileTitleAlignment.center,
                           title: Text(w.title),
                           subtitle: Text('${w.status} · ${w.priority}'),
                           trailing: const Icon(Icons.chevron_right),
@@ -1658,6 +1664,7 @@ class _TenantMoreTab extends ConsumerWidget {
       body: ListView(
         children: [
           ListTile(
+            titleAlignment: ListTileTitleAlignment.center,
             leading: const Icon(Icons.receipt_long_outlined),
             title: const Text('Account history'),
             subtitle: const Text('Every charge and payment, explained.'),
@@ -1669,6 +1676,7 @@ class _TenantMoreTab extends ConsumerWidget {
             ),
           ),
           ListTile(
+            titleAlignment: ListTileTitleAlignment.center,
             leading: const Icon(Icons.description_outlined),
             title: const Text('Lease'),
             subtitle: const Text('Your terms, rent and ledger.'),
@@ -1680,6 +1688,7 @@ class _TenantMoreTab extends ConsumerWidget {
             ),
           ),
           ListTile(
+            titleAlignment: ListTileTitleAlignment.center,
             leading: const Icon(Icons.event_outlined),
             title: const Text('Appointments'),
             subtitle: const Text('Upcoming showings and visits.'),
@@ -1691,6 +1700,7 @@ class _TenantMoreTab extends ConsumerWidget {
             ),
           ),
           ListTile(
+            titleAlignment: ListTileTitleAlignment.center,
             leading: const Icon(Icons.logout_outlined),
             title: const Text('Sign out'),
             onTap: () async {
@@ -2085,6 +2095,7 @@ class _MessageCard extends StatelessWidget {
 
     return Card(
       child: ListTile(
+        titleAlignment: ListTileTitleAlignment.center,
         onTap: () {
           Widget detailBuilder(BuildContext _) => MessageDetailScreen(
             conversationId: conversation.id,
@@ -2153,6 +2164,7 @@ class _FieldQueueCard extends StatelessWidget {
 
     return Card(
       child: ListTile(
+        titleAlignment: ListTileTitleAlignment.center,
         onTap: () {
           Widget detailBuilder(BuildContext _) =>
               WorkOrderUnitAwareLoaderScreen(workOrderId: workOrder.id);
@@ -2675,7 +2687,7 @@ class _BulletRow extends StatelessWidget {
     final content = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
             padding: const EdgeInsets.all(6),

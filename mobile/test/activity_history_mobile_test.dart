@@ -94,6 +94,77 @@ void main() {
     },
   );
 
+  test('activity history notifier reloads with selected server sort', () async {
+    final repo = _FakeActivityRepository(
+      pages: [
+        [ActivityEntry.fromJson(_auditJson(id: 1))],
+      ],
+    );
+    final container = ProviderContainer(
+      overrides: [activityRepositoryProvider.overrideWithValue(repo)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(activityHistoryProvider.notifier).setSort('timestamp');
+
+    expect(container.read(activityHistoryProvider).filter.sort, 'timestamp');
+    expect(repo.requests.single, {
+      'skip': 0,
+      'take': 20,
+      'sort': 'timestamp',
+      'search': null,
+      'operation': null,
+      'entityType': null,
+      'entityId': null,
+    });
+  });
+
+  test(
+    'scoped activity history provider sends entity filters independently',
+    () async {
+      final repo = _FakeActivityRepository(
+        pages: [
+          [ActivityEntry.fromJson(_auditJson())],
+          [
+            ActivityEntry.fromJson(
+              _auditJson(entityType: 'OwnerEntity', entityId: 77),
+            ),
+          ],
+        ],
+      );
+      final container = ProviderContainer(
+        overrides: [activityRepositoryProvider.overrideWithValue(repo)],
+      );
+      addTearDown(container.dispose);
+
+      await container.read(activityHistoryProvider.notifier).setSearch('rent');
+      repo.requests.clear();
+
+      const scope = ActivityHistoryScope(
+        entityType: 'OwnerEntity',
+        entityId: 77,
+      );
+      await container
+          .read(activityHistoryScopedProvider(scope).notifier)
+          .refresh();
+
+      expect(container.read(activityHistoryProvider).filter.search, 'rent');
+      expect(
+        container.read(activityHistoryScopedProvider(scope)).filter.search,
+        isNull,
+      );
+      expect(repo.requests.single, {
+        'skip': 0,
+        'take': 20,
+        'sort': '-timestamp',
+        'search': null,
+        'operation': null,
+        'entityType': 'OwnerEntity',
+        'entityId': 77,
+      });
+    },
+  );
+
   test(
     'activity history notifier discards stale load-more responses after filter changes',
     () async {
@@ -159,10 +230,91 @@ void main() {
     await tester.pump();
 
     expect(find.text('Activity history'), findsOneWidget);
+    expect(find.byKey(const Key('activity-controls-button')), findsOneWidget);
     expect(find.text('Rent payment updated'), findsOneWidget);
     expect(find.textContaining('Alex Manager'), findsOneWidget);
     expect(find.textContaining('Updated'), findsOneWidget);
     expect(find.textContaining('Payment #42'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('activity-controls-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sort and filter'), findsOneWidget);
+    expect(find.text('Newest first'), findsOneWidget);
+  });
+
+  testWidgets('activity history opens a detail card with back navigation', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activityRepositoryProvider.overrideWithValue(
+            _FakeActivityRepository(
+              pages: [
+                [ActivityEntry.fromJson(_auditJson())],
+              ],
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: ActivityHistoryScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('activity-entry-42')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Payment #42'), findsWidgets);
+    expect(find.byType(BackButton), findsOneWidget);
+    expect(find.text('Changed fields'), findsOneWidget);
+    expect(find.text('Amount'), findsOneWidget);
+    expect(find.text(r'$1,200'), findsOneWidget);
+    expect(find.text(r'$1,250'), findsOneWidget);
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Activity history'), findsOneWidget);
+    expect(find.byKey(const Key('activity-entry-42')), findsOneWidget);
+  });
+
+  testWidgets('activity history screen renders scoped audit entries', (
+    tester,
+  ) async {
+    final repo = _FakeActivityRepository(
+      pages: [
+        [
+          ActivityEntry.fromJson(
+            _auditJson(entityType: 'OwnerEntity', entityId: 77),
+          ),
+        ],
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [activityRepositoryProvider.overrideWithValue(repo)],
+        child: const MaterialApp(
+          home: ActivityHistoryScreen(
+            entityType: 'OwnerEntity',
+            entityId: 77,
+            title: 'Owner activity',
+            subtitle: 'Cobles LLC',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Owner activity'), findsWidgets);
+    expect(find.byKey(const Key('activity-scope-banner')), findsOneWidget);
+    expect(find.text('Cobles LLC'), findsOneWidget);
+    expect(find.textContaining('OwnerEntity #77'), findsOneWidget);
+    expect(repo.requests.single, containsPair('entityType', 'OwnerEntity'));
+    expect(repo.requests.single, containsPair('entityId', 77));
   });
 
   testWidgets('activity history screen shows retained search filter', (
@@ -207,13 +359,15 @@ void main() {
 Map<String, dynamic> _auditJson({
   int id = 42,
   String description = 'Rent payment updated',
+  String entityType = 'Payment',
+  int entityId = 42,
 }) => {
   'id': id,
   'portfolioId': 1,
   'operation': 'Updated',
   'operationName': 'Updated',
-  'entityType': 'Payment',
-  'entityId': 42,
+  'entityType': entityType,
+  'entityId': entityId,
   'actor': 'Alex Manager',
   'description': description,
   'detailHref': '/accounting/payments/42',

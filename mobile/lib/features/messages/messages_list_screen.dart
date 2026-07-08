@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -124,8 +125,6 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     final convosAsync = ref.watch(conversationsProvider);
     final auth = ref.watch(authControllerProvider);
     final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Messages')),
@@ -156,13 +155,15 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
             }
             return ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 88),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
               itemCount: list.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 4),
+              separatorBuilder: (_, _) => const MobileM3ListDivider(),
               itemBuilder: (ctx, i) => _ConversationTile(
                 conversation: list[i],
-                colorScheme: colorScheme,
-                theme: theme,
+                position: MobileM3ListItemPositionForIndex.forIndex(
+                  i,
+                  list.length,
+                ),
                 onTap: () => _openThread(ctx, list[i]),
               ),
             );
@@ -178,14 +179,12 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
 class _ConversationTile extends StatelessWidget {
   const _ConversationTile({
     required this.conversation,
-    required this.colorScheme,
-    required this.theme,
+    required this.position,
     required this.onTap,
   });
 
   final Conversation conversation;
-  final ColorScheme colorScheme;
-  final ThemeData theme;
+  final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
   String _avatarInitials() {
@@ -199,109 +198,77 @@ class _ConversationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final unread = conversation.hasUnread;
     final preview = conversation.lastMessagePreview ?? '';
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Avatar
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: colorScheme.primaryContainer,
-                child: Text(
-                  _avatarInitials(),
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Name + subject + preview
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            conversation.tenantName,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: unread
-                                  ? FontWeight.w700
-                                  : FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _fmtRelative(conversation.lastMessageAt),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: unread
-                                ? colorScheme.primary
-                                : colorScheme.onSurfaceVariant,
-                            fontWeight: unread
-                                ? FontWeight.w700
-                                : FontWeight.w400,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      conversation.subject,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurface,
-                        fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            preview.isEmpty ? 'No messages yet' : preview,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: unread
-                                  ? colorScheme.onSurface
-                                  : colorScheme.onSurfaceVariant,
-                              fontWeight: unread
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (unread) ...[
-                          const SizedBox(width: 8),
-                          _UnreadBadge(
-                            count: conversation.unreadCount,
-                            colorScheme: colorScheme,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
+    return MobileM3ListItem(
+      position: position,
+      onTap: onTap,
+      promoted: unread,
+      leading: CircleAvatar(
+        radius: 24,
+        backgroundColor: colorScheme.primaryContainer,
+        child: Text(
+          _avatarInitials(),
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: colorScheme.onPrimaryContainer,
+            fontWeight: FontWeight.w600,
           ),
         ),
+      ),
+      title: Text(
+        conversation.tenantName,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: unread ? FontWeight.w700 : FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      supporting: [
+        Text(
+          conversation.subject,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onSurface,
+            fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(
+          preview.isEmpty ? 'No messages yet' : preview,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: unread
+                ? colorScheme.onSurface
+                : colorScheme.onSurfaceVariant,
+            fontWeight: unread ? FontWeight.w600 : FontWeight.w400,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+      trailing: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            _fmtRelative(conversation.lastMessageAt),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: unread
+                  ? colorScheme.primary
+                  : colorScheme.onSurfaceVariant,
+              fontWeight: unread ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+          if (unread) ...[
+            const SizedBox(height: 8),
+            _UnreadBadge(
+              count: conversation.unreadCount,
+              colorScheme: colorScheme,
+            ),
+          ],
+        ],
       ),
     );
   }

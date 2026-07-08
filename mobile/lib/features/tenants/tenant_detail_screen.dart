@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../activity/activity_history_screen.dart';
 import '../leases/leases_repository.dart';
 import '../notices/create_tenant_notice.dart';
 import '../units/unit_command_center_screen.dart';
@@ -107,8 +108,9 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
 
   Future<void> _loadFullTenant() async {
     try {
-      final full =
-          await ref.read(tenantsRepositoryProvider).getTenant(_tenant.id);
+      final full = await ref
+          .read(tenantsRepositoryProvider)
+          .getTenant(_tenant.id);
       if (mounted) setState(() => _tenant = full);
     } on ApiException {
       // Non-fatal: the rest of the screen still works from the list-loaded copy.
@@ -146,6 +148,64 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
     );
   }
 
+  void _showActivityHistory() {
+    final name = '${_tenant.firstName} ${_tenant.lastName}'.trim();
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'Tenant',
+          entityId: _tenant.id,
+          title: 'Tenant activity',
+          subtitle: name.isEmpty ? null : name,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete() async {
+    final name = '${_tenant.firstName} ${_tenant.lastName}'.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete tenant?'),
+        content: Text(
+          name.isEmpty ? 'Delete this tenant?' : 'Delete $name?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await ref.read(tenantsRepositoryProvider).deleteTenant(_tenant.id);
+      ref.invalidate(tenantDetailProvider(_tenant.id));
+      ref.invalidate(tenantsPageProvider);
+      ref.invalidate(tenantsProvider);
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Tenant deleted.')));
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -162,9 +222,11 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
           .setPortalAccess(_tenant.id, enabled: enabled);
       if (!mounted) return;
       setState(() => _tenant = _tenant.copyWith(portalAccess: newState));
-      _toast(newState == 'active'
-          ? 'Portal access turned on.'
-          : 'Portal access turned off.');
+      _toast(
+        newState == 'active'
+            ? 'Portal access turned on.'
+            : 'Portal access turned off.',
+      );
     } on ApiException catch (e) {
       _toast(e.message);
     } finally {
@@ -186,9 +248,11 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
       final to = (result.email != null && result.email!.isNotEmpty)
           ? result.email!
           : '${_tenant.firstName} ${_tenant.lastName}'.trim();
-      _toast(result.alreadyExisted
-          ? 'Portal invite resent to $to.'
-          : 'Portal invite sent to $to.');
+      _toast(
+        result.alreadyExisted
+            ? 'Portal invite resent to $to.'
+            : 'Portal invite sent to $to.',
+      );
     } on ApiException catch (e) {
       _toast(e.message);
     } finally {
@@ -215,9 +279,19 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
             onPressed: _createNotice,
           ),
           IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View tenant activity',
+            onPressed: _showActivityHistory,
+          ),
+          IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit tenant',
             onPressed: () => _showEditSheet(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Delete tenant',
+            onPressed: _confirmDelete,
           ),
         ],
       ),

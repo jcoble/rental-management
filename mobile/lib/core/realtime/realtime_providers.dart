@@ -3,14 +3,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/auth_controller.dart';
 import '../auth/token_store.dart';
 import '../../features/appointments/appointments_repository.dart';
+import '../../features/applications/applications_repository.dart';
+import '../../features/activity/activity_repository.dart';
+import '../../features/inspections/inspections_repository.dart';
 import '../../features/leases/leases_repository.dart';
 import '../../features/maintenance/work_orders_repository.dart';
 import '../../features/messages/messages_repository.dart';
+import '../../features/money/money_repository.dart';
 import '../../features/notifications/notifications_repository.dart';
+import '../../features/onboarding/getting_started_provider.dart';
+import '../../features/owners/owners_repository.dart';
 import '../../features/payments/payments_repository.dart';
+import '../../features/properties/property_loans_repository.dart';
 import '../../features/properties/properties_repository.dart';
 import '../../features/scan/scan_repository.dart';
 import '../../features/tenants/tenants_repository.dart';
+import '../../features/vendors/vendors_repository.dart';
 import 'signalr_service.dart';
 
 // ---------------------------------------------------------------------------
@@ -63,18 +71,25 @@ final realtimeWatcherProvider = Provider<void>((ref) {
 /// autoDispose FutureProviders are invalidated via [ref.invalidate], which is
 /// always safe — a no-op when no instances are live.
 void _invalidateForEntity(Ref ref, String entityType) {
+  _refreshIfAlive(ref, activityHistoryProvider);
+
   switch (entityType) {
     case 'Payment':
       _refreshIfAlive(ref, paymentsProvider);
+      ref.invalidate(paymentsPageProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
       _refreshIfAlive(ref, leasesForPaymentProvider);
 
     case 'Expense':
+      ref.invalidate(expensesPageProvider);
+      ref.invalidate(expensesListProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
 
     case 'Lease':
       _refreshIfAlive(ref, leasesProvider);
+      ref.invalidate(leasesPageProvider);
       _refreshIfAlive(ref, leasesForPaymentProvider);
+      ref.invalidate(gettingStartedSignalsProvider);
       // Family providers: invalidate all live instances.
       ref.invalidate(propertyLeasesProvider);
       ref.invalidate(tenantLeasesProvider);
@@ -82,17 +97,47 @@ void _invalidateForEntity(Ref ref, String entityType) {
 
     case 'Property':
       _refreshIfAlive(ref, propertiesProvider);
+      ref.invalidate(gettingStartedSignalsProvider);
 
     case 'Unit':
       ref.invalidate(unitsProvider);
+      ref.invalidate(gettingStartedSignalsProvider);
 
     case 'Tenant':
       _refreshIfAlive(ref, tenantsProvider);
+      ref.invalidate(tenantsPageProvider);
       ref.invalidate(tenantDetailProvider);
+      ref.invalidate(gettingStartedSignalsProvider);
 
     case 'WorkOrder':
       _refreshIfAlive(ref, workOrdersProvider);
+      ref.invalidate(workOrdersPageProvider);
       ref.invalidate(workOrderDetailProvider);
+
+    case 'RentalApplication':
+      ref.invalidate(applicationsProvider);
+      ref.invalidate(applicationsPageProvider);
+      ref.invalidate(applicationDetailProvider);
+
+    case 'Inspection':
+      ref.invalidate(inspectionsProvider);
+      ref.invalidate(inspectionsPageProvider);
+      ref.invalidate(inspectionDetailProvider);
+
+    case 'OwnerEntity':
+      ref.invalidate(ownersPageProvider);
+      ref.invalidate(ownerDetailProvider);
+      ref.invalidate(gettingStartedSignalsProvider);
+
+    case 'Loan':
+      ref.invalidate(propertyLoansProvider);
+
+    case 'Portfolio':
+      ref.invalidate(gettingStartedSignalsProvider);
+
+    case 'Vendor':
+      ref.invalidate(vendorsProvider);
+      ref.invalidate(vendorsPageProvider);
 
     case 'Appointment':
       _refreshIfAlive(ref, appointmentsProvider);

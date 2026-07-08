@@ -172,6 +172,7 @@ public class WorkOrderService : IWorkOrderService
                 : q.OrderBy(w => w.Tenant!.FirstName).ThenBy(w => w.Tenant!.LastName),
             "status" => query.SortDescending ? q.OrderByDescending(w => w.Status) : q.OrderBy(w => w.Status),
             "priority" => query.SortDescending ? q.OrderByDescending(w => w.Priority) : q.OrderBy(w => w.Priority),
+            "fieldqueue" => q.OrderByDescending(w => w.Priority).ThenBy(w => w.RequestedAt),
             "requestedat" => query.SortDescending ? q.OrderByDescending(w => w.RequestedAt) : q.OrderBy(w => w.RequestedAt),
             "scheduledfor" => query.SortDescending ? q.OrderByDescending(w => w.ScheduledFor) : q.OrderBy(w => w.ScheduledFor),
             "completedat" => query.SortDescending ? q.OrderByDescending(w => w.CompletedAt) : q.OrderBy(w => w.CompletedAt),

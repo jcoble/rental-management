@@ -14,6 +14,7 @@ class Vendor {
     this.postalCode,
     this.email,
     this.phone,
+    this.website,
     this.taxId,
     this.is1099Eligible = false,
     this.preferred = false,
@@ -33,6 +34,7 @@ class Vendor {
   final String? postalCode;
   final String? email;
   final String? phone;
+  final String? website;
   final String? taxId;
   final bool is1099Eligible;
   final bool preferred;
@@ -58,6 +60,8 @@ class Vendor {
   /// True when the vendor has an email on file (enables the email action).
   bool get hasEmail => (email ?? '').trim().isNotEmpty;
 
+  bool get hasWebsite => (website ?? '').trim().isNotEmpty;
+
   factory Vendor.fromJson(Map<String, dynamic> json) {
     String? asString(String key) {
       final raw = json[key];
@@ -75,6 +79,7 @@ class Vendor {
       postalCode: asString('postalCode'),
       email: asString('email'),
       phone: asString('phone'),
+      website: asString('website'),
       taxId: asString('taxId'),
       is1099Eligible: json['is1099Eligible'] as bool? ?? false,
       preferred: json['preferred'] as bool? ?? false,
@@ -86,11 +91,7 @@ class Vendor {
     );
   }
 
-  Vendor copyWith({
-    bool? is1099Eligible,
-    bool? w9OnFile,
-    bool? preferred,
-  }) {
+  Vendor copyWith({bool? is1099Eligible, bool? w9OnFile, bool? preferred}) {
     return Vendor(
       id: id,
       name: name,
@@ -101,6 +102,7 @@ class Vendor {
       postalCode: postalCode,
       email: email,
       phone: phone,
+      website: website,
       taxId: taxId,
       is1099Eligible: is1099Eligible ?? this.is1099Eligible,
       preferred: preferred ?? this.preferred,
@@ -109,6 +111,66 @@ class Vendor {
       averageRating: averageRating,
       ratingCount: ratingCount,
       jobsCompleted: jobsCompleted,
+    );
+  }
+}
+
+class VendorListQuery {
+  const VendorListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'name',
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+
+  @override
+  bool operator ==(Object other) {
+    return other is VendorListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort);
+}
+
+class VendorPage {
+  const VendorPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Vendor> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory VendorPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(Vendor.fromJson)
+              .toList()
+        : <Vendor>[];
+
+    return VendorPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
     );
   }
 }

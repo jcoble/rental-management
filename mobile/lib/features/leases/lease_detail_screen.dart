@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
+import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../notices/create_tenant_notice.dart';
 import '../payments/payment_detail_screen.dart';
@@ -192,6 +193,19 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => LeaseFormSheet(existing: _lease, onSaved: _refresh),
+    );
+  }
+
+  void _showActivityHistory() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ActivityHistoryScreen(
+          entityType: 'Lease',
+          entityId: _lease.id,
+          title: 'Lease activity',
+          subtitle: 'Lease #${_lease.leaseNumber}',
+        ),
+      ),
     );
   }
 
@@ -400,6 +414,11 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View lease activity',
+            onPressed: _showActivityHistory,
+          ),
           IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit lease',

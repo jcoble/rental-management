@@ -4,12 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../leases/lease_detail_screen.dart';
 import '../leases/leases_repository.dart';
 import '../money/money_format.dart';
 import '../money/receipt_attachment_repository.dart';
 import '../money/receipt_upload_sheet.dart';
+import '../money/transactions_controller.dart';
 import 'payment_lease_labels.dart';
 import 'payment_receipt_viewer_screen.dart';
 import 'payments_repository.dart';
@@ -33,12 +35,87 @@ class PaymentDetailScreen extends ConsumerWidget {
 
   final int paymentId;
 
+  Future<void> _confirmDelete(
+    BuildContext context,
+    WidgetRef ref,
+    Payment payment,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete payment?'),
+        content: Text(
+          'This will permanently remove payment #${payment.id} '
+          '(${moneyFmt(payment.amount)}).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      await ref.read(paymentsRepositoryProvider).deletePayment(payment.id);
+      ref.invalidate(paymentDetailProvider(payment.id));
+      ref.invalidate(paymentsPageProvider);
+      ref.invalidate(paymentsProvider);
+      ref.invalidate(leasePaymentsProvider(payment.leaseId));
+      ref.invalidate(transactionsProvider);
+      await ref.read(accountingSummaryProvider.notifier).refresh();
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Payment deleted.')));
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(paymentDetailProvider(paymentId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Payment')),
+      appBar: AppBar(
+        title: const Text('Payment'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: 'View payment activity',
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => ActivityHistoryScreen(
+                  entityType: 'Payment',
+                  entityId: paymentId,
+                  title: 'Payment activity',
+                ),
+              ),
+            ),
+          ),
+          async.maybeWhen(
+            data: (payment) => IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete payment',
+              onPressed: () => _confirmDelete(context, ref, payment),
+            ),
+            orElse: () => const SizedBox.shrink(),
+          ),
+        ],
+      ),
       body: async.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => _ErrorView(

@@ -87,6 +87,39 @@ public class InspectionChecklistServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_ReturnsDbCountAndFinalFullPage()
+    {
+        var property = SeedProperty();
+        var day1 = new DateTime(2026, 7, 1, 10, 0, 0, DateTimeKind.Utc);
+        SeedInspection(property, day1, "First");
+        SeedInspection(property, day1.AddDays(1), "Second");
+        SeedInspection(property, day1.AddDays(2), "Third");
+        SeedInspection(property, day1.AddDays(3), "Fourth");
+
+        _executedSql.Clear();
+        var page = await _service.ListPageAsync(PortfolioId, property.Id, new ListQuery
+        {
+            Skip = 2,
+            Take = 2,
+            Sort = "scheduledFor",
+        });
+
+        page.TotalCount.Should().Be(4);
+        page.Skip.Should().Be(2);
+        page.Take.Should().Be(2);
+        page.Items.Select(i => i.Outcome).Should().Equal("Third", "Fourth");
+
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Inspections", StringComparison.OrdinalIgnoreCase));
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ScheduledFor", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Create_FromTemplate_MaterializesPendingItems()
     {
         var property = SeedProperty();
@@ -540,6 +573,22 @@ public class InspectionChecklistServiceTests : IDisposable
         _db.Properties.Add(property);
         _db.SaveChanges();
         return property;
+    }
+
+    private void SeedInspection(Property property, DateTime scheduledFor, string outcome)
+    {
+        _db.Inspections.Add(new Inspection
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Type = InspectionType.Routine,
+            Status = InspectionStatus.Scheduled,
+            ScheduledFor = scheduledFor,
+            Outcome = outcome,
+            CreatedAt = scheduledFor,
+            UpdatedAt = scheduledFor,
+        });
+        _db.SaveChanges();
     }
 
     private sealed class NoopInspectionDataUpdate : IDataUpdateService

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -61,6 +62,12 @@ public class OwnerEntityListResponse
     public int TotalCount { get; set; }
     public int Skip { get; set; }
     public int Take { get; set; }
+}
+
+public class OwnerEntityListQuery : ListQuery
+{
+    [FromQuery(Name = "ownerEntityType")]
+    public OwnerEntityType? OwnerEntityType { get; set; }
 }
 
 public class DeleteOwnerEntityOptions

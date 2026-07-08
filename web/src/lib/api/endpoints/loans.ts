@@ -1,5 +1,9 @@
 import { api } from '../client';
-import { buildListQuery, type ListParams } from '../list-params';
+import {
+	buildLoanListPagePath,
+	buildLoanListPath,
+	type LoanListParams
+} from './loan-list-path';
 
 /** Lifecycle of a per-property loan (mortgage). */
 export type LoanStatus = 'Active' | 'PaidOff' | 'Closed';
@@ -36,6 +40,13 @@ export interface Loan {
 	testId: string;
 }
 
+export interface LoanListResponse {
+	items: Loan[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 /** One row of a loan's amortization schedule (read-only history). */
 export interface LoanPayment {
 	id: number;
@@ -54,10 +65,8 @@ export interface LoanPayment {
 }
 
 export const loans = {
-	list: (params?: ListParams & { propertyId?: number }) => {
-		const { propertyId, ...list } = params ?? {};
-		return api.get<Loan[]>(`/loans${buildListQuery(list, { propertyId })}`);
-	},
+	list: (params?: LoanListParams) => api.get<Loan[]>(buildLoanListPath(params)),
+	listPage: (params?: LoanListParams) => api.get<LoanListResponse>(buildLoanListPagePath(params)),
 	get: (id: number) => api.get<Loan>(`/loans/${id}`),
 	payments: (id: number) => api.get<LoanPayment[]>(`/loans/${id}/payments`),
 	create: (data: Record<string, unknown>) => api.post<Loan>('/loans', data),

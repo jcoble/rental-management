@@ -1,0 +1,103 @@
+[
+  {
+    "template": "templates/lease.html",
+    "out": "generated/leases/L01_412-maple_whitfield.pdf",
+    "mode": "pdf",
+    "data": {
+      "managementCompany": "Okafor Property Group",
+      "leaseNumber": "L-2024-0412",
+      "signDate": "March 25, 2024",
+      "tenantName": "James Whitfield",
+      "tenantEmail": "j.whitfield@example.com",
+      "tenantPhone": "(937) 555-0112",
+      "propertyAddress": "412 Maple St",
+      "unitNumber": "1",
+      "propertyCity": "Springfield",
+      "propertyState": "OH",
+      "propertyPostal": "45504",
+      "bedrooms": "3",
+      "bathrooms": "1.5",
+      "squareFeet": "1,180",
+      "startDate": "April 1, 2024",
+      "endDate": "March 31, 2025",
+      "monthlyRent": "1,250.00",
+      "rentDueDayOrdinal": "1st",
+      "securityDeposit": "1,250.00",
+      "lateFee": "75.00",
+      "paymentMethod": "Check",
+      "additionalProvisions": "No smoking inside the premises. One dog under 30 lbs permitted with a $250 pet deposit. Tenant maintains the lawn; Landlord maintains major systems and appliances."
+    }
+  },
+  {
+    "template": "templates/lease-photo-page.html",
+    "out": "generated/leases/photos/L11_210-willow-B_p1.jpg",
+    "mode": "photo",
+    "size": [1200, 1600],
+    "data": {
+      "leaseNumber": "L-2024-0210B",
+      "pageLabel": "page 1 of 2",
+      "rotate": "-1.4",
+      "bodyHtml": "<h1>RESIDENTIAL LEASE AGREEMENT</h1><div class=\"sub\">State of Ohio &middot; Lease No. L-2024-0210B &middot; Okafor Property Group</div><h2>Parties &amp; Premises</h2><table><tr><td class=\"k\">Tenant</td><td class=\"v\">Hien Pham</td></tr><tr><td class=\"k\">Co-tenant</td><td class=\"v\">Minh Pham</td></tr><tr><td class=\"k\">Email</td><td class=\"v\">hien.pham@example.com</td></tr><tr><td class=\"k\">Phone</td><td class=\"v\">(937) 555-0148</td></tr><tr><td class=\"k\">Premises</td><td class=\"v\">210 Willow Way, Unit B<br>Springfield, OH 45503</td></tr></table><h2>Term &amp; Rent</h2><table><tr><td class=\"k\">Commencement</td><td class=\"v\">March 1, 2024</td></tr><tr><td class=\"k\">Expiration</td><td class=\"v\">February 28, 2025</td></tr><tr><td class=\"k\">Monthly rent</td><td class=\"v\">$1,150.00</td></tr><tr><td class=\"k\">Rent due day</td><td class=\"v\">1st of each month</td></tr><tr><td class=\"k\">Security deposit</td><td class=\"v\">$1,150.00</td></tr><tr><td class=\"k\">Late fee (flat)</td><td class=\"v\">$60.00</td></tr></table><p>Tenant agrees to pay the Monthly Rent in advance on the first day of each calendar month. This is page 1 of 2; the signature page follows.</p>"
+    }
+  },
+  {
+    "template": "templates/lease-photo-page.html",
+    "out": "generated/leases/photos/L11_210-willow-B_p2.jpg",
+    "mode": "photo",
+    "size": [1200, 1600],
+    "data": {
+      "leaseNumber": "L-2024-0210B",
+      "pageLabel": "page 2 of 2",
+      "rotate": "1.3",
+      "bodyHtml": "<h2>Utilities</h2><p>Tenant pays electricity, gas, and internet. Landlord pays water, sewer, and trash collection.</p><h2>Renewal &amp; Notice</h2><p>Unless either party gives written notice of non-renewal at least thirty (30) days before the expiration date, this Agreement may be renewed or converted to a month-to-month tenancy on the terms then offered by Landlord.</p><h2>Signatures</h2><p>By signing below, the parties agree to all terms of this Agreement for the premises at 210 Willow Way, Unit B, Springfield, OH 45503.</p><div class=\"sigline\">Tenant &mdash; Hien Pham</div><div class=\"sigline\">Co-tenant &mdash; Minh Pham</div><div class=\"sigline\">Landlord / Agent &mdash; Okafor Property Group</div><p style=\"margin-top:18px\">Executed March 1, 2024 at Springfield, Ohio.</p>"
+    }
+  },
+  {
+    "template": "templates/receipt.html",
+    "out": "generated/receipts/2025-01-14_rooter-brothers_P09.jpg",
+    "mode": "photo",
+    "size": [1200, 1600],
+    "data": {
+      "vendorName": "Rooter Brothers Plumbing",
+      "vendorAddress": "1820 S Limestone St, Springfield, OH 45505",
+      "vendorPhone": "(937) 555-0733",
+      "vendorWebsite": "rooterbros.example.com",
+      "receiptNumber": "RB-58204",
+      "transactionDate": "01/14/2025",
+      "serviceAddress": "1450 Highland Blvd #2",
+      "lineItemsHtml": "<div class=\"row\"><span class=\"d\">Diagnostic / service call</span><span>$85.00</span></div><div class=\"row\"><span class=\"d\">Faucet cartridge, kitchen</span><span>$34.00</span></div><div class=\"row\"><span class=\"d\">Labor, 0.75 hr</span><span>$51.00</span></div>",
+      "subtotal": "170.00",
+      "taxRate": "7.25",
+      "tax": "12.33",
+      "total": "182.33",
+      "paymentMethod": "Visa",
+      "cardLast4": "6612",
+      "notes": "Replaced kitchen faucet cartridge; tested under pressure, no leaks. Category: Repairs."
+    }
+  },
+  {
+    "template": "templates/mortgage-statement.html",
+    "out": "generated/mortgage/2025-01_prairie-state_P01.jpg",
+    "mode": "photo",
+    "size": [1200, 1600],
+    "data": {
+      "lender": "Prairie State Bank",
+      "loanNumber": "PSB-4471-0412",
+      "propertyAddress": "412 Maple St, Springfield OH",
+      "statementDate": "01/05/2025",
+      "dueDate": "02/01/2025",
+      "totalPayment": "782.06",
+      "currentBalance": "88,140.22",
+      "originalAmount": "96,000.00",
+      "interestRate": "4.25",
+      "termMonths": "360",
+      "startDate": "03/01/2021",
+      "maturityDate": "03/01/2051",
+      "principalInterest": "472.06",
+      "escrow": "310.00",
+      "principalPortion": "159.90",
+      "interestPortion": "312.16",
+      "escrowCovers": "County property tax & hazard insurance"
+    }
+  }
+]

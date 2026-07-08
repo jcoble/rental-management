@@ -11,6 +11,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
@@ -18,13 +19,39 @@
 	let { propertyId }: { propertyId: number } = $props();
 
 	const queryClient = useQueryClient();
+	const PAGE_SIZE = 10;
+
+	let recurringPage = $state(1);
+	let recurringSort = $state('nextRunDate');
+	let recurringFrom = $state('');
+	let recurringTo = $state('');
+
+	let recurringFilterResetPrimed = false;
+	$effect(() => {
+		propertyId;
+		recurringFrom;
+		recurringTo;
+		if (!recurringFilterResetPrimed) {
+			recurringFilterResetPrimed = true;
+			return;
+		}
+		recurringPage = 1;
+	});
 
 	const query = createQuery(() => ({
-		queryKey: ['recurring-expenses', propertyId],
-		queryFn: () => recurringExpenses.list({ propertyId }),
+		queryKey: ['recurring-expenses', propertyId, 'page', recurringPage, recurringSort, recurringFrom, recurringTo, PAGE_SIZE],
+		queryFn: () => recurringExpenses.listPage({
+			propertyId,
+			skip: (recurringPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: recurringSort || undefined,
+			from: recurringFrom || undefined,
+			to: recurringTo || undefined
+		}),
 		enabled: !isNaN(propertyId) && propertyId > 0
 	}));
-	const list = $derived(query.data ?? []);
+	const list = $derived(query.data?.items ?? []);
+	const totalCount = $derived(query.data?.totalCount ?? 0);
 
 	const categoryOptions = EXPENSE_CATEGORY_OPTIONS;
 	const frequencyOptions = [
@@ -152,15 +179,29 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={query.isLoading}
+		loading={query.isLoading || query.isFetching}
 		emptyMessage="No recurring expenses yet."
 		getRowKey={(t) => t.id}
 		onRowClick={(t) => openEdit(t)}
-		pageSize={10}
+		pageSize={PAGE_SIZE}
+		page={recurringPage}
+		totalCount={totalCount}
+		serverSide
+		sort={recurringSort}
+		onPageChange={(page) => (recurringPage = page)}
+		onSortChange={(sort) => { recurringSort = sort ?? ''; recurringPage = 1; }}
 		data-testid="property-recurring-expenses-grid"
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1"></div>
+			<RangeDatePicker
+				bind:start={recurringFrom}
+				bind:end={recurringTo}
+				presets
+				placeholder="Next run dates"
+				align="end"
+				testid="property-recurring-expenses-date-range"
+			/>
 			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="recurring-expense-add-button">
 				<Plus class="h-4 w-4" />
 				Add Recurring Expense
