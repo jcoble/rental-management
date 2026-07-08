@@ -452,6 +452,24 @@ export const recurringExpenseSchema = z.object({
 	notes: optionalText,
 });
 
+export const capitalAssetSchema = z.object({
+	description: required('Description').max(500, 'Description must be 500 characters or fewer'),
+	costBasis: positiveNumeric('Cost basis'),
+	inServiceDate: required('In-service date'),
+	method: z.enum(['StraightLine', 'Macrs']),
+	recoveryYears: positiveNumeric('Recovery years').refine((v) => v <= 40, 'Recovery years cannot exceed 40'),
+	convention: z.enum(['MidMonth', 'HalfYear']),
+	accumulatedDepreciation: optionalNonNegative('Accumulated depreciation'),
+});
+
+export const capitalizeExpenseSchema = z.object({
+	inServiceDate: required('In-service date'),
+	method: z.enum(['StraightLine', 'Macrs']),
+	recoveryYears: positiveNumeric('Recovery years').refine((v) => v <= 40, 'Recovery years cannot exceed 40'),
+	convention: z.enum(['MidMonth', 'HalfYear']),
+	description: optionalTextMax('Description', 500),
+});
+
 // Property depreciation basis (optional inline fields on the property edit form).
 export const propertyBasisSchema = z
 	.object({

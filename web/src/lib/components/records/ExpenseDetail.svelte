@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown, Plus } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown, Plus, Landmark } from '@lucide/svelte';
+	import type { DepreciationConvention, DepreciationMethod } from '$lib/api/endpoints/capital-assets';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { expenseDetailSchema, parseForm } from '$lib/schemas';
+	import { capitalizeExpenseSchema, expenseDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
@@ -28,6 +29,7 @@
 	import { buildExpenseReceiptDataForSave } from '$lib/accounting/expense-receipt-data';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
@@ -66,6 +68,15 @@
 		receiptData: ''
 	});
 	let formErrors = $state<Record<string, string>>({});
+	let showCapitalize = $state(false);
+	let capitalizeForm = $state({
+		inServiceDate: '',
+		method: 'StraightLine' as DepreciationMethod,
+		recoveryYears: '27.5',
+		convention: 'MidMonth' as DepreciationConvention,
+		description: ''
+	});
+	let capitalizeErrors = $state<Record<string, string>>({});
 
 	// --- Editable line items (mirrors the scan review page pattern) ---
 	// Numeric cells kept as strings; parsed on save. Key is a stable client-side id
@@ -206,6 +217,20 @@
 	const categoryOptions = $derived(EXPENSE_CATEGORY_OPTIONS);
 	const propertyOptions = $derived([{ value: '', label: 'No property' }, ...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))]);
 	const vendorOptions = $derived([{ value: '', label: 'No vendor' }, ...(vendorsQuery.data ?? []).map((v) => ({ value: String(v.id), label: v.name }))]);
+	const depreciationMethodOptions = [
+		{ value: 'StraightLine', label: 'Straight-line' },
+		{ value: 'Macrs', label: 'MACRS' }
+	];
+	const depreciationConventionOptions = [
+		{ value: 'MidMonth', label: 'Mid-month' },
+		{ value: 'HalfYear', label: 'Half-year' }
+	];
+	const recoveryOptions = [
+		{ value: '27.5', label: '27.5 years' },
+		{ value: '15', label: '15 years' },
+		{ value: '7', label: '7 years' },
+		{ value: '5', label: '5 years' }
+	];
 
 	function startEditing() {
 		if (!expense) return;
@@ -296,6 +321,48 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
+
+	function openCapitalize() {
+		if (!expense) return;
+		capitalizeForm = {
+			inServiceDate: expense.incurredAt?.slice(0, 10) ?? '',
+			method: 'StraightLine',
+			recoveryYears: '27.5',
+			convention: 'MidMonth',
+			description: expense.description
+		};
+		capitalizeErrors = {};
+		showCapitalize = true;
+	}
+
+	function closeCapitalize() {
+		showCapitalize = false;
+		capitalizeErrors = {};
+	}
+
+	const capitalizeMutation = createMutation(() => ({
+		mutationFn: (data: Parameters<typeof expenses.capitalize>[1]) => expenses.capitalize(expenseId, data),
+		onSuccess: () => {
+			showSuccess('Expense capitalized.');
+			closeCapitalize();
+			queryClient.invalidateQueries({ queryKey: ['expense', expenseId] });
+			queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['capital-assets', expense?.propertyId] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['reports', portfolioId] });
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function submitCapitalize() {
+		const result = parseForm(capitalizeExpenseSchema, capitalizeForm);
+		if (result.errors) {
+			capitalizeErrors = result.errors;
+			return;
+		}
+		capitalizeErrors = {};
+		capitalizeMutation.mutate(result.data);
+	}
 </script>
 
 <svelte:head>
@@ -346,6 +413,15 @@
 					<Button variant="outline" onclick={cancelEditing} disabled={saveMutation.isPending}><X class="h-4 w-4" />Cancel</Button>
 					<Button onclick={saveExpense} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
 				{:else}
+					{#if expense.capitalizedAssetId}
+						<span class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm font-medium text-muted-foreground" data-testid="expense-detail-capitalized-badge">
+							<Landmark class="h-4 w-4" />Capitalized
+						</span>
+					{:else if expense.propertyId}
+						<Button variant="outline" onclick={openCapitalize} disabled={capitalizeMutation.isPending} data-testid="expense-detail-capitalize-button">
+							<Landmark class="h-4 w-4" />Capitalize
+						</Button>
+					{/if}
 					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
 					<Button variant="destructive" onclick={() => (deleteTarget = requestExpenseDelete(expense))} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
 				{/if}
@@ -683,6 +759,29 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root open={showCapitalize} onOpenChange={(v) => { if (!v) closeCapitalize(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Capitalize Expense</Dialog.Title>
+		</Dialog.Header>
+		<div class="grid gap-3" data-testid="expense-capitalize-form">
+			<InlineField label="Description" bind:value={capitalizeForm.description} editing type="text" error={capitalizeErrors.description} testid="expense-capitalize-description" />
+			<InlineField label="In-service date" bind:value={capitalizeForm.inServiceDate} editing type="date" error={capitalizeErrors.inServiceDate} testid="expense-capitalize-in-service-date" />
+			<div class="grid grid-cols-3 gap-3">
+				<InlineField label="Method" bind:value={capitalizeForm.method} editing type="select" options={depreciationMethodOptions} error={capitalizeErrors.method} testid="expense-capitalize-method" />
+				<InlineField label="Life" bind:value={capitalizeForm.recoveryYears} editing type="select" options={recoveryOptions} error={capitalizeErrors.recoveryYears} testid="expense-capitalize-recovery-years" />
+				<InlineField label="Convention" bind:value={capitalizeForm.convention} editing type="select" options={depreciationConventionOptions} error={capitalizeErrors.convention} testid="expense-capitalize-convention" />
+			</div>
+		</div>
+		<div class="mt-4 flex justify-end gap-2">
+			<Button variant="outline" onclick={closeCapitalize}>Cancel</Button>
+			<Button onclick={submitCapitalize} disabled={capitalizeMutation.isPending} data-testid="expense-capitalize-save-button">
+				{capitalizeMutation.isPending ? 'Saving...' : 'Capitalize'}
+			</Button>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={deleteTarget !== null}
