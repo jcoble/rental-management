@@ -300,9 +300,7 @@ class _FakeOwnersRepository extends OwnersRepository {
     owner = OwnerEntity(
       id: id,
       portfolioId: owner.portfolioId,
-      ownerEntityType:
-          OwnerEntityType.fromJson(data['ownerEntityType']) ??
-          owner.ownerEntityType,
+      ownerEntityType: OwnerEntityType.fromJson(data['ownerEntityType']),
       name: data['name'] as String? ?? owner.name,
     );
     return owner;
