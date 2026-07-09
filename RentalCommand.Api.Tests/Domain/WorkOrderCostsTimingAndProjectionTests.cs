@@ -240,6 +240,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var property = SeedProperty("Oak Terrace");
         var vendor = SeedVendor("Ace Plumbing");
         var tenant = SeedTenant("Maria", "Tenant");
+        SeedActiveLease(property, tenant);
 
         var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
         {
@@ -425,6 +426,37 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         _db.Tenants.Add(tenant);
         _db.SaveChanges();
         return tenant;
+    }
+
+    private void SeedActiveLease(Property property, Tenant tenant)
+    {
+        var now = DateTime.UtcNow;
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = $"U-{tenant.Id}",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Units.Add(unit);
+        _db.SaveChanges();
+
+        _db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = $"WO-{tenant.Id}",
+            Status = LeaseStatus.Active,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
     }
 
     private sealed class NoopDataUpdate : IDataUpdateService

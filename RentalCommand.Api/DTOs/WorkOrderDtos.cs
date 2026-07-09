@@ -180,11 +180,7 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             UnitNumber = e.Unit?.UnitNumber,
             VendorName = e.Vendor?.Name,
             TenantName = e.Tenant == null ? null : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
-            Timeline = events
-                .OrderBy(ev => ev.CreatedAtUtc)
-                .ThenBy(ev => ev.Id)
-                .Select(WorkOrderStatusEventResponse.FromEntity)
-                .ToList(),
+            Timeline = events.Select(WorkOrderStatusEventResponse.FromEntity).ToList(),
         };
         return detail;
     }
@@ -258,11 +254,17 @@ public class UpdateWorkOrderRequest
     [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
 
+    public bool ClearUnit { get; set; }
+
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
 
+    public bool ClearTenant { get; set; }
+
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
+
+    public bool ClearLease { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }

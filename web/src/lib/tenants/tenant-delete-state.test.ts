@@ -23,4 +23,38 @@ describe('tenant delete state', () => {
 			}
 		);
 	});
+
+	it('uses server delete-blocked copy for active leases when provided', () => {
+		assert.deepEqual(
+			getTenantDeleteState({
+				fullName: 'Maya Ortiz',
+				activeLeaseCount: 1,
+				deleteBlockedReason: 'This tenant has an active or notice-given lease; end or reassign it first.',
+			}),
+			{
+				message: 'This tenant has an active or notice-given lease; end or reassign it first.',
+				confirmDisabled: true,
+			}
+		);
+	});
+
+	it('blocks tenants with lease history even without active leases', () => {
+		assert.deepEqual(
+			getTenantDeleteState({ fullName: 'Jordan Lee', activeLeaseCount: 0, leaseHistoryCount: 2 }),
+			{
+				message: 'Jordan Lee has lease history. Keep the tenant record to preserve past leases and payments.',
+				confirmDisabled: true,
+			}
+		);
+	});
+
+	it('blocks generic server-declared non-deletable tenants', () => {
+		assert.deepEqual(
+			getTenantDeleteState({ fullName: 'Riley Chen', activeLeaseCount: 0, leaseHistoryCount: 0, canDelete: false }),
+			{
+				message: 'Riley Chen cannot be deleted right now.',
+				confirmDisabled: true,
+			}
+		);
+	});
 });

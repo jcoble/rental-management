@@ -570,6 +570,49 @@ public class LeaseService : ILeaseService
         }
     }
 
+    private async Task EnsureUnitAvailableForOccupyingLeaseAsync(
+        int portfolioId, int unitId, CancellationToken ct)
+    {
+        var unit = await _db.Units
+            .AsNoTracking()
+            .Where(u => u.Id == unitId && u.Property != null && u.Property.PortfolioId == portfolioId)
+            .Select(u => new { u.Status })
+            .FirstOrDefaultAsync(ct);
+
+        if (unit == null)
+        {
+            return;
+        }
+
+        if (unit.Status != UnitStatus.Vacant)
+        {
+            throw new DomainValidationException(
+                "Choose a vacant unit before activating this lease.",
+                statusCode: 409);
+        }
+    }
+
+    private async Task EnsureTenantsAvailableForOccupyingLeaseAsync(
+        int portfolioId, int leaseId, IReadOnlyList<int> tenantIds, CancellationToken ct)
+    {
+        var conflict = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId
+                && l.Id != leaseId
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                && (tenantIds.Contains(l.TenantId) ||
+                    l.LeaseTenants.Any(lt => tenantIds.Contains(lt.TenantId))))
+            .Select(l => l.LeaseNumber)
+            .FirstOrDefaultAsync(ct);
+
+        if (conflict != null)
+        {
+            throw new DomainValidationException(
+                $"One of the selected tenants is already on active lease {conflict}.",
+                statusCode: 409);
+        }
+    }
+
     // Validate the date range BEFORE the DB CHECK constraint (CK_Lease_StartBeforeEnd) is hit, so the
     // client gets a clean 400 instead of a constraint-violation 500. The DB constraint remains the
     // backstop. Compares the UTC-normalized values that will actually be persisted.
@@ -652,6 +695,25 @@ public class LeaseService : ILeaseService
             membership.IsPrimary = index == 0;
             membership.UpdatedAt = now;
         }
+    }
+
+    private static IReadOnlyList<int> CurrentTenantIds(Lease lease)
+    {
+        var result = new List<int>();
+        if (lease.TenantId > 0)
+        {
+            result.Add(lease.TenantId);
+        }
+
+        foreach (var leaseTenant in lease.LeaseTenants.OrderByDescending(lt => lt.IsPrimary).ThenBy(lt => lt.Id))
+        {
+            if (leaseTenant.TenantId > 0 && !result.Contains(leaseTenant.TenantId))
+            {
+                result.Add(leaseTenant.TenantId);
+            }
+        }
+
+        return result;
     }
 
     public async Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -1118,6 +1180,8 @@ public class LeaseService : ILeaseService
         // so it skips the check. Id 0 (unsaved) never matches an existing row.
         if (OccupiesUnit(request.Status))
         {
+            await EnsureUnitAvailableForOccupyingLeaseAsync(portfolioId, request.UnitId, ct);
+            await EnsureTenantsAvailableForOccupyingLeaseAsync(portfolioId, 0, tenantIds, ct);
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, request.UnitId, 0, startUtc, endUtc, ct);
         }
 
@@ -1215,6 +1279,16 @@ public class LeaseService : ILeaseService
             (prevStatus != LeaseStatus.Active && newStatus == LeaseStatus.Active);
         var rentTrackingMode = request.RentTrackingStartMode
             ?? (shouldResolveRentTrackingStart ? RentTrackingStartMode.ForwardOnly : (RentTrackingStartMode?)null);
+        var hasTenantUpdate = request.TenantId.HasValue || request.TenantIds is { Count: > 0 };
+        IReadOnlyList<int>? requestedTenantIds = null;
+        if (hasTenantUpdate)
+        {
+            requestedTenantIds = NormalizeTenantIds(request.TenantId, request.TenantIds);
+            if (!await AreTenantsInPortfolioAsync(portfolioId, requestedTenantIds, ct))
+            {
+                return null;
+            }
+        }
 
         // 1. State machine: a status move must be a legal lifecycle edge (no-op same→same allowed).
         EnsureTransitionAllowed(prevStatus, newStatus);
@@ -1248,6 +1322,20 @@ public class LeaseService : ILeaseService
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, entity.UnitId, entity.Id, newStartUtc, newEndUtc, ct);
         }
 
+        if (OccupiesUnit(newStatus) && !OccupiesUnit(prevStatus))
+        {
+            await EnsureUnitAvailableForOccupyingLeaseAsync(portfolioId, entity.UnitId, ct);
+        }
+
+        if (OccupiesUnit(newStatus) && (!OccupiesUnit(prevStatus) || requestedTenantIds is not null))
+        {
+            await EnsureTenantsAvailableForOccupyingLeaseAsync(
+                portfolioId,
+                entity.Id,
+                requestedTenantIds ?? CurrentTenantIds(entity),
+                ct);
+        }
+
         if (request.LeaseNumber != null) entity.LeaseNumber = request.LeaseNumber;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.StartDate.HasValue) entity.StartDate = request.StartDate.Value.ToUtc();
@@ -1265,15 +1353,9 @@ public class LeaseService : ILeaseService
         if (request.SecurityDeposit.HasValue) entity.SecurityDeposit = request.SecurityDeposit.Value;
         if (request.LateFeeAmount.HasValue) entity.LateFeeAmount = request.LateFeeAmount.Value;
         if (request.RentDueDay.HasValue) entity.RentDueDay = request.RentDueDay.Value;
-        if (request.TenantId.HasValue || request.TenantIds is { Count: > 0 })
+        if (requestedTenantIds is not null)
         {
-            var tenantIds = NormalizeTenantIds(request.TenantId, request.TenantIds);
-            if (!await AreTenantsInPortfolioAsync(portfolioId, tenantIds, ct))
-            {
-                return null;
-            }
-
-            SetLeaseTenantMemberships(entity, tenantIds, _timeProvider.UtcNow());
+            SetLeaseTenantMemberships(entity, requestedTenantIds, _timeProvider.UtcNow());
         }
         if (rentTrackingMode.HasValue)
         {

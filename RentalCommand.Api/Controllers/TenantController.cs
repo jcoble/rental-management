@@ -40,7 +40,7 @@ public class TenantController : ManagementControllerBase
 
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<TenantResponse>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TenantResponse>>> List([FromQuery] ListQuery query, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<TenantResponse>>> List([FromQuery] TenantListQuery query, CancellationToken ct)
     {
         var items = await _service.ListAsync(GetPortfolioId(), query, ct);
         return Ok(items);

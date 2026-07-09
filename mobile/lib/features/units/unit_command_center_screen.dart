@@ -10,6 +10,8 @@ import '../../core/models/work_order.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../home/mobile_quick_action_fab.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../leases/lease_form_defaults.dart';
 import '../leases/lease_detail_screen.dart';
 import '../leases/leases_list_screen.dart';
@@ -19,8 +21,10 @@ import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../properties/properties_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'unit_command_center_tabs.dart';
+import 'unit_form_sheet.dart';
 import 'units_repository.dart';
 
 export 'unit_command_center_tabs.dart';
@@ -176,20 +180,136 @@ class UnitCommandCenterScreen extends StatelessWidget {
                 ],
               )
             : tabView,
+        floatingActionButton: _UnitWorkOrderQuickActionFab(
+          dashboard: dashboard,
+          selectedWorkOrder: initialWorkOrder,
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       ),
     );
   }
 }
 
-class _UnitOverviewTab extends StatelessWidget {
+class _UnitWorkOrderQuickActionFab extends ConsumerStatefulWidget {
+  const _UnitWorkOrderQuickActionFab({
+    required this.dashboard,
+    this.selectedWorkOrder,
+  });
+
+  final UnitDashboard dashboard;
+  final WorkOrder? selectedWorkOrder;
+
+  @override
+  ConsumerState<_UnitWorkOrderQuickActionFab> createState() =>
+      _UnitWorkOrderQuickActionFabState();
+}
+
+class _UnitWorkOrderQuickActionFabState
+    extends ConsumerState<_UnitWorkOrderQuickActionFab> {
+  final Object _quickActionOwner = Object();
+  TabController? _tabController;
+  MobileQuickActionController? _scopeController;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = DefaultTabController.maybeOf(context);
+    final nextScope = MobileQuickActionScope.maybeOf(context);
+
+    if (!identical(_tabController, nextController)) {
+      _tabController?.removeListener(_handleTabChanged);
+      _tabController = nextController;
+      _tabController?.addListener(_handleTabChanged);
+    }
+
+    if (!identical(_scopeController, nextScope)) {
+      _scopeController?.clearPrimaryAction(_quickActionOwner);
+      _scopeController = nextScope;
+    }
+  }
+
+  @override
+  void dispose() {
+    _tabController?.removeListener(_handleTabChanged);
+    _scopeController?.clearPrimaryAction(_quickActionOwner);
+    super.dispose();
+  }
+
+  void _handleTabChanged() {
+    if (mounted) setState(() {});
+  }
+
+  String get _propertyLabel {
+    final property = widget.dashboard.propertyName.trim();
+    return property.isEmpty ? 'Property' : property;
+  }
+
+  MobileQuickAction? _currentAction() {
+    final index =
+        _tabController?.index ?? DefaultTabController.of(context).index;
+    if (index == UnitCommandCenterTab.work.index &&
+        widget.selectedWorkOrder == null) {
+      return MobileQuickAction(
+        label: 'New work order',
+        icon: Icons.add,
+        onPressed: _showWorkOrderSheet,
+      );
+    }
+
+    if (index == UnitCommandCenterTab.turnover.index) {
+      return MobileQuickAction(
+        label: 'New turnover task',
+        icon: Icons.add,
+        onPressed: _showWorkOrderSheet,
+      );
+    }
+
+    return null;
+  }
+
+  void _showWorkOrderSheet() {
+    showCreateWorkOrderSheet(
+      context: context,
+      ref: ref,
+      onSaved: () =>
+          ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id)),
+      initialPropertyId: widget.dashboard.unit.propertyId,
+      initialUnitId: widget.dashboard.unit.id,
+      initialPropertyLabel: _propertyLabel,
+      initialUnitLabel: _unitLabel(widget.dashboard.unit.unitNumber),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final action = _currentAction();
+    final scope = _scopeController;
+    if (scope != null) {
+      scope.setPrimaryAction(_quickActionOwner, action);
+      return const SizedBox.shrink();
+    }
+
+    if (action == null) return const SizedBox.shrink();
+    return MobileQuickActionFab(
+      heroTag: 'unit-work-order-quick-action-fab',
+      primaryAction: action,
+      onChat: () => openMobileAssistant(context),
+      onRecord: () => openMobileRecord(context),
+      onScan: () => openMobileScan(context),
+    );
+  }
+}
+
+class _UnitOverviewTab extends ConsumerWidget {
   const _UnitOverviewTab({required this.dashboard});
 
   final UnitDashboard dashboard;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final header = dashboard.header;
     final unit = dashboard.unit;
+    final statusLocked = _hasCurrentOccupyingLease(dashboard.currentLease);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -222,6 +342,15 @@ class _UnitOverviewTab extends StatelessWidget {
                 value: _bedBathLabel(unit.bedrooms, unit.bathrooms),
               ),
           ],
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Edit unit'),
+            onPressed: () => _showEditUnitSheet(context, ref, statusLocked),
+          ),
         ),
         const SizedBox(height: 14),
         Wrap(
@@ -271,6 +400,30 @@ class _UnitOverviewTab extends StatelessWidget {
         const SizedBox(height: 14),
         _AppointmentsSection(items: dashboard.overview.upcomingAppointments),
       ],
+    );
+  }
+
+  bool _hasCurrentOccupyingLease(UnitLeaseSummary? lease) {
+    final status = lease?.status.toLowerCase();
+    return status == 'active' || status == 'noticegiven';
+  }
+
+  void _showEditUnitSheet(
+    BuildContext context,
+    WidgetRef ref,
+    bool statusLocked,
+  ) {
+    showUnitFormSheet(
+      context,
+      propertyId: dashboard.unit.propertyId,
+      unit: dashboard.unit,
+      statusLocked: statusLocked,
+      statusLockMessage:
+          'End, move out, or cancel notice on the current lease before changing unit status.',
+      onSaved: (_) {
+        ref.invalidate(unitDashboardProvider(dashboard.unit.id));
+        ref.invalidate(unitsProvider(dashboard.unit.propertyId));
+      },
     );
   }
 }
@@ -1080,17 +1233,14 @@ class _UnitTenantsTab extends StatelessWidget {
   }
 }
 
-class _UnitTurnoverTab extends ConsumerWidget {
+class _UnitTurnoverTab extends StatelessWidget {
   const _UnitTurnoverTab({required this.dashboard});
 
   final UnitDashboard dashboard;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final turnover = dashboard.turnover;
-    final property = dashboard.propertyName.trim().isEmpty
-        ? 'Property'
-        : dashboard.propertyName.trim();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -1161,45 +1311,25 @@ class _UnitTurnoverTab extends ConsumerWidget {
         _WorkOrdersSection(
           items: dashboard.overview.openWorkOrders,
           openFullDetail: true,
-          trailing: IconButton.filledTonal(
-            tooltip: 'New turnover task',
-            icon: const Icon(Icons.add),
-            onPressed: () {
-              showCreateWorkOrderSheet(
-                context: context,
-                ref: ref,
-                onSaved: () =>
-                    ref.invalidate(unitDashboardProvider(dashboard.unit.id)),
-                initialPropertyId: dashboard.unit.propertyId,
-                initialUnitId: dashboard.unit.id,
-                initialPropertyLabel: property,
-                initialUnitLabel: _unitLabel(dashboard.unit.unitNumber),
-              );
-            },
-          ),
         ),
       ],
     );
   }
 }
 
-class _UnitWorkTab extends ConsumerWidget {
+class _UnitWorkTab extends StatelessWidget {
   const _UnitWorkTab({required this.dashboard, this.selectedWorkOrder});
 
   final UnitDashboard dashboard;
   final WorkOrder? selectedWorkOrder;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final selected = selectedWorkOrder;
 
     if (selected != null) {
       return WorkOrderDetailScreen(workOrderId: selected.id);
     }
-
-    final property = dashboard.propertyName.trim().isEmpty
-        ? 'Property'
-        : dashboard.propertyName.trim();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -1207,22 +1337,6 @@ class _UnitWorkTab extends ConsumerWidget {
         _WorkOrdersSection(
           items: dashboard.overview.openWorkOrders,
           openFullDetail: true,
-          trailing: IconButton.filledTonal(
-            tooltip: 'New work order',
-            icon: const Icon(Icons.add),
-            onPressed: () {
-              showCreateWorkOrderSheet(
-                context: context,
-                ref: ref,
-                onSaved: () =>
-                    ref.invalidate(unitDashboardProvider(dashboard.unit.id)),
-                initialPropertyId: dashboard.unit.propertyId,
-                initialUnitId: dashboard.unit.id,
-                initialPropertyLabel: property,
-                initialUnitLabel: _unitLabel(dashboard.unit.unitNumber),
-              );
-            },
-          ),
         ),
       ],
     );
@@ -1252,22 +1366,16 @@ class _PaymentsSection extends StatelessWidget {
 }
 
 class _WorkOrdersSection extends StatelessWidget {
-  const _WorkOrdersSection({
-    required this.items,
-    this.openFullDetail = false,
-    this.trailing,
-  });
+  const _WorkOrdersSection({required this.items, this.openFullDetail = false});
 
   final List<UnitWorkOrderSummary> items;
   final bool openFullDetail;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     return _Section(
       title: 'Work orders',
       empty: 'No open work orders',
-      trailing: trailing,
       children: [
         for (final item in items)
           _CompactRow(
@@ -1495,13 +1603,11 @@ class _Section extends StatelessWidget {
     required this.title,
     required this.children,
     required this.empty,
-    this.trailing,
   });
 
   final String title;
   final List<Widget> children;
   final String empty;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -1523,7 +1629,6 @@ class _Section extends StatelessWidget {
                   ),
                 ),
               ),
-              ?trailing,
             ],
           ),
         ),

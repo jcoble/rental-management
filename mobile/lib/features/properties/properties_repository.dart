@@ -39,9 +39,14 @@ class PropertiesRepository {
 
   // ── Properties ─────────────────────────────────────────────────────────────
 
-  Future<List<Property>> listProperties() async {
+  Future<List<Property>> listProperties({
+    bool availableForLease = false,
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>('/properties');
+      final response = await _dio.get<List<dynamic>>(
+        '/properties',
+        queryParameters: availableForLease ? {'availableForLease': true} : null,
+      );
       final data = response.data ?? [];
       return data
           .whereType<Map<String, dynamic>>()
@@ -134,11 +139,17 @@ class PropertiesRepository {
 
   // ── Units ──────────────────────────────────────────────────────────────────
 
-  Future<List<Unit>> listUnits(int propertyId) async {
+  Future<List<Unit>> listUnits(
+    int propertyId, {
+    bool availableForLease = false,
+  }) async {
     try {
       final response = await _dio.get<List<dynamic>>(
         '/units',
-        queryParameters: {'propertyId': propertyId},
+        queryParameters: {
+          'propertyId': propertyId,
+          if (availableForLease) 'availableForLease': true,
+        },
       );
       final data = response.data ?? [];
       return data.whereType<Map<String, dynamic>>().map(Unit.fromJson).toList();
@@ -240,6 +251,13 @@ final propertiesProvider =
       PropertiesNotifier.new,
     );
 
+final availableForLeasePropertiesProvider =
+    FutureProvider.autoDispose<List<Property>>((ref) {
+      return ref
+          .watch(propertiesRepositoryProvider)
+          .listProperties(availableForLease: true);
+    });
+
 // ── Units for a specific property ─────────────────────────────────────────────
 
 class UnitsNotifier extends Notifier<AsyncValue<List<Unit>>> {
@@ -272,6 +290,13 @@ final unitsProvider =
     NotifierProvider.family<UnitsNotifier, AsyncValue<List<Unit>>, int>(
       UnitsNotifier.new,
     );
+
+final availableForLeaseUnitsProvider = FutureProvider.autoDispose
+    .family<List<Unit>, int>((ref, propertyId) {
+      return ref
+          .watch(propertiesRepositoryProvider)
+          .listUnits(propertyId, availableForLease: true);
+    });
 
 // ── Leases for a specific property ────────────────────────────────────────────
 
