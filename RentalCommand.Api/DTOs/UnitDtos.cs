@@ -88,6 +88,11 @@ public class UnitHealthListQuery : ListQuery
     public string? Stage { get; set; }
 }
 
+public class UnitListQuery : ListQuery
+{
+    public bool? AvailableForLease { get; set; }
+}
+
 public class CreateUnitRequest
 {
     [Required]

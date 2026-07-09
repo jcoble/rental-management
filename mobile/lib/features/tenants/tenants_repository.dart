@@ -14,6 +14,7 @@ class TenantListQuery {
     this.availableForLease,
     this.propertyId,
     this.unitId,
+    this.includeLeaseId,
   });
 
   final int skip;
@@ -23,6 +24,7 @@ class TenantListQuery {
   final bool? availableForLease;
   final int? propertyId;
   final int? unitId;
+  final int? includeLeaseId;
 
   @override
   bool operator ==(Object other) {
@@ -33,7 +35,8 @@ class TenantListQuery {
         other.sort == sort &&
         other.availableForLease == availableForLease &&
         other.propertyId == propertyId &&
-        other.unitId == unitId;
+        other.unitId == unitId &&
+        other.includeLeaseId == includeLeaseId;
   }
 
   @override
@@ -45,6 +48,7 @@ class TenantListQuery {
     availableForLease,
     propertyId,
     unitId,
+    includeLeaseId,
   );
 }
 
@@ -134,6 +138,7 @@ class TenantsRepository {
       'availableForLease': query.availableForLease,
       'propertyId': query.propertyId,
       'unitId': query.unitId,
+      'includeLeaseId': query.includeLeaseId,
     }..removeWhere((_, value) => value == null || value == '');
 
     try {

@@ -86,6 +86,27 @@ public class UnitServiceCreateTests : IDisposable
         updated.MarketRent.Should().Be(1500m);
     }
 
+    [Fact]
+    public async Task UpdateAsync_AllowsMarketRentButBlocksStatusChangeWhenUnitHasCurrentLease()
+    {
+        var property = SeedProperty();
+        var unit = await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "101", UnitStatus.Occupied));
+        SeedLease(unit!.Id, property.Id, LeaseStatus.Active);
+
+        var rentUpdate = await _sut.UpdateAsync(
+            PortfolioId, unit.Id, new UpdateUnitRequest { MarketRent = 1500m });
+
+        rentUpdate.Should().NotBeNull();
+        rentUpdate!.MarketRent.Should().Be(1500m);
+
+        var act = async () => await _sut.UpdateAsync(
+            PortfolioId, unit.Id, new UpdateUnitRequest { Status = UnitStatus.Vacant });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("current lease");
+    }
+
     private Property SeedProperty(string name = "Test Property")
     {
         var now = DateTime.UtcNow;
@@ -105,10 +126,44 @@ public class UnitServiceCreateTests : IDisposable
         return property;
     }
 
-    private static CreateUnitRequest NewUnit(int propertyId, string unitNumber) => new()
+    private void SeedLease(int unitId, int propertyId, LeaseStatus status)
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Active",
+            LastName = "Resident",
+            Email = "active.resident@example.local",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            Tenant = tenant,
+            LeaseNumber = "L-CURRENT",
+            Status = status,
+            StartDate = now.Date,
+            EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private static CreateUnitRequest NewUnit(
+        int propertyId,
+        string unitNumber,
+        UnitStatus status = UnitStatus.Vacant) => new()
     {
         PropertyId = propertyId,
         UnitNumber = unitNumber,
-        Status = UnitStatus.Vacant,
+        Status = status,
     };
 }

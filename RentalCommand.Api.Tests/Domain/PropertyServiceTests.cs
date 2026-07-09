@@ -57,6 +57,40 @@ public class PropertyServiceTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_AvailableForLeaseReturnsOnlyPropertiesWithEligibleUnitsInSql()
+    {
+        var available = SeedPropertyWithUnit(out var availableUnit);
+        available.Name = "Available Property";
+        availableUnit.Status = UnitStatus.Vacant;
+
+        var occupied = SeedPropertyWithUnit(out var occupiedUnit);
+        occupied.Name = "Occupied Property";
+        occupiedUnit.Status = UnitStatus.Occupied;
+
+        var activeLease = SeedPropertyWithUnit(out var activeLeaseUnit);
+        activeLease.Name = "Active Lease Property";
+        activeLeaseUnit.Status = UnitStatus.Vacant;
+        SeedOccupyingLease(activeLease, activeLeaseUnit, LeaseStatus.Active);
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new PropertyListQuery
+        {
+            AvailableForLease = true,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.Items.Select(p => p.Name).Should().Equal("Available Property");
+        _commands.Should().HaveCount(2);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("Units", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData(PropertyType.SingleFamily)]
     [InlineData(PropertyType.Condo)]

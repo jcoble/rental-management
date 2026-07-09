@@ -16,6 +16,10 @@ public class TenantService : ITenantService
 {
     private const string EntityType = "Tenant";
     private const int MaxSearchTokens = 8;
+    private const string ActiveLeaseDeleteBlockedReason =
+        "This tenant has an active or notice-given lease; end or reassign it first.";
+    private const string LeaseHistoryDeleteBlockedReason =
+        "This tenant has lease history; keep the tenant record to preserve past leases and payments.";
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -78,12 +82,16 @@ public class TenantService : ITenantService
 
         if (query.AvailableForLease == true)
         {
+            var includeLeaseId = query.IncludeLeaseId;
             q = q.Where(t =>
-                !t.Leases.Any(l => l.PortfolioId == portfolioId
-                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)) &&
-                !t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
-                    && lt.Lease != null
-                    && (lt.Lease.Status == LeaseStatus.Active || lt.Lease.Status == LeaseStatus.NoticeGiven)));
+                (includeLeaseId.HasValue && _db.Leases.Any(l =>
+                    l.PortfolioId == portfolioId
+                    && l.Id == includeLeaseId.Value
+                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id)))) ||
+                !_db.Leases.Any(l =>
+                    l.PortfolioId == portfolioId
+                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id))));
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -115,7 +123,7 @@ public class TenantService : ITenantService
             "lastname" => query.SortDescending ? q.OrderByDescending(t => t.LastName) : q.OrderBy(t => t.LastName),
             "email" => query.SortDescending ? q.OrderByDescending(t => t.Email) : q.OrderBy(t => t.Email),
             "phone" => query.SortDescending ? q.OrderByDescending(t => t.Phone) : q.OrderBy(t => t.Phone),
-            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
+            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => _db.Leases.Count(l => l.PortfolioId == portfolioId && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id)))).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => _db.Leases.Count(l => l.PortfolioId == portfolioId && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id)))).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
             "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
@@ -134,16 +142,37 @@ public class TenantService : ITenantService
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
+                ActiveLeaseCount = _db.Leases.Count(l =>
+                    l.PortfolioId == portfolioId
+                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id))),
             })
             .ToListAsync(ct);
+        var rowTenantIds = rows.Select(r => r.Entity.Id).ToArray();
+        var leaseHistoryCounts = rowTenantIds.Length == 0
+            ? new Dictionary<int, int>()
+            : await _db.Leases
+                .IgnoreQueryFilters()
+                .Where(l => l.PortfolioId == portfolioId && rowTenantIds.Contains(l.TenantId))
+                .Select(l => new { l.TenantId, LeaseId = l.Id })
+                .Concat(_db.LeaseTenants
+                    .IgnoreQueryFilters()
+                    .Where(lt => rowTenantIds.Contains(lt.TenantId) && lt.Lease != null && lt.Lease.PortfolioId == portfolioId)
+                    .Select(lt => new { lt.TenantId, lt.LeaseId }))
+                .Distinct()
+                .GroupBy(x => x.TenantId)
+                .Select(g => new { TenantId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.TenantId, x => x.Count, ct);
 
         return new TenantListResponse
         {
             Items = rows.Select(r =>
             {
                 var response = TenantResponse.FromEntity(r.Entity);
-                response.ActiveLeaseCount = r.ActiveLeaseCount;
+                ApplyDeleteState(
+                    response,
+                    r.ActiveLeaseCount,
+                    leaseHistoryCounts.GetValueOrDefault(r.Entity.Id));
                 return response;
             }).ToList(),
             TotalCount = totalCount,
@@ -161,7 +190,20 @@ public class TenantService : ITenantService
         AvailableForLease = (query as TenantListQuery)?.AvailableForLease,
         PropertyId = (query as TenantListQuery)?.PropertyId,
         UnitId = (query as TenantListQuery)?.UnitId,
+        IncludeLeaseId = (query as TenantListQuery)?.IncludeLeaseId,
     };
+
+    private static void ApplyDeleteState(TenantResponse response, int activeLeaseCount, int leaseHistoryCount)
+    {
+        response.ActiveLeaseCount = activeLeaseCount;
+        response.LeaseHistoryCount = leaseHistoryCount;
+        response.CanDelete = activeLeaseCount == 0 && leaseHistoryCount == 0;
+        response.DeleteBlockedReason = activeLeaseCount > 0
+            ? ActiveLeaseDeleteBlockedReason
+            : leaseHistoryCount > 0
+                ? LeaseHistoryDeleteBlockedReason
+                : null;
+    }
 
     private static IReadOnlyList<string> SearchTokens(string search)
     {
@@ -218,7 +260,10 @@ public class TenantService : ITenantService
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
+                ActiveLeaseCount = _db.Leases.Count(l =>
+                    l.PortfolioId == portfolioId
+                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id))),
                 // Portal-login state: existence + lockout of the Identity user linked to this tenant,
                 // fetched DB-side as correlated subqueries in the SAME query (no follow-up round trip).
                 HasPortalUser = _db.Users.Any(u => u.TenantId == t.Id && u.PortfolioId == portfolioId),
@@ -234,8 +279,12 @@ public class TenantService : ITenantService
             return null;
         }
 
+        var leaseHistoryCount = await _db.Leases
+            .IgnoreQueryFilters()
+            .CountAsync(l => l.PortfolioId == portfolioId
+                && (l.TenantId == id || l.LeaseTenants.Any(lt => lt.TenantId == id)), ct);
         var response = TenantResponse.FromEntity(row.Entity);
-        response.ActiveLeaseCount = row.ActiveLeaseCount;
+        ApplyDeleteState(response, row.ActiveLeaseCount, leaseHistoryCount);
         // Classify the single fetched row (no cross-row work): no user → none; locked-off → disabled.
         response.PortalAccess = !row.HasPortalUser
             ? "none"
@@ -269,7 +318,7 @@ public class TenantService : ITenantService
         // fail tenant creation.
         await TryProvisionPortalAccessAsync(entity.Id, portfolioId, ct);
 
-        var response = TenantResponse.FromEntity(entity);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -312,7 +361,7 @@ public class TenantService : ITenantService
 
         await _db.SaveChangesAsync(ct);
 
-        var response = TenantResponse.FromEntity(entity);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -326,21 +375,26 @@ public class TenantService : ITenantService
             return false;
         }
 
-        // Block the soft-delete while the tenant still occupies a unit. A lease in Active OR NoticeGiven
-        // is still in force and occupying — a notice-given lease is treated as the current lease
-        // everywhere else (unit health badge, "Move-Out" stage). Otherwise the lease keeps occupying its
-        // unit but 404s in the UI — Include(Tenant) inner-joins through the tenant's soft-delete query
-        // filter, so the orphaned lease becomes invisible yet stays in force. Same occupancy predicate
-        // the read model's ActiveLeaseCount uses; evaluated SQL-side as an EXISTS (the global query
-        // filter already excludes soft-deleted leases).
         var hasOccupyingLease = await _db.Leases
-            .AnyAsync(l => l.TenantId == id
-                && l.PortfolioId == portfolioId
-                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven), ct);
+            .AnyAsync(l => l.PortfolioId == portfolioId
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                && (l.TenantId == id || l.LeaseTenants.Any(lt => lt.TenantId == id)), ct);
         if (hasOccupyingLease)
         {
             throw new DomainValidationException(
-                "This tenant has an active lease; end or reassign it first.");
+                ActiveLeaseDeleteBlockedReason,
+                StatusCodes.Status409Conflict);
+        }
+
+        var hasLeaseHistory = await _db.Leases
+            .IgnoreQueryFilters()
+            .AnyAsync(l => l.PortfolioId == portfolioId
+                && (l.TenantId == id || l.LeaseTenants.Any(lt => lt.TenantId == id)), ct);
+        if (hasLeaseHistory)
+        {
+            throw new DomainValidationException(
+                LeaseHistoryDeleteBlockedReason,
+                StatusCodes.Status409Conflict);
         }
 
         entity.DeletedAt = _timeProvider.UtcNow();

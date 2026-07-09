@@ -21,8 +21,10 @@ import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../properties/properties_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'unit_command_center_tabs.dart';
+import 'unit_form_sheet.dart';
 import 'units_repository.dart';
 
 export 'unit_command_center_tabs.dart';
@@ -298,15 +300,16 @@ class _UnitWorkOrderQuickActionFabState
   }
 }
 
-class _UnitOverviewTab extends StatelessWidget {
+class _UnitOverviewTab extends ConsumerWidget {
   const _UnitOverviewTab({required this.dashboard});
 
   final UnitDashboard dashboard;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final header = dashboard.header;
     final unit = dashboard.unit;
+    final statusLocked = _hasCurrentOccupyingLease(dashboard.currentLease);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -339,6 +342,15 @@ class _UnitOverviewTab extends StatelessWidget {
                 value: _bedBathLabel(unit.bedrooms, unit.bathrooms),
               ),
           ],
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Edit unit'),
+            onPressed: () => _showEditUnitSheet(context, ref, statusLocked),
+          ),
         ),
         const SizedBox(height: 14),
         Wrap(
@@ -388,6 +400,30 @@ class _UnitOverviewTab extends StatelessWidget {
         const SizedBox(height: 14),
         _AppointmentsSection(items: dashboard.overview.upcomingAppointments),
       ],
+    );
+  }
+
+  bool _hasCurrentOccupyingLease(UnitLeaseSummary? lease) {
+    final status = lease?.status.toLowerCase();
+    return status == 'active' || status == 'noticegiven';
+  }
+
+  void _showEditUnitSheet(
+    BuildContext context,
+    WidgetRef ref,
+    bool statusLocked,
+  ) {
+    showUnitFormSheet(
+      context,
+      propertyId: dashboard.unit.propertyId,
+      unit: dashboard.unit,
+      statusLocked: statusLocked,
+      statusLockMessage:
+          'End, move out, or cancel notice on the current lease before changing unit status.',
+      onSaved: (_) {
+        ref.invalidate(unitDashboardProvider(dashboard.unit.id));
+        ref.invalidate(unitsProvider(dashboard.unit.propertyId));
+      },
     );
   }
 }

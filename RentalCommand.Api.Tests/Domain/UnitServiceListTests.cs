@@ -161,6 +161,44 @@ public class UnitServiceListTests : IDisposable
     }
 
     [Fact]
+    public async Task ListAsync_AvailableForLeaseReturnsOnlyVacantUnitsWithoutOccupyingLeasesInSql()
+    {
+        var now = DateTime.UtcNow;
+        var (_, availableUnit) = SeedUnitShell("101", "Available Property", UnitStatus.Vacant, now);
+        SeedUnitShell("102", "Occupied Property", UnitStatus.Occupied, now);
+        var (leasedProperty, leasedUnit) = SeedUnitShell("103", "Leased Property", UnitStatus.Vacant, now);
+        var tenant = SeedTenant(now);
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = leasedProperty,
+            Unit = leasedUnit,
+            Tenant = tenant,
+            LeaseNumber = "L-LEASED",
+            Status = LeaseStatus.NoticeGiven,
+            StartDate = now.Date,
+            EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1250m,
+            SecurityDeposit = 1250m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var result = await _sut.ListAsync(PortfolioId, null, new UnitListQuery
+        {
+            AvailableForLease = true,
+            Sort = "unitNumber",
+        });
+
+        result.Select(u => u.Id).Should().Equal(availableUnit.Id);
+        _commands.Should().ContainSingle(sql =>
+            sql.Contains("Units", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ListWithHealthPageAsync_DocsCountMatchesUnitDashboardRollupDefinition()
     {
         var now = DateTime.UtcNow;
