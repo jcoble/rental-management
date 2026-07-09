@@ -3,8 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
+import '../../core/models/models.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../money/money_format.dart';
+import '../payments/payments_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
@@ -42,6 +45,7 @@ class _ApplicationDetailScreenState
   Future<void> _refresh() async {
     ref.invalidate(applicationDetailProvider(_id));
     ref.invalidate(applicationScreeningProvider(_id));
+    ref.invalidate(applicationPaymentsProvider(_id));
   }
 
   void _snack(String message) {
@@ -159,7 +163,9 @@ class _ApplicationDetailScreenState
 
     setState(() => _busy = true);
     try {
-      await ref.read(applicationsRepositoryProvider).recordFee(
+      await ref
+          .read(applicationsRepositoryProvider)
+          .recordFee(
             _id,
             amount: input.amount,
             method: input.method,
@@ -328,6 +334,7 @@ class _ApplicationDetailScreenState
   Widget build(BuildContext context) {
     final detailAsync = ref.watch(applicationDetailProvider(_id));
     final screeningAsync = ref.watch(applicationScreeningProvider(_id));
+    final feesAsync = ref.watch(applicationPaymentsProvider(_id));
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -373,6 +380,7 @@ class _ApplicationDetailScreenState
             busy: _busy,
             createdTenantId: _createdTenantId ?? app.approvedTenantId,
             screeningAsync: screeningAsync,
+            feesAsync: feesAsync,
             adverseAction: _adverseAction,
             onApprove: _approve,
             onDecline: _decline,
@@ -397,6 +405,7 @@ class _DetailBody extends StatelessWidget {
     required this.busy,
     required this.createdTenantId,
     required this.screeningAsync,
+    required this.feesAsync,
     required this.adverseAction,
     required this.onApprove,
     required this.onDecline,
@@ -412,6 +421,7 @@ class _DetailBody extends StatelessWidget {
   final bool busy;
   final int? createdTenantId;
   final AsyncValue<List<ScreeningResult>> screeningAsync;
+  final AsyncValue<List<Payment>> feesAsync;
   final AdverseActionNotice? adverseAction;
   final VoidCallback onApprove;
   final VoidCallback onDecline;
@@ -632,6 +642,10 @@ class _DetailBody extends StatelessWidget {
           const SizedBox(height: 12),
         ],
 
+        // ── Application fees ──────────────────────────────────────────────
+        _ApplicationFeesSection(feesAsync: feesAsync),
+        const SizedBox(height: 12),
+
         // ── Consent ────────────────────────────────────────────────────────
         _SectionCard(
           title: 'Consent',
@@ -720,6 +734,97 @@ class _DetailBody extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 24),
+      ],
+    );
+  }
+}
+
+class _ApplicationFeesSection extends StatelessWidget {
+  const _ApplicationFeesSection({required this.feesAsync});
+
+  final AsyncValue<List<Payment>> feesAsync;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return _SectionCard(
+      title: 'Application fees',
+      child: feesAsync.when(
+        loading: () => const LinearProgressIndicator(),
+        error: (e, _) => Text(
+          e is ApiException ? e.message : 'Could not load application fees.',
+          style: theme.textTheme.bodyMedium?.copyWith(color: cs.error),
+        ),
+        data: (fees) {
+          if (fees.isEmpty) {
+            return const _EmptyHint(text: 'No application fees recorded.');
+          }
+
+          return Column(
+            children: [
+              for (var i = 0; i < fees.length; i++) ...[
+                _ApplicationFeeRow(payment: fees[i]),
+                if (i < fees.length - 1) const Divider(height: 16),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ApplicationFeeRow extends StatelessWidget {
+  const _ApplicationFeeRow({required this.payment});
+
+  final Payment payment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final date = payment.paidDate ?? payment.dueDate;
+    final dateLabel = date.year > 1
+        ? formatApplicationDate(date.toLocal())
+        : '—';
+    final method = payment.method?.trim();
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                paymentTypeLabel(payment.type),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                [
+                  if (payment.status.isNotEmpty) payment.status,
+                  dateLabel,
+                  if (method != null && method.isNotEmpty) method,
+                ].join(' · '),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          moneyFmt(payment.amount),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ],
     );
   }
@@ -1116,9 +1221,9 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
           Text(
             'Records a paid application/screening fee as income for this '
             "application's property. No lease required.",
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: cs.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 12),
           TextField(

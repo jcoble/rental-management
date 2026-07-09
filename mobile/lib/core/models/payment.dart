@@ -13,6 +13,8 @@ String paymentTypeLabel(String type) {
       return 'Late fee';
     case 'Utility':
       return 'Utility';
+    case 'ApplicationFee':
+      return 'Application fee';
     case 'Other':
       return 'Other';
     default:
@@ -23,7 +25,8 @@ String paymentTypeLabel(String type) {
 class Payment {
   final int id;
   final int? portfolioId;
-  final int leaseId;
+  final int? leaseId;
+  final int? applicationId;
   final String type;
   final String status;
   final double amount;
@@ -49,7 +52,8 @@ class Payment {
   const Payment({
     required this.id,
     this.portfolioId,
-    required this.leaseId,
+    this.leaseId,
+    this.applicationId,
     required this.type,
     required this.status,
     required this.amount,
@@ -73,7 +77,8 @@ class Payment {
     return Payment(
       id: (json['id'] as num).toInt(),
       portfolioId: (json['portfolioId'] as num?)?.toInt(),
-      leaseId: (json['leaseId'] as num).toInt(),
+      leaseId: (json['leaseId'] as num?)?.toInt(),
+      applicationId: (json['applicationId'] as num?)?.toInt(),
       type: json['paymentType'] as String? ?? json['type'] as String? ?? '',
       status: json['status'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
@@ -100,7 +105,8 @@ class Payment {
   Map<String, dynamic> toJson() {
     return {
       if (portfolioId != null) 'portfolioId': portfolioId,
-      'leaseId': leaseId,
+      if (leaseId != null) 'leaseId': leaseId,
+      if (applicationId != null) 'applicationId': applicationId,
       'type': type,
       'status': status,
       'amount': amount,
