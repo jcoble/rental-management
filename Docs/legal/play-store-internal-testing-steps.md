@@ -7,7 +7,7 @@ install it from the Play Store.
 - **App id (package name):** `com.rentalcommand.rental_command`
 - **Signed bundle to upload:** `mobile/build/app/outputs/bundle/prodRelease/app-prod-release.aab`
 - **Version of this build:** `1.0.0 (versionCode 1)`
-- **Backend the app talks to:** production — `https://rc.coblesolutions.com`
+- **Backend the app talks to:** production — `https://rentalcommand.net`
 
 > ⚠️ **Verify current requirements at execution time.** Google changes the Play
 > Console flow and policy wording regularly. Treat this checklist as the intended
@@ -28,7 +28,7 @@ install it from the Play Store.
   HTML source live in `Docs/legal/privacy-policy.md` / `Docs/legal/privacy-policy.html`.
   You must put the HTML somewhere publicly reachable first.
 - A test login for the app (an email + password that works against
-  `rc.coblesolutions.com`) in case Google's reviewer asks for app access.
+  `rentalcommand.net`) in case Google's reviewer asks for app access.
 
 ---
 
@@ -113,14 +113,14 @@ a green check. Rollout to testers is blocked until the mandatory ones are done.
 ### 5a. App access
 - If **all** functionality is behind a login (Rental Command is), choose
   **"All or some functionality is restricted"** and provide **demo login
-  credentials** (a working email + password for `rc.coblesolutions.com`) plus any
+  credentials** (a working email + password for `rentalcommand.net`) plus any
   steps the reviewer needs. This lets Google's reviewer get in.
 
 ### 5b. Privacy policy
 - Paste the **public URL** where you hosted the privacy policy.
 - You must host `Docs/legal/privacy-policy.html` (or an equivalent page) at a real
-  https URL first — e.g. `https://coblesolutions.com/rental-command/privacy` or a
-  GitHub Pages URL. The URL must be publicly reachable (no login).
+  https URL first — e.g. `https://rentalcommand.net/privacy` or a GitHub Pages URL.
+  The URL must be publicly reachable (no login).
 
 ### 5c. Data safety
 - Fill in the **Data safety** form. It must **match the privacy policy** in
@@ -209,5 +209,5 @@ When you're ready for anyone to install it from the Play Store:
 | Upload key alias | `upload` |
 | Version | `1.0.0 (versionCode 1)` |
 | Privacy policy source | `Docs/legal/privacy-policy.md` / `.html` (must be hosted at a public URL) |
-| Backend | `https://rc.coblesolutions.com` (production) |
+| Backend | `https://rentalcommand.net` (production) |
 | Track | Internal testing (≤100 testers, no 14-day gate) |

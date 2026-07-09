@@ -9,7 +9,7 @@ rental applications. This Privacy Policy explains what personal information the 
 collects, why we collect it, how it is stored and shared, and the choices you have.
 
 The app is provided by the operator of Rental Command. If you have any questions or
-requests about your data, contact us at **[CONTACT EMAIL]**.
+requests about your data, contact us at **jcoble@rentalcommand.net**.
 
 ---
 
@@ -182,7 +182,7 @@ consent (such as background screening).
 - **Tenants, applicants, and other individuals** whose data a landlord entered can
   contact us, or the landlord who manages their records, to make a request.
 - To request access to or **deletion** of your data, or to ask a question about this
-  policy, contact us at **[CONTACT EMAIL]**. We will respond consistent with
+  policy, contact us at **jcoble@rentalcommand.net**. We will respond consistent with
   applicable law. Note that we may need to retain certain records to meet legal
   obligations.
 
@@ -209,4 +209,4 @@ after an update means you accept the revised policy.
 For any privacy question or request, contact:
 
 **Rental Command**
-Email: **[CONTACT EMAIL]**
+Email: **jcoble@rentalcommand.net**

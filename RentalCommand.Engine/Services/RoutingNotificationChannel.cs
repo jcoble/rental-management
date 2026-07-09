@@ -11,8 +11,8 @@ namespace RentalCommand.Engine.Services;
 /// <summary>
 /// Phase 4 <see cref="INotificationChannel"/>: routes SMS through the pluggable
 /// <see cref="ISmsDispatcher"/> (per-portfolio BYO provider with platform-env fallback) and email
-/// through a config-selectable transport — SMTP (e.g. Zoho) when <c>Notifications:Email:Transport</c>
-/// is "Smtp" and SMTP creds are present, otherwise the SendGrid HTTP API. Email with no configured
+/// through a config-selectable transport — SMTP when <c>Notifications:Email:Transport</c>
+/// is "Smtp" and SMTP is configured, otherwise the SendGrid HTTP API. Email with no configured
 /// provider raises a typed suppression so the outbox can show "not delivered" without retrying.
 /// Register via <c>AddHttpClient&lt;INotificationChannel, RoutingNotificationChannel&gt;()</c>
 /// in Program.cs.
@@ -52,7 +52,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
     {
         // Transport selection (config-gated):
-        //   1. Transport == "Smtp" AND SMTP configured (host+user+pass) → send via SMTP (e.g. Zoho).
+        //   1. Transport == "Smtp" AND SMTP configured                  → send via SMTP.
         //   2. else SendGrid configured                                 → send via SendGrid.
         //   3. else                                                     → terminal suppression, no retry.
         var smtp = _cfg.Smtp;
@@ -75,7 +75,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
             "Email delivery is not configured for this environment. No external email provider accepted this message.");
     }
 
-    // SMTP (e.g. Zoho): delegates the connect/auth/send to ISmtpEmailSender. Logs success/failure
+    // SMTP: delegates the connect/auth/send to ISmtpEmailSender. Logs success/failure
     // consistently with the SendGrid path. The sender throws on failure → propagates so the outbox
     // worker retries (same contract as EnsureSuccessAsync below).
     private async Task SendViaSmtpAsync(
@@ -125,8 +125,8 @@ public sealed class RoutingNotificationChannel : INotificationChannel
             // Disable click/open tracking PER MESSAGE so it can never silently regress.
             // We send transactional auth/notice mail (verify-email, password-reset, late notices) — the
             // links MUST stay direct. SendGrid's account-level click-tracking default rewrites every
-            // <a href> to a branded "urlNNNN.coblesolutions.com/ls/click?upn=…" link; that link-branding
-            // CNAME isn't in Cloudflare DNS, so a tracked verify link dies with ERR_NAME_NOT_RESOLVED and
+            // <a href> to a branded link-tracking host; if that CNAME isn't in DNS, a tracked verify
+            // link dies with ERR_NAME_NOT_RESOLVED and
             // locks the new user out (login is gated on EmailConfirmed). The API send otherwise INHERITS
             // whatever the dashboard Tracking toggle is at send time — turning it off in the portal only
             // holds until that account default flips back on. Setting it false in the payload is

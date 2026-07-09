@@ -108,7 +108,7 @@ class VoiceLinkService {
 
 /// Returns the supported auth route for either a custom-scheme form
 /// (`rentalcommand://reset-password?...`) or an https path form
-/// (`https://rc.coblesolutions.com/reset-password?...`).
+/// (`https://rentalcommand.net/reset-password?...`).
 @visibleForTesting
 String? authEmailLinkPath(Uri uri) {
   const supported = {'reset-password', 'verify-email'};

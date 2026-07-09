@@ -11,7 +11,7 @@ void main() {
       expect(
         authEmailLinkPath(
           Uri.parse(
-            'https://rc.coblesolutions.com/reset-password?userId=u&token=t',
+            'https://rentalcommand.net/reset-password?userId=u&token=t',
           ),
         ),
         'reset-password',
@@ -19,7 +19,7 @@ void main() {
       expect(
         authEmailLinkPath(
           Uri.parse(
-            'https://rc.coblesolutions.com/verify-email?userId=u&token=t',
+            'https://rentalcommand.net/verify-email?userId=u&token=t',
           ),
         ),
         'verify-email',
@@ -36,7 +36,7 @@ void main() {
         'verify-email',
       );
       expect(
-        authEmailLinkPath(Uri.parse('https://rc.coblesolutions.com/settings')),
+        authEmailLinkPath(Uri.parse('https://rentalcommand.net/settings')),
         isNull,
       );
     });
@@ -122,7 +122,7 @@ void main() {
     test('https app-link form (path-based) parses identically', () {
       final cmd = parseVoiceCommand(
         Uri.parse(
-          'https://rc.coblesolutions.com/voice/log-expense?amount=12',
+          'https://rentalcommand.net/voice/log-expense?amount=12',
         ),
       );
       expect(cmd!.action, VoiceAction.logExpense);

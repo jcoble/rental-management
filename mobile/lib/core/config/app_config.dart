@@ -15,7 +15,7 @@ class AppConfig {
   AppConfig._();
 
   /// Production API base — the live deployment (`VITE_API_URL=/api/v1` on web).
-  static const String prodApiBaseUrl = 'https://rc.coblesolutions.com/api/v1';
+  static const String prodApiBaseUrl = 'https://rentalcommand.net/api/v1';
 
   /// Default dev API base — Android emulator loopback (10.0.2.2 → host).
   /// iOS Simulator should pass `--dart-define=API_BASE_URL=https://localhost:5666/api/v1`;

@@ -38,8 +38,8 @@ public class NotificationsConfig
     public VonageOptions Vonage { get; set; } = new();
     public SendGridOptions SendGrid { get; set; } = new();
 
-    /// <summary>SMTP email transport (e.g. Zoho). Lets email be sent over an already-DKIM/SPF-authenticated
-    /// mailbox domain when SendGrid mail fails DMARC. Selected via <see cref="Email"/>.Transport == "Smtp".</summary>
+    /// <summary>SMTP email transport. Lets email be sent over a domain-authenticated SMTP provider
+    /// or IP-authorized relay. Selected via <see cref="Email"/>.Transport == "Smtp".</summary>
     public SmtpOptions Smtp { get; set; } = new();
 
     /// <summary>Chooses which email transport <c>SendEmailAsync</c> uses (SendGrid vs SMTP).</summary>
@@ -181,14 +181,13 @@ public class SendGridOptions
 }
 
 /// <summary>
-/// SMTP email transport — e.g. Zoho (<c>smtp.zoho.com:465</c>, SSL on connect). Use this when the
-/// sending domain is authenticated (DKIM/SPF) with the mailbox provider rather than SendGrid, so mail
-/// passes DMARC alignment and actually delivers. Defaults match Zoho's implicit-TLS endpoint.
+/// SMTP email transport. Supports authenticated mailbox SMTP and IP-authorized relay
+/// (<c>smtp-relay.gmail.com:587</c>) so mail can be sent from the domain-authenticated provider.
 /// </summary>
 public class SmtpOptions
 {
     public string? Host { get; set; }
-    /// <summary>465 = implicit SSL/TLS on connect (Zoho default). 587 = STARTTLS.</summary>
+    /// <summary>465 = implicit SSL/TLS on connect. 587 = STARTTLS.</summary>
     public int Port { get; set; } = 465;
     /// <summary>True → SSL-on-connect (port 465). False → STARTTLS (port 587).</summary>
     public bool UseSsl { get; set; } = true;
@@ -199,17 +198,26 @@ public class SmtpOptions
     /// <summary>Socket/operation timeout (seconds) so a dead relay can't stall the outbox dispatcher.</summary>
     public int TimeoutSeconds { get; set; } = 30;
 
-    /// <summary>Configured when host + credentials are present. From falls back to Username if unset.</summary>
+    public bool HasCredentials =>
+        !string.IsNullOrWhiteSpace(Username)
+        && !string.IsNullOrWhiteSpace(Password);
+
+    /// <summary>
+    /// Configured when host is present and either credentials exist or a relay sender address is set.
+    /// If Username/Password are both blank, the SMTP client connects without AUTH.
+    /// </summary>
     public bool Enabled =>
         !string.IsNullOrWhiteSpace(Host)
-        && !string.IsNullOrWhiteSpace(Username)
-        && !string.IsNullOrWhiteSpace(Password);
+        && (HasCredentials
+            || (string.IsNullOrWhiteSpace(Username)
+                && string.IsNullOrWhiteSpace(Password)
+                && !string.IsNullOrWhiteSpace(FromEmail)));
 }
 
 /// <summary>
 /// Selects which email transport <c>SendEmailAsync</c> uses. Defaults to "SendGrid" so existing
 /// behaviour is unchanged; set Transport = "Smtp" (with <see cref="NotificationsConfig.Smtp"/>
-/// configured) to send over SMTP/Zoho instead.
+/// configured) to send over SMTP instead.
 /// </summary>
 public class EmailTransportOptions
 {
