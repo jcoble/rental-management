@@ -589,9 +589,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ApprovedChannels).HasMaxLength(100);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.PaymentId);
             entity.HasIndex(e => e.TenantId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.NoticeType, e.Status });
+            entity.HasIndex(e => new { e.PortfolioId, e.PaymentId, e.NoticeType, e.Status });
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
@@ -600,6 +602,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.LeaseId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Payment)
+                .WithMany()
+                .HasForeignKey(e => e.PaymentId)
+                .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.Tenant)
                 .WithMany()
                 .HasForeignKey(e => e.TenantId)
