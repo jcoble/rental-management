@@ -4,6 +4,15 @@ Full project context, architecture, auth model, and conventions are in
 [`CLAUDE.md`](./CLAUDE.md). Read it. The rules below are the ones agents most
 often get wrong, repeated here so they are not missed.
 
+## Transaction atomicity — HARD RULE (all apps, no matter what)
+
+Every user action that writes an aggregate or workflow must be all-or-nothing inside **one explicit database transaction**. Multiple `SaveChanges` / `SaveChangesAsync` calls are allowed when generated IDs or ordered writes require them, but every one of those calls must participate in the same transaction. Never split one user action across independently committed HTTP requests or saves.
+
+- Composite workflows (for example tenant + lease + memberships + occupancy + deposit + opening balance + initial payments) belong in one server-side transaction.
+- On any failure, the transaction must roll back every row written by that action; no half-created or "half-cooked" state is acceptable.
+- Realtime broadcasts, emails, provider calls, and other external side effects run only after commit. Use the outbox for side effects that must be guaranteed or retried.
+- Validating before save is not enough for concurrency safety; retain database constraints and use appropriate isolation or locking where races are possible.
+
 ## Worktrees (read before creating any worktree)
 
 Create git worktrees under a **single shared root**, one subfolder per repo, one

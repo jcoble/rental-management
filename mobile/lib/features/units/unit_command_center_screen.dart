@@ -987,13 +987,18 @@ class _UnitLeaseTab extends ConsumerWidget {
       unit: dashboard.unit,
       propertyName: property,
     );
+    final hasOccupyingLease =
+        dashboard.unit.status != 'Vacant' ||
+        summary?.status == 'Active' ||
+        summary?.status == 'NoticeGiven';
+    final addLease = hasOccupyingLease
+        ? null
+        : () => _showLeaseSheet(context, ref, leaseDefaults);
 
     if (lease != null) {
       return LeaseDetailScreen(
         lease: lease,
-        leadingContent: _UnitLeaseAddAction(
-          onPressed: () => _showLeaseSheet(context, ref, leaseDefaults),
-        ),
+        leadingContent: _UnitLeaseAddAction(onPressed: addLease),
       );
     }
 
@@ -1002,11 +1007,7 @@ class _UnitLeaseTab extends ConsumerWidget {
         icon: Symbols.description_rounded,
         title: 'No lease',
         body: 'This unit has no current lease.',
-        action: FilledButton.icon(
-          icon: const Icon(Icons.add),
-          label: const Text('Add lease'),
-          onPressed: () => _showLeaseSheet(context, ref, leaseDefaults),
-        ),
+        action: _UnitLeaseAddAction(onPressed: addLease),
       );
     }
 
@@ -1020,9 +1021,7 @@ class _UnitLeaseTab extends ConsumerWidget {
       ),
       data: (loadedLease) => LeaseDetailScreen(
         lease: loadedLease,
-        leadingContent: _UnitLeaseAddAction(
-          onPressed: () => _showLeaseSheet(context, ref, leaseDefaults),
-        ),
+        leadingContent: _UnitLeaseAddAction(onPressed: addLease),
       ),
     );
   }
@@ -1035,6 +1034,8 @@ class _UnitLeaseTab extends ConsumerWidget {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -1052,17 +1053,26 @@ class _UnitLeaseTab extends ConsumerWidget {
 class _UnitLeaseAddAction extends StatelessWidget {
   const _UnitLeaseAddAction({required this.onPressed});
 
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: FilledButton.icon(
-        icon: const Icon(Icons.add),
-        label: const Text('Add lease'),
-        onPressed: onPressed,
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        FilledButton.icon(
+          icon: const Icon(Icons.add),
+          label: const Text('Add lease'),
+          onPressed: onPressed,
+        ),
+        if (onPressed == null) ...[
+          const SizedBox(height: 6),
+          const Text(
+            'End or terminate the active lease before adding another.',
+            textAlign: TextAlign.right,
+          ),
+        ],
+      ],
     );
   }
 }

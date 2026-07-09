@@ -56,9 +56,13 @@ export function createUnitLeaseForm(context: UnitLeaseCreateContext): UnitLeaseC
 		openingBalanceAmount: '',
 		openingBalanceAsOfDate: '',
 		openingBalanceNote: '',
-		status: 'Draft',
+		status: 'Active',
 		notes: '',
 	};
+}
+
+export function hasOccupyingLease(lease: { status: string } | null | undefined): boolean {
+	return lease?.status === 'Active' || lease?.status === 'NoticeGiven';
 }
 
 export function createSimpleTenantForm(): SimpleTenantForm {
