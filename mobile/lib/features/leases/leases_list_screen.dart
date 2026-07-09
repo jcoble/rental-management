@@ -616,12 +616,11 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
     // Load dropdowns
     Future.microtask(() {
-      ref.read(propertiesProvider.notifier).load();
-      if (_isEdit) {
-        ref.read(tenantsProvider.notifier).load();
+      if (_isEdit || _isUnitPrefilled) {
+        ref.read(propertiesProvider.notifier).load();
       }
       final propertyId = _selectedPropertyId;
-      if (propertyId != null) {
+      if (propertyId != null && (_isEdit || _isUnitPrefilled)) {
         ref.read(unitsProvider(propertyId).notifier).load();
       }
     });
@@ -781,17 +780,26 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final propertiesAsync = ref.watch(propertiesProvider);
-    final tenantsAsync = _isEdit
-        ? ref.watch(tenantsProvider)
-        : ref.watch(availableForLeaseTenantsProvider);
+    final unrestrictedPickers = _isEdit || _isUnitPrefilled;
+    final propertiesAsync = unrestrictedPickers
+        ? ref.watch(propertiesProvider)
+        : ref.watch(availableForLeasePropertiesProvider);
+    final tenantsQuery = TenantListQuery(
+      take: 200,
+      sort: 'name',
+      availableForLease: true,
+      includeLeaseId: _isEdit ? widget.existing!.id : null,
+    );
+    final tenantsAsync = ref.watch(tenantsPageProvider(tenantsQuery));
 
     final properties = propertiesAsync.value ?? <Property>[];
-    final tenants = tenantsAsync.value ?? <Tenant>[];
+    final tenants = tenantsAsync.value?.items ?? <Tenant>[];
 
     // When property changes, reset unit selection.
     final unitsAsync = _selectedPropertyId != null
-        ? ref.watch(unitsProvider(_selectedPropertyId!))
+        ? unrestrictedPickers
+              ? ref.watch(unitsProvider(_selectedPropertyId!))
+              : ref.watch(availableForLeaseUnitsProvider(_selectedPropertyId!))
         : const AsyncValue<List<Unit>>.data([]);
     final units = unitsAsync.value ?? <Unit>[];
     const gap = SizedBox(height: 12);
@@ -819,35 +827,48 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                         'Property #$_initialPropertyId',
                   )
                 else
-                  DropdownButtonFormField<int>(
-                    initialValue:
-                        properties.any((p) => p.id == _selectedPropertyId)
-                        ? _selectedPropertyId
-                        : null,
-                    decoration: const InputDecoration(labelText: 'Property'),
-                    items: properties
-                        .map(
-                          (p) => DropdownMenuItem(
-                            value: p.id,
-                            child: Text(
-                              p.name,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      setState(() {
-                        _selectedPropertyId = v;
-                        _selectedUnitId = null;
-                      });
-                      if (v != null) {
-                        ref.read(unitsProvider(v).notifier).load();
-                      }
-                    },
-                    validator: (_) => _selectedPropertyId == null
-                        ? 'Select a property'
-                        : null,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (!_isEdit &&
+                          propertiesAsync.hasValue &&
+                          properties.isEmpty)
+                        const _FormHint(
+                          text: 'No properties have a vacant unit available.',
+                        ),
+                      DropdownButtonFormField<int>(
+                        initialValue:
+                            properties.any((p) => p.id == _selectedPropertyId)
+                            ? _selectedPropertyId
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Property',
+                        ),
+                        items: properties
+                            .map(
+                              (p) => DropdownMenuItem(
+                                value: p.id,
+                                child: Text(
+                                  p.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          setState(() {
+                            _selectedPropertyId = v;
+                            _selectedUnitId = null;
+                          });
+                          if (v != null && unrestrictedPickers) {
+                            ref.read(unitsProvider(v).notifier).load();
+                          }
+                        },
+                        validator: (_) => _selectedPropertyId == null
+                            ? 'Select a property'
+                            : null,
+                      ),
+                    ],
                   ),
                 gap,
                 if (_isUnitPrefilled)
@@ -864,6 +885,8 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                       labelText: 'Unit',
                       helperText: _selectedPropertyId == null
                           ? 'Select a property first'
+                          : (!_isEdit && unitsAsync.hasValue && units.isEmpty)
+                          ? 'No vacant units are available for this property'
                           : null,
                     ),
                     items: units
@@ -1051,6 +1074,25 @@ class _ReadOnlyFormValue extends StatelessWidget {
     return InputDecorator(
       decoration: InputDecoration(labelText: label),
       child: Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
+    );
+  }
+}
+
+class _FormHint extends StatelessWidget {
+  const _FormHint({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
     );
   }
 }

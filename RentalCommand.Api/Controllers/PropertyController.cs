@@ -22,7 +22,7 @@ public class PropertyController : ManagementControllerBase
 
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<PropertyResponse>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<PropertyResponse>>> List([FromQuery] ListQuery query, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<PropertyResponse>>> List([FromQuery] PropertyListQuery query, CancellationToken ct)
     {
         var items = await _service.ListAsync(GetPortfolioId(), query, ct);
         return Ok(items);

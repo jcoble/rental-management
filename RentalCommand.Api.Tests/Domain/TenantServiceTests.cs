@@ -203,8 +203,9 @@ public class TenantServiceTests : IDisposable
         tenant.FirstName.Should().Be("Avery");
         tenant.LastName.Should().Be("Ellis");
 
-        _commands.Should().HaveCount(2);
-        _commands.Should().OnlyContain(sql =>
+        _commands.Should().HaveCount(3);
+        _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql =>
             sql.Contains("LIKE", StringComparison.OrdinalIgnoreCase) ||
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
     }
@@ -234,12 +235,44 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Available", "Devon Expired", "Emery Pending");
 
-        _commands.Should().HaveCount(2);
-        _commands.Should().OnlyContain(sql =>
+        _commands.Should().HaveCount(3);
+        _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql =>
             sql.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("LeaseTenants", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_AvailableForLeaseWithIncludeLeaseIdKeepsCurrentLeaseTenants()
+    {
+        SeedTenant("Avery", "Available", activeLeaseCount: 0);
+        var currentPrimary = SeedTenant("Blair", "Current", activeLeaseCount: 0);
+        var currentMember = SeedTenant("Casey", "Current", activeLeaseCount: 0);
+        var conflictTenant = SeedTenant("Devon", "Conflict", activeLeaseCount: 0);
+        var currentLease = SeedLeaseTenantMembership(currentMember, LeaseStatus.Active, withSeparatePrimaryTenant: true);
+        var generatedPrimaryTenantId = currentLease.TenantId;
+        currentLease.TenantId = currentPrimary.Id;
+        _ctx.Db.Tenants.Single(t => t.Id == generatedPrimaryTenantId).DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+        SeedLeaseTenantMembership(conflictTenant, LeaseStatus.Active);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            AvailableForLease = true,
+            IncludeLeaseId = currentLease.Id,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.Items.Select(t => $"{t.FirstName} {t.LastName}")
+            .Should().Equal("Avery Available", "Blair Current", "Casey Current");
+        result.Items.Should().NotContain(t => t.FirstName == "Devon");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -268,8 +301,9 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Active", "Blair Primary Holder", "Blair Member");
 
-        _commands.Should().HaveCount(2);
-        _commands.Should().OnlyContain(sql =>
+        _commands.Should().HaveCount(3);
+        _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql =>
             sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
@@ -292,15 +326,41 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAsync_SoftDeletesWhenTenantHasNoOccupyingLease()
+    public async Task DeleteAsync_ThrowsWhenTenantHasLeaseHistory()
     {
         var tenant = SeedTenantWithLease(LeaseStatus.Expired);
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, tenant.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("lease history");
+        (await _sut.GetAsync(PortfolioId, tenant.Id))
+            .Should().NotBeNull("a tenant with lease history is preserved for past leases and payments");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_SoftDeletesWhenTenantHasNoLeaseHistory()
+    {
+        var tenant = SeedTenant("Unlinked", "Tenant", activeLeaseCount: 0);
 
         var deleted = await _sut.DeleteAsync(PortfolioId, tenant.Id);
 
         deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, tenant.Id))
-            .Should().BeNull("a tenant with only an ended lease is soft-deleted");
+        (await _sut.GetAsync(PortfolioId, tenant.Id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ReportsDeleteStateForLeaseHistory()
+    {
+        var tenant = SeedTenantWithLease(LeaseStatus.Expired);
+
+        var response = await _sut.GetAsync(PortfolioId, tenant.Id);
+
+        response!.ActiveLeaseCount.Should().Be(0);
+        response.LeaseHistoryCount.Should().Be(1);
+        response.CanDelete.Should().BeFalse();
+        response.DeleteBlockedReason.Should().Contain("lease history");
     }
 
     [Fact]
@@ -424,7 +484,7 @@ public class TenantServiceTests : IDisposable
         return tenant;
     }
 
-    private void SeedLeaseTenantMembership(
+    private Lease SeedLeaseTenantMembership(
         Tenant tenant,
         LeaseStatus status,
         bool withSeparatePrimaryTenant = false)
@@ -494,6 +554,7 @@ public class TenantServiceTests : IDisposable
 
         _ctx.Db.Leases.Add(lease);
         _ctx.Db.SaveChanges();
+        return lease;
     }
 
     private (Property property, Unit targetUnit, Unit otherUnit) SeedPropertyWithUnits()
