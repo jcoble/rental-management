@@ -158,6 +158,9 @@ public sealed class RentChargeService : IRentChargeService
                 continue;
             }
 
+            var trackedBeforeIteration = _db.ChangeTracker.Entries()
+                .Select(entry => entry.Entity)
+                .ToHashSet(ReferenceEqualityComparer.Instance);
             var payment = new Payment
             {
                 PortfolioId = lease.PortfolioId,
@@ -227,6 +230,13 @@ public sealed class RentChargeService : IRentChargeService
                 created++;
                 existing.Add((lease.Id, period.PeriodKey));
 
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    lease.PortfolioId,
+                    "Payment",
+                    payment.Id,
+                    PaymentResponse.FromEntity(payment),
+                    ct);
+
                 foreach (var row in inAppRows)
                     await _dataUpdate.BroadcastEntityUpdateAsync(
                         lease.PortfolioId, "Notification", row.Id, NotificationResponse.FromEntity(row), ct);
@@ -241,8 +251,7 @@ public sealed class RentChargeService : IRentChargeService
                     "Rent charge already exists for lease {LeaseId} period {PeriodKey} (DB unique violation — skipping)",
                     lease.Id, period.PeriodKey);
 
-                // Detach the failed entity so the context remains usable for the next iteration.
-                _db.Entry(payment).State = EntityState.Detached;
+                DetachEntitiesTrackedAfter(trackedBeforeIteration);
                 continue;
             }
             catch (Exception ex)
@@ -255,7 +264,7 @@ public sealed class RentChargeService : IRentChargeService
                     "Failed to create rent charge + notice for lease {LeaseId} period {PeriodKey}; rolled back, will retry",
                     lease.Id, period.PeriodKey);
 
-                _db.Entry(payment).State = EntityState.Detached;
+                DetachEntitiesTrackedAfter(trackedBeforeIteration);
                 continue;
             }
         }
@@ -265,6 +274,19 @@ public sealed class RentChargeService : IRentChargeService
             created, today);
 
         return created;
+    }
+
+    private void DetachEntitiesTrackedAfter(IReadOnlySet<object> baseline)
+    {
+        // Rollback reverts the database, not EF's change tracker. Remove every entity introduced by
+        // this candidate (payment, notifications, outbox rows, etc.) so a later successful iteration
+        // cannot accidentally persist stale work from the rolled-back candidate.
+        foreach (var entry in _db.ChangeTracker.Entries()
+                     .Where(entry => !baseline.Contains(entry.Entity))
+                     .ToList())
+        {
+            entry.State = EntityState.Detached;
+        }
     }
 
     private static DateTime RentChargeGenerationStart(Lease lease)

@@ -19,11 +19,13 @@ public class LateFeeServiceTests : IDisposable
 {
     private readonly SqliteTestContext _ctx;
     private readonly Mock<IMessagePublisher> _publisher;
+    private readonly Mock<IDataUpdateService> _dataUpdate;
 
     public LateFeeServiceTests()
     {
         _ctx       = new SqliteTestContext();
         _publisher = new Mock<IMessagePublisher>();
+        _dataUpdate = new Mock<IDataUpdateService>();
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -51,6 +53,22 @@ public class LateFeeServiceTests : IDisposable
 
         // The original rent payment should be flipped to Late.
         _ctx.Db.Payments.Find(rentPayment.Id)!.Status.Should().Be(PaymentStatus.Late);
+        _dataUpdate.Verify(
+            update => update.BroadcastEntityUpdateAsync(
+                lease.PortfolioId,
+                "Payment",
+                lateFees[0].Id,
+                It.IsAny<object>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _dataUpdate.Verify(
+            update => update.BroadcastEntityUpdateAsync(
+                lease.PortfolioId,
+                "Payment",
+                rentPayment.Id,
+                It.IsAny<object>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -131,6 +149,40 @@ public class LateFeeServiceTests : IDisposable
         publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 20 });
     }
 
+    [Fact]
+    public async Task NotificationFailure_RollsBackAndClearsAllIterationTracking()
+    {
+        var (lease, rentPayment) = SeedOverdueScenario();
+        SeedNotificationUsers(lease.TenantId);
+        var cfg = new NotificationsConfig
+        {
+            EnableLateFees = true,
+            LateFeeGraceDays = 5,
+            NotifyTenants = true,
+            StateLateFeeCaps = new Dictionary<string, LateFeeCap>
+            {
+                ["CA"] = new() { MaxPercentOfRent = 6m },
+            },
+            ChannelPreferences =
+            {
+                [NotificationType.LateFee] = new NotificationChannelPreference
+                {
+                    EnableInApp = true,
+                    EnablePush = true,
+                },
+            },
+        };
+
+        var count = await BuildService(cfg, new ThrowingPublisher()).AssessAsync();
+
+        count.Should().Be(0);
+        _ctx.Db.Payments.Count(p => p.PaymentType == PaymentType.LateFee).Should().Be(0);
+        _ctx.Db.Payments.Find(rentPayment.Id)!.Status.Should().Be(PaymentStatus.Scheduled);
+        _ctx.Db.Notifications.Should().BeEmpty();
+        _ctx.Db.ChangeTracker.Entries()
+            .Should().NotContain(entry => entry.State == Microsoft.EntityFrameworkCore.EntityState.Added);
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -159,7 +211,7 @@ public class LateFeeServiceTests : IDisposable
             _ctx.Db,
             publisher,
             new FakeNotificationSettingsService(cfg),
-            Mock.Of<IDataUpdateService>(),
+            _dataUpdate.Object,
             Options.Create(cfg),
             TimeProvider.System,
             new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
@@ -322,5 +374,15 @@ public class LateFeeServiceTests : IDisposable
                         .ToArray();
                 })
                 .ToList();
+    }
+
+    private sealed class ThrowingPublisher : IMessagePublisher
+    {
+        public Task PublishAsync<TPayload>(
+            int portfolioId,
+            string messageType,
+            TPayload payload,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Injected notification failure");
     }
 }

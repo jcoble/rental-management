@@ -10,11 +10,21 @@ describe('unit lease tab create action', () => {
 		assert.match(source, /data-testid="unit-lease-create-dialog"/);
 		assert.match(source, /data-testid="unit-lease-existing-tenant-mode"/);
 		assert.match(source, /data-testid="unit-lease-new-tenant-mode"/);
-		assert.match(source, /tenants\.create/);
+		assert.doesNotMatch(source, /tenants\.create/);
+		assert.match(source, /newTenant:\s*buildSimpleTenantPayload/);
 		assert.match(source, /leases\.create/);
 		assert.match(source, /propertyId:\s*String\(dashboard\.unit\.propertyId\)/);
 		assert.match(source, /unitId:\s*String\(dashboard\.unit\.id\)/);
 		assert.doesNotMatch(source, /Emergency contact/);
+	});
+
+	it('blocks duplicate active-lease entry before opening the form and prevents implicit dismissal', () => {
+		assert.match(source, /disabled=\{isCheckingLeaseAvailability \|\| hasCurrentOccupyingLease\}/);
+		assert.match(source, /dashboard\.unit\.status !== 'Vacant'/);
+		assert.match(source, /unitLeases\.some\(\(lease\) => hasOccupyingLease\(lease\)\)/);
+		assert.match(source, /data-testid="unit-lease-add-blocked-reason"/);
+		assert.match(source, /onInteractOutside=\{\(event\) => event\.preventDefault\(\)\}/);
+		assert.match(source, /onEscapeKeydown=\{\(event\) => event\.preventDefault\(\)\}/);
 	});
 
 	it('loads unit-scoped lease history so prior leases stay selectable', () => {

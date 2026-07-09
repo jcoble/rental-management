@@ -360,6 +360,12 @@ public class CreateLeaseRequest
 
     public IReadOnlyList<int>? TenantIds { get; set; }
 
+    /// <summary>
+    /// Optional tenant to create as part of the same lease-creation transaction. This is mutually
+    /// exclusive with <see cref="TenantId"/> and <see cref="TenantIds"/>.
+    /// </summary>
+    public CreateTenantRequest? NewTenant { get; set; }
+
     [MaxLength(100)]
     public string? LeaseNumber { get; set; }
 
