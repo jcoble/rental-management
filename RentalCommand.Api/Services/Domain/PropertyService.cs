@@ -59,6 +59,13 @@ public class PropertyService : IPropertyService
             q = q.Where(p => p.Status == query.Status.Value);
         }
 
+        if (query.AvailableForLease == true)
+        {
+            q = q.Where(p => p.Units.Any(u =>
+                u.Status == UnitStatus.Vacant &&
+                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)));
+        }
+
         q = query.SortField switch
         {
             "name" => query.SortDescending ? q.OrderByDescending(p => p.Name) : q.OrderBy(p => p.Name),
@@ -102,6 +109,9 @@ public class PropertyService : IPropertyService
         Take = query.Take,
         Search = query.Search,
         Sort = query.Sort,
+        Type = (query as PropertyListQuery)?.Type,
+        Status = (query as PropertyListQuery)?.Status,
+        AvailableForLease = (query as PropertyListQuery)?.AvailableForLease,
     };
 
     public async Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

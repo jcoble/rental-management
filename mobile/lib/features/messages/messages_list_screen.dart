@@ -7,6 +7,7 @@ import '../../core/models/models.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../tenants/tenants_repository.dart';
@@ -85,15 +86,26 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
   Future<void> _refresh() => ref.read(conversationsProvider.notifier).refresh();
 
   void _openThread(BuildContext context, Conversation convo) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => MessageDetailScreen(
-          conversationId: convo.id,
-          title: convo.tenantName,
-          subtitle: convo.subject,
-        ),
-      ),
-    );
+    Widget detailBuilder(BuildContext _) {
+      return MessageDetailScreen(
+        conversationId: convo.id,
+        title: convo.tenantName,
+        subtitle: convo.subject,
+      );
+    }
+
+    final domainNavigator = MobileDomainNavigation.maybeOf(context);
+    if (domainNavigator != null) {
+      domainNavigator.openDestination(
+        MobileDestinationId.messages,
+        detailBuilder: detailBuilder,
+      );
+      return;
+    }
+
+    Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
   }
 
   Future<void> _startNewConversation(BuildContext context) async {
@@ -109,15 +121,26 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     // Refresh the inbox and open the freshly created thread.
     await ref.read(conversationsProvider.notifier).refresh();
     if (!context.mounted) return;
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => MessageDetailScreen(
-          conversationId: created.id,
-          title: created.tenantName,
-          subtitle: created.subject,
-        ),
-      ),
-    );
+    Widget detailBuilder(BuildContext _) {
+      return MessageDetailScreen(
+        conversationId: created.id,
+        title: created.tenantName,
+        subtitle: created.subject,
+      );
+    }
+
+    final domainNavigator = MobileDomainNavigation.maybeOf(context);
+    if (domainNavigator != null) {
+      domainNavigator.openDestination(
+        MobileDestinationId.messages,
+        detailBuilder: detailBuilder,
+      );
+      return;
+    }
+
+    Navigator.of(
+      context,
+    ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
   }
 
   @override
@@ -125,10 +148,11 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     final convosAsync = ref.watch(conversationsProvider);
     final auth = ref.watch(authControllerProvider);
     final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
+    final routeIsCurrent = ModalRoute.isCurrentOf(context) ?? true;
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Messages')),
-      floatingActionButton: tenantMode
+      floatingActionButton: tenantMode || !routeIsCurrent
           ? null
           : MobileQuickActionFab(
               heroTag: 'messages-fab',
@@ -164,7 +188,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
                   i,
                   list.length,
                 ),
-                onTap: () => _openThread(ctx, list[i]),
+                onTap: () => _openThread(context, list[i]),
               ),
             );
           },

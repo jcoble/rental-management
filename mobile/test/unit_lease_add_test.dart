@@ -8,6 +8,7 @@ import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/leases/lease_form_defaults.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 import 'package:rental_command/features/payments/payments_repository.dart';
+import 'package:rental_command/features/properties/properties_repository.dart';
 import 'package:rental_command/features/tenants/tenants_repository.dart';
 import 'package:rental_command/features/units/unit_command_center_screen.dart';
 import 'package:rental_command/features/units/units_repository.dart';
@@ -39,6 +40,9 @@ void main() {
       ProviderScope(
         overrides: [
           leasesRepositoryProvider.overrideWithValue(_FakeLeasesRepository()),
+          propertiesRepositoryProvider.overrideWithValue(
+            _FakePropertiesRepository(),
+          ),
           paymentsRepositoryProvider.overrideWithValue(
             _FakePaymentsRepository(),
           ),
@@ -73,6 +77,46 @@ void main() {
 
     expect(find.text('Avery Available'), findsOneWidget);
   });
+
+  testWidgets(
+    'unit overview opens edit sheet and locks status for current leases',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            propertiesRepositoryProvider.overrideWithValue(
+              _FakePropertiesRepository(),
+            ),
+          ],
+          child: MaterialApp(
+            home: UnitCommandCenterScreen(
+              dashboard: _unitDashboard(currentLease: _leaseSummary()),
+              initialTab: UnitCommandCenterTab.overview,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit unit'), findsOneWidget);
+      await tester.tap(find.text('Edit unit'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit Unit 4B'), findsOneWidget);
+      expect(find.text('Floor plan'), findsOneWidget);
+      expect(find.text('Square feet'), findsOneWidget);
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Status'), findsAtLeastNWidgets(1));
+      expect(
+        find.text(
+          'End, move out, or cancel notice on the current lease before changing unit status.',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 }
 
 UnitDashboard _unitDashboard({UnitLeaseSummary? currentLease}) {
@@ -180,6 +224,39 @@ class _FakePaymentsRepository extends PaymentsRepository {
   Future<Uint8List> scanBytes(int id) async => Uint8List(0);
 }
 
+class _FakePropertiesRepository extends PropertiesRepository {
+  _FakePropertiesRepository() : super(Dio());
+
+  @override
+  Future<List<Property>> listProperties({
+    bool availableForLease = false,
+  }) async {
+    return [
+      Property(
+        id: 7,
+        portfolioId: 1,
+        name: 'Maple Ridge',
+        type: 'SingleFamily',
+        status: 'Active',
+        addressLine1: '100 Main St',
+        city: 'Columbus',
+        state: 'OH',
+        postalCode: '43215',
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      ),
+    ];
+  }
+
+  @override
+  Future<List<Unit>> listUnits(
+    int propertyId, {
+    bool availableForLease = false,
+  }) async {
+    return [_unit()];
+  }
+}
+
 class _FakeTenantsRepository extends TenantsRepository {
   _FakeTenantsRepository() : super(Dio());
 
@@ -190,16 +267,29 @@ class _FakeTenantsRepository extends TenantsRepository {
 
   @override
   Future<List<Tenant>> listAvailableForLeaseTenants({int take = 200}) async {
-    return [
-      Tenant(
-        id: 3,
-        portfolioId: 1,
-        firstName: 'Avery',
-        lastName: 'Available',
-        email: 'avery@example.test',
-        createdAt: DateTime(2026),
-        updatedAt: DateTime(2026),
-      ),
-    ];
+    throw StateError('Add Lease should load paged lease-available tenants.');
+  }
+
+  @override
+  Future<TenantPage> listPage([
+    TenantListQuery query = const TenantListQuery(),
+  ]) async {
+    expect(query.availableForLease, true);
+    return TenantPage(
+      items: [
+        Tenant(
+          id: 3,
+          portfolioId: 1,
+          firstName: 'Avery',
+          lastName: 'Available',
+          email: 'avery@example.test',
+          createdAt: DateTime(2026),
+          updatedAt: DateTime(2026),
+        ),
+      ],
+      totalCount: 1,
+      skip: query.skip,
+      take: query.take,
+    );
   }
 }

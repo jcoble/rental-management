@@ -40,6 +40,13 @@ public class UnitService : IUnitService
             q = q.Where(u => u.PropertyId == propertyId.Value);
         }
 
+        if (query is UnitListQuery { AvailableForLease: true })
+        {
+            q = q.Where(u =>
+                u.Status == UnitStatus.Vacant &&
+                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven));
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
@@ -414,6 +421,19 @@ public class UnitService : IUnitService
         {
             throw new DomainValidationException(
                 $"Unit number \"{request.UnitNumber}\" already exists on this property.",
+                StatusCodes.Status409Conflict);
+        }
+
+        if (request.Status.HasValue
+            && request.Status.Value != entity.Status
+            && request.Status.Value != UnitStatus.Occupied
+            && await _db.Leases.AnyAsync(l =>
+                l.PortfolioId == portfolioId
+                && l.UnitId == entity.Id
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven), ct))
+        {
+            throw new DomainValidationException(
+                "This unit has a current lease. End, move out, or cancel notice on the lease before changing the unit status.",
                 StatusCodes.Status409Conflict);
         }
 

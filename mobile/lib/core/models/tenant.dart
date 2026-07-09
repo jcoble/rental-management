@@ -10,6 +10,9 @@ class Tenant {
   final DateTime? dateOfBirth;
   final String? notes;
   final int? activeLeaseCount;
+  final int? leaseHistoryCount;
+  final bool canDelete;
+  final String? deleteBlockedReason;
 
   /// Portal-login state, populated only on the single-tenant GET /tenants/{id}:
   /// 'none' (no login), 'active' (can sign in), or 'disabled' (login locked off).
@@ -31,6 +34,9 @@ class Tenant {
     this.dateOfBirth,
     this.notes,
     this.activeLeaseCount,
+    this.leaseHistoryCount,
+    this.canDelete = true,
+    this.deleteBlockedReason,
     this.portalAccess,
     required this.createdAt,
     required this.updatedAt,
@@ -49,9 +55,14 @@ class Tenant {
       dateOfBirth: DateTime.tryParse(json['dateOfBirth'] as String? ?? ''),
       notes: json['notes'] as String?,
       activeLeaseCount: (json['activeLeaseCount'] as num?)?.toInt(),
+      leaseHistoryCount: (json['leaseHistoryCount'] as num?)?.toInt(),
+      canDelete: json['canDelete'] as bool? ?? true,
+      deleteBlockedReason: json['deleteBlockedReason'] as String?,
       portalAccess: json['portalAccess'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 
@@ -63,7 +74,8 @@ class Tenant {
       if (email != null) 'email': email,
       if (phone != null) 'phone': phone,
       if (emergencyContact != null) 'emergencyContact': emergencyContact,
-      if (dateOfBirth != null) 'dateOfBirth': dateOfBirth!.toIso8601String().split('T').first,
+      if (dateOfBirth != null)
+        'dateOfBirth': dateOfBirth!.toIso8601String().split('T').first,
       if (notes != null) 'notes': notes,
     };
   }
@@ -83,6 +95,9 @@ class Tenant {
       dateOfBirth: dateOfBirth,
       notes: notes,
       activeLeaseCount: activeLeaseCount,
+      leaseHistoryCount: leaseHistoryCount,
+      canDelete: canDelete,
+      deleteBlockedReason: deleteBlockedReason,
       portalAccess: portalAccess ?? this.portalAccess,
       createdAt: createdAt,
       updatedAt: updatedAt,
