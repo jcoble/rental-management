@@ -12,6 +12,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { propertySchema, propertyBasisSchema, unitSchema, parseForm } from '$lib/schemas';
 	import PropertyCapitalAssetsSection from '$lib/components/property/PropertyCapitalAssetsSection.svelte';
+	import PropertyDispositionsSection from '$lib/components/property/PropertyDispositionsSection.svelte';
 	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
 	import PropertyRecurringExpensesSection from '$lib/components/property/PropertyRecurringExpensesSection.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -678,6 +679,9 @@
 
 		<!-- Capital assets section -->
 		<PropertyCapitalAssetsSection propertyId={id} />
+
+		<!-- Property sale / disposition section -->
+		<PropertyDispositionsSection propertyId={id} />
 
 		<!-- Recurring expenses section -->
 		<PropertyRecurringExpensesSection propertyId={id} />

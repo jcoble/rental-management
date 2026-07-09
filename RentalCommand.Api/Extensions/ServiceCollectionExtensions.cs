@@ -50,6 +50,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<ICapitalAssetService, CapitalAssetService>();
+        services.AddScoped<IPropertyDispositionService, PropertyDispositionService>();
         services.AddScoped<ILoanService, LoanService>();
         services.AddScoped<IRecurringExpenseService, RecurringExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();
@@ -105,6 +106,7 @@ public static class ServiceCollectionExtensions
         services.AddSmsProviders();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<INoticeTemplateService, NoticeTemplateService>();
+        services.AddScoped<IEvictionCaseService, EvictionCaseService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();

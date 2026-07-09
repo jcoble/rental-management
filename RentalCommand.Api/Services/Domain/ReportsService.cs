@@ -18,13 +18,20 @@ public class ReportsService : IReportsService
     private readonly RentalCommandDbContext _db;
     private readonly IOwnerStatementService _ownerStatements;
     private readonly IScheduleEService _scheduleE;
+    private readonly IPropertyDispositionService _propertyDispositions;
     private readonly TimeProvider _timeProvider;
 
-    public ReportsService(RentalCommandDbContext db, IOwnerStatementService ownerStatements, IScheduleEService scheduleE, TimeProvider timeProvider)
+    public ReportsService(
+        RentalCommandDbContext db,
+        IOwnerStatementService ownerStatements,
+        IScheduleEService scheduleE,
+        IPropertyDispositionService propertyDispositions,
+        TimeProvider timeProvider)
     {
         _db = db;
         _ownerStatements = ownerStatements;
         _scheduleE = scheduleE;
+        _propertyDispositions = propertyDispositions;
         _timeProvider = timeProvider;
     }
 
@@ -786,6 +793,17 @@ public class ReportsService : IReportsService
         // Block 3: rent roll — current leases with their past-due balance (DB-side, no N+1).
         var rentRoll = await BuildRentRollAsync(portfolioId, propertyId, ct);
 
+        var dispositions = await _propertyDispositions.ListAsync(
+            portfolioId,
+            new PropertyDispositionListQuery
+            {
+                Year = year,
+                PropertyId = propertyId,
+                Sort = "closedOnDate",
+                Take = ListQuery.MaxTake,
+            },
+            ct);
+
         // §18 "see your accountant" caveats — surfaced so the owner never trusts a number the model
         // does not compute. Conditional on what the data suggests, so they are actionable not noise.
         var notes = new List<string>();
@@ -804,7 +822,10 @@ public class ReportsService : IReportsService
         if (hasLargeRepairs)
             notes.Add("Large amounts booked to Repairs may be capital improvements (IRS $2,500 de-minimis) that must be depreciated, not expensed. Review with your accountant.");
 
-        notes.Add("Mid-year purchase or sale of a property (disposition: sale-year depreciation, gain/loss, and §1250 recapture) is NOT computed here.");
+        if (dispositions.Count > 0)
+            notes.Add("Property sale/disposition estimates include sale-year depreciation, gain/loss, and unrecaptured §1250 gain. Confirm final basis and closing costs with your accountant.");
+        else
+            notes.Add("No property sale/disposition is recorded for this tax year. If a property was sold, add a disposition before handing this packet to your accountant.");
         notes.Add("Owner-occupied / mixed-use properties are not allocated — expenses and depreciation assume 100% rental use.");
 
         return new YearEndViewResponse
@@ -813,6 +834,7 @@ public class ReportsService : IReportsService
             CashFlow = cashFlow,
             ScheduleE = scheduleE,
             RentRoll = rentRoll,
+            PropertyDispositions = dispositions,
             AccountantNotes = notes,
         };
     }

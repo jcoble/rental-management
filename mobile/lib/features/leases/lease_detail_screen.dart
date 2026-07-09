@@ -13,6 +13,8 @@ import '../payments/record_payment_sheet.dart';
 import '../properties/property_detail_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
+import 'eviction_cases_repository.dart';
+import 'lease_eviction_case_form_sheet.dart';
 import 'lease_ledger_view.dart';
 import 'leases_list_screen.dart';
 import 'leases_repository.dart';
@@ -34,6 +36,11 @@ const _monthNames = [
 ];
 
 String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
+
+String _fmtNullable(DateTime? d) {
+  if (d == null || d.year <= 1) return '-';
+  return _fmt(d);
+}
 
 String _formatCurrency(double amount) {
   final rounded = amount.round();
@@ -178,7 +185,10 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
   }
 
   Future<void> _refresh() async {
-    await ref.read(leaseDetailProvider(_lease.id).notifier).refresh();
+    await Future.wait<void>([
+      ref.read(leaseDetailProvider(_lease.id).notifier).refresh(),
+      ref.read(leaseEvictionCasesProvider(_lease.id).notifier).refresh(),
+    ]);
     final updated = ref.read(leaseDetailProvider(_lease.id));
     updated.whenData((l) {
       if (mounted) setState(() => _lease = l);
@@ -207,6 +217,99 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showAddEvictionCaseSheet(BuildContext context) async {
+    final saved = await showEvictionCaseFormSheet(context, leaseId: _lease.id);
+    if (saved && mounted) await _refreshAfterEvictionChange();
+  }
+
+  Future<void> _showEditEvictionCaseSheet(
+    BuildContext context,
+    EvictionCase evictionCase,
+  ) async {
+    final saved = await showEvictionCaseFormSheet(
+      context,
+      leaseId: _lease.id,
+      evictionCase: evictionCase,
+    );
+    if (saved && mounted) await _refreshAfterEvictionChange();
+  }
+
+  Future<void> _showAddEvictionEventSheet(
+    BuildContext context,
+    EvictionCase evictionCase,
+  ) async {
+    final saved = await showEvictionEventFormSheet(
+      context,
+      evictionCase: evictionCase,
+    );
+    if (saved && mounted) await _refreshAfterEvictionChange();
+  }
+
+  Future<void> _refreshAfterEvictionChange() async {
+    await Future.wait<void>([
+      ref.read(leaseEvictionCasesProvider(_lease.id).notifier).refresh(),
+      ref.read(leaseDetailProvider(_lease.id).notifier).refresh(),
+      ref.read(leasesProvider.notifier).refresh(),
+    ]);
+    final updated = ref.read(leaseDetailProvider(_lease.id));
+    updated.whenData((l) {
+      if (mounted) setState(() => _lease = l);
+    });
+  }
+
+  Future<void> _confirmDeleteEvictionCase(
+    BuildContext context,
+    EvictionCase evictionCase,
+  ) async {
+    final label = evictionCase.caseNumber?.trim().isNotEmpty == true
+        ? evictionCase.caseNumber!.trim()
+        : '#${evictionCase.id}';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Remove eviction case $label?'),
+        content: const Text(
+          'This removes the eviction case and its event timeline.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(evictionCasesRepositoryProvider)
+          .deleteCase(evictionCase.id);
+      await ref.read(leaseEvictionCasesProvider(_lease.id).notifier).refresh();
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Eviction case removed.')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not remove eviction case.')),
+        );
+    }
   }
 
   Future<void> _updateStatus(String newStatus) async {
@@ -406,6 +509,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final evictionCasesAsync = ref.watch(leaseEvictionCasesProvider(_lease.id));
 
     return Scaffold(
       appBar: AppBar(
@@ -548,6 +652,23 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
             ),
             const SizedBox(height: 16),
 
+            _LeaseEvictionCasesCard(
+              casesAsync: evictionCasesAsync,
+              onAdd: () => _showAddEvictionCaseSheet(context),
+              onEdit: (evictionCase) =>
+                  _showEditEvictionCaseSheet(context, evictionCase),
+              onAddEvent: (evictionCase) =>
+                  _showAddEvictionEventSheet(context, evictionCase),
+              onDelete: (evictionCase) =>
+                  _confirmDeleteEvictionCase(context, evictionCase),
+              onLoadMore: () => ref
+                  .read(leaseEvictionCasesProvider(_lease.id).notifier)
+                  .loadMore(),
+              theme: theme,
+              colorScheme: colorScheme,
+            ),
+            const SizedBox(height: 16),
+
             _LeaseAskCard(
               controller: _questionController,
               loading: _askingLease,
@@ -562,6 +683,318 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+enum _EvictionAction { addEvent, edit, delete }
+
+class _LeaseEvictionCasesCard extends StatelessWidget {
+  const _LeaseEvictionCasesCard({
+    required this.casesAsync,
+    required this.onAdd,
+    required this.onEdit,
+    required this.onAddEvent,
+    required this.onDelete,
+    required this.onLoadMore,
+    required this.theme,
+    required this.colorScheme,
+  });
+
+  final AsyncValue<LeaseEvictionCasesPage> casesAsync;
+  final VoidCallback onAdd;
+  final ValueChanged<EvictionCase> onEdit;
+  final ValueChanged<EvictionCase> onAddEvent;
+  final ValueChanged<EvictionCase> onDelete;
+  final VoidCallback onLoadMore;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Eviction Cases',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: 'File eviction case',
+                  onPressed: onAdd,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            casesAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Text(
+                e is ApiException ? e.message : e.toString(),
+                style: TextStyle(color: colorScheme.error, fontSize: 13),
+              ),
+              data: (page) {
+                if (page.cases.isEmpty) {
+                  return Text(
+                    'No eviction case recorded for this lease.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  );
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...page.cases.map(
+                      (evictionCase) => _EvictionCaseTile(
+                        evictionCase: evictionCase,
+                        onEdit: () => onEdit(evictionCase),
+                        onAddEvent: () => onAddEvent(evictionCase),
+                        onDelete: () => onDelete(evictionCase),
+                      ),
+                    ),
+                    if (page.loadMoreError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        child: Text(
+                          page.loadMoreError is ApiException
+                              ? (page.loadMoreError! as ApiException).message
+                              : 'Could not load more eviction cases.',
+                          style: TextStyle(
+                            color: colorScheme.error,
+                            fontSize: 12,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    if (page.hasMore || page.isLoadingMore)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: OutlinedButton.icon(
+                          icon: page.isLoadingMore
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.expand_more),
+                          label: Text(
+                            page.isLoadingMore
+                                ? 'Loading cases...'
+                                : 'Load more cases',
+                          ),
+                          onPressed: page.isLoadingMore ? null : onLoadMore,
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EvictionCaseTile extends StatelessWidget {
+  const _EvictionCaseTile({
+    required this.evictionCase,
+    required this.onEdit,
+    required this.onAddEvent,
+    required this.onDelete,
+  });
+
+  final EvictionCase evictionCase;
+  final VoidCallback onEdit;
+  final VoidCallback onAddEvent;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isResolved =
+        evictionCase.status == EvictionCaseStatus.dismissed ||
+        evictionCase.status == EvictionCaseStatus.settled ||
+        evictionCase.status == EvictionCaseStatus.moveOut;
+
+    return Card(
+      key: Key('eviction-case-${evictionCase.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 4),
+              leading: CircleAvatar(
+                radius: 20,
+                backgroundColor: isResolved
+                    ? colorScheme.surfaceContainerHighest
+                    : colorScheme.tertiaryContainer,
+                child: Icon(
+                  isResolved ? Icons.fact_check_outlined : Icons.gavel_outlined,
+                  size: 18,
+                  color: isResolved
+                      ? colorScheme.onSurfaceVariant
+                      : colorScheme.onTertiaryContainer,
+                ),
+              ),
+              title: Text(
+                evictionCase.status.label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                evictionCase.caseNumber?.trim().isNotEmpty == true
+                    ? 'Case ${evictionCase.caseNumber!.trim()}'
+                    : 'Eviction case #${evictionCase.id}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: PopupMenuButton<_EvictionAction>(
+                tooltip: 'Eviction case actions',
+                onSelected: (action) {
+                  switch (action) {
+                    case _EvictionAction.addEvent:
+                      onAddEvent();
+                    case _EvictionAction.edit:
+                      onEdit();
+                    case _EvictionAction.delete:
+                      onDelete();
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: _EvictionAction.addEvent,
+                    child: ListTile(
+                      leading: Icon(Icons.add),
+                      title: Text('Add event'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: _EvictionAction.edit,
+                    child: ListTile(
+                      leading: Icon(Icons.edit_outlined),
+                      title: Text('Edit'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: _EvictionAction.delete,
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('Delete'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  _CaseMetric(
+                    label: 'Filed',
+                    value: _fmtNullable(evictionCase.filedOnDate),
+                  ),
+                  _CaseMetric(
+                    label: 'Hearing',
+                    value: _fmtNullable(evictionCase.hearingDate),
+                  ),
+                  _CaseMetric(
+                    label: 'Resolved',
+                    value: _fmtNullable(evictionCase.resolvedOnDate),
+                  ),
+                  _CaseMetric(
+                    label: 'Events',
+                    value: '${evictionCase.eventCount}',
+                  ),
+                  _CaseMetric(
+                    label: 'Latest event',
+                    value: _fmtNullable(evictionCase.latestEventDate),
+                  ),
+                  if (evictionCase.courtName != null &&
+                      evictionCase.courtName!.isNotEmpty)
+                    _CaseMetric(label: 'Court', value: evictionCase.courtName!),
+                ],
+              ),
+            ),
+            if (evictionCase.resolution != null &&
+                evictionCase.resolution!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  evictionCase.resolution!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            if (evictionCase.notes != null && evictionCase.notes!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  evictionCase.notes!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CaseMetric extends StatelessWidget {
+  const _CaseMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        Text(
+          value,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
     );
   }
 }

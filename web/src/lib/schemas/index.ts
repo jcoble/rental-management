@@ -462,6 +462,30 @@ export const capitalAssetSchema = z.object({
 	accumulatedDepreciation: optionalNonNegative('Accumulated depreciation'),
 });
 
+export const propertyDispositionSchema = z.object({
+	closedOnDate: required('Close date'),
+	salePrice: positiveNumeric('Sale price'),
+	sellingCosts: optionalNonNegative('Selling costs').transform((v) => v ?? 0),
+	buyerName: optionalTextMax('Buyer', 200),
+	memo: optionalTextMax('Memo', 1000),
+});
+
+export const evictionCaseSchema = z.object({
+	status: z.enum(['Draft', 'NoticeServed', 'Filed', 'HearingScheduled', 'Judgment', 'MoveOut', 'Settled', 'Dismissed']),
+	filedOnDate: optionalText,
+	hearingDate: optionalText,
+	courtName: optionalTextMax('Court', 200),
+	caseNumber: optionalTextMax('Case number', 100),
+	resolution: optionalTextMax('Resolution', 500),
+	notes: optionalTextMax('Notes', 1000),
+});
+
+export const evictionCaseEventSchema = z.object({
+	eventType: z.enum(['NoticeServed', 'Filed', 'HearingScheduled', 'Judgment', 'MoveOut', 'Settlement', 'Dismissal', 'PaymentPlan', 'Note']),
+	eventDate: required('Event date'),
+	notes: optionalTextMax('Notes', 1000),
+});
+
 export const capitalizeExpenseSchema = z.object({
 	inServiceDate: required('In-service date'),
 	method: z.enum(['StraightLine', 'Macrs']),

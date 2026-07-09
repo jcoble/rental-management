@@ -33,11 +33,15 @@
 		const map = new Map<number, string>();
 		for (const p of optionsView?.cashFlow.properties ?? []) map.set(p.propertyId, p.propertyName);
 		for (const p of optionsView?.scheduleE.properties ?? []) map.set(p.propertyId, p.propertyName);
+		for (const p of optionsView?.propertyDispositions ?? []) {
+			if (p.propertyName) map.set(p.propertyId, p.propertyName);
+		}
 		return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
 	});
 
 	const cashRows = $derived(view?.cashFlow.properties ?? []);
 	const taxRows = $derived(view?.scheduleE.properties ?? []);
+	const dispositionRows = $derived(view?.propertyDispositions ?? []);
 	const rentRoll = $derived(view?.rentRoll ?? []);
 
 	const totalCashFlow = $derived(view?.cashFlow.totalCashFlow ?? 0);
@@ -184,7 +188,44 @@
 			</div>
 		</section>
 
-		<!-- Block 3: Rent roll -->
+		<!-- Block 3: Property dispositions -->
+		<section class="mb-6" data-testid="year-end-dispositions-block">
+			<h2 class="mb-3 flex items-center gap-2 text-lg font-semibold"><Home class="h-5 w-5" /> Property sales / dispositions</h2>
+			<div class="overflow-x-auto rounded-lg border border-border">
+				<table class="w-full text-sm tabular-nums">
+					<thead class="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
+						<tr>
+							<th class="px-3 py-2">Property</th>
+							<th class="px-3 py-2">Closed</th>
+							<th class="px-3 py-2 text-right">Sale price</th>
+							<th class="px-3 py-2 text-right">Selling costs</th>
+							<th class="px-3 py-2 text-right">Sale-year dep.</th>
+							<th class="px-3 py-2 text-right">Adjusted basis</th>
+							<th class="px-3 py-2 text-right">Gain / loss</th>
+							<th class="px-3 py-2 text-right">§1250</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each dispositionRows as d (d.id)}
+							<tr class="border-t border-border/60">
+								<td class="px-3 py-2 font-medium">{d.propertyName ?? `Property ${d.propertyId}`}</td>
+								<td class="px-3 py-2">{new Date(d.closedOnDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}</td>
+								<td class="px-3 py-2 text-right">{fmt(d.salePrice)}</td>
+								<td class="px-3 py-2 text-right">{fmt(d.sellingCosts)}</td>
+								<td class="px-3 py-2 text-right">{fmt(d.saleYearDepreciation)}</td>
+								<td class="px-3 py-2 text-right">{fmt(d.adjustedBasis)}</td>
+								<td class="px-3 py-2 text-right font-semibold {d.gainLoss < 0 ? 'text-destructive' : ''}">{fmt(d.gainLoss)}</td>
+								<td class="px-3 py-2 text-right">{fmt(d.unrecapturedSection1250Gain)}</td>
+							</tr>
+						{:else}
+							<tr><td colspan="8" class="px-3 py-6 text-center text-muted-foreground">No property sale or disposition recorded for {year}.</td></tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</section>
+
+		<!-- Block 4: Rent roll -->
 		<section class="mb-6" data-testid="year-end-rent-roll-block">
 			<h2 class="mb-3 flex items-center gap-2 text-lg font-semibold"><Home class="h-5 w-5" /> Rent roll</h2>
 			<div class="overflow-x-auto rounded-lg border border-border">
