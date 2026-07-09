@@ -28,7 +28,10 @@ test('Command Center nav: appears below Scan/Add, lists labelled units, opens a 
 	// Clicking a unit navigates to its Command Center page...
 	await firstUnit.click();
 	await expect(page).toHaveURL(/\/units\/\d+/);
+	await expect(page.getByRole('heading', { name: /Unit / })).toBeVisible();
 
 	// ...and the dropdown collapses on selection (regression: it used to stay open).
+	await page.waitForTimeout(250);
 	await expect(ccToggle).toHaveAttribute('aria-expanded', 'false');
+	await expect(page.locator('[data-testid^="command-center-unit-"]')).toHaveCount(0);
 });
