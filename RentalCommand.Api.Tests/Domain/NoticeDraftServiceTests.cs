@@ -349,6 +349,242 @@ public class NoticeDraftServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GenerateAsync_PaymentScopedRentReminder_TargetsRequestedPayment()
+    {
+        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
+        var otherLease = SeedSingleActiveLease(firstName: "Avery", lastName: "Brooks", monthlyRent: 1700m);
+        var now = DateTime.UtcNow;
+        var dueDate = now.Date.AddDays(3);
+        var targetPayment = new Payment
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1500m,
+            DueDate = dueDate,
+            PeriodKey = dueDate.ToString("yyyy-MM"),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Payments.AddRange(
+            targetPayment,
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = otherLease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1700m,
+                DueDate = dueDate,
+                PeriodKey = dueDate.ToString("yyyy-MM"),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                PaymentId = targetPayment.Id,
+                NoticeType = "RentReminder",
+            });
+
+        result.CreatedCount.Should().Be(1);
+        var draft = result.Drafts.Should().ContainSingle().Which;
+        draft.PaymentId.Should().Be(targetPayment.Id);
+        draft.LeaseId.Should().Be(lease.Id);
+        draft.NoticeType.Should().Be("RentReminder");
+        draft.TriggerDate.Date.Should().Be(dueDate);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PaymentScopedLateNotice_IncludesLateFeeForSamePeriod()
+    {
+        var lease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 2200m);
+        var now = DateTime.UtcNow;
+        var dueDate = now.Date.AddDays(-10);
+        var periodKey = dueDate.ToString("yyyy-MM");
+        var rent = new Payment
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 2200m,
+            DueDate = dueDate,
+            PeriodKey = periodKey,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Payments.AddRange(
+            rent,
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = lease.Id,
+                PaymentType = PaymentType.LateFee,
+                Status = PaymentStatus.Scheduled,
+                Amount = 75m,
+                DueDate = dueDate.AddDays(5),
+                PeriodKey = periodKey,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                PaymentId = rent.Id,
+                NoticeType = "LateRentNotice",
+            });
+
+        result.CreatedCount.Should().Be(1);
+        var draft = result.Drafts.Should().ContainSingle().Which;
+        draft.PaymentId.Should().Be(rent.Id);
+        draft.NoticeType.Should().Be("LateRentNotice");
+        draft.Reason.Should().Contain("$75");
+        draft.Body.Should().Contain("$2,275");
+    }
+
+    [Fact]
+    public async Task GenerateAsync_LeaseScopedLateNotice_DoesNotLeakOtherTenantLease()
+    {
+        var currentLease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 2200m);
+        var otherLease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 1800m);
+        var now = DateTime.UtcNow;
+        var currentPeriod = now.Date.AddDays(-8).ToString("yyyy-MM");
+        _ctx.Db.Payments.AddRange(
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = currentLease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Late,
+                Amount = 146.67m,
+                DueDate = now.Date.AddDays(-38),
+                PeriodKey = now.Date.AddDays(-38).ToString("yyyy-MM"),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = currentLease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Late,
+                Amount = 2200m,
+                DueDate = now.Date.AddDays(-8),
+                PeriodKey = currentPeriod,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = currentLease.Id,
+                PaymentType = PaymentType.LateFee,
+                Status = PaymentStatus.Scheduled,
+                Amount = 75m,
+                DueDate = now.Date.AddDays(-1),
+                PeriodKey = currentPeriod,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = otherLease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Late,
+                Amount = 1800m,
+                DueDate = now.Date.AddDays(-12),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = currentLease.TenantId,
+                LeaseId = currentLease.Id,
+                NoticeType = "LateRentNotice",
+            });
+
+        result.CreatedCount.Should().Be(1);
+        var draft = result.Drafts.Should().ContainSingle(d =>
+            d.LeaseId == currentLease.Id &&
+            d.NoticeType == "LateRentNotice").Which;
+        draft.Body.Should().Contain("$2,275");
+        draft.Body.Should().NotContain("$222");
+        result.Drafts.Should().NotContain(d => d.LeaseId == otherLease.Id);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PaymentScopedExistingNotice_ReturnsExistingWithoutDuplicate()
+    {
+        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
+        var now = DateTime.UtcNow;
+        var payment = new Payment
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1500m,
+            DueDate = now.Date.AddDays(3),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Payments.Add(payment);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.NoticeDrafts.Add(new NoticeDraft
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentId = payment.Id,
+            TenantId = lease.TenantId,
+            PropertyId = lease.PropertyId,
+            NoticeType = "RentReminder",
+            Status = "Approved",
+            Subject = "Existing reminder",
+            Body = "Existing body",
+            Reason = "Already sent.",
+            TriggerDate = payment.DueDate.Date,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                PaymentId = payment.Id,
+                NoticeType = "RentReminder",
+            });
+
+        result.CreatedCount.Should().Be(0);
+        result.Drafts.Should().ContainSingle(d =>
+            d.PaymentId == payment.Id &&
+            d.Subject == "Existing reminder");
+        _ctx.Db.NoticeDrafts.Count(d => d.PaymentId == payment.Id).Should().Be(1);
+    }
+
+    [Fact]
     public async Task GenerateAsync_PortfolioWide_DoesNotCreateRentReminder_ForPaymentBeyondLeadWindow()
     {
         var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);

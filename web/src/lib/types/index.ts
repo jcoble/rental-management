@@ -923,6 +923,7 @@ export interface BankReviewQueueResponse {
 export interface NoticeDraft {
 	id: number;
 	leaseId: number;
+	paymentId?: number;
 	tenantId: number;
 	propertyId?: number;
 	tenantName: string;
@@ -945,6 +946,13 @@ export interface NoticeDraft {
 export interface GenerateNoticeDraftsResponse {
 	createdCount: number;
 	drafts: NoticeDraft[];
+}
+
+export interface GenerateNoticeDraftsRequest {
+	tenantId?: number;
+	leaseId?: number;
+	paymentId?: number;
+	noticeType?: string;
 }
 
 export interface ApproveNoticeDraftRequest {

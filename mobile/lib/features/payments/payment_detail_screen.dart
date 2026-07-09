@@ -12,6 +12,7 @@ import '../money/money_format.dart';
 import '../money/receipt_attachment_repository.dart';
 import '../money/receipt_upload_sheet.dart';
 import '../money/transactions_controller.dart';
+import '../notices/create_tenant_notice.dart';
 import 'payment_lease_labels.dart';
 import 'payment_receipt_viewer_screen.dart';
 import 'payments_repository.dart';
@@ -141,6 +142,40 @@ class _PaymentBody extends ConsumerWidget {
   final Payment payment;
 
   bool get _isPaid => payment.status.toLowerCase() == 'paid';
+  bool get _isPaymentSettled {
+    final status = payment.status.toLowerCase();
+    return status == 'paid' ||
+        status == 'waived' ||
+        status == 'failed' ||
+        status == 'refunded';
+  }
+
+  String? get _noticeType {
+    if (_isPaymentSettled) return null;
+    if (payment.leaseId == null) return null;
+
+    final type = payment.type.toLowerCase();
+    final status = payment.status.toLowerCase();
+    final today = DateTime.now();
+    final todayOnly = DateTime(today.year, today.month, today.day);
+    final dueOnly = DateTime(
+      payment.dueDate.year,
+      payment.dueDate.month,
+      payment.dueDate.day,
+    );
+    final isPastDue = dueOnly.isBefore(todayOnly);
+
+    if ((type == 'rent' || type == 'latefee') &&
+        (status == 'late' || status == 'partial' || isPastDue)) {
+      return 'LateRentNotice';
+    }
+
+    if (type == 'rent' && status == 'scheduled' && !isPastDue) {
+      return 'RentReminder';
+    }
+
+    return null;
+  }
 
   Future<void> _markPaid(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -204,6 +239,26 @@ class _PaymentBody extends ConsumerWidget {
       ..showSnackBar(const SnackBar(content: Text('Receipt uploaded.')));
   }
 
+  Future<void> _createNotice(BuildContext context, WidgetRef ref) async {
+    final noticeType = _noticeType;
+    final leaseId = payment.leaseId;
+    if (noticeType == null || leaseId == null) return;
+
+    final tenantName = (payment.tenantName ?? '').trim();
+    await showCreateTenantNoticeFlow(
+      context,
+      ref,
+      leaseId: leaseId,
+      paymentId: payment.id,
+      initialNoticeType: noticeType,
+      tenantName: tenantName.isEmpty
+          ? 'tenant on lease #$leaseId'
+          : tenantName,
+    );
+    ref.invalidate(paymentDetailProvider(payment.id));
+    ref.invalidate(leasePaymentsProvider(leaseId));
+  }
+
   void _viewReceipt(BuildContext context) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -220,6 +275,7 @@ class _PaymentBody extends ConsumerWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final leaseDisplay = formatPaymentLeaseDisplay(payment);
+    final noticeType = _noticeType;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -292,6 +348,14 @@ class _PaymentBody extends ConsumerWidget {
           label: const Text('Upload receipt'),
         ),
         const SizedBox(height: 12),
+        if (noticeType != null) ...[
+          OutlinedButton.icon(
+            onPressed: () => _createNotice(context, ref),
+            icon: const Icon(Icons.notifications_active_outlined),
+            label: const Text('Notice / reminder'),
+          ),
+          const SizedBox(height: 12),
+        ],
         Row(
           children: [
             if (!_isPaid)
