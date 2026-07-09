@@ -233,14 +233,23 @@ class MobileGridSearchField extends StatefulWidget {
   State<MobileGridSearchField> createState() => _MobileGridSearchFieldState();
 }
 
-class _MobileGridSearchFieldState extends State<MobileGridSearchField> {
+class _MobileGridSearchFieldState extends State<MobileGridSearchField>
+    with WidgetsBindingObserver {
   late final FocusNode _focusNode = FocusNode();
+  double _lastViewInsetBottom = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.controller.addListener(_handleTextChanged);
     _focusNode.addListener(_handleTextChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _lastViewInsetBottom = _viewInsetBottom;
   }
 
   @override
@@ -253,14 +262,39 @@ class _MobileGridSearchFieldState extends State<MobileGridSearchField> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_handleTextChanged);
     _focusNode.removeListener(_handleTextChanged);
     _focusNode.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeMetrics() {
+    final viewInsetBottom = _viewInsetBottom;
+    final keyboardDismissed = _lastViewInsetBottom > 0 && viewInsetBottom == 0;
+    _lastViewInsetBottom = viewInsetBottom;
+
+    if (keyboardDismissed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _closeSearch();
+      });
+    }
+  }
+
+  double get _viewInsetBottom {
+    final view = View.of(context);
+    return view.viewInsets.bottom / view.devicePixelRatio;
+  }
+
   void _handleTextChanged() {
     setState(() {});
+  }
+
+  void _closeSearch() {
+    if (!_focusNode.hasFocus) return;
+    _focusNode.unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   @override
@@ -269,77 +303,83 @@ class _MobileGridSearchFieldState extends State<MobileGridSearchField> {
     final hasText = widget.controller.text.trim().isNotEmpty;
     final isActive = _focusNode.hasFocus;
 
-    return SearchBar(
-      controller: widget.controller,
-      focusNode: _focusNode,
-      hintText: widget.labelText,
-      leading: _MorphingSearchLeadingIcon(
-        active: isActive,
-        searchTooltip: widget.searchTooltip ?? 'Search',
-        backTooltip: 'Close search',
+    return PopScope<void>(
+      canPop: !isActive,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _closeSearch();
+      },
+      child: SearchBar(
+        controller: widget.controller,
+        focusNode: _focusNode,
+        hintText: widget.labelText,
+        leading: _MorphingSearchLeadingIcon(
+          active: isActive,
+          searchTooltip: widget.searchTooltip ?? 'Search',
+          backTooltip: 'Close search',
+          onTap: () {
+            if (isActive) {
+              _closeSearch();
+            } else {
+              _focusNode.requestFocus();
+            }
+          },
+        ),
+        trailing: hasText
+            ? [
+                IconButton(
+                  tooltip: widget.clearTooltip ?? 'Clear search',
+                  icon: const Icon(Icons.close),
+                  onPressed: widget.onClear,
+                ),
+              ]
+            : null,
+        onTapOutside: (_) => _closeSearch(),
         onTap: () {
-          if (isActive) {
-            _focusNode.unfocus();
-          } else {
+          if (!_focusNode.hasFocus) {
             _focusNode.requestFocus();
           }
         },
-      ),
-      trailing: hasText
-          ? [
-              IconButton(
-                tooltip: widget.clearTooltip ?? 'Clear search',
-                icon: const Icon(Icons.close),
-                onPressed: widget.onClear,
-              ),
-            ]
-          : null,
-      onTapOutside: (_) {
-        if (_focusNode.hasFocus) _focusNode.unfocus();
-      },
-      onTap: () {
-        if (!_focusNode.hasFocus) {
-          _focusNode.requestFocus();
-        }
-      },
-      overlayColor: WidgetStatePropertyAll(
-        colorScheme.primary.withValues(alpha: 0.08),
-      ),
-      onSubmitted: (value) {
-        widget.onSubmitted(value);
-        _focusNode.unfocus();
-      },
-      constraints: const BoxConstraints(minHeight: 56),
-      elevation: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.pressed) ||
-            states.contains(WidgetState.focused)) {
+        overlayColor: WidgetStatePropertyAll(
+          colorScheme.primary.withValues(alpha: 0.08),
+        ),
+        onSubmitted: (value) {
+          widget.onSubmitted(value);
+          _closeSearch();
+        },
+        constraints: const BoxConstraints(minHeight: 56),
+        elevation: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.pressed) ||
+              states.contains(WidgetState.focused)) {
+            return 0;
+          }
           return 0;
-        }
-        return 0;
-      }),
-      backgroundColor: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.pressed) ||
-            states.contains(WidgetState.focused)) {
-          return colorScheme.surfaceContainerHighest;
-        }
-        return colorScheme.surfaceContainerHigh;
-      }),
-      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-      shadowColor: const WidgetStatePropertyAll(Colors.transparent),
-      side: const WidgetStatePropertyAll(BorderSide.none),
-      shape: const WidgetStatePropertyAll(StadiumBorder()),
-      padding: const WidgetStatePropertyAll(EdgeInsets.only(left: 4, right: 4)),
-      hintStyle: WidgetStatePropertyAll(
-        Theme.of(
-          context,
-        ).textTheme.bodyLarge?.copyWith(color: colorScheme.onSurfaceVariant),
+        }),
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.pressed) ||
+              states.contains(WidgetState.focused)) {
+            return colorScheme.surfaceContainerHighest;
+          }
+          return colorScheme.surfaceContainerHigh;
+        }),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        shadowColor: const WidgetStatePropertyAll(Colors.transparent),
+        side: const WidgetStatePropertyAll(BorderSide.none),
+        shape: const WidgetStatePropertyAll(StadiumBorder()),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.only(left: 4, right: 4),
+        ),
+        hintStyle: WidgetStatePropertyAll(
+          Theme.of(
+            context,
+          ).textTheme.bodyLarge?.copyWith(color: colorScheme.onSurfaceVariant),
+        ),
+        textStyle: WidgetStatePropertyAll(
+          Theme.of(
+            context,
+          ).textTheme.bodyLarge?.copyWith(color: colorScheme.onSurface),
+        ),
+        textInputAction: TextInputAction.search,
       ),
-      textStyle: WidgetStatePropertyAll(
-        Theme.of(
-          context,
-        ).textTheme.bodyLarge?.copyWith(color: colorScheme.onSurface),
-      ),
-      textInputAction: TextInputAction.search,
     );
   }
 }
