@@ -15,22 +15,34 @@ public sealed class CsvImportService : ICsvImportService
     private readonly ITenantService _tenants;
     private readonly IPropertyService _properties;
     private readonly IUnitService _units;
+    private readonly IPaymentService _payments;
+    private readonly IExpenseService _expenses;
+    private readonly ILoanService _loans;
 
     // Defined column sets per entity type (the order doubles as the downloadable template header).
     private static readonly string[] TenantColumns = ["firstName", "lastName", "email", "phone"];
     private static readonly string[] PropertyColumns = ["name", "addressLine1", "addressLine2", "city", "state", "postalCode", "type"];
     private static readonly string[] UnitColumns = ["propertyName", "propertyId", "unitNumber", "bedrooms", "bathrooms", "marketRent"];
+    private static readonly string[] PaymentColumns = ["leaseNumber", "propertyName", "unitNumber", "paymentType", "amount", "paidDate", "method", "externalReference", "notes"];
+    private static readonly string[] ExpenseColumns = ["propertyName", "category", "description", "amount", "incurredAt", "paidAt", "notes"];
+    private static readonly string[] LoanColumns = ["propertyName", "lender", "originalAmount", "currentBalance", "annualInterestRatePct", "termMonths", "startDate", "dayOfMonthDue", "monthlyPrincipalInterest", "monthlyEscrow"];
 
     public CsvImportService(
         RentalCommandDbContext db,
         ITenantService tenants,
         IPropertyService properties,
-        IUnitService units)
+        IUnitService units,
+        IPaymentService payments,
+        IExpenseService expenses,
+        ILoanService loans)
     {
         _db = db;
         _tenants = tenants;
         _properties = properties;
         _units = units;
+        _payments = payments;
+        _expenses = expenses;
+        _loans = loans;
     }
 
     public string GetTemplate(string entityType) =>
@@ -56,15 +68,20 @@ public sealed class CsvImportService : ICsvImportService
             columnIndex.TryAdd(table.Header[i], i);
         }
 
+        var rows = table.Rows
+            .Select((cells, index) => new ImportRow(index + 2, cells))
+            .ToList();
+        var batch = await BuildBatchContextAsync(portfolioId, canonicalType, rows, columnIndex, ct);
+
         var rowResults = new List<CsvImportRowResult>(table.Rows.Count);
         var validCount = 0;
         var createdCount = 0;
+        var duplicateCount = 0;
 
-        for (var r = 0; r < table.Rows.Count; r++)
+        for (var r = 0; r < rows.Count; r++)
         {
-            // Row number as the user sees it: header is row 1, so the first data row is row 2.
-            var rowNumber = r + 2;
-            var cells = table.Rows[r];
+            var row = rows[r];
+            var cells = row.Cells;
 
             string? Cell(string column) =>
                 columnIndex.TryGetValue(column, out var idx) && idx < cells.Length
@@ -72,6 +89,7 @@ public sealed class CsvImportService : ICsvImportService
                     : null;
 
             var errors = new List<string>();
+            batch.BeginRow(row.RowNumber);
 
             // Build + validate the create request, then (when committing) create it. A failure of any
             // single row is captured as that row's errors and never aborts the whole import.
@@ -88,7 +106,16 @@ public sealed class CsvImportService : ICsvImportService
                         valid = await TryImportPropertyAsync(portfolioId, Cell, dryRun, errors, id => createdId = id, ct);
                         break;
                     case "Unit":
-                        valid = await TryImportUnitAsync(portfolioId, Cell, dryRun, errors, id => createdId = id, ct);
+                        valid = await TryImportUnitAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
+                        break;
+                    case "Payment":
+                        valid = await TryImportPaymentAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
+                        break;
+                    case "Expense":
+                        valid = await TryImportExpenseAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
+                        break;
+                    case "Loan":
+                        valid = await TryImportLoanAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
                         break;
                 }
             }
@@ -108,12 +135,21 @@ public sealed class CsvImportService : ICsvImportService
                 }
             }
 
+            string? skipReason = null;
+            var isDuplicate = errors.Count == 0 && batch.TryGetSkip(row.RowNumber, out skipReason);
+            if (isDuplicate)
+            {
+                duplicateCount++;
+            }
+
             rowResults.Add(new CsvImportRowResult
             {
-                RowNumber = rowNumber,
+                RowNumber = row.RowNumber,
                 Valid = valid,
                 Errors = errors,
                 CreatedId = createdId,
+                IsDuplicate = isDuplicate,
+                SkipReason = skipReason,
             });
         }
 
@@ -121,9 +157,10 @@ public sealed class CsvImportService : ICsvImportService
         {
             EntityType = canonicalType,
             DryRun = dryRun,
-            TotalRows = table.Rows.Count,
+            TotalRows = rows.Count,
             ValidRows = validCount,
             CreatedRows = createdCount,
+            DuplicateRows = duplicateCount,
             Rows = rowResults,
         };
     }
@@ -206,62 +243,13 @@ public sealed class CsvImportService : ICsvImportService
     }
 
     private async Task<bool> TryImportUnitAsync(
-        int portfolioId, Func<string, string?> cell, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
     {
         // Resolve the property reference: an explicit propertyId wins; otherwise resolve by name
         // (case-insensitive, in-portfolio). Ambiguous or missing names are a clear per-row error.
         var propertyIdRaw = NullIfEmpty(cell("propertyId"));
         var propertyName = NullIfEmpty(cell("propertyName"));
-        int? propertyId = null;
-
-        if (propertyIdRaw != null)
-        {
-            if (!int.TryParse(propertyIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
-            {
-                errors.Add($"propertyId '{propertyIdRaw}' is not a valid number.");
-            }
-            else
-            {
-                var inScope = await _db.Properties
-                    .AnyAsync(p => p.Id == parsedId && p.PortfolioId == portfolioId, ct);
-                if (!inScope)
-                {
-                    errors.Add($"propertyId {parsedId} was not found in this portfolio.");
-                }
-                else
-                {
-                    propertyId = parsedId;
-                }
-            }
-        }
-        else if (propertyName != null)
-        {
-            // Case-insensitive name match that translates on both Postgres (prod) and SQLite (tests).
-            // Take(2) is enough to detect ambiguity without loading every matching row.
-            var lowered = propertyName.ToLower();
-            var matches = await _db.Properties
-                .Where(p => p.PortfolioId == portfolioId && p.Name.ToLower() == lowered)
-                .Select(p => p.Id)
-                .Take(2)
-                .ToListAsync(ct);
-
-            if (matches.Count == 0)
-            {
-                errors.Add($"No property named '{propertyName}' was found in this portfolio.");
-            }
-            else if (matches.Count > 1)
-            {
-                errors.Add($"Property name '{propertyName}' is ambiguous — more than one property matches. Use propertyId instead.");
-            }
-            else
-            {
-                propertyId = matches[0];
-            }
-        }
-        else
-        {
-            errors.Add("A propertyName or propertyId is required.");
-        }
+        var propertyId = ResolvePropertyReference(propertyIdRaw, propertyName, batch, errors);
 
         var request = new CreateUnitRequest
         {
@@ -297,9 +285,669 @@ public sealed class CsvImportService : ICsvImportService
         return true;
     }
 
+    private async Task<bool> TryImportPaymentAsync(
+        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+    {
+        var leaseId = ResolveLeaseReference(
+            NullIfEmpty(cell("leaseNumber")),
+            NullIfEmpty(cell("propertyName")),
+            NullIfEmpty(cell("unitNumber")),
+            batch,
+            errors);
+
+        var amount = ParseRequiredDecimal("amount", cell("amount"), errors);
+        var paidDate = ParseRequiredDate("paidDate", cell("paidDate"), errors);
+        var paymentType = ParseEnum("paymentType", cell("paymentType"), PaymentType.Rent, errors);
+
+        if (errors.Count > 0 || !leaseId.HasValue || !amount.HasValue || !paidDate.HasValue || !paymentType.HasValue)
+        {
+            return false;
+        }
+
+        var dedupeKey = PaymentKey(leaseId.Value, amount.Value, paidDate.Value, NullIfEmpty(cell("externalReference")));
+        if (batch.ExistingPaymentKeys.Contains(dedupeKey))
+        {
+            batch.SkipCurrent("duplicate of existing payment");
+            return true;
+        }
+        if (!batch.SeenPaymentKeys.Add(dedupeKey))
+        {
+            batch.SkipCurrent("duplicate payment row in this file");
+            return true;
+        }
+
+        var request = new CreatePaymentRequest
+        {
+            LeaseId = leaseId.Value,
+            PaymentType = paymentType.Value,
+            Status = PaymentStatus.Paid,
+            Amount = amount.Value,
+            DueDate = paidDate.Value,
+            PaidDate = paidDate.Value,
+            Method = NullIfEmpty(cell("method")),
+            ExternalReference = NullIfEmpty(cell("externalReference")),
+            Notes = NullIfEmpty(cell("notes")),
+        };
+
+        if (!TryValidate(request, errors))
+        {
+            return false;
+        }
+
+        if (!dryRun)
+        {
+            var created = await _payments.CreateAsync(portfolioId, request, ct);
+            if (created == null)
+            {
+                errors.Add("The payment could not be created (the lease is missing or outside this portfolio).");
+                return false;
+            }
+            setId(created.Id);
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryImportExpenseAsync(
+        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+    {
+        var propertyId = ResolvePropertyReference(null, NullIfEmpty(cell("propertyName")), batch, errors);
+        var amount = ParseRequiredDecimal("amount", cell("amount"), errors);
+        var incurredAt = ParseRequiredDate("incurredAt", cell("incurredAt"), errors);
+        var paidAt = ParseDate("paidAt", cell("paidAt"), errors);
+        var category = ParseEnum("category", cell("category"), ScheduleECategory.Other, errors);
+
+        if (errors.Count > 0 || !propertyId.HasValue || !amount.HasValue || !incurredAt.HasValue || !category.HasValue)
+        {
+            return false;
+        }
+
+        var description = cell("description") ?? string.Empty;
+        var dedupeKey = ExpenseKey(propertyId.Value, amount.Value, incurredAt.Value, description);
+        if (batch.ExistingExpenseKeys.Contains(dedupeKey))
+        {
+            batch.SkipCurrent("duplicate of existing expense");
+            return true;
+        }
+        if (!batch.SeenExpenseKeys.Add(dedupeKey))
+        {
+            batch.SkipCurrent("duplicate expense row in this file");
+            return true;
+        }
+
+        var request = new CreateExpenseRequest
+        {
+            PropertyId = propertyId.Value,
+            Category = category.Value,
+            Description = description,
+            Status = paidAt.HasValue ? ExpenseStatus.Paid : ExpenseStatus.Pending,
+            Amount = amount.Value,
+            IncurredAt = incurredAt.Value,
+            PaidAt = paidAt,
+            Notes = NullIfEmpty(cell("notes")),
+        };
+
+        if (!TryValidate(request, errors))
+        {
+            return false;
+        }
+
+        if (!dryRun)
+        {
+            var created = await _expenses.CreateAsync(portfolioId, request, ct);
+            if (created == null)
+            {
+                errors.Add("The expense could not be created (the property is missing or outside this portfolio).");
+                return false;
+            }
+            setId(created.Id);
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryImportLoanAsync(
+        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+    {
+        var propertyId = ResolvePropertyReference(null, NullIfEmpty(cell("propertyName")), batch, errors);
+        var originalAmount = ParseRequiredDecimal("originalAmount", cell("originalAmount"), errors);
+        var currentBalance = ParseDecimal("currentBalance", cell("currentBalance"), errors);
+        var annualInterestRatePct = ParseDecimal("annualInterestRatePct", cell("annualInterestRatePct"), errors) ?? 0m;
+        var termMonths = ParseRequiredInt("termMonths", cell("termMonths"), errors);
+        var startDate = ParseRequiredDate("startDate", cell("startDate"), errors);
+        var dayOfMonthDue = ParseInt("dayOfMonthDue", cell("dayOfMonthDue"), errors) ?? 1;
+        var monthlyPrincipalInterest = ParseDecimal("monthlyPrincipalInterest", cell("monthlyPrincipalInterest"), errors) ?? 0m;
+        var monthlyEscrow = ParseDecimal("monthlyEscrow", cell("monthlyEscrow"), errors) ?? 0m;
+
+        if (errors.Count > 0 || !propertyId.HasValue || !originalAmount.HasValue || !termMonths.HasValue || !startDate.HasValue)
+        {
+            return false;
+        }
+
+        var lender = cell("lender") ?? string.Empty;
+        var dedupeKey = LoanKey(propertyId.Value, lender, originalAmount.Value, startDate.Value);
+        if (batch.ExistingLoanKeys.Contains(dedupeKey))
+        {
+            batch.SkipCurrent("duplicate of existing loan");
+            return true;
+        }
+        if (!batch.SeenLoanKeys.Add(dedupeKey))
+        {
+            batch.SkipCurrent("duplicate loan row in this file");
+            return true;
+        }
+
+        var request = new CreateLoanRequest
+        {
+            PropertyId = propertyId.Value,
+            Lender = lender,
+            OriginalAmount = originalAmount.Value,
+            CurrentBalance = currentBalance,
+            AnnualInterestRatePct = annualInterestRatePct,
+            TermMonths = termMonths.Value,
+            StartDate = startDate.Value,
+            DayOfMonthDue = dayOfMonthDue,
+            MonthlyPrincipalInterest = monthlyPrincipalInterest,
+            MonthlyEscrow = monthlyEscrow,
+        };
+
+        if (!TryValidate(request, errors))
+        {
+            return false;
+        }
+
+        if (!dryRun)
+        {
+            var created = await _loans.CreateAsync(portfolioId, request, ct);
+            if (created == null)
+            {
+                errors.Add("The loan could not be created (the property is missing or outside this portfolio).");
+                return false;
+            }
+            setId(created.Id);
+        }
+
+        return true;
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private sealed record ImportRow(int RowNumber, string[] Cells);
+
+    private sealed record ReferenceResolution(int? Id, string? Error)
+    {
+        public static ReferenceResolution Found(int id) => new(id, null);
+        public static ReferenceResolution Failed(string error) => new(null, error);
+    }
+
+    private sealed class ImportBatchContext
+    {
+        private int _currentRowNumber;
+        private readonly Dictionary<int, string> _skipReasons = [];
+
+        public Dictionary<int, bool> PropertyIdsInScope { get; } = [];
+        public Dictionary<string, ReferenceResolution> PropertiesByName { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, ReferenceResolution> LeasesByNumber { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, ReferenceResolution> ActiveLeasesByProperty { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, ReferenceResolution> ActiveLeasesByPropertyUnit { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> ExistingPaymentKeys { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ExistingExpenseKeys { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ExistingLoanKeys { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> SeenPaymentKeys { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> SeenExpenseKeys { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> SeenLoanKeys { get; } = new(StringComparer.Ordinal);
+
+        public void BeginRow(int rowNumber) => _currentRowNumber = rowNumber;
+
+        public void SkipCurrent(string reason) => _skipReasons[_currentRowNumber] = reason;
+
+        public bool TryGetSkip(int rowNumber, out string? reason) =>
+            _skipReasons.TryGetValue(rowNumber, out reason);
+    }
+
+    private async Task<ImportBatchContext> BuildBatchContextAsync(
+        int portfolioId,
+        string canonicalType,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        CancellationToken ct)
+    {
+        var batch = new ImportBatchContext();
+
+        string? Cell(ImportRow row, string column) =>
+            columnIndex.TryGetValue(column, out var idx) && idx < row.Cells.Length
+                ? NullIfEmpty(row.Cells[idx].Trim())
+                : null;
+
+        if (canonicalType is "Unit")
+        {
+            var propertyIds = rows
+                .Select(row => Cell(row, "propertyId"))
+                .Where(raw => int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                .Select(raw => int.Parse(raw!, NumberStyles.Integer, CultureInfo.InvariantCulture))
+                .Distinct()
+                .ToList();
+
+            if (propertyIds.Count > 0)
+            {
+                var inScopeIds = await _db.Properties
+                    .AsNoTracking()
+                    .Where(p => p.PortfolioId == portfolioId && propertyIds.Contains(p.Id))
+                    .Select(p => p.Id)
+                    .ToListAsync(ct);
+
+                foreach (var id in propertyIds)
+                {
+                    batch.PropertyIdsInScope[id] = inScopeIds.Contains(id);
+                }
+            }
+        }
+
+        if (canonicalType is "Unit" or "Expense" or "Loan" or "Payment")
+        {
+            var propertyNames = rows
+                .Select(row => Cell(row, "propertyName"))
+                .Where(name => name != null)
+                .Select(NormalizeKey)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            if (propertyNames.Count > 0)
+            {
+                var propertyMatches = await _db.Properties
+                    .AsNoTracking()
+                    .Where(p => p.PortfolioId == portfolioId && propertyNames.Contains(p.Name.ToLower()))
+                    .GroupBy(p => p.Name.ToLower())
+                    .Select(g => new { Name = g.Key, Count = g.Count(), Id = g.Min(p => p.Id) })
+                    .ToListAsync(ct);
+
+                foreach (var name in propertyNames)
+                {
+                    var match = propertyMatches.SingleOrDefault(p => p.Name == name);
+                    batch.PropertiesByName[name] = match switch
+                    {
+                        null => ReferenceResolution.Failed($"No property named '{{0}}' was found in this portfolio."),
+                        { Count: > 1 } => ReferenceResolution.Failed($"Property name '{{0}}' is ambiguous — more than one property matches. Use propertyId instead."),
+                        _ => ReferenceResolution.Found(match.Id),
+                    };
+                }
+            }
+        }
+
+        if (canonicalType is "Payment")
+        {
+            await LoadLeaseReferencesAsync(portfolioId, rows, columnIndex, batch, ct);
+            await LoadExistingPaymentKeysAsync(portfolioId, rows, columnIndex, batch, ct);
+        }
+        else if (canonicalType is "Expense")
+        {
+            await LoadExistingExpenseKeysAsync(portfolioId, rows, columnIndex, batch, ct);
+        }
+        else if (canonicalType is "Loan")
+        {
+            await LoadExistingLoanKeysAsync(portfolioId, rows, columnIndex, batch, ct);
+        }
+
+        return batch;
+    }
+
+    private async Task LoadLeaseReferencesAsync(
+        int portfolioId,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        ImportBatchContext batch,
+        CancellationToken ct)
+    {
+        string? Cell(ImportRow row, string column) =>
+            columnIndex.TryGetValue(column, out var idx) && idx < row.Cells.Length
+                ? NullIfEmpty(row.Cells[idx].Trim())
+                : null;
+
+        var leaseNumbers = rows
+            .Select(row => Cell(row, "leaseNumber"))
+            .Where(value => value != null)
+            .Select(NormalizeKey)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (leaseNumbers.Count > 0)
+        {
+            var leaseMatches = await _db.Leases
+                .AsNoTracking()
+                .Where(l => l.PortfolioId == portfolioId && leaseNumbers.Contains(l.LeaseNumber.ToLower()))
+                .GroupBy(l => l.LeaseNumber.ToLower())
+                .Select(g => new { LeaseNumber = g.Key, Count = g.Count(), Id = g.Min(l => l.Id) })
+                .ToListAsync(ct);
+
+            foreach (var leaseNumber in leaseNumbers)
+            {
+                var match = leaseMatches.SingleOrDefault(l => l.LeaseNumber == leaseNumber);
+                batch.LeasesByNumber[leaseNumber] = match switch
+                {
+                    null => ReferenceResolution.Failed($"No lease numbered '{{0}}' was found in this portfolio."),
+                    { Count: > 1 } => ReferenceResolution.Failed($"Lease number '{{0}}' is ambiguous — more than one lease matches."),
+                    _ => ReferenceResolution.Found(match.Id),
+                };
+            }
+        }
+
+        var propertyNames = rows
+            .Where(row => Cell(row, "leaseNumber") == null && Cell(row, "propertyName") != null)
+            .Select(row => Cell(row, "propertyName")!)
+            .Select(NormalizeKey)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (propertyNames.Count == 0)
+        {
+            return;
+        }
+
+        var leasesByProperty = await _db.Leases
+            .AsNoTracking()
+            .Where(l =>
+                l.PortfolioId == portfolioId &&
+                l.Status == LeaseStatus.Active &&
+                propertyNames.Contains(l.Property!.Name.ToLower()))
+            .GroupBy(l => l.Property!.Name.ToLower())
+            .Select(g => new { PropertyName = g.Key, Count = g.Count(), Id = g.Min(l => l.Id) })
+            .ToListAsync(ct);
+
+        foreach (var propertyName in propertyNames)
+        {
+            var match = leasesByProperty.SingleOrDefault(l => l.PropertyName == propertyName);
+            batch.ActiveLeasesByProperty[propertyName] = match switch
+            {
+                null => ReferenceResolution.Failed($"No active lease was found for property '{{0}}'."),
+                { Count: > 1 } => ReferenceResolution.Failed($"Property '{{0}}' has more than one active lease. Add unitNumber or leaseNumber."),
+                _ => ReferenceResolution.Found(match.Id),
+            };
+        }
+
+        var unitNumbers = rows
+            .Where(row => Cell(row, "leaseNumber") == null && Cell(row, "propertyName") != null && Cell(row, "unitNumber") != null)
+            .Select(row => Cell(row, "unitNumber")!)
+            .Select(NormalizeKey)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (unitNumbers.Count == 0)
+        {
+            return;
+        }
+
+        var leasesByPropertyUnit = await _db.Leases
+            .AsNoTracking()
+            .Where(l =>
+                l.PortfolioId == portfolioId &&
+                l.Status == LeaseStatus.Active &&
+                propertyNames.Contains(l.Property!.Name.ToLower()) &&
+                unitNumbers.Contains(l.Unit!.UnitNumber.ToLower()))
+            .GroupBy(l => new { PropertyName = l.Property!.Name.ToLower(), UnitNumber = l.Unit!.UnitNumber.ToLower() })
+            .Select(g => new { g.Key.PropertyName, g.Key.UnitNumber, Count = g.Count(), Id = g.Min(l => l.Id) })
+            .ToListAsync(ct);
+
+        foreach (var propertyName in propertyNames)
+        {
+            foreach (var unitNumber in unitNumbers)
+            {
+                var key = LeasePropertyUnitKey(propertyName, unitNumber);
+                var match = leasesByPropertyUnit.SingleOrDefault(l => l.PropertyName == propertyName && l.UnitNumber == unitNumber);
+                batch.ActiveLeasesByPropertyUnit[key] = match switch
+                {
+                    null => ReferenceResolution.Failed($"No active lease was found for property '{{0}}' and unit '{{1}}'."),
+                    { Count: > 1 } => ReferenceResolution.Failed($"Property '{{0}}' and unit '{{1}}' have more than one active lease. Use leaseNumber."),
+                    _ => ReferenceResolution.Found(match.Id),
+                };
+            }
+        }
+    }
+
+    private async Task LoadExistingPaymentKeysAsync(
+        int portfolioId,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        ImportBatchContext batch,
+        CancellationToken ct)
+    {
+        var candidates = rows
+            .Select(row => new
+            {
+                Amount = TryParseDecimalForLookup(Cell(row, "amount", columnIndex)),
+                EffectiveDate = TryParseDateForLookup(Cell(row, "paidDate", columnIndex)),
+            })
+            .Where(x => x.Amount.HasValue && x.EffectiveDate.HasValue)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var amounts = candidates.Select(c => c.Amount!.Value).Distinct().ToList();
+        var minDate = candidates.Min(c => c.EffectiveDate!.Value);
+        var maxDate = candidates.Max(c => c.EffectiveDate!.Value);
+
+        var existing = await _db.Payments
+            .AsNoTracking()
+            .Where(p =>
+                p.PortfolioId == portfolioId &&
+                amounts.Contains(p.Amount) &&
+                (p.PaidDate ?? p.DueDate) >= minDate &&
+                (p.PaidDate ?? p.DueDate) <= maxDate)
+            .Select(p => new { p.LeaseId, p.Amount, EffectiveDate = p.PaidDate ?? p.DueDate, p.ExternalReference })
+            .ToListAsync(ct);
+
+        foreach (var payment in existing)
+        {
+            if (payment.LeaseId is { } leaseId)
+            {
+                batch.ExistingPaymentKeys.Add(PaymentKey(leaseId, payment.Amount, payment.EffectiveDate, payment.ExternalReference));
+            }
+        }
+    }
+
+    private async Task LoadExistingExpenseKeysAsync(
+        int portfolioId,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        ImportBatchContext batch,
+        CancellationToken ct)
+    {
+        var candidates = rows
+            .Select(row => new
+            {
+                Amount = TryParseDecimalForLookup(Cell(row, "amount", columnIndex)),
+                IncurredAt = TryParseDateForLookup(Cell(row, "incurredAt", columnIndex)),
+            })
+            .Where(x => x.Amount.HasValue && x.IncurredAt.HasValue)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var amounts = candidates.Select(c => c.Amount!.Value).Distinct().ToList();
+        var minDate = candidates.Min(c => c.IncurredAt!.Value);
+        var maxDate = candidates.Max(c => c.IncurredAt!.Value);
+
+        var existing = await _db.Expenses
+            .AsNoTracking()
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                amounts.Contains(e.Amount) &&
+                e.IncurredAt >= minDate &&
+                e.IncurredAt <= maxDate)
+            .Select(e => new { e.PropertyId, e.Amount, e.IncurredAt, e.Description })
+            .ToListAsync(ct);
+
+        foreach (var expense in existing)
+        {
+            if (expense.PropertyId is { } propertyId)
+            {
+                batch.ExistingExpenseKeys.Add(ExpenseKey(propertyId, expense.Amount, expense.IncurredAt, expense.Description));
+            }
+        }
+    }
+
+    private async Task LoadExistingLoanKeysAsync(
+        int portfolioId,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        ImportBatchContext batch,
+        CancellationToken ct)
+    {
+        var candidates = rows
+            .Select(row => new
+            {
+                OriginalAmount = TryParseDecimalForLookup(Cell(row, "originalAmount", columnIndex)),
+                StartDate = TryParseDateForLookup(Cell(row, "startDate", columnIndex)),
+            })
+            .Where(x => x.OriginalAmount.HasValue && x.StartDate.HasValue)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var amounts = candidates.Select(c => c.OriginalAmount!.Value).Distinct().ToList();
+        var minDate = candidates.Min(c => c.StartDate!.Value);
+        var maxDate = candidates.Max(c => c.StartDate!.Value);
+
+        var existing = await _db.Loans
+            .AsNoTracking()
+            .Where(l =>
+                l.PortfolioId == portfolioId &&
+                amounts.Contains(l.OriginalAmount) &&
+                l.StartDate >= minDate &&
+                l.StartDate <= maxDate)
+            .Select(l => new { l.PropertyId, l.Lender, l.OriginalAmount, l.StartDate })
+            .ToListAsync(ct);
+
+        foreach (var loan in existing)
+        {
+            batch.ExistingLoanKeys.Add(LoanKey(loan.PropertyId, loan.Lender, loan.OriginalAmount, loan.StartDate));
+        }
+    }
+
+    private static string? Cell(ImportRow row, string column, IReadOnlyDictionary<string, int> columnIndex) =>
+        columnIndex.TryGetValue(column, out var idx) && idx < row.Cells.Length
+            ? NullIfEmpty(row.Cells[idx].Trim())
+            : null;
+
+    private static int? ResolvePropertyReference(
+        string? propertyIdRaw,
+        string? propertyName,
+        ImportBatchContext batch,
+        List<string> errors)
+    {
+        if (propertyIdRaw != null)
+        {
+            if (!int.TryParse(propertyIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
+            {
+                errors.Add($"propertyId '{propertyIdRaw}' is not a valid number.");
+                return null;
+            }
+
+            if (!batch.PropertyIdsInScope.TryGetValue(parsedId, out var inScope) || !inScope)
+            {
+                errors.Add($"propertyId {parsedId} was not found in this portfolio.");
+                return null;
+            }
+
+            return parsedId;
+        }
+
+        if (propertyName == null)
+        {
+            errors.Add("A propertyName or propertyId is required.");
+            return null;
+        }
+
+        if (!batch.PropertiesByName.TryGetValue(NormalizeKey(propertyName), out var resolution))
+        {
+            errors.Add($"No property named '{propertyName}' was found in this portfolio.");
+            return null;
+        }
+
+        if (resolution.Error != null)
+        {
+            errors.Add(string.Format(CultureInfo.InvariantCulture, resolution.Error, propertyName));
+            return null;
+        }
+
+        return resolution.Id;
+    }
+
+    private static int? ResolveLeaseReference(
+        string? leaseNumber,
+        string? propertyName,
+        string? unitNumber,
+        ImportBatchContext batch,
+        List<string> errors)
+    {
+        if (leaseNumber != null)
+        {
+            if (!batch.LeasesByNumber.TryGetValue(NormalizeKey(leaseNumber), out var resolution))
+            {
+                errors.Add($"No lease numbered '{leaseNumber}' was found in this portfolio.");
+                return null;
+            }
+
+            if (resolution.Error != null)
+            {
+                errors.Add(string.Format(CultureInfo.InvariantCulture, resolution.Error, leaseNumber));
+                return null;
+            }
+
+            return resolution.Id;
+        }
+
+        if (propertyName == null)
+        {
+            errors.Add("A leaseNumber or propertyName is required.");
+            return null;
+        }
+
+        var normalizedProperty = NormalizeKey(propertyName);
+        ReferenceResolution? leaseResolution;
+        if (unitNumber != null)
+        {
+            var normalizedUnit = NormalizeKey(unitNumber);
+            var key = LeasePropertyUnitKey(normalizedProperty, normalizedUnit);
+            if (!batch.ActiveLeasesByPropertyUnit.TryGetValue(key, out leaseResolution))
+            {
+                errors.Add($"No active lease was found for property '{propertyName}' and unit '{unitNumber}'.");
+                return null;
+            }
+
+            if (leaseResolution.Error != null)
+            {
+                errors.Add(string.Format(CultureInfo.InvariantCulture, leaseResolution.Error, propertyName, unitNumber));
+                return null;
+            }
+
+            return leaseResolution.Id;
+        }
+
+        if (!batch.ActiveLeasesByProperty.TryGetValue(normalizedProperty, out leaseResolution))
+        {
+            errors.Add($"No active lease was found for property '{propertyName}'.");
+            return null;
+        }
+
+        if (leaseResolution.Error != null)
+        {
+            errors.Add(string.Format(CultureInfo.InvariantCulture, leaseResolution.Error, propertyName));
+            return null;
+        }
+
+        return leaseResolution.Id;
+    }
 
     /// <summary>
     /// Runs DataAnnotations validation on a create request (the same attributes the controllers use),
@@ -341,6 +989,143 @@ public sealed class CsvImportService : ICsvImportService
         return null;
     }
 
+    private static decimal? ParseRequiredDecimal(string column, string? raw, List<string> errors)
+    {
+        var value = ParseDecimal(column, raw, errors);
+        if (!value.HasValue && string.IsNullOrWhiteSpace(raw))
+        {
+            errors.Add($"{column} is required.");
+        }
+        return value;
+    }
+
+    private static int? ParseInt(string column, string? raw, List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            return value;
+        }
+
+        errors.Add($"{column} '{raw}' is not a valid whole number.");
+        return null;
+    }
+
+    private static int? ParseRequiredInt(string column, string? raw, List<string> errors)
+    {
+        var value = ParseInt(column, raw, errors);
+        if (!value.HasValue && string.IsNullOrWhiteSpace(raw))
+        {
+            errors.Add($"{column} is required.");
+        }
+        return value;
+    }
+
+    private static DateTime? ParseDate(string column, string? raw, List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (DateTime.TryParse(
+                raw.Trim(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var value))
+        {
+            return value;
+        }
+
+        errors.Add($"{column} '{raw}' is not a valid date.");
+        return null;
+    }
+
+    private static DateTime? ParseRequiredDate(string column, string? raw, List<string> errors)
+    {
+        var value = ParseDate(column, raw, errors);
+        if (!value.HasValue && string.IsNullOrWhiteSpace(raw))
+        {
+            errors.Add($"{column} is required.");
+        }
+        return value;
+    }
+
+    private static TEnum? ParseEnum<TEnum>(string column, string? raw, TEnum defaultValue, List<string> errors)
+        where TEnum : struct, Enum
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return defaultValue;
+        }
+
+        var normalized = NormalizeEnumToken(raw);
+        foreach (var name in Enum.GetNames<TEnum>())
+        {
+            if (NormalizeEnumToken(name) == normalized)
+            {
+                return Enum.Parse<TEnum>(name);
+            }
+        }
+
+        errors.Add($"{column} '{raw}' is not valid. Allowed: {string.Join(", ", Enum.GetNames<TEnum>())}.");
+        return null;
+    }
+
+    private static decimal? TryParseDecimalForLookup(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var cleaned = raw.Trim().TrimStart('$').Replace(",", string.Empty);
+        return decimal.TryParse(cleaned, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+    }
+
+    private static DateTime? TryParseDateForLookup(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        return DateTime.TryParse(
+                raw.Trim(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var value)
+            ? value
+            : null;
+    }
+
+    private static string PaymentKey(int leaseId, decimal amount, DateTime effectiveDate, string? externalReference) =>
+        string.Join("|", leaseId, amount.ToString("0.00", CultureInfo.InvariantCulture), DateKey(effectiveDate), NormalizeKey(externalReference));
+
+    private static string ExpenseKey(int propertyId, decimal amount, DateTime incurredAt, string? description) =>
+        string.Join("|", propertyId, amount.ToString("0.00", CultureInfo.InvariantCulture), DateKey(incurredAt), NormalizeKey(description));
+
+    private static string LoanKey(int propertyId, string lender, decimal originalAmount, DateTime startDate) =>
+        string.Join("|", propertyId, NormalizeKey(lender), originalAmount.ToString("0.00", CultureInfo.InvariantCulture), DateKey(startDate));
+
+    private static string DateKey(DateTime value) =>
+        value.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private static string LeasePropertyUnitKey(string propertyName, string unitNumber) =>
+        $"{propertyName}|{unitNumber}";
+
+    private static string NormalizeKey(string? value) =>
+        (value ?? string.Empty).Trim().ToLowerInvariant();
+
+    private static string NormalizeEnumToken(string value) =>
+        new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
 
@@ -349,12 +1134,32 @@ public sealed class CsvImportService : ICsvImportService
         "Tenant" => TenantColumns,
         "Property" => PropertyColumns,
         "Unit" => UnitColumns,
+        "Payment" => PaymentColumns,
+        "Expense" => ExpenseColumns,
+        "Loan" => LoanColumns,
         _ => throw new ArgumentException($"Unsupported import entity type '{entityType}'.", nameof(entityType)),
     };
 
     /// <summary>Normalizes a client-supplied entity type to its canonical name, or throws.</summary>
     private static string Canonicalize(string entityType)
     {
+        var normalized = NormalizeEnumToken(entityType);
+        var synonym = normalized switch
+        {
+            "tenants" => "Tenant",
+            "properties" => "Property",
+            "units" => "Unit",
+            "payments" or "rent" or "rents" or "transactions" => "Payment",
+            "expenses" or "expense" or "mortgagepayment" or "mortgagepayments" => "Expense",
+            "loans" or "mortgage" or "mortgages" => "Loan",
+            _ => null,
+        };
+
+        if (synonym != null)
+        {
+            return synonym;
+        }
+
         foreach (var supported in ICsvImportService.SupportedEntityTypes)
         {
             if (string.Equals(entityType, supported, StringComparison.OrdinalIgnoreCase))

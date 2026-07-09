@@ -67,4 +67,5 @@ public class Lease : IAuditable, IPortfolioScoped
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
+    public List<EvictionCase> EvictionCases { get; set; } = [];
 }

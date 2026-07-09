@@ -7,6 +7,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -50,13 +51,29 @@ public class ReportsServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ReportsService(_db, new OwnerStatementService(_db), new ScheduleEService(_db), TimeProvider.System);
+        _sut = new ReportsService(
+            _db,
+            new OwnerStatementService(_db),
+            new ScheduleEService(_db),
+            new PropertyDispositionService(_db, new NoopDataUpdateService(), TimeProvider.System),
+            TimeProvider.System);
     }
 
     public void Dispose()
     {
         _db.Dispose();
         _conn.Dispose();
+    }
+
+    private sealed class NoopDataUpdateService : IDataUpdateService
+    {
+        public Task BroadcastEntityUpdateAsync(
+            int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task BroadcastEntityDeleteAsync(
+            int portfolioId, string entityType, int entityId, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     // ── Pure-function unit tests (no DB) ───────────────────────────────────────────────────────────
@@ -760,9 +777,9 @@ public class ReportsServiceTests : IDisposable
         view.RentRoll.Should().ContainSingle();
         view.RentRoll[0].MonthlyRent.Should().Be(1_000m);
 
-        // §18 caveats are surfaced (always-on disposition + mixed-use notes at minimum).
+        // §18 caveats are surfaced even when no sale/disposition has been entered.
         view.AccountantNotes.Should().NotBeEmpty();
-        view.AccountantNotes.Should().Contain(n => n.Contains("recapture", StringComparison.OrdinalIgnoreCase));
+        view.AccountantNotes.Should().Contain(n => n.Contains("No property sale/disposition", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

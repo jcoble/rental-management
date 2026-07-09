@@ -18,13 +18,20 @@ public class ReportsService : IReportsService
     private readonly RentalCommandDbContext _db;
     private readonly IOwnerStatementService _ownerStatements;
     private readonly IScheduleEService _scheduleE;
+    private readonly IPropertyDispositionService _propertyDispositions;
     private readonly TimeProvider _timeProvider;
 
-    public ReportsService(RentalCommandDbContext db, IOwnerStatementService ownerStatements, IScheduleEService scheduleE, TimeProvider timeProvider)
+    public ReportsService(
+        RentalCommandDbContext db,
+        IOwnerStatementService ownerStatements,
+        IScheduleEService scheduleE,
+        IPropertyDispositionService propertyDispositions,
+        TimeProvider timeProvider)
     {
         _db = db;
         _ownerStatements = ownerStatements;
         _scheduleE = scheduleE;
+        _propertyDispositions = propertyDispositions;
         _timeProvider = timeProvider;
     }
 
@@ -290,7 +297,7 @@ public class ReportsService : IReportsService
                         p.DueDate >= from && p.DueDate <= to)
             .Select(p => new RentLedgerQueryRow
             {
-                LeaseId = p.LeaseId,
+                LeaseId = p.LeaseId!.Value,
                 LeaseNumber = p.Lease!.LeaseNumber,
                 PropertyId = p.Lease.PropertyId,
                 PropertyName = p.Lease.Property!.Name,
@@ -310,7 +317,7 @@ public class ReportsService : IReportsService
                         p.PaidDate >= from && p.PaidDate <= to)
             .Select(p => new RentLedgerQueryRow
             {
-                LeaseId = p.LeaseId,
+                LeaseId = p.LeaseId!.Value,
                 LeaseNumber = p.Lease!.LeaseNumber,
                 PropertyId = p.Lease.PropertyId,
                 PropertyName = p.Lease.Property!.Name,
@@ -524,7 +531,8 @@ public class ReportsService : IReportsService
                 };
                 return new DelinquencyRow
                 {
-                    LeaseId = g.Key.LeaseId,
+                    // Delinquency is lease-scoped (ForCurrentLeaseAttention requires a live lease).
+                    LeaseId = g.Key.LeaseId!.Value,
                     LeaseNumber = g.Key.LeaseNumber,
                     PropertyId = g.Key.PropertyId,
                     PropertyName = g.Key.PropertyName,
@@ -590,11 +598,15 @@ public class ReportsService : IReportsService
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee || p.PaymentType == PaymentType.ApplicationFee) &&
                 (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
 
         if (propertyFilter is not null)
-            incomeQuery = incomeQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
+            // Lease-tied income scopes by the lease's property; a lease-less app fee by its own PropertyId.
+            incomeQuery = incomeQuery.Where(p =>
+                p.LeaseId != null
+                    ? propertyFilter.Contains(p.Lease!.PropertyId)
+                    : (p.PropertyId != null && propertyFilter.Contains(p.PropertyId.Value)));
 
         var incomeByMonth = (await incomeQuery
             .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
@@ -694,9 +706,8 @@ public class ReportsService : IReportsService
                     .Where(pay =>
                         pay.PortfolioId == portfolioId &&
                         (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
-                        (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee) &&
-                        pay.Lease != null &&
-                        pay.Lease.PropertyId == p.Id &&
+                        (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee || pay.PaymentType == PaymentType.ApplicationFee) &&
+                        (pay.LeaseId != null ? pay.Lease!.PropertyId : pay.PropertyId) == p.Id &&
                         (pay.PaidDate ?? pay.DueDate) >= from && (pay.PaidDate ?? pay.DueDate) <= to)
                     .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial ? (pay.AmountPaid ?? 0m) : pay.Amount)) ?? 0m,
                 OperatingExpenses = _db.Expenses
@@ -782,6 +793,17 @@ public class ReportsService : IReportsService
         // Block 3: rent roll — current leases with their past-due balance (DB-side, no N+1).
         var rentRoll = await BuildRentRollAsync(portfolioId, propertyId, ct);
 
+        var dispositions = await _propertyDispositions.ListAsync(
+            portfolioId,
+            new PropertyDispositionListQuery
+            {
+                Year = year,
+                PropertyId = propertyId,
+                Sort = "closedOnDate",
+                Take = ListQuery.MaxTake,
+            },
+            ct);
+
         // §18 "see your accountant" caveats — surfaced so the owner never trusts a number the model
         // does not compute. Conditional on what the data suggests, so they are actionable not noise.
         var notes = new List<string>();
@@ -800,7 +822,10 @@ public class ReportsService : IReportsService
         if (hasLargeRepairs)
             notes.Add("Large amounts booked to Repairs may be capital improvements (IRS $2,500 de-minimis) that must be depreciated, not expensed. Review with your accountant.");
 
-        notes.Add("Mid-year purchase or sale of a property (disposition: sale-year depreciation, gain/loss, and §1250 recapture) is NOT computed here.");
+        if (dispositions.Count > 0)
+            notes.Add("Property sale/disposition estimates include sale-year depreciation, gain/loss, and unrecaptured §1250 gain. Confirm final basis and closing costs with your accountant.");
+        else
+            notes.Add("No property sale/disposition is recorded for this tax year. If a property was sold, add a disposition before handing this packet to your accountant.");
         notes.Add("Owner-occupied / mixed-use properties are not allocated — expenses and depreciation assume 100% rental use.");
 
         return new YearEndViewResponse
@@ -809,6 +834,7 @@ public class ReportsService : IReportsService
             CashFlow = cashFlow,
             ScheduleE = scheduleE,
             RentRoll = rentRoll,
+            PropertyDispositions = dispositions,
             AccountantNotes = notes,
         };
     }
@@ -887,7 +913,10 @@ public class ReportsService : IReportsService
         // cumulative net.
         var paymentQuery = _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid);
+            // Lease-scoped ledger rows (property/tenant/lease-number come from the lease): a lease-less
+            // payment (application fee) has none of those, so it is excluded here and instead surfaces on
+            // Schedule E + cash flow + the vw_accounting_transactions ledger.
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null);
 
         if (propertyFilter is not null)
             paymentQuery = paymentQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
@@ -1376,6 +1405,13 @@ public class ReportsService : IReportsService
         // Reuse OwnerStatementService's net-per-owner computation so distributions reconcile exactly with
         // the per-owner statement.
         var summaries = await _ownerStatements.ListOwnersWithNetAsync(portfolioId, year, ct);
+        var totalNetToOwners = await _ownerStatements.GetTotalNetToOwnersAsync(portfolioId, year, ct);
+        var start = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var end = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var totalDistributed = await _db.OwnerDistributions
+            .AsNoTracking()
+            .Where(d => d.PortfolioId == portfolioId && d.Date >= start && d.Date < end)
+            .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
 
         var rows = summaries
             .Select(s => new OwnerDistributionRow
@@ -1383,6 +1419,8 @@ public class ReportsService : IReportsService
                 OwnerId = s.OwnerId,
                 OwnerName = s.OwnerName,
                 NetToOwner = s.NetToOwner,
+                TotalDistributed = s.TotalDistributed,
+                Undistributed = s.Undistributed,
             })
             .ToList();
 
@@ -1390,7 +1428,9 @@ public class ReportsService : IReportsService
         {
             Year = year,
             Rows = rows,
-            TotalNetToOwners = await _ownerStatements.GetTotalNetToOwnersAsync(portfolioId, year, ct),
+            TotalNetToOwners = totalNetToOwners,
+            TotalDistributed = totalDistributed,
+            TotalUndistributed = totalNetToOwners - totalDistributed,
         };
     }
 

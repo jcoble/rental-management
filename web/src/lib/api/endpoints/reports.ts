@@ -303,12 +303,16 @@ export interface OwnerDistributionRow {
 	ownerId: number;
 	ownerName: string;
 	netToOwner: number;
+	totalDistributed: number;
+	undistributed: number;
 }
 
 export interface OwnerDistributionsResponse {
 	year: number;
 	rows: OwnerDistributionRow[];
 	totalNetToOwners: number;
+	totalDistributed: number;
+	totalUndistributed: number;
 }
 
 export interface WorkOrderReportRow {

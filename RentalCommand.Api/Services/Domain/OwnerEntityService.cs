@@ -217,6 +217,17 @@ public class OwnerEntityService : IOwnerEntityService
                     .SetProperty(p => p.UpdatedAt, now), ct);
         }
 
+        var distributionCount = await _db.OwnerDistributions
+            .AsNoTracking()
+            .CountAsync(d => d.PortfolioId == portfolioId && d.OwnerEntityId == id, ct);
+        if (distributionCount > 0)
+        {
+            var distributionNoun = distributionCount == 1 ? "distribution" : "distributions";
+            throw new DomainValidationException(
+                $"This owner has {distributionCount} recorded {distributionNoun}. Delete or reassign those owner distributions before deleting this owner.",
+                statusCode: 409);
+        }
+
         entity.DeletedAt = _timeProvider.UtcNow();
         entity.UpdatedAt = entity.DeletedAt.Value;
         await _db.SaveChangesAsync(ct);

@@ -9,7 +9,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for payments within the caller's portfolio plus the mark-paid action. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?leaseId&amp;skip&amp;take&amp;search&amp;sort&amp;dueFrom&amp;dueTo&amp;paidFrom&amp;paidTo</c>. Create
+/// <c>portfolioId</c> claim; list supports <c>?leaseId&amp;applicationId&amp;skip&amp;take&amp;search&amp;sort&amp;dueFrom&amp;dueTo&amp;paidFrom&amp;paidTo</c>. Create
 /// validates the referenced lease is in the portfolio. Payment has no soft-delete, so removal is a hard delete.
 /// </summary>
 [ApiController]

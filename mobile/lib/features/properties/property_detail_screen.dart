@@ -6,12 +6,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
 import '../activity/activity_history_screen.dart';
+import '../money/money_format.dart' as money;
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_form_sheet.dart';
 import '../units/unit_navigation.dart';
+import 'capital_assets_repository.dart';
 import 'properties_repository.dart';
+import 'property_capital_asset_form_sheet.dart';
+import 'property_disposition_form_sheet.dart';
+import 'property_dispositions_repository.dart';
 import 'property_form_sheet.dart';
 import 'property_labels.dart';
 import 'property_loan_form_sheet.dart';
@@ -151,6 +156,8 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
         if (mounted) setState(() => _property = property);
       }),
       ref.read(propertyLoansProvider(propertyId).notifier).refresh(),
+      ref.read(propertyCapitalAssetsProvider(propertyId).notifier).refresh(),
+      ref.read(propertyDispositionsProvider(propertyId).notifier).refresh(),
     ]);
   }
 
@@ -341,6 +348,172 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     }
   }
 
+  Future<void> _showAddCapitalAssetSheet(BuildContext context) async {
+    final saved = await showPropertyCapitalAssetFormSheet(
+      context,
+      propertyId: _property.id,
+    );
+    if (saved && mounted) {
+      await ref
+          .read(propertyCapitalAssetsProvider(_property.id).notifier)
+          .refresh();
+    }
+  }
+
+  Future<void> _showEditCapitalAssetSheet(
+    BuildContext context,
+    CapitalAsset asset,
+  ) async {
+    final saved = await showPropertyCapitalAssetFormSheet(
+      context,
+      propertyId: _property.id,
+      asset: asset,
+    );
+    if (saved && mounted) {
+      await ref
+          .read(propertyCapitalAssetsProvider(_property.id).notifier)
+          .refresh();
+    }
+  }
+
+  Future<void> _confirmDeleteCapitalAsset(
+    BuildContext context,
+    CapitalAsset asset,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Remove ${asset.description}?'),
+        content: const Text(
+          'This removes the capital asset record from this property.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(capitalAssetsRepositoryProvider).deleteAsset(asset.id);
+      await ref
+          .read(propertyCapitalAssetsProvider(_property.id).notifier)
+          .refresh();
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Capital asset removed.')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not remove capital asset.')),
+        );
+    }
+  }
+
+  Future<void> _showAddDispositionSheet(BuildContext context) async {
+    final saved = await showPropertyDispositionFormSheet(
+      context,
+      propertyId: _property.id,
+    );
+    if (saved && mounted) await _refreshAfterDispositionChange();
+  }
+
+  Future<void> _showEditDispositionSheet(
+    BuildContext context,
+    PropertyDisposition disposition,
+  ) async {
+    final saved = await showPropertyDispositionFormSheet(
+      context,
+      propertyId: _property.id,
+      disposition: disposition,
+    );
+    if (saved && mounted) await _refreshAfterDispositionChange();
+  }
+
+  Future<void> _refreshAfterDispositionChange() async {
+    final propertyId = _property.id;
+    await Future.wait<void>([
+      ref.read(propertyDispositionsProvider(propertyId).notifier).refresh(),
+      ref.read(propertyCapitalAssetsProvider(propertyId).notifier).refresh(),
+      ref.read(unitsProvider(propertyId).notifier).refresh(),
+      ref.read(propertyLeasesProvider(propertyId).notifier).refresh(),
+      ref.read(propertiesProvider.notifier).refresh(),
+      ref.read(propertiesRepositoryProvider).getProperty(propertyId).then((
+        property,
+      ) {
+        if (mounted) setState(() => _property = property);
+      }),
+    ]);
+  }
+
+  Future<void> _confirmDeleteDisposition(
+    BuildContext context,
+    PropertyDisposition disposition,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove property sale?'),
+        content: const Text(
+          'This removes the disposition record from this property.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(propertyDispositionsRepositoryProvider)
+          .deleteDisposition(disposition.id);
+      await ref
+          .read(propertyDispositionsProvider(_property.id).notifier)
+          .refresh();
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Property sale removed.')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not remove property sale.')),
+        );
+    }
+  }
+
   void _showActivityHistory() {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -362,6 +535,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final unitsAsync = ref.watch(unitsProvider(property.id));
     final leasesAsync = ref.watch(propertyLeasesProvider(property.id));
     final loansAsync = ref.watch(propertyLoansProvider(property.id));
+    final capitalAssetsAsync = ref.watch(
+      propertyCapitalAssetsProvider(property.id),
+    );
+    final dispositionsAsync = ref.watch(
+      propertyDispositionsProvider(property.id),
+    );
     final propertyIsUnit = isPropertyUnitType(property.type);
 
     return Scaffold(
@@ -543,6 +722,202 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                               : () => ref
                                     .read(
                                       propertyLoansProvider(
+                                        property.id,
+                                      ).notifier,
+                                    )
+                                    .loadMore(),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+
+            const SizedBox(height: 24),
+
+            // ── Capital assets section ───────────────────────────────────
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Capital Assets',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Add capital asset',
+                  icon: const Icon(Icons.add),
+                  onPressed: () => _showAddCapitalAssetSheet(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            capitalAssetsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => _InlineError(
+                message: e is ApiException ? e.message : e.toString(),
+              ),
+              data: (page) {
+                final assets = page.assets;
+                if (assets.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'No capital assets recorded for this property yet.',
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
+                    ),
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...assets.map(
+                      (asset) => _CapitalAssetTile(
+                        asset: asset,
+                        onEdit: () =>
+                            _showEditCapitalAssetSheet(context, asset),
+                        onDelete: () =>
+                            _confirmDeleteCapitalAsset(context, asset),
+                      ),
+                    ),
+                    if (page.loadMoreError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        child: Text(
+                          page.loadMoreError is ApiException
+                              ? (page.loadMoreError! as ApiException).message
+                              : 'Could not load more capital assets.',
+                          style: TextStyle(
+                            color: colorScheme.error,
+                            fontSize: 12,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    if (page.hasMore || page.isLoadingMore)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: OutlinedButton.icon(
+                          icon: page.isLoadingMore
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.expand_more),
+                          label: Text(
+                            page.isLoadingMore
+                                ? 'Loading assets...'
+                                : 'Load more assets',
+                          ),
+                          onPressed: page.isLoadingMore
+                              ? null
+                              : () => ref
+                                    .read(
+                                      propertyCapitalAssetsProvider(
+                                        property.id,
+                                      ).notifier,
+                                    )
+                                    .loadMore(),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+
+            const SizedBox(height: 24),
+
+            // ── Property disposition section ─────────────────────────────
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Property Sale / Disposition',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Record property sale',
+                  icon: const Icon(Icons.add),
+                  onPressed: () => _showAddDispositionSheet(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            dispositionsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => _InlineError(
+                message: e is ApiException ? e.message : e.toString(),
+              ),
+              data: (page) {
+                final dispositions = page.dispositions;
+                if (dispositions.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'No sale or disposition recorded for this property.',
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
+                    ),
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...dispositions.map(
+                      (disposition) => _DispositionTile(
+                        disposition: disposition,
+                        onEdit: () =>
+                            _showEditDispositionSheet(context, disposition),
+                        onDelete: () =>
+                            _confirmDeleteDisposition(context, disposition),
+                      ),
+                    ),
+                    if (page.loadMoreError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, bottom: 8),
+                        child: Text(
+                          page.loadMoreError is ApiException
+                              ? (page.loadMoreError! as ApiException).message
+                              : 'Could not load more property sales.',
+                          style: TextStyle(
+                            color: colorScheme.error,
+                            fontSize: 12,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    if (page.hasMore || page.isLoadingMore)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: OutlinedButton.icon(
+                          icon: page.isLoadingMore
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.expand_more),
+                          label: Text(
+                            page.isLoadingMore
+                                ? 'Loading property sales...'
+                                : 'Load more property sales',
+                          ),
+                          onPressed: page.isLoadingMore
+                              ? null
+                              : () => ref
+                                    .read(
+                                      propertyDispositionsProvider(
                                         property.id,
                                       ).notifier,
                                     )
@@ -885,6 +1260,247 @@ class _LeaseTile extends StatelessWidget {
   }
 }
 
+// ── Capital asset tile ───────────────────────────────────────────────────────
+
+class _CapitalAssetTile extends StatelessWidget {
+  const _CapitalAssetTile({
+    required this.asset,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final CapitalAsset asset;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final disposed = asset.disposedOnDate != null;
+
+    return Card(
+      key: Key('capital-asset-${asset.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 4),
+              leading: CircleAvatar(
+                radius: 20,
+                backgroundColor: disposed
+                    ? colorScheme.surfaceContainerHighest
+                    : colorScheme.primaryContainer,
+                child: Icon(
+                  Icons.home_repair_service_outlined,
+                  size: 18,
+                  color: disposed
+                      ? colorScheme.onSurfaceVariant
+                      : colorScheme.onPrimaryContainer,
+                ),
+              ),
+              title: Text(
+                asset.description,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                '${money.moneyFmt(asset.costBasis)} basis  ·  '
+                '${asset.method.label} ${_decimalLabel(asset.recoveryYears)} yrs',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    onPressed: onEdit,
+                    tooltip: 'Edit capital asset',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    onPressed: onDelete,
+                    tooltip: 'Delete capital asset',
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  _ScheduleMetric(
+                    label: 'In service',
+                    value: _formatDate(asset.inServiceDate),
+                  ),
+                  _ScheduleMetric(
+                    label: '${asset.depreciationYear} depreciation',
+                    value: money.moneyFmt(asset.annualDepreciation),
+                  ),
+                  _ScheduleMetric(
+                    label: 'Accumulated',
+                    value: money.moneyFmt(asset.accumulatedDepreciation),
+                  ),
+                  if (asset.sourceExpenseDescription != null)
+                    _ScheduleMetric(
+                      label: 'Source expense',
+                      value: asset.sourceExpenseDescription!,
+                    ),
+                  if (asset.disposedOnDate != null)
+                    _ScheduleMetric(
+                      label: 'Disposed',
+                      value: _formatDate(asset.disposedOnDate!),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Property disposition tile ────────────────────────────────────────────────
+
+class _DispositionTile extends StatelessWidget {
+  const _DispositionTile({
+    required this.disposition,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final PropertyDisposition disposition;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final gainIsPositive = disposition.gainLoss >= 0;
+
+    return Card(
+      key: Key('property-disposition-${disposition.id}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 4),
+              leading: CircleAvatar(
+                radius: 20,
+                backgroundColor: gainIsPositive
+                    ? colorScheme.primaryContainer
+                    : colorScheme.errorContainer,
+                child: Icon(
+                  Icons.sell_outlined,
+                  size: 18,
+                  color: gainIsPositive
+                      ? colorScheme.onPrimaryContainer
+                      : colorScheme.onErrorContainer,
+                ),
+              ),
+              title: Text(
+                'Closed ${_formatDate(disposition.closedOnDate)}',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                '${money.moneyFmt(disposition.salePrice)} sale price  ·  '
+                '${money.moneyFmt(disposition.gainLoss)} ${gainIsPositive ? 'gain' : 'loss'}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    onPressed: onEdit,
+                    tooltip: 'Edit property sale',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    onPressed: onDelete,
+                    tooltip: 'Delete property sale',
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  _ScheduleMetric(
+                    label: 'Net proceeds',
+                    value: money.moneyFmt(disposition.netSaleProceeds),
+                  ),
+                  _ScheduleMetric(
+                    label: 'Adjusted basis',
+                    value: money.moneyFmt(disposition.adjustedBasis),
+                  ),
+                  _ScheduleMetric(
+                    label: 'Sale-year depreciation',
+                    value: money.moneyFmt(disposition.saleYearDepreciation),
+                  ),
+                  _ScheduleMetric(
+                    label: 'Total depreciation',
+                    value: money.moneyFmt(disposition.totalDepreciation),
+                  ),
+                  _ScheduleMetric(
+                    label: 'Section 1250 est.',
+                    value: money.moneyFmt(
+                      disposition.unrecapturedSection1250Gain,
+                    ),
+                  ),
+                  if (disposition.sellingCosts > 0)
+                    _ScheduleMetric(
+                      label: 'Selling costs',
+                      value: money.moneyFmt(disposition.sellingCosts),
+                    ),
+                  if (disposition.buyerName != null &&
+                      disposition.buyerName!.isNotEmpty)
+                    _ScheduleMetric(
+                      label: 'Buyer',
+                      value: disposition.buyerName!,
+                    ),
+                ],
+              ),
+            ),
+            if (disposition.memo != null && disposition.memo!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: Text(
+                  disposition.memo!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Loan tile ────────────────────────────────────────────────────────────────
 
 class _LoanTile extends ConsumerStatefulWidget {
@@ -1187,6 +1803,10 @@ String _loanPaymentStatusLabel(String status) => switch (status) {
   'Scheduled' => 'Scheduled',
   _ => status,
 };
+
+String _decimalLabel(double value) => value == value.roundToDouble()
+    ? value.toStringAsFixed(0)
+    : value.toString();
 
 // ── Inline error ──────────────────────────────────────────────────────────────
 

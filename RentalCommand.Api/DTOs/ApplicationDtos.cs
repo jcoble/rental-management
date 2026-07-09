@@ -343,6 +343,23 @@ public class DeclineApplicationRequest
     public string? Reason { get; set; }
 }
 
+/// <summary>
+/// Records a real application/screening fee as income against an application, before any lease exists.
+/// The property is taken from the application; the payment is created Paid.
+/// </summary>
+public class RecordApplicationFeeRequest
+{
+    [Range(0.01, 99999999)]
+    public decimal Amount { get; set; }
+
+    /// <summary>How the fee was paid (e.g. Card, Cash, Check); free text, optional.</summary>
+    [MaxLength(100)]
+    public string? Method { get; set; }
+
+    /// <summary>When the fee was received; defaults to now when omitted.</summary>
+    public DateTime? PaidDate { get; set; }
+}
+
 /// <summary>Result of approving an application: the new status plus the tenant that was created.</summary>
 public class ApproveApplicationResult
 {

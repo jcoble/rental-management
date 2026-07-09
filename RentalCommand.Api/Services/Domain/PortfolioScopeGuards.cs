@@ -36,6 +36,10 @@ internal static class PortfolioScopeGuards
     public static Task<bool> EnsureLeaseInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int leaseId, CancellationToken ct)
         => db.Leases.AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
 
+    /// <summary>The referenced rental application must live in the caller's portfolio.</summary>
+    public static Task<bool> EnsureApplicationInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int applicationId, CancellationToken ct)
+        => db.RentalApplications.AnyAsync(a => a.Id == applicationId && a.PortfolioId == portfolioId, ct);
+
     /// <summary>The referenced vendor must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureVendorInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int vendorId, CancellationToken ct)
         => db.Vendors.AnyAsync(v => v.Id == vendorId && v.PortfolioId == portfolioId, ct);
@@ -51,4 +55,8 @@ internal static class PortfolioScopeGuards
     /// <summary>The referenced owner entity (legal owner) must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureOwnerEntityInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int ownerEntityId, CancellationToken ct)
         => db.OwnerEntities.AnyAsync(e => e.Id == ownerEntityId && e.PortfolioId == portfolioId, ct);
+
+    /// <summary>The referenced capital asset must live in the caller's portfolio.</summary>
+    public static Task<bool> EnsureCapitalAssetInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int capitalAssetId, CancellationToken ct)
+        => db.CapitalAssets.AnyAsync(a => a.Id == capitalAssetId && a.PortfolioId == portfolioId, ct);
 }

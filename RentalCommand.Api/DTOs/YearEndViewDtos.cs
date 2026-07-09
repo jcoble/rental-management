@@ -20,6 +20,9 @@ public class YearEndViewResponse
     /// <summary>Block 3 — rent roll: one row per current lease.</summary>
     public IReadOnlyList<YearEndRentRollRow> RentRoll { get; set; } = [];
 
+    /// <summary>Property sales/dispositions closed during the tax year, with estimated gain/loss fields.</summary>
+    public IReadOnlyList<PropertyDispositionResponse> PropertyDispositions { get; set; } = [];
+
     /// <summary>
     /// "See your accountant" caveats (spec §18) the owner must never trust the raw numbers past — the
     /// figures above do NOT model these, so the UI surfaces them as labels.

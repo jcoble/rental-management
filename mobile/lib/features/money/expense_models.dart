@@ -92,6 +92,7 @@ class Expense {
     this.propertyId,
     this.vendorId,
     this.workOrderId,
+    this.capitalizedAssetId,
     required this.category,
     required this.description,
     required this.status,
@@ -120,6 +121,7 @@ class Expense {
   final int? propertyId;
   final int? vendorId;
   final int? workOrderId;
+  final int? capitalizedAssetId;
   final ScheduleECategory category;
   final String description;
   final ExpenseStatus status;
@@ -149,6 +151,7 @@ class Expense {
       propertyId: (json['propertyId'] as num?)?.toInt(),
       vendorId: (json['vendorId'] as num?)?.toInt(),
       workOrderId: (json['workOrderId'] as num?)?.toInt(),
+      capitalizedAssetId: (json['capitalizedAssetId'] as num?)?.toInt(),
       category: ScheduleECategory.fromWire(json['category'] as String?),
       description: json['description'] as String? ?? '',
       status: ExpenseStatus.fromWire(json['status'] as String?),

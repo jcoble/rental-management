@@ -20,7 +20,7 @@ import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { fetchApi, refreshToken } from '../client';
 
 /** The entity types the CSV importer supports (case-insensitive on the wire). */
-export type ImportEntityType = 'tenant' | 'property' | 'unit';
+export type ImportEntityType = 'tenant' | 'property' | 'unit' | 'payment' | 'expense' | 'loan';
 
 /** One row of the dry-run / import result, 1-based as in the spreadsheet. */
 export interface ImportRowResult {
@@ -28,6 +28,8 @@ export interface ImportRowResult {
 	rowNumber: number;
 	valid: boolean;
 	errors: string[];
+	isDuplicate: boolean;
+	skipReason: string | null;
 	/** Set only on a real (non-dry-run) import once the row is created. */
 	createdId: number | null;
 }
@@ -38,6 +40,7 @@ export interface ImportResult {
 	dryRun: boolean;
 	totalRows: number;
 	validRows: number;
+	duplicateRows: number;
 	createdRows: number;
 	rows: ImportRowResult[];
 }

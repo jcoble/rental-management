@@ -26,6 +26,11 @@ String _fmtCurrency(double amount) {
   return '\$${isNegative ? '-' : ''}$buf.$decPart';
 }
 
+String _fmtDate(DateTime value) {
+  final local = value.toLocal();
+  return '${local.month}/${local.day}/${local.year}';
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 /// Owner reports screen — year selector + owner list.
@@ -360,7 +365,13 @@ class _OwnerSummaryListItem extends StatelessWidget {
       ),
       supporting: [
         Text(
-          'Net to owner',
+          'Distributed ${_fmtCurrency(owner.totalDistributed)}',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+        Text(
+          'Undistributed ${_fmtCurrency(owner.undistributed)}',
           style: theme.textTheme.bodySmall?.copyWith(
             color: cs.onSurfaceVariant,
           ),
@@ -461,25 +472,129 @@ class _OwnerStatementSheet extends ConsumerWidget {
   }
 }
 
-class _StatementBody extends StatelessWidget {
+class _StatementBody extends ConsumerWidget {
   const _StatementBody({required this.statement});
 
   final OwnerStatement statement;
 
+  OwnerDistributionQuery get _distributionQuery => OwnerDistributionQuery(
+        ownerEntityId: statement.ownerId,
+        year: statement.year,
+      );
+
+  Future<void> _refreshAfterDistribution(WidgetRef ref) async {
+    ref.invalidate(ownerDistributionsProvider(_distributionQuery));
+    await ref.read(ownerStatementProvider.notifier).load(
+          statement.ownerId,
+          statement.year,
+        );
+    await ref.read(ownerSummariesProvider.notifier).refresh();
+  }
+
+  Future<void> _recordDistribution(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final input = await showDialog<CreateOwnerDistributionInput>(
+      context: context,
+      builder: (_) => _RecordDistributionDialog(statement: statement),
+    );
+    if (input == null || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(ownerReportsRepositoryProvider).createDistribution(input);
+      await _refreshAfterDistribution(ref);
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Owner distribution recorded.')),
+        );
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  Future<void> _deleteDistribution(
+    BuildContext context,
+    WidgetRef ref,
+    OwnerDistribution distribution,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete distribution?'),
+        content: Text(
+          'Remove the ${_fmtCurrency(distribution.amount)} '
+          '${distribution.method.label} distribution from '
+          '${_fmtDate(distribution.date)}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(ownerReportsRepositoryProvider)
+          .deleteDistribution(distribution.id);
+      await _refreshAfterDistribution(ref);
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Owner distribution deleted.')),
+        );
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final distributionsAsync = ref.watch(
+      ownerDistributionsProvider(_distributionQuery),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Year badge
-        Text(
-          '${statement.year} Annual Statement',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: cs.onSurfaceVariant,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Text(
+                '${statement.year} Annual Statement',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: () => _recordDistribution(context, ref),
+              icon: const Icon(Icons.payments_outlined, size: 18),
+              label: const Text('Record distribution'),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
 
@@ -516,9 +631,31 @@ class _StatementBody extends StatelessWidget {
                   textColor: cs.onPrimaryContainer,
                   bold: true,
                 ),
+                _StatRow(
+                  label: 'Distributed',
+                  value: _fmtCurrency(statement.totalDistributed),
+                  theme: theme,
+                  textColor: cs.onPrimaryContainer,
+                ),
+                const Divider(height: 12),
+                _StatRow(
+                  label: 'Undistributed',
+                  value: _fmtCurrency(statement.undistributed),
+                  theme: theme,
+                  textColor: cs.onPrimaryContainer,
+                  bold: true,
+                ),
               ],
             ),
           ),
+        ),
+
+        const SizedBox(height: 16),
+
+        _DistributionsSection(
+          distributionsAsync: distributionsAsync,
+          onDelete: (distribution) =>
+              _deleteDistribution(context, ref, distribution),
         ),
 
         const SizedBox(height: 16),
@@ -577,6 +714,308 @@ class _StatementBody extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+class _DistributionsSection extends StatelessWidget {
+  const _DistributionsSection({
+    required this.distributionsAsync,
+    required this.onDelete,
+  });
+
+  final AsyncValue<List<OwnerDistribution>> distributionsAsync;
+  final ValueChanged<OwnerDistribution> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Distributions',
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: distributionsAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (e, _) => Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                e is ApiException ? e.message : e.toString(),
+                style: TextStyle(color: cs.error),
+              ),
+            ),
+            data: (items) {
+              if (items.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'No distributions recorded for this year.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                );
+              }
+
+              return Column(
+                children: [
+                  for (var i = 0; i < items.length; i++) ...[
+                    _DistributionTile(
+                      distribution: items[i],
+                      onDelete: () => onDelete(items[i]),
+                    ),
+                    if (i != items.length - 1)
+                      const MobileM3ListDivider(indent: 16),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DistributionTile extends StatelessWidget {
+  const _DistributionTile({
+    required this.distribution,
+    required this.onDelete,
+  });
+
+  final OwnerDistribution distribution;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final subtitleParts = [
+      _fmtDate(distribution.date),
+      distribution.method.label,
+      if (distribution.propertyName != null &&
+          distribution.propertyName!.trim().isNotEmpty)
+        distribution.propertyName!,
+    ];
+
+    return ListTile(
+      leading: CircleAvatar(
+        backgroundColor: cs.secondaryContainer,
+        foregroundColor: cs.onSecondaryContainer,
+        child: const Icon(Icons.payments_outlined, size: 20),
+      ),
+      title: Text(
+        _fmtCurrency(distribution.amount),
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      subtitle: Text(
+        [
+          subtitleParts.join(' • '),
+          if (distribution.memo != null &&
+              distribution.memo!.trim().isNotEmpty)
+            distribution.memo!,
+        ].join('\n'),
+      ),
+      isThreeLine:
+          distribution.memo != null && distribution.memo!.trim().isNotEmpty,
+      trailing: IconButton(
+        tooltip: 'Delete distribution',
+        icon: const Icon(Icons.delete_outline),
+        color: cs.error,
+        onPressed: onDelete,
+      ),
+    );
+  }
+}
+
+class _RecordDistributionDialog extends StatefulWidget {
+  const _RecordDistributionDialog({required this.statement});
+
+  final OwnerStatement statement;
+
+  @override
+  State<_RecordDistributionDialog> createState() =>
+      _RecordDistributionDialogState();
+}
+
+class _RecordDistributionDialogState
+    extends State<_RecordDistributionDialog> {
+  final _amountController = TextEditingController();
+  final _memoController = TextEditingController();
+  DateTime _date = DateTime.now();
+  DistributionMethod _method = DistributionMethod.ach;
+  int _propertyId = -1;
+  String? _amountError;
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _memoController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(_date.year - 5),
+      lastDate: DateTime(_date.year + 1),
+    );
+    if (picked != null) setState(() => _date = picked);
+  }
+
+  void _submit() {
+    final amount = double.tryParse(_amountController.text.trim());
+    if (amount == null || amount <= 0) {
+      setState(() => _amountError = 'Enter an amount greater than zero.');
+      return;
+    }
+
+    final memo = _memoController.text.trim();
+    Navigator.of(context).pop(
+      CreateOwnerDistributionInput(
+        ownerEntityId: widget.statement.ownerId,
+        propertyId: _propertyId <= 0 ? null : _propertyId,
+        date: _date,
+        amount: amount,
+        method: _method,
+        memo: memo.isEmpty ? null : memo,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final propertyItems = [
+      const DropdownMenuItem<int>(
+        value: -1,
+        child: Text('No property'),
+      ),
+      ...widget.statement.properties
+          .where((p) => p.propertyId > 0)
+          .map(
+            (p) => DropdownMenuItem<int>(
+              value: p.propertyId,
+              child: Text(p.propertyName),
+            ),
+          ),
+    ];
+
+    return AlertDialog(
+      title: const Text('Record distribution'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Record cash actually paid to this owner. This does not '
+                'create an expense or reduce property income.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _amountController,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Amount',
+                  prefixText: '\$ ',
+                  border: const OutlineInputBorder(),
+                  errorText: _amountError,
+                ),
+                onChanged: (_) {
+                  if (_amountError != null) {
+                    setState(() => _amountError = null);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<DistributionMethod>(
+                initialValue: _method,
+                decoration: const InputDecoration(
+                  labelText: 'Method',
+                  border: OutlineInputBorder(),
+                ),
+                items: DistributionMethod.values
+                    .map(
+                      (method) => DropdownMenuItem(
+                        value: method,
+                        child: Text(method.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setState(() => _method = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: _propertyId,
+                decoration: const InputDecoration(
+                  labelText: 'Property',
+                  border: OutlineInputBorder(),
+                ),
+                items: propertyItems,
+                onChanged: (value) {
+                  if (value != null) setState(() => _propertyId = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _memoController,
+                minLines: 2,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Memo (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Date: ${_date.toIso8601String().split('T').first}',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                  ),
+                  TextButton(onPressed: _pickDate, child: const Text('Change')),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Record')),
       ],
     );
   }

@@ -69,7 +69,14 @@ class PaymentDetailScreen extends ConsumerWidget {
       ref.invalidate(paymentDetailProvider(payment.id));
       ref.invalidate(paymentsPageProvider);
       ref.invalidate(paymentsProvider);
-      ref.invalidate(leasePaymentsProvider(payment.leaseId));
+      final leaseId = payment.leaseId;
+      if (leaseId != null) {
+        ref.invalidate(leasePaymentsProvider(leaseId));
+      }
+      final applicationId = payment.applicationId;
+      if (applicationId != null) {
+        ref.invalidate(applicationPaymentsProvider(applicationId));
+      }
       ref.invalidate(transactionsProvider);
       await ref.read(accountingSummaryProvider.notifier).refresh();
       if (!context.mounted) return;
@@ -145,7 +152,14 @@ class _PaymentBody extends ConsumerWidget {
     if (updated == null) return;
     ref.invalidate(paymentDetailProvider(payment.id));
     // Keep any lease payments section in sync after an inline record.
-    ref.invalidate(leasePaymentsProvider(payment.leaseId));
+    final leaseId = payment.leaseId;
+    if (leaseId != null) {
+      ref.invalidate(leasePaymentsProvider(leaseId));
+    }
+    final applicationId = payment.applicationId;
+    if (applicationId != null) {
+      ref.invalidate(applicationPaymentsProvider(applicationId));
+    }
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Payment recorded.')));
@@ -162,8 +176,11 @@ class _PaymentBody extends ConsumerWidget {
     );
     if (newLeaseId == null) return;
     ref.invalidate(paymentDetailProvider(payment.id));
-    ref.invalidate(leasePaymentsProvider(payment.leaseId));
-    if (newLeaseId != payment.leaseId) {
+    final currentLeaseId = payment.leaseId;
+    if (currentLeaseId != null) {
+      ref.invalidate(leasePaymentsProvider(currentLeaseId));
+    }
+    if (newLeaseId != currentLeaseId) {
       ref.invalidate(leasePaymentsProvider(newLeaseId));
     }
   }
@@ -178,7 +195,10 @@ class _PaymentBody extends ConsumerWidget {
     if (!uploaded) return;
     ref.invalidate(paymentDetailProvider(payment.id));
     ref.invalidate(paymentReceiptProvider(payment.id));
-    ref.invalidate(leasePaymentsProvider(payment.leaseId));
+    final leaseId = payment.leaseId;
+    if (leaseId != null) {
+      ref.invalidate(leasePaymentsProvider(leaseId));
+    }
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(content: Text('Receipt uploaded.')));
@@ -236,8 +256,12 @@ class _PaymentBody extends ConsumerWidget {
           label: 'Lease',
           value: leaseDisplay.isNotEmpty
               ? leaseDisplay
-              : 'Lease #${payment.leaseId}',
-          onTap: () => _openLease(context, ref),
+              : payment.leaseId != null
+              ? 'Lease #${payment.leaseId}'
+              : 'None',
+          onTap: payment.leaseId == null
+              ? null
+              : () => _openLease(context, ref),
         ),
         _DetailRow(label: 'Due', value: dateFmt(payment.dueDate)),
         if (payment.paidDate != null)
@@ -324,12 +348,15 @@ class _PaymentBody extends ConsumerWidget {
   /// payment, so push a screen that fetches the full lease via
   /// [leaseDetailProvider] and then shows the standard lease detail.
   void _openLease(BuildContext context, WidgetRef ref) {
+    final leaseId = payment.leaseId;
+    if (leaseId == null) return;
+
     final shellNavigator = mobileShellNavigatorOf(context);
     if (shellNavigator != null) {
       shellNavigator.openTab(
         MobileShellTabId.rentals,
         destination: MobileDestinationId.units,
-        detailBuilder: (_) => LeaseDetailLoaderScreen(leaseId: payment.leaseId),
+        detailBuilder: (_) => LeaseDetailLoaderScreen(leaseId: leaseId),
       );
       revealMobileShellIfDetached(context);
       return;
@@ -337,7 +364,7 @@ class _PaymentBody extends ConsumerWidget {
 
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => LeaseDetailLoaderScreen(leaseId: payment.leaseId),
+        builder: (_) => LeaseDetailLoaderScreen(leaseId: leaseId),
       ),
     );
   }

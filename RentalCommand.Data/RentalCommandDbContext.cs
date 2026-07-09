@@ -17,6 +17,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Owner> Owners => Set<Owner>();
     public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
+    public DbSet<OwnerDistribution> OwnerDistributions => Set<OwnerDistribution>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<UnitListing> UnitListings => Set<UnitListing>();
@@ -28,6 +29,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<ExpenseLineItem> ExpenseLineItems => Set<ExpenseLineItem>();
+    public DbSet<CapitalAsset> CapitalAssets => Set<CapitalAsset>();
+    public DbSet<PropertyDisposition> PropertyDispositions => Set<PropertyDisposition>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<VendorDispatch> VendorDispatches => Set<VendorDispatch>();
     public DbSet<VendorRating> VendorRatings => Set<VendorRating>();
@@ -80,6 +83,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Loan> Loans => Set<Loan>();
     public DbSet<LoanPayment> LoanPayments => Set<LoanPayment>();
     public DbSet<RecurringExpense> RecurringExpenses => Set<RecurringExpense>();
+    public DbSet<EvictionCase> EvictionCases => Set<EvictionCase>();
+    public DbSet<EvictionCaseEvent> EvictionCaseEvents => Set<EvictionCaseEvent>();
 
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
     public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
@@ -205,6 +210,29 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(p => p.OwnerEntities)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OwnerDistribution>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Method).HasConversion<int>();
+            entity.Property(e => e.Memo).HasMaxLength(500);
+            entity.HasIndex(e => new { e.PortfolioId, e.OwnerEntityId, e.Date });
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.OwnerEntity)
+                .WithMany()
+                .HasForeignKey(e => e.OwnerEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<StoredFile>(entity =>
@@ -1086,10 +1114,24 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(p => p.Payments)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+            // Optional lease (nullable FK): a lease-less payment (application fee) has LeaseId == null.
+            // SetNull (not Cascade) so deleting a lease never cascade-deletes historical payment/income rows.
             entity.HasOne(e => e.Lease)
                 .WithMany(l => l.Payments)
                 .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.SetNull);
+            // Optional application/property links for lease-less income (application/screening fees).
+            // SetNull so deleting an application or property never removes the income record. ApplicationId
+            // is not soft-delete-joined, so no query-filter guard is needed (mirrors ScreeningResult).
+            entity.HasIndex(e => e.ApplicationId);
+            entity.HasOne(e => e.Application)
+                .WithMany()
+                .HasForeignKey(e => e.ApplicationId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Expense>(entity =>
@@ -1112,6 +1154,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.WorkOrderId);
+            entity.HasIndex(e => e.CapitalizedAssetId);
             entity.HasIndex(e => e.Status);
             // #2 Every financial report + the grid Expense date-range filter buckets expenses by
             // IncurredAt (accrual) and PaidAt (cash-basis / Schedule E), portfolio-scoped.
@@ -1145,6 +1188,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(w => w.Expenses)
                 .HasForeignKey(e => e.WorkOrderId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.CapitalizedAsset)
+                .WithMany()
+                .HasForeignKey(e => e.CapitalizedAssetId)
+                .OnDelete(DeleteBehavior.SetNull);
             entity.HasMany(e => e.LineItems)
                 .WithOne(li => li.Expense)
                 .HasForeignKey(li => li.ExpenseId)
@@ -1159,6 +1206,63 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.HasIndex(e => e.ExpenseId);
+        });
+
+        modelBuilder.Entity<CapitalAsset>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.CostBasis).HasPrecision(18, 2);
+            entity.Property(e => e.Method).HasConversion<int>();
+            entity.Property(e => e.RecoveryYears).HasPrecision(9, 2);
+            entity.Property(e => e.Convention).HasConversion<int>();
+            entity.Property(e => e.AccumulatedDepreciation).HasPrecision(18, 2);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.UnitId);
+            entity.HasIndex(e => e.SourceExpenseId);
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.InServiceDate })
+                  .HasDatabaseName("IX_CapitalAssets_Portfolio_Property_InServiceDate");
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany(p => p.CapitalAssets)
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.SourceExpense)
+                .WithMany()
+                .HasForeignKey(e => e.SourceExpenseId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<PropertyDisposition>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SalePrice).HasPrecision(18, 2);
+            entity.Property(e => e.SellingCosts).HasPrecision(18, 2);
+            entity.Property(e => e.BuyerName).HasMaxLength(200);
+            entity.Property(e => e.Memo).HasMaxLength(1000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.ClosedOnDate);
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId })
+                .IsUnique()
+                .HasFilter("\"DeletedAt\" IS NULL")
+                .HasDatabaseName("IX_PropertyDispositions_Portfolio_Property_Active");
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany(p => p.Dispositions)
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Loan>(entity =>
@@ -1236,6 +1340,62 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.UnitId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<EvictionCase>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.CourtName).HasMaxLength(200);
+            entity.Property(e => e.CaseNumber).HasMaxLength(100);
+            entity.Property(e => e.Resolution).HasMaxLength(500);
+            entity.Property(e => e.Notes).HasMaxLength(1000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.Status })
+                .HasDatabaseName("IX_EvictionCases_Portfolio_Lease_Status");
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.Status })
+                .HasDatabaseName("IX_EvictionCases_Portfolio_Property_Status");
+            entity.HasIndex(e => new { e.PortfolioId, e.TenantId, e.Status })
+                .HasDatabaseName("IX_EvictionCases_Portfolio_Tenant_Status");
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Lease)
+                .WithMany(l => l.EvictionCases)
+                .HasForeignKey(e => e.LeaseId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Property)
+                .WithMany(p => p.EvictionCases)
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EvictionCaseEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.EventType).HasConversion<int>();
+            entity.Property(e => e.Notes).HasMaxLength(1000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.EvictionCaseId, e.EventDate });
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.EvictionCase)
+                .WithMany(e => e.Events)
+                .HasForeignKey(e => e.EvictionCaseId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Vendor>(entity =>
@@ -1772,7 +1932,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // ----------------------------------------------------------------------------------------
 
         // Dependents of Lease (Lease has `DeletedAt == null`). Payment is the H-4 root.
-        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        // Keep a payment when it is lease-less (LeaseId == null — an application/screening fee) OR it has a
+        // LIVE lease. EF composes the Lease soft-delete query filter into the `e.Lease` navigation, so
+        // `e.Lease != null` is true only for a non-deleted lease; a soft-deleted lease's payments are still
+        // hidden. This mirrors the accounting view's `p."LeaseId" IS NULL OR l."Id" IS NOT NULL` guard. Do NOT
+        // use `e.Lease!.DeletedAt == null` here: adding the lease-less OR forces a LEFT JOIN, and on the
+        // no-match (soft-deleted) side `l."DeletedAt" IS NULL` is true, which would resurface those payments.
+        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.LeaseId == null || e.Lease != null);
         modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<NoticeDraft>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);

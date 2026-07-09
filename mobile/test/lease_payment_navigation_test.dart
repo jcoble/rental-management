@@ -102,6 +102,7 @@ class _FakePaymentsRepository extends PaymentsRepository {
   @override
   Future<List<Payment>> listPayments({
     int? leaseId,
+    int? applicationId,
     String sort = '-createdAt',
     String? dueFrom,
     String? dueTo,

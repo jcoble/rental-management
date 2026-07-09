@@ -282,6 +282,29 @@ class _LedgerEntryCard extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      if (entry.isProrated) ...[
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: cs.primaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              'Prorated',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: cs.onPrimaryContainer,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                       if (_fmtDate(entry.date).isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text(

@@ -29,6 +29,16 @@ public class OwnerStatementService : IOwnerStatementService
         if (owner is null)
             return null;
 
+        var (start, end) = YearRange(year);
+        var totalDistributed = await _db.OwnerDistributions
+            .AsNoTracking()
+            .Where(d =>
+                d.PortfolioId == portfolioId &&
+                d.OwnerEntityId == ownerId &&
+                d.Date >= start &&
+                d.Date < end)
+            .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
+
         // ── Property lines ─────────────────────────────────────────────────────────────────────
         // Filter/sort each owned property and project its rent/expense aggregates in one translated
         // property query. DTO math/rounding stays post-query; no payment/expense rows are materialized.
@@ -78,6 +88,8 @@ public class OwnerStatementService : IOwnerStatementService
                 TotalExpenses = 0m,
                 TotalManagementFee = 0m,
                 TotalNetToOwner = 0m,
+                TotalDistributed = totalDistributed,
+                Undistributed = -totalDistributed,
             };
         }
 
@@ -86,18 +98,18 @@ public class OwnerStatementService : IOwnerStatementService
 
         foreach (var prop in propertyRows)
         {
-            var income   = Math.Round(prop.RentalIncome, 2);
+            var income = Math.Round(prop.RentalIncome, 2);
             var expenses = Math.Round(prop.Expenses, 2);
-            var mgmtFee  = Math.Round(income * (prop.ManagementFeePercent ?? 0m) / 100m, 2);
-            var net      = income - expenses - mgmtFee;
+            var mgmtFee = Math.Round(income * (prop.ManagementFeePercent ?? 0m) / 100m, 2);
+            var net = income - expenses - mgmtFee;
 
             lines.Add(new OwnerStatementPropertyLine(
-                PropertyId:    prop.Id,
-                PropertyName:  prop.Name,
-                RentalIncome:  income,
-                Expenses:      expenses,
+                PropertyId: prop.Id,
+                PropertyName: prop.Name,
+                RentalIncome: income,
+                Expenses: expenses,
                 ManagementFee: mgmtFee,
-                NetToOwner:    net));
+                NetToOwner: net));
         }
 
         // Totals are the sum of the ROUNDED per-line values above, so the statement foots exactly: a
@@ -108,16 +120,20 @@ public class OwnerStatementService : IOwnerStatementService
         // single query above sums the payment/expense rows per property in SQL. `lines` is just that
         // small per-property result set — already materialized to render the breakdown and bounded by the
         // owner's property count — so this roll-up is over a handful of rows, not a row scan.
+        var totalNetToOwner = lines.Sum(l => l.NetToOwner);
+
         return new OwnerStatementReport
         {
-            OwnerId            = owner.Id,
-            OwnerName          = owner.Name,
-            Year               = year,
-            Properties         = lines,
-            TotalIncome        = lines.Sum(l => l.RentalIncome),
-            TotalExpenses      = lines.Sum(l => l.Expenses),
+            OwnerId = owner.Id,
+            OwnerName = owner.Name,
+            Year = year,
+            Properties = lines,
+            TotalIncome = lines.Sum(l => l.RentalIncome),
+            TotalExpenses = lines.Sum(l => l.Expenses),
             TotalManagementFee = lines.Sum(l => l.ManagementFee),
-            TotalNetToOwner    = lines.Sum(l => l.NetToOwner),
+            TotalNetToOwner = totalNetToOwner,
+            TotalDistributed = totalDistributed,
+            Undistributed = totalNetToOwner - totalDistributed,
         };
     }
 
@@ -141,8 +157,34 @@ public class OwnerStatementService : IOwnerStatementService
             .OrderBy(o => o.OwnerName)
             .ToListAsync(ct);
 
+        var (start, end) = YearRange(year);
+        var distributedRows = await _db.OwnerDistributions
+            .AsNoTracking()
+            .Where(d =>
+                d.PortfolioId == portfolioId &&
+                d.Date >= start &&
+                d.Date < end)
+            .GroupBy(d => d.OwnerEntityId)
+            .Select(g => new
+            {
+                OwnerId = g.Key,
+                TotalDistributed = g.Sum(d => d.Amount),
+            })
+            .ToListAsync(ct);
+
+        var distributedByOwner = distributedRows.ToDictionary(d => d.OwnerId, d => d.TotalDistributed);
+
         return summaries
-            .Select(s => new OwnerStatementSummary(s.OwnerId, s.OwnerName, s.NetToOwner))
+            .Select(s =>
+            {
+                var totalDistributed = distributedByOwner.GetValueOrDefault(s.OwnerId);
+                return new OwnerStatementSummary(
+                    s.OwnerId,
+                    s.OwnerName,
+                    s.NetToOwner,
+                    totalDistributed,
+                    s.NetToOwner - totalDistributed);
+            })
             .ToList();
     }
 
@@ -194,6 +236,13 @@ public class OwnerStatementService : IOwnerStatementService
                         (e.PaidAt ?? e.IncurredAt) < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
             });
+    }
+
+    private static (DateTime Start, DateTime End) YearRange(int year)
+    {
+        return (
+            new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc));
     }
 
     private sealed class OwnerPropertyNetRow
