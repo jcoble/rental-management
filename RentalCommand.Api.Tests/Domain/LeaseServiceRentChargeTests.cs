@@ -10,6 +10,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
@@ -24,17 +25,122 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
 
     public LeaseServiceRentChargeTests()
     {
-        _sut = new LeaseService(
-            _ctx.Db,
-            new NoopDataUpdateService(),
-            Mock.Of<IFileStorage>(),
-            Mock.Of<ILeaseAgreementPdfGenerator>(),
-            new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
-            NullLogger<LeaseService>.Instance,
-            TimeProvider.System);
+        _sut = BuildSut();
     }
 
     public void Dispose() => _ctx.Dispose();
+
+    [Fact]
+    public async Task CreateAsync_ActiveMidMonthStart_ProratesFirstRentCharge()
+    {
+        var clock = new FixedTimeProvider(Date(2026, 7, 20));
+        var sut = BuildSut(clock);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-PRORATE-FIRST-001",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2026, 7, 15),
+            EndDate = Date(2027, 7, 1),
+            MonthlyRent = 3100m,
+            SecurityDeposit = 3100m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+            RentTrackingStartMode = RentTrackingStartMode.BackfillFromLeaseStart,
+        });
+
+        result.Should().NotBeNull();
+
+        var payment = await _ctx.Db.Payments
+            .AsNoTracking()
+            .SingleAsync(p => p.LeaseId == result!.Id);
+
+        payment.PeriodKey.Should().Be("2026-07");
+        payment.DueDate.Should().Be(Date(2026, 7, 1));
+        payment.Amount.Should().Be(1700m);
+
+        var ledger = await sut.GetLedgerAsync(PortfolioId, result!.Id);
+        ledger!.Entries.Should().ContainSingle();
+        ledger.Entries[0].IsProrated.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ThirtyDayConvention_UsesThirtyDayProration()
+    {
+        _ctx.Db.Portfolios.Single(p => p.Id == PortfolioId).Settings =
+            """{"prorationConvention":"ThirtyDay"}""";
+        await _ctx.Db.SaveChangesAsync();
+
+        var clock = new FixedTimeProvider(Date(2026, 2, 20));
+        var sut = BuildSut(clock);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-PRORATE-30-001",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2026, 2, 15),
+            EndDate = Date(2027, 2, 1),
+            MonthlyRent = 3000m,
+            SecurityDeposit = 3000m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+            RentTrackingStartMode = RentTrackingStartMode.BackfillFromLeaseStart,
+        });
+
+        result.Should().NotBeNull();
+
+        var payment = await _ctx.Db.Payments
+            .AsNoTracking()
+            .SingleAsync(p => p.LeaseId == result!.Id);
+
+        payment.Amount.Should().Be(1600m);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_MoveOutDateMidMonth_ProratesExistingUncollectedFinalRent()
+    {
+        var clock = new FixedTimeProvider(Date(2026, 8, 10));
+        var sut = BuildSut(clock);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        var lease = SeedLease(property, unit, tenant, LeaseStatus.Active, Date(2026, 8, 1));
+        lease.MonthlyRent = 3100m;
+        lease.EndDate = Date(2027, 8, 1);
+        _ctx.Db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 3100m,
+            DueDate = Date(2026, 8, 1),
+            PeriodKey = "2026-08",
+            CreatedAt = Date(2026, 8, 1),
+            UpdatedAt = Date(2026, 8, 1),
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.NoticeGiven,
+            MoveOutDate = Date(2026, 8, 16),
+        });
+
+        result.Should().NotBeNull();
+
+        var payment = await _ctx.Db.Payments
+            .AsNoTracking()
+            .SingleAsync(p => p.LeaseId == lease.Id && p.PeriodKey == "2026-08");
+
+        payment.Amount.Should().Be(1500m);
+    }
 
     [Fact]
     public async Task CreateAsync_ActivePastStartLease_BackfillCreatesRentChargesThroughToday()
@@ -596,6 +702,23 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     private static DateTime FirstOfMonth(DateTime value)
         => new(value.Year, value.Month, 1, 0, 0, 0, DateTimeKind.Utc);
 
+    private static DateTime Date(int year, int month, int day)
+        => new(year, month, day, 0, 0, 0, DateTimeKind.Utc);
+
+    private LeaseService BuildSut(TimeProvider? timeProvider = null)
+    {
+        var clock = timeProvider ?? TimeProvider.System;
+        return new LeaseService(
+            _ctx.Db,
+            new NoopDataUpdateService(),
+            Mock.Of<IFileStorage>(),
+            Mock.Of<ILeaseAgreementPdfGenerator>(),
+            new AuditTrailService(_ctx.Db, new AuditScope(), clock),
+            NullLogger<LeaseService>.Instance,
+            clock,
+            tz: new FixedTimeZoneProvider(TimeZoneInfo.Utc));
+    }
+
     private (Property property, Unit unit, Tenant tenant) SeedPropertyUnitTenant()
     {
         var now = DateTime.UtcNow;
@@ -686,5 +809,15 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
+    }
+
+    private sealed class FixedTimeZoneProvider(TimeZoneInfo timeZone) : IAppTimeZoneProvider
+    {
+        public TimeZoneInfo BusinessTimeZone => timeZone;
     }
 }

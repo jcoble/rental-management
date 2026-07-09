@@ -48,6 +48,7 @@
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
+	import LeaseEvictionCasesSection from '$lib/components/records/LeaseEvictionCasesSection.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
@@ -1096,6 +1097,10 @@
 						<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" />
 					</DetailCard>
 
+					<div class="lg:col-span-2">
+						<LeaseEvictionCasesSection leaseId={lease.id} />
+					</div>
+
 					<!-- Original scanned document this lease was created from, served through the
 					     same-origin /lease-file proxy (distinct from the generated/e-signed agreement
 					     in the Agreement tab). Renders only when a scanned source file exists. -->
@@ -1576,6 +1581,11 @@
 											<div class="min-w-0">
 												<div class="flex items-center gap-1.5">
 													<p class="truncate text-sm font-medium">{entry.description}</p>
+													{#if entry.isProrated}
+														<span class="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="lease-ledger-prorated-chip">
+															Prorated
+														</span>
+													{/if}
 													{#if entry.explanation}
 														<HelpTooltip text={entry.explanation} label="Why this is here" />
 													{/if}

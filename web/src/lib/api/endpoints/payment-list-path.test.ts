@@ -21,4 +21,15 @@ describe('payment list paths', () => {
 	it('omits optional filters when they are not set', () => {
 		assert.equal(buildPaymentListPath(2, { take: 20 }), '/payments?take=20&portfolioId=2');
 	});
+
+	it('serializes application payment filters', () => {
+		assert.equal(
+			buildPaymentListPagePath(2, {
+				applicationId: 40,
+				take: 10,
+				sort: '-createdAt'
+			}),
+			'/payments/page?take=10&sort=-createdAt&portfolioId=2&applicationId=40'
+		);
+	});
 });

@@ -309,23 +309,27 @@
 	// Structured view of the portfolio settings JSON. The raw JSON blob is never shown to the
 	// landlord — known keys are real inputs and anything else is an "advanced" key/value row.
 	//   - rentCollectionDay → number field
+	//   - prorationConvention → rent proration rule for partial first/final periods
 	//   - messaging.{email,sms} → toggles (also read by the messages composer)
 	//   - everything else (one level deep) → labeled "advanced" rows OR preserved untouched
 	// Keys owned by OTHER save flows on this page (notifications.email is written by the separate
 	// "Notification Email" endpoint, which read-modify-writes this same JSON) are kept verbatim in
 	// `preserved` so saving the portfolio form never clobbers them.
 	type CustomRow = { id: number; key: string; value: string };
-	const MANAGED_KEYS = ['rentCollectionDay', 'messaging'];
+	type ProrationConvention = 'ActualDays' | 'ThirtyDay';
+	const MANAGED_KEYS = ['rentCollectionDay', 'prorationConvention', 'messaging'];
 	// Top-level keys that other UI sections / endpoints own. Round-tripped untouched, hidden here.
 	const PRESERVED_KEYS = ['notifications'];
 
 	let settingsModel = $state<{
 		rentCollectionDay: number;
+		prorationConvention: ProrationConvention;
 		messaging: { email: boolean; sms: boolean };
 		customRows: CustomRow[];
 		preserved: Record<string, unknown>;
 	}>({
 		rentCollectionDay: 1,
+		prorationConvention: 'ActualDays',
 		messaging: { email: false, sms: false },
 		customRows: [],
 		preserved: {},
@@ -352,6 +356,9 @@
 		const rentCollectionDay =
 			typeof rawDay === 'number' && Number.isFinite(rawDay) ? rawDay : 1;
 
+		const prorationConvention =
+			parsed.prorationConvention === 'ThirtyDay' ? 'ThirtyDay' : 'ActualDays';
+
 		const m =
 			parsed.messaging && typeof parsed.messaging === 'object' && !Array.isArray(parsed.messaging)
 				? (parsed.messaging as Record<string, unknown>)
@@ -377,7 +384,7 @@
 		nextRowId = rowId;
 		showAdvanced = customRows.length > 0;
 
-		settingsModel = { rentCollectionDay, messaging, customRows, preserved };
+		settingsModel = { rentCollectionDay, prorationConvention, messaging, customRows, preserved };
 	}
 
 	// Reassemble the settings JSON from the structured model, preserving untouched keys. Advanced
@@ -387,6 +394,7 @@
 		// Number inputs become null when cleared; keep the stored shape as a sane day-of-month.
 		const day = Number(settingsModel.rentCollectionDay);
 		out.rentCollectionDay = Number.isFinite(day) && day >= 1 ? day : 1;
+		out.prorationConvention = settingsModel.prorationConvention;
 		out.messaging = { email: settingsModel.messaging.email, sms: settingsModel.messaging.sms };
 		for (const row of settingsModel.customRows) {
 			const key = row.key.trim();
@@ -730,6 +738,29 @@
 										data-testid="settings-rent-collection-day"
 									/>
 									<p class="mt-1 text-xs text-muted-foreground">The day each month rent is considered due (1–31).</p>
+								</div>
+								<div>
+									<label for="settings-proration-convention" class="mb-1 block text-xs text-muted-foreground">
+										Partial-month rent
+									</label>
+									<Select.Root type="single" bind:value={settingsModel.prorationConvention}>
+										<Select.Trigger
+											class="w-full"
+											id="settings-proration-convention"
+											data-testid="settings-proration-convention"
+										>
+											{settingsModel.prorationConvention === 'ThirtyDay' ? '30-day month' : 'Actual days in month'}
+										</Select.Trigger>
+										<Select.Content>
+											<Select.Item value="ActualDays" label="Actual days in month">
+												Actual days in month
+											</Select.Item>
+											<Select.Item value="ThirtyDay" label="30-day month">
+												30-day month
+											</Select.Item>
+										</Select.Content>
+									</Select.Root>
+									<p class="mt-1 text-xs text-muted-foreground">Used for prorated first and final rent charges.</p>
 								</div>
 							</div>
 						</div>

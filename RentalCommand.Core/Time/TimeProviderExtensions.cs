@@ -14,6 +14,16 @@ public static class TimeProviderExtensions
     /// <summary>Replacement for <c>DateTime.UtcNow</c>; always <see cref="DateTimeKind.Utc"/>.</summary>
     public static DateTime UtcNow(this TimeProvider timeProvider) => timeProvider.GetUtcNow().UtcDateTime;
 
+    /// <summary>
+    /// Current calendar day in the configured business timezone, returned as a UTC-kind date-only
+    /// <see cref="DateTime"/> so rent/late-fee due-date math keeps storing UTC midnight values.
+    /// </summary>
+    public static DateTime BusinessToday(this TimeProvider timeProvider, IAppTimeZoneProvider tz)
+    {
+        var localToday = TimeZoneInfo.ConvertTimeFromUtc(timeProvider.UtcNow(), tz.BusinessTimeZone).Date;
+        return DateTime.SpecifyKind(localToday, DateTimeKind.Utc);
+    }
+
     /// <summary>Replacement for <c>DateTime.Today</c> where a UTC calendar day is intended.</summary>
     public static DateOnly TodayUtc(this TimeProvider timeProvider) =>
         DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);

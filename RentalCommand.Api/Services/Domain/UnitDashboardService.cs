@@ -132,7 +132,7 @@ public class UnitDashboardService : IUnitDashboardService
         var rent = await _db.Payments
             .AsNoTracking()
             .ForCurrentLeaseAttention(now)
-            .Where(p => p.PortfolioId == portfolioId && unitLeaseIds.Contains(p.LeaseId))
+            .Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && unitLeaseIds.Contains(p.LeaseId.Value))
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -205,14 +205,15 @@ public class UnitDashboardService : IUnitDashboardService
         // Overview: recent payments (newest by due date) + open work orders (newest requested first).
         var recentPayments = await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && unitLeaseIds.Contains(p.LeaseId))
+            .Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && unitLeaseIds.Contains(p.LeaseId.Value))
             .OrderByDescending(p => p.DueDate)
             .ThenByDescending(p => p.Id)
             .Take(OverviewTake)
             .Select(p => new UnitPaymentSummary
             {
                 Id = p.Id,
-                LeaseId = p.LeaseId,
+                // Unit-scoped payments are all lease-tied (filtered by the unit's lease ids above).
+                LeaseId = p.LeaseId!.Value,
                 Type = p.PaymentType.ToString(),
                 Status = p.Status.ToString(),
                 Amount = p.Amount,
@@ -462,7 +463,7 @@ public class UnitDashboardService : IUnitDashboardService
             .Select(l => l.Id);
 
         var paymentIds = _db.Payments.AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
+            .Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && leaseIds.Contains(p.LeaseId.Value))
             .Select(p => p.Id);
 
         var workOrderIds = _db.WorkOrders.AsNoTracking()
@@ -518,7 +519,7 @@ public class UnitDashboardService : IUnitDashboardService
         // materialized in API memory before the stored-file query runs.
         var workOrderIds = _db.WorkOrders.Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId).Select(w => w.Id);
         var inspectionIds = _db.Inspections.Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId).Select(i => i.Id);
-        var paymentIds = _db.Payments.Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId)).Select(p => p.Id);
+        var paymentIds = _db.Payments.Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && leaseIds.Contains(p.LeaseId.Value)).Select(p => p.Id);
         var expenseIds = _db.Expenses
             .Where(e => e.PortfolioId == portfolioId
                 && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))

@@ -7,10 +7,15 @@
 		type ScreeningResultResponse,
 		type AdverseActionNoticeResponse,
 		type UpdateApplicationRequest,
+		type RecordApplicationFeeRequest,
 	} from '$lib/api/endpoints/applications';
 	import { downloadDocument } from '$lib/api/endpoints/documents';
+	import { payments } from '$lib/api/endpoints/payments';
 	import { ApiError } from '$lib/api/client';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { parseForm, applicationFeeSchema } from '$lib/schemas';
 	import { showSuccess, showWarning, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import {
 		formatApplicationAddress,
 		canRunApplicationScreening,
@@ -43,6 +48,7 @@
 		Download,
 		User,
 		Edit3,
+		DollarSign,
 	} from '@lucide/svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
@@ -62,6 +68,7 @@
 
 	const queryClient = useQueryClient();
 	const id = $derived(applicationId);
+	const portfolioId = $derived(getCurrentPortfolioId());
 
 	const applicationQuery = createQuery(() => ({
 		queryKey: ['application', id],
@@ -70,6 +77,17 @@
 	}));
 
 	const application = $derived<ApplicationResponse | undefined>(applicationQuery.data);
+	const applicationFeesQuery = createQuery(() => ({
+		queryKey: ['payments', portfolioId, { applicationId: id }],
+		queryFn: () =>
+			payments.listPage(portfolioId, {
+				applicationId: id,
+				take: 10,
+				sort: '-createdAt',
+			}),
+		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
+	}));
+	const applicationFees = $derived(applicationFeesQuery.data?.items ?? []);
 
 	$effect(() => {
 		if (isMismatchedUnitSelection(application, expectedUnitId)) onUnitMismatch?.();
@@ -134,6 +152,53 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	// ── Record application fee (lease-less income against the application's property) ──────────────
+	let showRecordFee = $state(false);
+	let feeAmount = $state('');
+	let feeMethod = $state('');
+	let feePaidDate = $state('');
+	let feeErrors = $state<Record<string, string>>({});
+
+	function openRecordFee() {
+		feeAmount = '';
+		feeMethod = '';
+		feePaidDate = '';
+		feeErrors = {};
+		showRecordFee = true;
+	}
+
+	const recordFeeMutation = createMutation(() => ({
+		mutationFn: (body: RecordApplicationFeeRequest) => applications.recordFee(id, body),
+		onSuccess: () => {
+			showRecordFee = false;
+			showSuccess('Application fee recorded.');
+			queryClient.invalidateQueries({ queryKey: ['application', id] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['accounting-transactions'] });
+			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, { applicationId: id }] });
+			queryClient.invalidateQueries({ queryKey: ['payments'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function submitRecordFee() {
+		const result = parseForm(applicationFeeSchema, {
+			amount: feeAmount,
+			method: feeMethod,
+			paidDate: feePaidDate,
+		});
+		if (result.errors) {
+			feeErrors = result.errors;
+			return;
+		}
+		feeErrors = {};
+		recordFeeMutation.mutate({
+			amount: result.data.amount,
+			method: result.data.method ?? null,
+			paidDate: result.data.paidDate ?? null,
+		});
+	}
 
 	// ── Landlord corrections ─────────────────────────────────────────────────────
 	type ApplicationEditForm = {
@@ -398,6 +463,9 @@
 					<Button variant="outline" class="gap-2" onclick={openEditApplication} data-testid="application-edit">
 						<Edit3 class="h-4 w-4" /> Edit
 					</Button>
+					<Button variant="outline" class="gap-2" onclick={openRecordFee} data-testid="application-record-fee">
+						<DollarSign class="h-4 w-4" /> Record fee
+					</Button>
 					<Button class="gap-2" onclick={() => (showApprove = true)} data-testid="application-approve">
 						<CheckCircle2 class="h-4 w-4" /> Approve
 					</Button>
@@ -511,6 +579,46 @@
 					</Card.Content>
 				</Card.Root>
 			{/if}
+
+			<Card.Root class="lg:col-span-2" data-testid="application-fees-card">
+				<Card.Header>
+					<Card.Title class="flex items-center gap-2 text-base"><DollarSign class="h-4 w-4" /> Application fees</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					{#if applicationFeesQuery.isLoading}
+						<div class="flex items-center gap-2 text-sm text-muted-foreground" data-testid="application-fees-loading">
+							<div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
+							<span>Loading fees…</span>
+						</div>
+					{:else if applicationFeesQuery.isError}
+						<p class="text-sm text-destructive" data-testid="application-fees-error">
+							{apiErrorMessage(applicationFeesQuery.error, 'Could not load application fees.')}
+						</p>
+					{:else if applicationFees.length === 0}
+						<p class="text-sm text-muted-foreground" data-testid="application-fees-empty">
+							No application fees recorded.
+						</p>
+					{:else}
+						<div class="divide-y divide-border" data-testid="application-fees-list">
+							{#each applicationFees as payment (payment.id)}
+								<div class="flex flex-wrap items-start justify-between gap-3 py-3 first:pt-0 last:pb-0" data-testid="application-fee-row">
+									<div class="min-w-0">
+										<p class="text-sm font-medium text-foreground">{paymentTypeLabel(payment.paymentType)}</p>
+										<p class="mt-1 text-xs text-muted-foreground">
+											{payment.status}
+											· {fmtDate(payment.paidDate ?? payment.dueDate)}
+											{#if payment.method}
+												· {payment.method}
+											{/if}
+										</p>
+									</div>
+									<p class="text-sm font-semibold text-foreground">{fmtMoney(payment.amount)}</p>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</Card.Content>
+			</Card.Root>
 
 			{#if application.hasScan}
 				<Card.Root class="lg:col-span-2" data-testid="application-scan-card">
@@ -855,6 +963,57 @@
 				data-testid="application-adverse-action-confirm"
 			>
 				{adverseActionMutation.isPending ? 'Generating…' : 'Generate notice'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Record application fee (lease-less income against the application's property) -->
+<Dialog.Root open={showRecordFee} onOpenChange={(v) => { if (!v) showRecordFee = false; }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Record application fee</Dialog.Title>
+			<Dialog.Description>
+				Record a paid application/screening fee as income for {fullName}. It posts to the
+				application's property and shows on the accounting ledger and Schedule E — no lease required.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="application-fee-form">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
+				<Input
+					data-testid="application-fee-amount-input"
+					bind:value={feeAmount}
+					type="text"
+					inputmode="decimal"
+					mask="currency"
+					placeholder="0.00"
+				/>
+				{#if feeErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="application-fee-amount-error">{feeErrors.amount}</p>{/if}
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Method (optional)</span>
+				<Input
+					data-testid="application-fee-method-input"
+					bind:value={feeMethod}
+					placeholder="e.g. Card, Cash, Check"
+				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Paid date (optional)</span>
+				<DatePicker
+					id="application-fee-paid-date-input"
+					testid="application-fee-paid-date-input"
+					value={feePaidDate}
+					onchange={(v) => (feePaidDate = v)}
+					placeholder="Defaults to today"
+				/>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showRecordFee = false)} data-testid="application-fee-cancel">Cancel</Button>
+			<Button onclick={submitRecordFee} disabled={recordFeeMutation.isPending} data-testid="application-fee-save">
+				{recordFeeMutation.isPending ? 'Recording…' : 'Record fee'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

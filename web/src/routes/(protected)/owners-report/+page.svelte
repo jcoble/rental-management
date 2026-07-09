@@ -1,22 +1,39 @@
 <script lang="ts">
-	import { createMutation, createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { accounting, downloadOwnerStatementCsv } from '$lib/api/endpoints/accounting';
 	import { owners as ownersApi } from '$lib/api/endpoints/owners';
+	import {
+		ownerDistributions,
+		type CreateOwnerDistributionRequest,
+		type DistributionMethod,
+		type OwnerDistribution
+	} from '$lib/api/endpoints/owner-distributions';
 	import type { OwnerStatementSummary, OwnerStatementReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { FileBarChart, Mail } from '@lucide/svelte';
+	import { Input } from '$lib/components/ui/input';
+	import { FileBarChart, Mail, Plus, Trash2 } from '@lucide/svelte';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
+	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
+		{ value: 'Ach', label: 'ACH' },
+		{ value: 'Check', label: 'Check' },
+		{ value: 'Wire', label: 'Wire' },
+		{ value: 'Cash', label: 'Cash' },
+		{ value: 'Other', label: 'Other' }
+	];
 
+	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	let selectedYear = $state(String(CURRENT_YEAR));
 	let selectedOwnerId = $state<number | null>(null);
 	let downloading = $state(false);
+	let distributionFormContext = $state('');
+	let distributionForm = $state(makeDistributionForm(CURRENT_YEAR));
 
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owner-statements', portfolioId, selectedYear],
@@ -33,6 +50,18 @@
 	}));
 
 	const report = $derived(reportQuery.data as OwnerStatementReport | undefined);
+	const distributionQuery = createQuery(() => ({
+		queryKey: ['owner-distributions', portfolioId, selectedOwnerId, selectedYear],
+		queryFn: () =>
+			ownerDistributions.list({
+				ownerEntityId: selectedOwnerId!,
+				year: Number(selectedYear),
+				sort: '-date',
+				take: 200
+			}),
+		enabled: !!portfolioId && selectedOwnerId !== null
+	}));
+	const distributions = $derived((distributionQuery.data as OwnerDistribution[] | undefined) ?? []);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', {
@@ -41,6 +70,47 @@
 			minimumFractionDigits: 2,
 			maximumFractionDigits: 2
 		}).format(value || 0);
+	}
+
+	function localDateString(date: Date) {
+		const year = date.getFullYear();
+		const month = String(date.getMonth() + 1).padStart(2, '0');
+		const day = String(date.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
+	}
+
+	function defaultDistributionDate(year: number) {
+		const today = new Date();
+		if (today.getFullYear() === year) return localDateString(today);
+		return `${year}-12-31`;
+	}
+
+	function makeDistributionForm(year: number) {
+		return {
+			date: defaultDistributionDate(year),
+			amount: '',
+			method: 'Ach' as DistributionMethod,
+			propertyId: 'none',
+			memo: ''
+		};
+	}
+
+	function formatDate(value: string) {
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric',
+			timeZone: 'UTC'
+		}).format(new Date(value));
+	}
+
+	function methodLabel(value: DistributionMethod) {
+		return DISTRIBUTION_METHODS.find((m) => m.value === value)?.label ?? value;
+	}
+
+	function parseAmount(value: string) {
+		const parsed = Number(value.replace(/[$,]/g, '').trim());
+		return Number.isFinite(parsed) ? parsed : NaN;
 	}
 
 	function selectOwner(ownerId: number) {
@@ -52,6 +122,14 @@
 		// eslint-disable-next-line @typescript-eslint/no-unused-expressions
 		selectedYear;
 		selectedOwnerId = null;
+	});
+
+	$effect(() => {
+		const key = `${selectedOwnerId ?? 'none'}:${selectedYear}`;
+		if (key !== distributionFormContext) {
+			distributionFormContext = key;
+			distributionForm = makeDistributionForm(Number(selectedYear));
+		}
 	});
 
 	async function handleDownload() {
@@ -72,6 +150,63 @@
 		onSuccess: () => showSuccess('Statement emailed.'),
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	function invalidateDistributionData() {
+		queryClient.invalidateQueries({ queryKey: ['owner-distributions'] });
+		queryClient.invalidateQueries({ queryKey: ['owner-statements'] });
+		queryClient.invalidateQueries({ queryKey: ['owner-statement'] });
+		queryClient.invalidateQueries({ queryKey: ['report'] });
+		queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+	}
+
+	const createDistributionMutation = createMutation(() => ({
+		mutationFn: (body: CreateOwnerDistributionRequest) => ownerDistributions.create(body),
+		onSuccess: () => {
+			showSuccess('Owner distribution recorded.');
+			distributionForm = {
+				...makeDistributionForm(Number(selectedYear)),
+				date: distributionForm.date
+			};
+			invalidateDistributionData();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const deleteDistributionMutation = createMutation(() => ({
+		mutationFn: (id: number) => ownerDistributions.delete(id),
+		onSuccess: () => {
+			showSuccess('Owner distribution deleted.');
+			invalidateDistributionData();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function handleDistributionSubmit(event: SubmitEvent) {
+		event.preventDefault();
+		if (selectedOwnerId === null) return;
+
+		const amount = parseAmount(distributionForm.amount);
+		if (!Number.isFinite(amount) || amount <= 0) {
+			showError('Enter a distribution amount greater than zero.');
+			return;
+		}
+		if (!distributionForm.date) {
+			showError('Choose a distribution date.');
+			return;
+		}
+
+		const propertyId =
+			distributionForm.propertyId === 'none' ? undefined : Number(distributionForm.propertyId);
+		const body: CreateOwnerDistributionRequest = {
+			ownerEntityId: selectedOwnerId,
+			propertyId,
+			date: `${distributionForm.date}T00:00:00.000Z`,
+			amount,
+			method: distributionForm.method,
+			memo: distributionForm.memo.trim() || undefined
+		};
+		createDistributionMutation.mutate(body);
+	}
 </script>
 
 <svelte:head>
@@ -140,6 +275,9 @@
 						<p class="mt-0.5 font-mono text-sm {owner.netToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 							Net: {money(owner.netToOwner)}
 						</p>
+						<p class="mt-0.5 font-mono text-xs {owner.undistributed >= 0 ? 'text-muted-foreground' : 'text-destructive'}">
+							Undistributed: {money(owner.undistributed)}
+						</p>
 					</button>
 				{/each}
 			</div>
@@ -184,7 +322,7 @@
 					</div>
 
 					<!-- Grand-total cards -->
-					<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-testid="owners-report-summary-cards">
+					<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5" data-testid="owners-report-summary-cards">
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-total-income">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Total income</p>
@@ -209,6 +347,150 @@
 								<p class="font-mono tabular-nums text-2xl font-bold {report.totalNetToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 									{money(report.totalNetToOwner)}
 								</p>
+							</Card.Content>
+						</Card.Root>
+						<Card.Root class="gap-0 py-0" data-testid="owners-report-undistributed">
+							<Card.Content class="p-4">
+								<p class="text-xs text-muted-foreground">Undistributed</p>
+								<p class="font-mono tabular-nums text-2xl font-bold {report.undistributed >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
+									{money(report.undistributed)}
+								</p>
+								<p class="mt-1 font-mono text-xs text-muted-foreground">Paid: {money(report.totalDistributed)}</p>
+							</Card.Content>
+						</Card.Root>
+					</div>
+
+					<div class="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
+							<Card.Header class="border-b border-border px-4 py-3">
+								<Card.Title class="text-base font-semibold">Record distribution</Card.Title>
+							</Card.Header>
+							<Card.Content class="p-4">
+								<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
+									<div>
+										<label for="owner-distribution-date" class="mb-1 block text-xs font-medium text-muted-foreground">Date</label>
+										<Input
+											id="owner-distribution-date"
+											type="date"
+											bind:value={distributionForm.date}
+											data-testid="owner-distribution-date"
+										/>
+									</div>
+									<div>
+										<label for="owner-distribution-amount" class="mb-1 block text-xs font-medium text-muted-foreground">Amount</label>
+										<Input
+											id="owner-distribution-amount"
+											type="text"
+											inputmode="decimal"
+											mask="currency"
+											bind:value={distributionForm.amount}
+											placeholder="0.00"
+											data-testid="owner-distribution-amount"
+										/>
+									</div>
+									<div>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">Method</span>
+										<Select.Root type="single" bind:value={distributionForm.method}>
+											<Select.Trigger class="w-full" data-testid="owner-distribution-method">
+												{methodLabel(distributionForm.method)}
+											</Select.Trigger>
+											<Select.Content>
+												{#each DISTRIBUTION_METHODS as method}
+													<Select.Item value={method.value} label={method.label}>{method.label}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									</div>
+									<div>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
+										<Select.Root type="single" bind:value={distributionForm.propertyId}>
+											<Select.Trigger class="w-full" data-testid="owner-distribution-property">
+												{distributionForm.propertyId === 'none'
+													? 'No property'
+													: report.properties.find((p) => String(p.propertyId) === distributionForm.propertyId)?.propertyName ?? 'Property'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="none" label="No property">No property</Select.Item>
+												{#each report.properties as property}
+													<Select.Item value={String(property.propertyId)} label={property.propertyName}>{property.propertyName}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									</div>
+									<div class="sm:col-span-2">
+										<label for="owner-distribution-memo" class="mb-1 block text-xs font-medium text-muted-foreground">Memo</label>
+										<Input
+											id="owner-distribution-memo"
+											bind:value={distributionForm.memo}
+											maxlength={500}
+											placeholder="Optional note"
+											data-testid="owner-distribution-memo"
+										/>
+									</div>
+									<div class="sm:col-span-2">
+										<Button
+											type="submit"
+											disabled={createDistributionMutation.isPending}
+											data-testid="owner-distribution-submit"
+										>
+											<Plus class="h-4 w-4" />
+											{createDistributionMutation.isPending ? 'Recording…' : 'Record distribution'}
+										</Button>
+									</div>
+								</form>
+							</Card.Content>
+						</Card.Root>
+
+						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-list-card">
+							<Card.Header class="border-b border-border px-4 py-3">
+								<Card.Title class="text-base font-semibold">Distributions</Card.Title>
+							</Card.Header>
+							<Card.Content class="p-0">
+								{#if distributionQuery.isLoading}
+									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-loading">Loading distributions…</p>
+								{:else if distributionQuery.isError}
+									<p class="p-4 text-sm text-destructive" data-testid="owner-distributions-error">Could not load distributions.</p>
+								{:else if distributions.length === 0}
+									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No distributions recorded for {selectedYear}.</p>
+								{:else}
+									<div class="overflow-x-auto">
+										<table class="w-full text-sm">
+											<thead>
+												<tr class="border-b border-border bg-muted/50">
+													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
+													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Method</th>
+													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property</th>
+													<th class="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
+													<th class="w-12 px-4 py-3"><span class="sr-only">Actions</span></th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each distributions as distribution (distribution.id)}
+													<tr class="border-b border-border/50 last:border-0 hover:bg-muted/30" data-testid="owner-distribution-row-{distribution.id}">
+														<td class="px-4 py-3 whitespace-nowrap">{formatDate(distribution.date)}</td>
+														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
+														<td class="px-4 py-3">{distribution.propertyName ?? '—'}</td>
+														<td class="px-4 py-3 text-right font-mono tabular-nums">{money(distribution.amount)}</td>
+														<td class="px-4 py-3 text-right">
+															<Button
+																variant="ghost"
+																size="icon"
+																class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+																aria-label={`Delete distribution ${money(distribution.amount)}`}
+																title="Delete distribution"
+																disabled={deleteDistributionMutation.isPending}
+																onclick={() => deleteDistributionMutation.mutate(distribution.id)}
+																data-testid="owner-distribution-delete-{distribution.id}"
+															>
+																<Trash2 class="h-4 w-4" />
+															</Button>
+														</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									</div>
+								{/if}
 							</Card.Content>
 						</Card.Root>
 					</div>

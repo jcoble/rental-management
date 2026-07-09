@@ -313,6 +313,9 @@ public class LedgerTransactionResponse
     public string Status { get; set; } = string.Empty;
     public string SourceHref { get; set; } = string.Empty;
 
+    /// <summary>True when this rent row was reduced for a partial first/final billing period.</summary>
+    public bool IsProrated { get; set; }
+
     /// <summary>
     /// Plain-English "why this is here", derived deterministically from the entry's type/date/amount/
     /// status — no LLM. Answers a tenant's "what is this charge?" without accounting knowledge,

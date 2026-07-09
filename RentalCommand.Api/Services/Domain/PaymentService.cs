@@ -197,6 +197,11 @@ public class PaymentService : IPaymentService
 
         if (query is PaymentListQuery paymentQuery)
         {
+            if (paymentQuery.ApplicationId.HasValue)
+            {
+                q = q.Where(p => p.ApplicationId == paymentQuery.ApplicationId.Value);
+            }
+
             if (paymentQuery.DueFrom.HasValue)
             {
                 var dueFrom = paymentQuery.DueFrom.Value.ToUtc();
@@ -269,10 +274,40 @@ public class PaymentService : IPaymentService
 
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)
     {
-        // Verify the referenced lease belongs to the caller's portfolio.
-        if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId, ct))
+        // Exactly one of LeaseId / ApplicationId identifies what the payment is charged against: a lease
+        // (rent/late-fee/utility) or a rental application (a lease-less application/screening fee). Both or
+        // neither is a validation failure (400).
+        if ((request.LeaseId is not null) == (request.ApplicationId is not null))
+        {
+            throw new DomainValidationException(
+                "A payment must reference exactly one of a lease or an application.");
+        }
+
+        // Every referenced FK must belong to the caller's portfolio (cross-tenant IDOR guard) → 404 on miss.
+        if (request.LeaseId is { } leaseId && !await _db.EnsureLeaseInPortfolioAsync(portfolioId, leaseId, ct))
         {
             return null;
+        }
+        if (request.ApplicationId is { } applicationId && !await _db.EnsureApplicationInPortfolioAsync(portfolioId, applicationId, ct))
+        {
+            return null;
+        }
+        if (request.PropertyId is { } requestedPropertyId && !await _db.EnsurePropertyInPortfolioAsync(portfolioId, requestedPropertyId, ct))
+        {
+            return null;
+        }
+
+        // An application fee defaults its type to ApplicationFee and attributes to the application's property
+        // when the caller didn't pass one, so lease-less income lands on the right property's reports.
+        var paymentType = request.PaymentType;
+        var resolvedPropertyId = request.PropertyId;
+        if (request.ApplicationId is { } appId)
+        {
+            paymentType = PaymentType.ApplicationFee;
+            resolvedPropertyId ??= await _db.RentalApplications
+                .Where(a => a.Id == appId && a.PortfolioId == portfolioId)
+                .Select(a => a.PropertyId)
+                .FirstOrDefaultAsync(ct);
         }
 
         var now = _timeProvider.UtcNow();
@@ -280,7 +315,9 @@ public class PaymentService : IPaymentService
         {
             PortfolioId = portfolioId,
             LeaseId = request.LeaseId,
-            PaymentType = request.PaymentType,
+            ApplicationId = request.ApplicationId,
+            PropertyId = resolvedPropertyId,
+            PaymentType = paymentType,
             Status = request.Status,
             Amount = request.Amount,
             // Partial-aware split: validated + normalized for the final status/amount (Partial keeps the
@@ -333,18 +370,23 @@ public class PaymentService : IPaymentService
         {
             // Reassigning a payment to a different lease moves it onto that lease's ledger — the target
             // lease must belong to the caller's portfolio (cross-tenant IDOR guard, mirroring CreateAsync).
-            if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, targetLeaseId, ct))
+            // A reassignment always targets a real lease (request.LeaseId was supplied and differs).
+            if (targetLeaseId is not { } newLeaseId ||
+                !await _db.EnsureLeaseInPortfolioAsync(portfolioId, newLeaseId, ct))
             {
                 return null;
             }
         }
 
-        if (targetLeaseId != entity.LeaseId || targetPaymentType != entity.PaymentType)
+        // The (lease, type, period) uniqueness only constrains lease-tied auto-generated rows
+        // (PeriodKey != null ⇒ a lease); a lease-less payment (application fee) has no PeriodKey to guard.
+        if (targetLeaseId is { } periodLeaseId &&
+            (targetLeaseId != entity.LeaseId || targetPaymentType != entity.PaymentType))
         {
             await EnsureGeneratedPeriodPaymentKeyAvailableAsync(
                 portfolioId,
                 id,
-                targetLeaseId,
+                periodLeaseId,
                 targetPaymentType,
                 entity.PeriodKey,
                 ct);

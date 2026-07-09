@@ -33,6 +33,10 @@ const entityQueryKeys: Record<string, string[][]> = {
 	Appointment: [['appointments'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Vendor: [['vendors']],
 	OwnerEntity: [['owners'], ['dashboard']],
+	OwnerDistribution: [['owner-distributions'], ['owner-statements'], ['owner-statement'], ['report'], ['dashboard']],
+	PropertyDisposition: [['property-dispositions'], ['properties'], ['property'], ['leases'], ['units'], ['capital-assets'], ['accounting-summary'], ['reports'], ['dashboard']],
+	EvictionCase: [['eviction-cases'], ['eviction-case'], ['leases'], ['lease'], ['units'], ['reports'], ['dashboard']],
+	EvictionCaseEvent: [['eviction-cases'], ['eviction-case'], ['leases'], ['lease'], ['units'], ['reports'], ['dashboard']],
 	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],
 	// A confirmed scan creates an Expense (the backend also broadcasts that
 	// `Expense` event), so refresh the expense list + accounting summary too -
@@ -64,6 +68,10 @@ const entityDetailKey: Record<string, string> = {
 	Appointment: 'appointment',
 	Vendor: 'vendor',
 	OwnerEntity: 'owner',
+	OwnerDistribution: 'owner-distribution',
+	PropertyDisposition: 'property-disposition',
+	EvictionCase: 'eviction-case',
+	EvictionCaseEvent: 'eviction-case-event',
 	Portfolio: 'portfolio',
 	ScanDraft: 'scan',
 	Conversation: 'conversation'

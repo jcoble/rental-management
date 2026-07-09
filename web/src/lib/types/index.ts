@@ -4,7 +4,7 @@ export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
 export type UnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
 export type LeaseStatus = 'Draft' | 'PendingSignature' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
 export type EsignStatus = 'None' | 'Sent' | 'Signed' | 'Declined';
-export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other';
+export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other' | 'ApplicationFee';
 export type PaymentStatus = 'Scheduled' | 'Paid' | 'Partial' | 'Late' | 'Waived' | 'Failed' | 'Refunded';
 export type ExpenseStatus = 'Pending' | 'Approved' | 'Paid' | 'Rejected' | 'Draft';
 export type WorkOrderPriority = 'Low' | 'Normal' | 'High' | 'Emergency';
@@ -395,7 +395,8 @@ export interface LeaseTenantSummary {
 export interface Payment {
 	id: number;
 	portfolioId: number;
-	leaseId: number;
+	leaseId?: number | null;
+	applicationId?: number | null;
 	/** Unit/Property the payment's lease is on; resolved DB-side via the lease join so the UI can route to the unit's tab. */
 	unitId?: number;
 	propertyId?: number;
@@ -434,6 +435,7 @@ export interface Expense {
 	unitId?: number;
 	vendorId?: number;
 	workOrderId?: number;
+	capitalizedAssetId?: number | null;
 	category: string;
 	description: string;
 	status: ExpenseStatus;
@@ -464,6 +466,8 @@ export interface OwnerStatementSummary {
 	ownerId: number;
 	ownerName: string;
 	netToOwner: number;
+	totalDistributed: number;
+	undistributed: number;
 }
 
 export interface OwnerStatementPropertyLine {
@@ -484,6 +488,8 @@ export interface OwnerStatementReport {
 	totalExpenses: number;
 	totalManagementFee: number;
 	totalNetToOwner: number;
+	totalDistributed: number;
+	undistributed: number;
 }
 
 // --- Schedule E tax report types ---
@@ -551,12 +557,32 @@ export interface YearEndRentRollRow {
 	pastDueBalance: number;
 }
 
+export interface YearEndPropertyDisposition {
+	id: number;
+	propertyId: number;
+	propertyName?: string | null;
+	closedOnDate: string;
+	salePrice: number;
+	sellingCosts: number;
+	netSaleProceeds: number;
+	purchasePrice: number;
+	landValue: number;
+	buildingBasis: number;
+	accumulatedDepreciationBeforeSale: number;
+	saleYearDepreciation: number;
+	totalDepreciation: number;
+	adjustedBasis: number;
+	gainLoss: number;
+	unrecapturedSection1250Gain: number;
+}
+
 /** The year-end three-block view: cash flow vs taxable income + rent roll + accountant caveats. */
 export interface YearEndView {
 	year: number;
 	cashFlow: CashFlowSummary;
 	scheduleE: ScheduleEReport;
 	rentRoll: YearEndRentRollRow[];
+	propertyDispositions: YearEndPropertyDisposition[];
 	accountantNotes: string[];
 }
 
@@ -648,6 +674,8 @@ export interface LedgerTransaction {
 	category?: string;
 	status: string;
 	sourceHref: string;
+	/** Rent row was reduced for a partial first/final billing period. */
+	isProrated?: boolean;
 	/** Plain-English "why this is here", derived deterministically (no LLM). */
 	explanation: string;
 }

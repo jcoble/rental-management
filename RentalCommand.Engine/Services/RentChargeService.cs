@@ -6,6 +6,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -28,7 +29,8 @@ public sealed class RentChargeService : IRentChargeService
     private readonly record struct RentChargeCandidate(
         Lease Lease,
         RentChargePeriod Period,
-        NotificationsConfig Config);
+        NotificationsConfig Config,
+        ProrationConvention ProrationConvention);
 
     public RentChargeService(
         RentalCommandDbContext db,
@@ -54,12 +56,25 @@ public sealed class RentChargeService : IRentChargeService
         // Business "today" in the landlord's local zone (drives period key + due-day math only). Near
         // month-end an evening (ET) UtcNow is already the next day/month in UTC, which would charge rent
         // for the wrong period. Every value WRITTEN to the DB below stays UTC (Kind=Utc).
-        var today = TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date;
+        var today = _timeProvider.BusinessToday(_tz);
 
         var leases = await _db.Leases
             .Where(l => l.Status == LeaseStatus.Active)
             .Include(l => l.Tenant)
             .ToListAsync(ct);
+
+        var portfolioIds = leases
+            .Select(l => l.PortfolioId)
+            .Distinct()
+            .ToList();
+        var prorationByPortfolio = await _db.Portfolios
+            .AsNoTracking()
+            .Where(p => portfolioIds.Contains(p.Id))
+            .Select(p => new { p.Id, p.Settings })
+            .ToDictionaryAsync(
+                p => p.Id,
+                p => PortfolioProrationSettings.ReadConvention(p.Settings),
+                ct);
 
         var configCache = new Dictionary<int, NotificationsConfig>();
         var candidates = new List<RentChargeCandidate>();
@@ -78,15 +93,19 @@ public sealed class RentChargeService : IRentChargeService
                 continue;
 
             var periods = RentChargeSchedule.GetDuePeriods(
-                RentChargeGenerationStart(lease),
+                lease.StartDate,
                 lease.EndDate,
                 lease.RentDueDay,
                 today,
-                cfg.RentChargeLeadDays);
+                cfg.RentChargeLeadDays,
+                RentChargeGenerationStart(lease));
+            var convention = prorationByPortfolio.GetValueOrDefault(
+                lease.PortfolioId,
+                ProrationConvention.ActualDays);
 
             foreach (var period in periods)
             {
-                candidates.Add(new RentChargeCandidate(lease, period, cfg));
+                candidates.Add(new RentChargeCandidate(lease, period, cfg, convention));
             }
         }
 
@@ -109,11 +128,12 @@ public sealed class RentChargeService : IRentChargeService
 
         var existingRows = await _db.Payments
             .AsNoTracking()
-            .Where(p => candidateLeaseIds.Contains(p.LeaseId)
+            .Where(p => p.LeaseId != null
+                && candidateLeaseIds.Contains(p.LeaseId.Value)
                 && p.PaymentType == PaymentType.Rent
                 && p.PeriodKey != null
                 && candidatePeriodKeys.Contains(p.PeriodKey))
-            .Select(p => new { p.LeaseId, p.PeriodKey })
+            .Select(p => new { LeaseId = p.LeaseId!.Value, p.PeriodKey })
             .ToListAsync(ct);
 
         var existing = existingRows
@@ -130,6 +150,9 @@ public sealed class RentChargeService : IRentChargeService
             var lease = candidate.Lease;
             var period = candidate.Period;
             var cfg = candidate.Config;
+            var chargeAmount = period.IsPartial
+                ? ProrationCalculator.Prorate(lease.MonthlyRent, period.PeriodStart, period.PeriodEnd, candidate.ProrationConvention)
+                : lease.MonthlyRent;
             if (existing.Contains((lease.Id, period.PeriodKey)))
             {
                 continue;
@@ -141,7 +164,7 @@ public sealed class RentChargeService : IRentChargeService
                 LeaseId = lease.Id,
                 PaymentType = PaymentType.Rent,
                 Status = PaymentStatus.Scheduled,
-                Amount = lease.MonthlyRent,
+                Amount = chargeAmount,
                 DueDate = period.DueDate,
                 PeriodKey = period.PeriodKey,
                 CreatedAt = _timeProvider.UtcNow(),
@@ -166,15 +189,15 @@ public sealed class RentChargeService : IRentChargeService
                 if (cfg.NotifyTenants && period.DueDate.Date >= today && lease.Tenant is { } tenant)
                 {
                     var channels = cfg.ResolveChannels(NotificationType.RentCharge);
-                    var message = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {period.DueDate:MMMM d}.";
-                    var tenantMessage = $"Your rent of {lease.MonthlyRent:C} is due on {period.DueDate:MMMM d}.";
+                    var message = $"Hi {tenant.FirstName}, your rent of {chargeAmount:C} is due on {period.DueDate:MMMM d}.";
+                    var tenantMessage = $"Your rent of {chargeAmount:C} is due on {period.DueDate:MMMM d}.";
                     inAppRows = await notifier.SendAsync(
                         lease.PortfolioId,
                         channels,
                         new AutomationNotifier.InAppContent(
                             Type: "RentCharge",
                             Title: $"Rent due {period.DueDate:MMM d}",
-                            Message: $"{tenant.FirstName} {tenant.LastName}".Trim() + $" — rent of {lease.MonthlyRent:C} due {period.DueDate:MMMM d}.",
+                            Message: $"{tenant.FirstName} {tenant.LastName}".Trim() + $" — rent of {chargeAmount:C} due {period.DueDate:MMMM d}.",
                             Severity: "Info",
                             ActionUrl: $"/payments/{payment.Id}",
                             RelatedEntityType: "Payment",

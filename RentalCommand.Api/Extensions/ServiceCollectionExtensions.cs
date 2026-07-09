@@ -49,12 +49,15 @@ public static class ServiceCollectionExtensions
             RentalCommand.Api.Services.Esign.NativeSigningService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<ICapitalAssetService, CapitalAssetService>();
+        services.AddScoped<IPropertyDispositionService, PropertyDispositionService>();
         services.AddScoped<ILoanService, LoanService>();
         services.AddScoped<IRecurringExpenseService, RecurringExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();
         services.AddScoped<IScheduleEService, ScheduleEService>();
         // Year-end accountant packet PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IYearEndPacketPdfGenerator, YearEndPacketPdfGenerator>();
+        services.AddScoped<IOwnerDistributionService, OwnerDistributionService>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         // Reports Hub: read-only report queries over existing data (rent roll, ledger, aging, cash flow,
@@ -103,6 +106,7 @@ public static class ServiceCollectionExtensions
         services.AddSmsProviders();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<INoticeTemplateService, NoticeTemplateService>();
+        services.AddScoped<IEvictionCaseService, EvictionCaseService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();

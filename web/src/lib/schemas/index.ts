@@ -286,6 +286,16 @@ export const paymentSchema = z
 		}
 	});
 
+/**
+ * Record-application-fee form (a lease-less income entry against an application). Mirrors the server
+ * RecordApplicationFeeRequest: amount is required and > 0; method + paid date are optional.
+ */
+export const applicationFeeSchema = z.object({
+	amount: positiveNumeric('Amount'),
+	method: optionalText,
+	paidDate: optionalText,
+});
+
 export const expenseSchema = z.object({
 	description: required('Description'),
 	// amount: server [Range(0.01, 99999999)] (ExpenseDtos.cs Create/UpdateExpenseRequest.Amount)
@@ -440,6 +450,48 @@ export const recurringExpenseSchema = z.object({
 	frequency: z.string(),
 	startDate: required('Start date'),
 	notes: optionalText,
+});
+
+export const capitalAssetSchema = z.object({
+	description: required('Description').max(500, 'Description must be 500 characters or fewer'),
+	costBasis: positiveNumeric('Cost basis'),
+	inServiceDate: required('In-service date'),
+	method: z.enum(['StraightLine', 'Macrs']),
+	recoveryYears: positiveNumeric('Recovery years').refine((v) => v <= 40, 'Recovery years cannot exceed 40'),
+	convention: z.enum(['MidMonth', 'HalfYear']),
+	accumulatedDepreciation: optionalNonNegative('Accumulated depreciation'),
+});
+
+export const propertyDispositionSchema = z.object({
+	closedOnDate: required('Close date'),
+	salePrice: positiveNumeric('Sale price'),
+	sellingCosts: optionalNonNegative('Selling costs').transform((v) => v ?? 0),
+	buyerName: optionalTextMax('Buyer', 200),
+	memo: optionalTextMax('Memo', 1000),
+});
+
+export const evictionCaseSchema = z.object({
+	status: z.enum(['Draft', 'NoticeServed', 'Filed', 'HearingScheduled', 'Judgment', 'MoveOut', 'Settled', 'Dismissed']),
+	filedOnDate: optionalText,
+	hearingDate: optionalText,
+	courtName: optionalTextMax('Court', 200),
+	caseNumber: optionalTextMax('Case number', 100),
+	resolution: optionalTextMax('Resolution', 500),
+	notes: optionalTextMax('Notes', 1000),
+});
+
+export const evictionCaseEventSchema = z.object({
+	eventType: z.enum(['NoticeServed', 'Filed', 'HearingScheduled', 'Judgment', 'MoveOut', 'Settlement', 'Dismissal', 'PaymentPlan', 'Note']),
+	eventDate: required('Event date'),
+	notes: optionalTextMax('Notes', 1000),
+});
+
+export const capitalizeExpenseSchema = z.object({
+	inServiceDate: required('In-service date'),
+	method: z.enum(['StraightLine', 'Macrs']),
+	recoveryYears: positiveNumeric('Recovery years').refine((v) => v <= 40, 'Recovery years cannot exceed 40'),
+	convention: z.enum(['MidMonth', 'HalfYear']),
+	description: optionalTextMax('Description', 500),
 });
 
 // Property depreciation basis (optional inline fields on the property edit form).

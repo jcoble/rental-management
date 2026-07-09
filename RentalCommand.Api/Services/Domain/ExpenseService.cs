@@ -220,6 +220,7 @@ public class ExpenseService : IExpenseService
                 UnitId = e.UnitId,
                 VendorId = e.VendorId,
                 WorkOrderId = e.WorkOrderId,
+                CapitalizedAssetId = e.CapitalizedAssetId,
                 Category = e.Category,
                 Description = e.Description,
                 Status = e.Status,

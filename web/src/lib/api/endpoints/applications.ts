@@ -1,3 +1,4 @@
+import type { Payment } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
@@ -108,6 +109,13 @@ export interface ScreeningResultResponse {
 	completedAtUtc: string | null;
 }
 
+/** Body for recording a real application/screening fee as income (lease-less payment). */
+export interface RecordApplicationFeeRequest {
+	amount: number;
+	method?: string | null;
+	paidDate?: string | null;
+}
+
 /** Request body for generating an FCRA adverse-action notice. */
 export interface AdverseActionRequest {
 	reason?: string;
@@ -147,6 +155,9 @@ export const applications = {
 	screen: (id: number) => api.post<ScreeningResultResponse>(`/applications/${id}/screen`),
 	/** Prior screening results for an application, newest first. */
 	screening: (id: number) => api.get<ScreeningResultResponse[]>(`/applications/${id}/screening`),
+	/** Record a real application/screening fee as income (lease-less payment on the application's property). */
+	recordFee: (id: number, body: RecordApplicationFeeRequest) =>
+		api.post<Payment>(`/applications/${id}/fee`, body),
 	/** Generate an FCRA adverse-action notice (and optionally email the applicant). */
 	adverseAction: (id: number, body: AdverseActionRequest) =>
 		api.post<AdverseActionNoticeResponse>(`/applications/${id}/adverse-action`, body),

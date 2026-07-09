@@ -58,4 +58,7 @@ public class Property : IAuditable, IPortfolioScoped
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];
+    public List<CapitalAsset> CapitalAssets { get; set; } = [];
+    public List<PropertyDisposition> Dispositions { get; set; } = [];
+    public List<EvictionCase> EvictionCases { get; set; } = [];
 }

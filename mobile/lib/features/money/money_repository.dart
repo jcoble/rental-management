@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../properties/capital_assets_repository.dart';
 import 'expense_models.dart';
 import 'transaction_models.dart';
 
@@ -122,6 +123,7 @@ class ExpenseListPage {
 ///   GET    /expenses/{id}             — single expense (with line items)
 ///   POST   /expenses                  — create
 ///   PATCH  /expenses/{id}             — update (partial)
+///   POST   /expenses/{id}/capitalize  — convert an expense to a capital asset
 ///   DELETE /expenses/{id}             — delete
 ///   GET    /expenses/{id}/receipt     — original scanned receipt bytes
 class MoneyRepository {
@@ -304,6 +306,28 @@ class MoneyRepository {
         );
       }
       return Expense.fromJson(responseData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<CapitalAsset> capitalizeExpense(
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/expenses/$id/capitalize',
+        data: data,
+      );
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return CapitalAsset.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

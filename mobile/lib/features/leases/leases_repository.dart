@@ -280,6 +280,25 @@ class LeasesRepository {
     return updateLease(id, {'status': status});
   }
 
+  Future<LeaseQuestionResponse> ask(int id, String question) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/leases/$id/ask',
+        data: {'question': question},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseQuestionResponse.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Generates a standard residential lease-agreement PDF from the lease's
   /// captured terms, stores it against the lease, and returns its reference.
   ///
@@ -427,6 +446,7 @@ class LeaseLedgerEntry {
     required this.amount,
     required this.status,
     required this.explanation,
+    required this.isProrated,
     this.propertyName,
     this.counterparty,
     this.category,
@@ -444,6 +464,7 @@ class LeaseLedgerEntry {
 
   /// Ready-to-show plain-English "why" for this entry.
   final String explanation;
+  final bool isProrated;
 
   final String? propertyName;
   final String? counterparty;
@@ -459,6 +480,7 @@ class LeaseLedgerEntry {
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       status: json['status'] as String? ?? '',
       explanation: json['explanation'] as String? ?? '',
+      isProrated: json['isProrated'] == true,
       propertyName: json['propertyName'] as String?,
       counterparty: json['counterparty'] as String?,
       category: json['category'] as String?,
@@ -580,6 +602,26 @@ class LeaseSignatureStatus {
       leaseStatus: json['leaseStatus'] as String? ?? '',
       hasSignedDocument: json['hasSignedDocument'] as bool? ?? false,
       envelopeId: json['envelopeId'] as String?,
+    );
+  }
+}
+
+class LeaseQuestionResponse {
+  const LeaseQuestionResponse({
+    required this.answer,
+    required this.llmEnhanced,
+    required this.sources,
+  });
+
+  final String answer;
+  final bool llmEnhanced;
+  final List<String> sources;
+
+  factory LeaseQuestionResponse.fromJson(Map<String, dynamic> json) {
+    return LeaseQuestionResponse(
+      answer: json['answer'] as String? ?? '',
+      llmEnhanced: json['llmEnhanced'] as bool? ?? false,
+      sources: (json['sources'] as List? ?? []).whereType<String>().toList(),
     );
   }
 }

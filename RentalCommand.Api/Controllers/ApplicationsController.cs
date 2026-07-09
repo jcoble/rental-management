@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -17,17 +18,20 @@ public class ApplicationsController : ManagementControllerBase
 {
     private readonly IApplicationService _service;
     private readonly IScreeningService _screening;
+    private readonly IPaymentService _payments;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
 
     public ApplicationsController(
         IApplicationService service,
         IScreeningService screening,
+        IPaymentService payments,
         RentalCommandDbContext db,
         IFileStorage files)
     {
         _service = service;
         _screening = screening;
+        _payments = payments;
         _db = db;
         _files = files;
     }
@@ -140,6 +144,37 @@ public class ApplicationsController : ManagementControllerBase
     {
         var deleted = await _service.DeleteAsync(GetPortfolioId(), id, GetUserId(), ct);
         return deleted ? NoContent() : NotFound(new { error = "Application not found" });
+    }
+
+    /// <summary>
+    /// Records a real application/screening fee as income against the application — no lease required.
+    /// Creates a Paid <see cref="PaymentType.ApplicationFee"/> payment attributed to the application's
+    /// property, so it surfaces on the accounting ledger and Schedule E. 404 when the application is not
+    /// in the caller's portfolio; 400 for an invalid amount.
+    /// </summary>
+    [HttpPost("{id:int}/fee")]
+    [ProducesResponseType(typeof(PaymentResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RecordFee(int id, [FromBody] RecordApplicationFeeRequest req, CancellationToken ct)
+    {
+        // Status = Paid so the fee is income immediately; DueDate carries the paid date (the service fills
+        // PaidDate from DueDate when omitted). A validation failure surfaces via the global handler (400).
+        var paidDate = req.PaidDate ?? DateTime.UtcNow;
+        var payment = await _payments.CreateAsync(GetPortfolioId(), new CreatePaymentRequest
+        {
+            ApplicationId = id,
+            PaymentType = PaymentType.ApplicationFee,
+            Status = PaymentStatus.Paid,
+            Amount = req.Amount,
+            DueDate = paidDate,
+            PaidDate = req.PaidDate,
+            Method = req.Method,
+        }, ct);
+
+        return payment == null
+            ? NotFound(new { error = "Application not found" })
+            : CreatedAtAction("Get", "Payment", new { id = payment.Id }, payment);
     }
 
     /// <summary>

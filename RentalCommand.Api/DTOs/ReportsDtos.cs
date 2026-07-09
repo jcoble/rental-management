@@ -495,8 +495,9 @@ public class Vendor1099Row
 // ── Owner Distributions ──────────────────────────────────────────────────────────────────────────
 
 /// <summary>
-/// Per-owner net distribution for a year, plus a portfolio total. Net per owner is the sum across the
-/// owner's properties of (rental income − expenses − management fee), matching the owner statement.
+/// Per-owner net proceeds, recorded owner distributions, and remaining undistributed owner balance
+/// for a year. Net per owner is the sum across the owner's properties of
+/// (rental income − expenses − management fee), matching the owner statement.
 /// </summary>
 public class OwnerDistributionsResponse
 {
@@ -505,6 +506,9 @@ public class OwnerDistributionsResponse
 
     /// <summary>Sum of net distributions across all owners.</summary>
     public decimal TotalNetToOwners { get; set; }
+
+    public decimal TotalDistributed { get; set; }
+    public decimal TotalUndistributed { get; set; }
 }
 
 public class OwnerDistributionRow
@@ -512,6 +516,8 @@ public class OwnerDistributionRow
     public int OwnerId { get; set; }
     public string OwnerName { get; set; } = string.Empty;
     public decimal NetToOwner { get; set; }
+    public decimal TotalDistributed { get; set; }
+    public decimal Undistributed { get; set; }
 }
 
 // ── Work Orders / Maintenance ────────────────────────────────────────────────────────────────────
