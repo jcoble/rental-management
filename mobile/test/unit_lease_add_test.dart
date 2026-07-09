@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/leases/eviction_cases_repository.dart';
 import 'package:rental_command/features/leases/lease_form_defaults.dart';
+import 'package:rental_command/features/leases/leases_list_screen.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 import 'package:rental_command/features/payments/payments_repository.dart';
 import 'package:rental_command/features/properties/properties_repository.dart';
@@ -114,6 +115,138 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Avery Available'), findsOneWidget);
+    expect(find.text('Existing'), findsOneWidget);
+    expect(find.text('New tenant'), findsOneWidget);
+
+    await tester.tap(find.text('New tenant'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('First name'), findsAtLeastNWidgets(1));
+    expect(find.text('Last name'), findsAtLeastNWidgets(1));
+    expect(find.text('Email'), findsAtLeastNWidgets(1));
+    expect(find.text('Phone'), findsAtLeastNWidgets(1));
+    expect(
+      find.text(
+        'The tenant and lease are saved together. If the lease fails, neither record is created.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('unit Add Lease sheet ignores outside taps', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          leasesRepositoryProvider.overrideWithValue(_FakeLeasesRepository()),
+          propertiesRepositoryProvider.overrideWithValue(
+            _FakePropertiesRepository(),
+          ),
+          paymentsRepositoryProvider.overrideWithValue(
+            _FakePaymentsRepository(),
+          ),
+          tenantsRepositoryProvider.overrideWithValue(_FakeTenantsRepository()),
+        ],
+        child: MaterialApp(
+          home: UnitCommandCenterScreen(
+            dashboard: _unitDashboard(unitStatus: 'Vacant'),
+            initialTab: UnitCommandCenterTab.lease,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Add lease'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New Lease'), findsOneWidget);
+  });
+
+  testWidgets('new tenant lease submits one atomic create payload', (
+    tester,
+  ) async {
+    final leasesRepository = _FakeLeasesRepository();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          leasesRepositoryProvider.overrideWithValue(leasesRepository),
+          propertiesRepositoryProvider.overrideWithValue(
+            _FakePropertiesRepository(),
+          ),
+          tenantsRepositoryProvider.overrideWithValue(_FakeTenantsRepository()),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: LeaseFormSheet(
+              unitDefaults: buildUnitLeaseFormDefaults(
+                unit: _unit(status: 'Vacant'),
+                propertyName: 'Maple Ridge',
+              ),
+              onSaved: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _tapNext(tester); // Location
+    await tester.tap(find.text('New tenant'));
+    await tester.pumpAndSettle();
+
+    final tenantFields = find.byType(TextFormField);
+    expect(tenantFields, findsNWidgets(4));
+    await tester.enterText(tenantFields.at(0), 'Avery');
+    await tester.enterText(tenantFields.at(1), 'Stone');
+    await tester.enterText(tenantFields.at(2), 'avery.stone@example.test');
+    await tester.enterText(tenantFields.at(3), '614-555-0184');
+    await _tapNext(tester); // Tenant
+
+    expect(find.text('Lease number'), findsOneWidget);
+    await _tapNext(tester); // Lease number
+
+    await tester.tap(
+      find
+          .ancestor(of: find.text('Start date'), matching: find.byType(InkWell))
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(find.text('Select date'), findsNothing);
+    await _tapNext(tester); // Dates; end defaults one calendar year later
+
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Security deposit (\$)'),
+      '1200',
+    );
+    await _tapNext(tester); // Rent
+    await _tapNext(tester); // Fees
+    await _tapNext(tester); // Status
+
+    expect(find.text('Rent tracking start'), findsOneWidget);
+    await tester.tap(find.text('Start from today'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Backfill from lease start').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Create Lease'));
+    await tester.pumpAndSettle();
+
+    final payload = leasesRepository.createdPayload;
+    expect(payload, isNotNull);
+    expect(payload!.containsKey('tenantId'), isFalse);
+    expect(payload.containsKey('tenantIds'), isFalse);
+    expect(payload['newTenant'], {
+      'firstName': 'Avery',
+      'lastName': 'Stone',
+      'email': 'avery.stone@example.test',
+      'phone': '614-555-0184',
+    });
+    expect(payload['status'], 'Active');
+    expect(payload['rentTrackingStartMode'], 'BackfillFromLeaseStart');
+    expect(payload['lateFeeAmount'], 75);
   });
 
   testWidgets(
@@ -155,6 +288,11 @@ void main() {
       );
     },
   );
+}
+
+Future<void> _tapNext(WidgetTester tester) async {
+  await tester.tap(find.text('Next'));
+  await tester.pumpAndSettle();
 }
 
 UnitDashboard _unitDashboard({
@@ -234,6 +372,14 @@ Lease _lease() {
 
 class _FakeLeasesRepository extends LeasesRepository {
   _FakeLeasesRepository() : super(Dio());
+
+  Map<String, dynamic>? createdPayload;
+
+  @override
+  Future<Lease> createLease(Map<String, dynamic> data) async {
+    createdPayload = Map<String, dynamic>.of(data);
+    return _lease();
+  }
 
   @override
   Future<LeaseSignatureStatus> signatureStatus(int id) async {

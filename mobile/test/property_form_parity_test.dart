@@ -246,7 +246,10 @@ class _FakePropertiesRepository extends PropertiesRepository {
   }
 
   @override
-  Future<List<Unit>> listUnits(int propertyId) async => const [];
+  Future<List<Unit>> listUnits(
+    int propertyId, {
+    bool availableForLease = false,
+  }) async => const [];
 
   @override
   Future<Unit> createUnit(int propertyId, Map<String, dynamic> data) async {

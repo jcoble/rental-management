@@ -42,6 +42,7 @@ class Lease {
   final double securityDeposit;
   final double lateFeeAmount;
   final int rentDueDay;
+  final DateTime? rentTrackingStartDate;
   final String? notes;
   final String? tenantName;
   final String? propertyName;
@@ -67,6 +68,7 @@ class Lease {
     required this.securityDeposit,
     required this.lateFeeAmount,
     required this.rentDueDay,
+    this.rentTrackingStartDate,
     this.notes,
     this.tenantName,
     this.propertyName,
@@ -119,6 +121,9 @@ class Lease {
       securityDeposit: (json['securityDeposit'] as num?)?.toDouble() ?? 0,
       lateFeeAmount: (json['lateFeeAmount'] as num?)?.toDouble() ?? 0,
       rentDueDay: (json['rentDueDay'] as num?)?.toInt() ?? 1,
+      rentTrackingStartDate: DateTime.tryParse(
+        json['rentTrackingStartDate'] as String? ?? '',
+      ),
       notes: json['notes'] as String?,
       tenantName:
           json['tenantName'] as String? ??
@@ -151,6 +156,11 @@ class Lease {
       'securityDeposit': securityDeposit,
       'lateFeeAmount': lateFeeAmount,
       'rentDueDay': rentDueDay,
+      if (rentTrackingStartDate != null)
+        'rentTrackingStartDate': rentTrackingStartDate!
+            .toIso8601String()
+            .split('T')
+            .first,
       if (notes != null) 'notes': notes,
     };
   }
