@@ -42,7 +42,7 @@ UnitLeaseFormDefaults buildUnitLeaseFormDefaults({
     securityDeposit: '',
     lateFeeAmount: '75',
     rentDueDay: '1',
-    status: 'Draft',
+    status: 'Active',
   );
 }
 

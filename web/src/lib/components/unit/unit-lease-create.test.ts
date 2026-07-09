@@ -4,6 +4,7 @@ import {
 	buildSimpleTenantPayload,
 	createSimpleTenantForm,
 	createUnitLeaseForm,
+	hasOccupyingLease,
 	validateSimpleTenantForm,
 } from './unit-lease-create.ts';
 
@@ -24,11 +25,18 @@ describe('unit-scoped lease creation helpers', () => {
 		assert.equal(form.propertyId, '7');
 		assert.equal(form.unitId, '23');
 		assert.equal(form.monthlyRent, '1600');
-		assert.equal(form.status, 'Draft');
+		assert.equal(form.status, 'Active');
 		assert.equal(form.rentTrackingStartMode, 'ForwardOnly');
 		assert.equal(form.openingBalanceAmount, '');
 		assert.equal(form.openingBalanceAsOfDate, '');
 		assert.equal(form.openingBalanceNote, '');
+	});
+
+	it('blocks the add-lease flow when the unit already has an occupying lease', () => {
+		assert.equal(hasOccupyingLease(undefined), false);
+		assert.equal(hasOccupyingLease({ status: 'Draft' }), false);
+		assert.equal(hasOccupyingLease({ status: 'Active' }), true);
+		assert.equal(hasOccupyingLease({ status: 'NoticeGiven' }), true);
 	});
 
 	it('requires the simple inline tenant fields and omits emergency contact', () => {

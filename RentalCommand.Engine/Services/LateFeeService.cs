@@ -166,6 +166,9 @@ public sealed class LateFeeService : ILateFeeService
                 continue;
             }
 
+            var trackedBeforeIteration = _db.ChangeTracker.Entries()
+                .Select(entry => entry.Entity)
+                .ToHashSet(ReferenceEqualityComparer.Instance);
             // ---- Create the late-fee payment row ----
             var lateFeePayment = new Payment
             {
@@ -252,6 +255,19 @@ public sealed class LateFeeService : ILateFeeService
                 // Record the just-assessed (lease, period) so a duplicate in this same batch is skipped.
                 existingLateFeeKeys.Add((rp.LeaseId, periodKey));
 
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    rp.PortfolioId,
+                    "Payment",
+                    lateFeePayment.Id,
+                    PaymentResponse.FromEntity(lateFeePayment),
+                    ct);
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    rp.PortfolioId,
+                    "Payment",
+                    rp.Id,
+                    PaymentResponse.FromEntity(rp),
+                    ct);
+
                 foreach (var row in inAppRows)
                     await _dataUpdate.BroadcastEntityUpdateAsync(
                         rp.PortfolioId, "Notification", row.Id, NotificationResponse.FromEntity(row), ct);
@@ -271,7 +287,7 @@ public sealed class LateFeeService : ILateFeeService
 
                 // Detach the unsaved fee and discard the in-memory rent-status change — the rollback
                 // undid the DB write, so reload restores rp to its persisted state.
-                _db.Entry(lateFeePayment).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                DetachEntitiesTrackedAfter(trackedBeforeIteration);
                 await _db.Entry(rp).ReloadAsync(ct);
                 continue;
             }
@@ -284,12 +300,24 @@ public sealed class LateFeeService : ILateFeeService
                     "Failed to assess late fee + notice for lease {LeaseId} period {Period}; rolled back, will retry",
                     rp.LeaseId, periodKey);
 
-                _db.Entry(lateFeePayment).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                DetachEntitiesTrackedAfter(trackedBeforeIteration);
                 await _db.Entry(rp).ReloadAsync(ct);
                 continue;
             }
         }
 
         return count;
+    }
+
+    private void DetachEntitiesTrackedAfter(IReadOnlySet<object> baseline)
+    {
+        // A DB rollback does not reset EF tracking state. Detach the fee, notifications, and outbox
+        // rows introduced by this candidate before the next rent payment is processed.
+        foreach (var entry in _db.ChangeTracker.Entries()
+                     .Where(entry => !baseline.Contains(entry.Entity))
+                     .ToList())
+        {
+            entry.State = EntityState.Detached;
+        }
     }
 }

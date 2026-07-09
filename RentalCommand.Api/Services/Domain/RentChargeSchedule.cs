@@ -22,17 +22,18 @@ public static class RentChargeSchedule
         var generationStartDate = (generationStart ?? occupancyStart).Date;
         var today = businessToday.Date;
 
-        if (occupancyStart >= endExclusive || today < generationStartDate)
+        if (occupancyStart >= endExclusive)
         {
             return [];
         }
 
-        var cutoff = today;
-        var currentDueDate = GetDueDate(today.Year, today.Month, rentDueDay);
-        var leadWindowStart = currentDueDate.AddDays(-Math.Max(0, leadDays));
-        if (today <= currentDueDate && today >= leadWindowStart)
+        // A lead window is a rolling date horizon, not a same-calendar-month rule. For example,
+        // July 27 + five days must include an August 1 charge. It also lets a first partial period
+        // become visible shortly before the lease begins without making it due before occupancy.
+        var cutoff = today.AddDays(Math.Max(0, leadDays));
+        if (cutoff < generationStartDate)
         {
-            cutoff = currentDueDate;
+            return [];
         }
 
         var cursor = new DateTime(generationStartDate.Year, generationStartDate.Month, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -45,7 +46,11 @@ public static class RentChargeSchedule
             var monthEnd = cursor.AddMonths(1).AddDays(-1);
             var periodStart = MaxDate(occupancyStart, monthStart);
             var periodEnd = MinDate(endExclusive.AddDays(-1), monthEnd);
-            var dueDate = GetDueDate(cursor.Year, cursor.Month, rentDueDay);
+            // A partial first period cannot be due before either occupancy or the configured tracking
+            // cutoff. This prevents a July 15 move-in from producing an already-overdue July 1 charge.
+            var dueDate = MaxDate(
+                GetDueDate(cursor.Year, cursor.Month, rentDueDay),
+                MaxDate(periodStart, generationStartDate));
             if (periodStart <= periodEnd && periodEnd >= generationStartDate && dueDate <= cutoff)
             {
                 var isPartial = periodStart > monthStart || periodEnd < monthEnd;

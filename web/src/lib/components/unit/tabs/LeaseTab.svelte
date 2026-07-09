@@ -26,6 +26,7 @@
 		buildSimpleTenantPayload,
 		createSimpleTenantForm,
 		createUnitLeaseForm,
+		hasOccupyingLease,
 		validateSimpleTenantForm,
 		type SimpleTenantForm,
 		type UnitLeaseCreateForm,
@@ -69,6 +70,12 @@
 	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
 	const unitLeases = $derived(unitLeasesQuery.data?.items ?? []);
 	const availableTenants = $derived(tenantsQuery.data?.items ?? []);
+	const isCheckingLeaseAvailability = $derived(unitLeasesQuery.isLoading);
+	const hasCurrentOccupyingLease = $derived(
+		dashboard.unit.status !== 'Vacant' ||
+			hasOccupyingLease(dashboard.currentLease) ||
+			unitLeases.some((lease) => hasOccupyingLease(lease)),
+	);
 
 	const createLeaseSteps: FormStepperStep[] = [
 		{ id: 'tenants', label: 'Tenants', description: 'Existing or new' },
@@ -160,7 +167,7 @@
 			openingBalanceAmount: '',
 			openingBalanceAsOfDate: '',
 			openingBalanceNote: '',
-			status: 'Draft',
+			status: 'Active',
 			notes: '',
 		};
 	}
@@ -257,6 +264,14 @@
 	}
 
 	function openCreateLease() {
+		if (isCheckingLeaseAvailability) {
+			showError('Still checking this unit for an existing lease. Try again in a moment.');
+			return;
+		}
+		if (hasCurrentOccupyingLease) {
+			showError('End the current active lease before adding another lease to this unit.');
+			return;
+		}
 		resetCreateLeaseForm();
 		showCreateLease = true;
 	}
@@ -281,8 +296,11 @@
 				? (leaseData.tenantIds as number[])
 				: [Number(leaseData.tenantId)].filter((id) => id > 0);
 			if (simpleTenant) {
-				const tenant = await tenants.create(buildSimpleTenantPayload(portfolioId, simpleTenant));
-				tenantIds = [tenant.id];
+				const { tenantId: _tenantId, tenantIds: _tenantIds, ...leaseWithoutTenantIds } = leaseData;
+				return leases.create({
+					...leaseWithoutTenantIds,
+					newTenant: buildSimpleTenantPayload(portfolioId, simpleTenant),
+				});
 			}
 			return leases.create({ ...leaseData, tenantId: tenantIds[0], tenantIds });
 		},
@@ -455,13 +473,24 @@
 	{/if}
 
 	<div class="flex flex-wrap gap-2">
-		<Button class="gap-2" onclick={openCreateLease} data-testid="unit-lease-add-button">
+		<Button
+			class="gap-2"
+			onclick={openCreateLease}
+			disabled={isCheckingLeaseAvailability || hasCurrentOccupyingLease}
+			title={hasCurrentOccupyingLease ? 'End the current active lease before adding another.' : undefined}
+			data-testid="unit-lease-add-button"
+		>
 			<Plus class="h-4 w-4" /> Add Lease
 		</Button>
 		<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="lease-scan">
 			<ScanLine class="h-4 w-4" /> Scan / upload lease
 		</Button>
 	</div>
+	{#if hasCurrentOccupyingLease}
+		<p class="text-sm text-muted-foreground" data-testid="unit-lease-add-blocked-reason">
+			This unit already has an active lease. End or terminate it before adding the next lease.
+		</p>
+	{/if}
 
 	<div class="rounded-lg border border-border bg-card p-4" data-testid="unit-lease-history">
 		<div class="flex flex-wrap items-start justify-between gap-2">
@@ -510,7 +539,12 @@
 </div>
 
 <Dialog.Root open={showCreateLease} onOpenChange={(v) => { if (!v) closeCreateLease(); }}>
-	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto" data-testid="unit-lease-create-dialog">
+	<Dialog.Content
+		class="max-h-[85vh] max-w-2xl overflow-y-auto"
+		onInteractOutside={(event) => event.preventDefault()}
+		onEscapeKeydown={(event) => event.preventDefault()}
+		data-testid="unit-lease-create-dialog"
+	>
 		<Dialog.Header>
 			<Dialog.Title>Add lease</Dialog.Title>
 			<Dialog.Description>

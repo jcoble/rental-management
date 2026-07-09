@@ -102,7 +102,7 @@
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly', rentTrackingStartDate: '',
 		openingBalanceAmount: '', openingBalanceAsOfDate: '', openingBalanceNote: '',
-		status: 'Draft', notes: '',
+		status: 'Active', notes: '',
 	};
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
@@ -315,11 +315,18 @@
 		const validationInput = { ...form, tenantId };
 		const result = parseForm(leaseSchema, validationInput);
 		const rentTrackingErrors = leaseRentTrackingErrors(validationInput);
+		const selectedUnit = (unitsForPropertyQuery.data ?? []).find(
+			(unit) => String(unit.id) === form.unitId,
+		);
+		const unitAvailabilityErrors: Record<string, string> =
+			editingId === null && form.status === 'Active' && selectedUnit && selectedUnit.status !== 'Vacant'
+				? { unitId: 'This unit already has an active lease. End it before creating another active lease.' }
+				: {};
 		const tenantErrors: Record<string, string> =
 			selectedTenantIds.length === 0 ? { tenantId: 'Select at least one tenant' } : {};
 		return {
 			data: result.data,
-			errors: { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantErrors },
+			errors: { ...(result.errors ?? {}), ...rentTrackingErrors, ...unitAvailabilityErrors, ...tenantErrors },
 			selectedTenantIds,
 		};
 	}
@@ -523,7 +530,11 @@
 	open={showForm}
 	onOpenChange={(v) => { if (!v) closeForm(); }}
 >
-	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
+	<Dialog.Content
+		class="max-h-[85vh] max-w-2xl overflow-y-auto"
+		onInteractOutside={(event) => event.preventDefault()}
+		onEscapeKeydown={(event) => event.preventDefault()}
+	>
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
 		</Dialog.Header>

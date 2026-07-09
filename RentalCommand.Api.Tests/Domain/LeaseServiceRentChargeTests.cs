@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
@@ -60,12 +61,213 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             .SingleAsync(p => p.LeaseId == result!.Id);
 
         payment.PeriodKey.Should().Be("2026-07");
-        payment.DueDate.Should().Be(Date(2026, 7, 1));
+        payment.DueDate.Should().Be(Date(2026, 7, 15));
         payment.Amount.Should().Be(1700m);
 
         var ledger = await sut.GetLedgerAsync(PortfolioId, result!.Id);
         ledger!.Entries.Should().ContainSingle();
         ledger.Entries[0].IsProrated.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithNewTenant_CreatesTenantAndLeaseTogether()
+    {
+        var today = Date(2026, 7, 9);
+        var sut = BuildSut(new FixedTimeProvider(today));
+        var (property, unit, _) = SeedPropertyUnitTenant();
+
+        var result = await sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            NewTenant = new CreateTenantRequest
+            {
+                FirstName = "Avery",
+                LastName = "Morgan",
+                Email = "avery.morgan@example.test",
+                Phone = "614-555-0199",
+            },
+            LeaseNumber = "L-ATOMIC-001",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2026, 7, 15),
+            EndDate = Date(2027, 7, 15),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        result.Should().NotBeNull();
+        var tenant = await _ctx.Db.Tenants
+            .AsNoTracking()
+            .SingleAsync(t => t.Email == "avery.morgan@example.test");
+        result!.TenantId.Should().Be(tenant.Id);
+        result.TenantIds.Should().ContainSingle().Which.Should().Be(tenant.Id);
+    }
+
+    [Fact]
+    public async Task CreateAsync_JoinsExistingTransactionAndRollsBackWithCaller()
+    {
+        var sut = BuildSut(new FixedTimeProvider(Date(2026, 7, 9)));
+        var (property, unit, _) = SeedPropertyUnitTenant();
+        await using var transaction = await _ctx.Db.Database.BeginTransactionAsync();
+
+        var result = await sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            NewTenant = new CreateTenantRequest
+            {
+                FirstName = "Ambient",
+                LastName = "Transaction",
+                Email = "ambient.transaction@example.test",
+                Phone = "614-555-0150",
+            },
+            LeaseNumber = "L-AMBIENT-001",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2026, 7, 15),
+            EndDate = Date(2027, 7, 15),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        result.Should().NotBeNull();
+        await transaction.RollbackAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        (await _ctx.Db.Tenants.AsNoTracking().CountAsync(t => t.Email == "ambient.transaction@example.test"))
+            .Should().Be(0);
+        (await _ctx.Db.Leases.AsNoTracking().CountAsync(l => l.LeaseNumber == "L-AMBIENT-001"))
+            .Should().Be(0);
+        (await _ctx.Db.Payments.AsNoTracking().CountAsync(p => p.LeaseId == result!.Id))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithNewTenant_RollsBackEverythingWhenLeaseWorkflowFails()
+    {
+        var audit = new Mock<IAuditTrailService>();
+        audit.Setup(a => a.LogAsync(
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<int>(),
+                It.IsAny<AuditLogOperation>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("simulated lease workflow failure"));
+        var sut = new LeaseService(
+            _ctx.Db,
+            new NoopDataUpdateService(),
+            Mock.Of<IFileStorage>(),
+            Mock.Of<ILeaseAgreementPdfGenerator>(),
+            audit.Object,
+            NullLogger<LeaseService>.Instance,
+            new FixedTimeProvider(Date(2026, 7, 9)),
+            tz: new FixedTimeZoneProvider(TimeZoneInfo.Utc));
+        var (property, unit, _) = SeedPropertyUnitTenant();
+
+        var act = () => sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            NewTenant = new CreateTenantRequest
+            {
+                FirstName = "Rollback",
+                LastName = "Tenant",
+                Email = "rollback.tenant@example.test",
+                Phone = "614-555-0100",
+            },
+            LeaseNumber = "L-ROLLBACK-001",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2026, 7, 9),
+            EndDate = Date(2027, 7, 9),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated lease workflow failure");
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.Tenants.AsNoTracking().CountAsync(t => t.Email == "rollback.tenant@example.test"))
+            .Should().Be(0);
+        (await _ctx.Db.Leases.AsNoTracking().CountAsync(l => l.LeaseNumber == "L-ROLLBACK-001"))
+            .Should().Be(0);
+        (await _ctx.Db.Payments.AsNoTracking().CountAsync(p => p.Amount == 1200m))
+            .Should().Be(0);
+        (await _ctx.Db.SecurityDepositHoldings.AsNoTracking().CountAsync(h => h.Amount == 1200m))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithNewTenant_RollsBackPortalAndLeaseWhenPortalProvisioningFails()
+    {
+        var portal = new Mock<ITenantPortalProvisioningService>();
+        portal.Setup(p => p.EnsurePortalAccountForTenantAsync(
+                It.IsAny<int>(),
+                PortfolioId,
+                It.IsAny<CancellationToken>()))
+            .Returns(async (int tenantId, int portfolioId, CancellationToken ct) =>
+            {
+                _ctx.Db.UserAccounts.Add(new UserAccount
+                {
+                    PortfolioId = portfolioId,
+                    TenantId = tenantId,
+                    Email = "portal.rollback@example.test",
+                    DisplayName = "Portal Rollback",
+                    PasswordHash = string.Empty,
+                    Role = UserRole.Tenant,
+                    IsActive = true,
+                    CreatedAt = Date(2026, 7, 9),
+                    UpdatedAt = Date(2026, 7, 9),
+                });
+                await _ctx.Db.SaveChangesAsync(ct);
+                throw new InvalidOperationException("simulated portal provisioning failure");
+            });
+        var sut = BuildSut(
+            new FixedTimeProvider(Date(2026, 7, 9)),
+            portal.Object);
+        var (property, unit, _) = SeedPropertyUnitTenant();
+
+        var act = () => sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            NewTenant = new CreateTenantRequest
+            {
+                FirstName = "Portal",
+                LastName = "Rollback",
+                Email = "portal.rollback@example.test",
+            },
+            LeaseNumber = "L-PORTAL-ROLLBACK-001",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2026, 7, 9),
+            EndDate = Date(2027, 7, 9),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated portal provisioning failure");
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.Tenants.AsNoTracking().CountAsync(t => t.Email == "portal.rollback@example.test"))
+            .Should().Be(0);
+        (await _ctx.Db.Leases.AsNoTracking().CountAsync(l => l.LeaseNumber == "L-PORTAL-ROLLBACK-001"))
+            .Should().Be(0);
+        (await _ctx.Db.UserAccounts.AsNoTracking().CountAsync(u => u.Email == "portal.rollback@example.test"))
+            .Should().Be(0);
     }
 
     [Fact]
@@ -705,7 +907,9 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     private static DateTime Date(int year, int month, int day)
         => new(year, month, day, 0, 0, 0, DateTimeKind.Utc);
 
-    private LeaseService BuildSut(TimeProvider? timeProvider = null)
+    private LeaseService BuildSut(
+        TimeProvider? timeProvider = null,
+        ITenantPortalProvisioningService? tenantPortalProvisioning = null)
     {
         var clock = timeProvider ?? TimeProvider.System;
         return new LeaseService(
@@ -716,7 +920,8 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             new AuditTrailService(_ctx.Db, new AuditScope(), clock),
             NullLogger<LeaseService>.Instance,
             clock,
-            tz: new FixedTimeZoneProvider(TimeZoneInfo.Utc));
+            tz: new FixedTimeZoneProvider(TimeZoneInfo.Utc),
+            tenantPortalProvisioning: tenantPortalProvisioning);
     }
 
     private (Property property, Unit unit, Tenant tenant) SeedPropertyUnitTenant()
