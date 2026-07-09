@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/models/models.dart';
+import 'package:rental_command/features/notices/notices_models.dart';
+import 'package:rental_command/features/notices/notices_repository.dart';
 import 'package:rental_command/features/payments/payment_detail_screen.dart';
 import 'package:rental_command/features/payments/payments_repository.dart';
 
@@ -81,6 +83,65 @@ void main() {
 
     expect(repo.deletedPaymentId, 8);
   });
+
+  testWidgets('eligible payment can create a scoped notice or reminder', (
+    tester,
+  ) async {
+    final paymentsRepo = _FakePaymentsRepository(
+      payment: _payment(leaseId: 10, propertyName: 'Maple Ridge', unit: '1A'),
+      leases: [_lease(id: 10, propertyName: 'Maple Ridge', unit: '1A')],
+    );
+    final noticesRepo = _FakeNoticesRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          paymentsRepositoryProvider.overrideWithValue(paymentsRepo),
+          noticesRepositoryProvider.overrideWithValue(noticesRepo),
+        ],
+        child: const MaterialApp(home: PaymentDetailScreen(paymentId: 8)),
+      ),
+    );
+
+    await tester.pump();
+    await tester.pump();
+
+    await tester.ensureVisible(find.text('Notice / reminder'));
+    await tester.tap(find.text('Notice / reminder'));
+    await tester.pumpAndSettle();
+
+    expect(noticesRepo.lastTenantId, isNull);
+    expect(noticesRepo.lastLeaseId, 10);
+    expect(noticesRepo.lastPaymentId, 8);
+    expect(noticesRepo.lastNoticeType, 'RentReminder');
+    expect(find.text('Review notice'), findsOneWidget);
+  });
+
+  testWidgets('settled payment does not show notice or reminder action', (
+    tester,
+  ) async {
+    final repo = _FakePaymentsRepository(
+      payment: _payment(
+        leaseId: 10,
+        propertyName: 'Maple Ridge',
+        unit: '1A',
+        status: 'Paid',
+      ),
+      leases: [_lease(id: 10, propertyName: 'Maple Ridge', unit: '1A')],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [paymentsRepositoryProvider.overrideWithValue(repo)],
+        child: const MaterialApp(home: PaymentDetailScreen(paymentId: 8)),
+      ),
+    );
+
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Notice / reminder'), findsNothing);
+  });
 }
 
 class _FakePaymentsRepository extends PaymentsRepository {
@@ -130,19 +191,59 @@ class _FakePaymentsRepository extends PaymentsRepository {
   }
 }
 
+class _FakeNoticesRepository extends NoticesRepository {
+  _FakeNoticesRepository() : super(Dio());
+
+  int? lastTenantId;
+  int? lastLeaseId;
+  int? lastPaymentId;
+  String? lastNoticeType;
+
+  @override
+  Future<List<NoticeDraft>> generateForTenant(
+    int? tenantId, {
+    int? leaseId,
+    int? paymentId,
+    String? noticeType,
+  }) async {
+    lastTenantId = tenantId;
+    lastLeaseId = leaseId;
+    lastPaymentId = paymentId;
+    lastNoticeType = noticeType;
+    return [
+      NoticeDraft(
+        id: 42,
+        leaseId: leaseId ?? 0,
+        paymentId: paymentId,
+        tenantId: tenantId ?? 0,
+        tenantName: 'Jesse Coble',
+        noticeType: noticeType ?? 'RentReminder',
+        status: 'Draft',
+        subject: 'Upcoming rent reminder',
+        body: 'Rent is due soon.',
+        reason: '',
+        triggerDate: DateTime(2026, 7),
+      ),
+    ];
+  }
+}
+
 Payment _payment({
   required int leaseId,
   required String propertyName,
   required String unit,
+  String type = 'Rent',
+  String status = 'Scheduled',
+  DateTime? dueDate,
 }) {
   return Payment(
     id: 8,
     portfolioId: 1,
     leaseId: leaseId,
-    type: 'Rent',
-    status: 'Scheduled',
+    type: type,
+    status: status,
     amount: 1200,
-    dueDate: DateTime(2026, 7),
+    dueDate: dueDate ?? DateTime(2099, 7),
     tenantName: 'Jesse Coble',
     leaseNumber: 'L-2026-0004',
     propertyName: propertyName,

@@ -346,6 +346,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
       context,
       ref,
       tenantId: _lease.tenantId,
+      leaseId: _lease.id,
       tenantName: tenantName.isEmpty
           ? 'tenant #${_lease.tenantId}'
           : tenantName,

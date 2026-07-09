@@ -24,4 +24,15 @@ describe('tenant create/send notice editing', () => {
 		assert.match(dialogSource, /notices\.approve\(draft\.id/);
 		assert.match(dialogSource, /onclick=\{\(\) => sendNoticeMutation\.mutate\(draft\)\}/);
 	});
+
+	it('supports lease and payment scoped generation without resending existing notices', () => {
+		assert.match(dialogSource, /leaseId\?: number/);
+		assert.match(dialogSource, /paymentId\?: number/);
+		assert.match(dialogSource, /function generateRequest\(noticeType\?: string\)/);
+		assert.match(dialogSource, /notices\.generate\(generateRequest\(noticeType\)\)/);
+		assert.match(dialogSource, /\.\.\.\(paymentId != null \? \{ paymentId \} : \{\}\)/);
+		assert.match(dialogSource, /draft\.status === 'Draft'/);
+		assert.match(dialogSource, /disabled=\{!editable\}/);
+		assert.match(dialogSource, /This notice already exists and will not be sent again\./);
+	});
 });
