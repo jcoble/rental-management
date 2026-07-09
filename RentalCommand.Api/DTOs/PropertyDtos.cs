@@ -103,6 +103,7 @@ public class PropertyListQuery : ListQuery
     [JsonPropertyName("type")]
     public PropertyType? Type { get; set; }
     public PropertyStatus? Status { get; set; }
+    public bool? AvailableForLease { get; set; }
 }
 
 public class CreatePropertyRequest

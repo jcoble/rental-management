@@ -20,6 +20,15 @@ public class TenantResponse
     /// <summary>Number of this tenant's leases currently in <see cref="LeaseStatus.Active"/>. Computed DB-side.</summary>
     public int ActiveLeaseCount { get; set; }
 
+    /// <summary>Number of live or historical leases linked to this tenant as primary or co-tenant. Computed DB-side.</summary>
+    public int LeaseHistoryCount { get; set; }
+
+    /// <summary>True only when this tenant has no lease history and can be safely deleted.</summary>
+    public bool CanDelete { get; set; } = true;
+
+    /// <summary>User-facing reason delete is disabled, when <see cref="CanDelete"/> is false.</summary>
+    public string? DeleteBlockedReason { get; set; }
+
     /// <summary>
     /// Portal-login state for this tenant: <c>"none"</c> (no Identity login), <c>"active"</c> (login,
     /// can sign in), or <c>"disabled"</c> (login locked off). Only populated on the single-tenant GET
@@ -62,6 +71,7 @@ public class TenantListQuery : ListQuery
     public bool? AvailableForLease { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
+    public int? IncludeLeaseId { get; set; }
 }
 
 public class CreateTenantRequest

@@ -115,6 +115,72 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_ActiveLeaseForNonVacantUnit_ThrowsConflict()
+    {
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        unit.Status = UnitStatus.Occupied;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-OCCUPIED-UNIT",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("vacant unit");
+        _ctx.Db.Leases.Should().NotContain(l => l.LeaseNumber == "L-OCCUPIED-UNIT");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ActiveLeaseWithTenantAlreadyOnOccupyingLease_ThrowsConflict()
+    {
+        var (property, existingUnit, tenant) = SeedPropertyUnitTenant();
+        SeedLease(property, existingUnit, tenant, "L-TENANT-ACTIVE", LeaseStatus.Active, Date(2030, 1, 1), Date(2030, 12, 31));
+        var newUnit = new Unit
+        {
+            Property = property,
+            UnitNumber = "2",
+            MarketRent = 1275m,
+            Status = UnitStatus.Vacant,
+            CreatedAt = Date(2026, 1, 1),
+            UpdatedAt = Date(2026, 1, 1),
+        };
+        _ctx.Db.Units.Add(newUnit);
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = newUnit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-TENANT-CONFLICT",
+            Status = LeaseStatus.Active,
+            StartDate = Date(2030, 6, 1),
+            EndDate = Date(2031, 1, 1),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("L-TENANT-ACTIVE");
+        _ctx.Db.Leases.Should().NotContain(l => l.LeaseNumber == "L-TENANT-CONFLICT");
+    }
+
+    [Fact]
     public async Task UpdateAsync_DraftToActiveWhenDatesOverlapOccupyingLease_ThrowsConflict()
     {
         var (property, unit, tenant) = SeedPropertyUnitTenant();

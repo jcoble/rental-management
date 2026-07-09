@@ -28,7 +28,7 @@ public class UnitController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<UnitResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<UnitResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+        [FromQuery] UnitListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
         var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
         return Ok(items);

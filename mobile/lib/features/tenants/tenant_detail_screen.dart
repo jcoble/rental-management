@@ -166,20 +166,40 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
     final name = '${_tenant.firstName} ${_tenant.lastName}'.trim();
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
+    final activeLeaseCount = _tenant.activeLeaseCount ?? 0;
+    final leaseHistoryCount = _tenant.leaseHistoryCount ?? 0;
+    final hasActiveLease = activeLeaseCount > 0;
+    final hasLeaseHistory = leaseHistoryCount > 0;
+    final canDelete = _tenant.canDelete && !hasActiveLease && !hasLeaseHistory;
+    final blockedReason = _tenant.deleteBlockedReason;
+    final title = canDelete
+        ? 'Delete tenant?'
+        : hasActiveLease
+        ? 'Tenant has an active lease'
+        : 'Tenant history is preserved';
+    final message = canDelete
+        ? (name.isEmpty ? 'Delete this tenant?' : 'Delete $name?')
+        : (blockedReason != null && blockedReason.isNotEmpty)
+        ? blockedReason
+        : hasActiveLease
+        ? 'End or reassign this tenant’s active leases before deleting them.'
+        : hasLeaseHistory
+        ? 'This tenant has lease history, so the record is kept for past leases and payments.'
+        : 'This tenant cannot be deleted right now.';
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete tenant?'),
-        content: Text(
-          name.isEmpty ? 'Delete this tenant?' : 'Delete $name?',
-        ),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: canDelete
+                ? () => Navigator.of(dialogContext).pop(true)
+                : null,
             child: const Text('Delete'),
           ),
         ],
@@ -443,6 +463,11 @@ class _TenantInfoCard extends StatelessWidget {
                   _KeyValue(
                     label: 'Active leases',
                     value: '${tenant.activeLeaseCount}',
+                  ),
+                if (tenant.leaseHistoryCount != null)
+                  _KeyValue(
+                    label: 'Lease history',
+                    value: '${tenant.leaseHistoryCount}',
                   ),
               ],
             ),
