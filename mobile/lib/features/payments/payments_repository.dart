@@ -56,6 +56,7 @@ class PaymentListQuery {
     this.skip = 0,
     this.take = 20,
     this.leaseId,
+    this.applicationId,
     this.search,
     this.sort = '-createdAt',
     this.dueFrom,
@@ -67,6 +68,7 @@ class PaymentListQuery {
   final int skip;
   final int take;
   final int? leaseId;
+  final int? applicationId;
   final String? search;
   final String sort;
   final String? dueFrom;
@@ -80,6 +82,7 @@ class PaymentListQuery {
         other.skip == skip &&
         other.take == take &&
         other.leaseId == leaseId &&
+        other.applicationId == applicationId &&
         other.search == search &&
         other.sort == sort &&
         other.dueFrom == dueFrom &&
@@ -93,6 +96,7 @@ class PaymentListQuery {
     skip,
     take,
     leaseId,
+    applicationId,
     search,
     sort,
     dueFrom,
@@ -229,6 +233,7 @@ class PaymentsRepository {
   /// screen both show the most recent activity first.
   Future<List<Payment>> listPayments({
     int? leaseId,
+    int? applicationId,
     String sort = '-createdAt',
     String? dueFrom,
     String? dueTo,
@@ -238,6 +243,7 @@ class PaymentsRepository {
     try {
       final params = <String, dynamic>{};
       if (leaseId != null) params['leaseId'] = leaseId;
+      if (applicationId != null) params['applicationId'] = applicationId;
       if (sort.isNotEmpty) params['sort'] = sort;
       if (dueFrom != null && dueFrom.isNotEmpty) {
         params['dueFrom'] = dueFrom;
@@ -272,6 +278,7 @@ class PaymentsRepository {
       'skip': query.skip,
       'take': query.take,
       'leaseId': query.leaseId,
+      'applicationId': query.applicationId,
       'search': query.search,
       'sort': query.sort,
       'dueFrom': query.dueFrom,
@@ -573,6 +580,18 @@ final leasePaymentsProvider = FutureProvider.autoDispose
       return ref
           .watch(paymentsRepositoryProvider)
           .listPayments(leaseId: leaseId);
+    });
+
+// ── Payments for a specific rental application ───────────────────────────────
+
+/// Lease-less application/screening fees for one application. The filter is
+/// server-side (`GET /payments?applicationId=…`) so detail screens never load
+/// the whole ledger and filter locally.
+final applicationPaymentsProvider = FutureProvider.autoDispose
+    .family<List<Payment>, int>((ref, applicationId) {
+      return ref
+          .watch(paymentsRepositoryProvider)
+          .listPayments(applicationId: applicationId);
     });
 
 /// Receipt/scan bytes for a payment, keyed by id.

@@ -87,7 +87,7 @@
 	function startEditing() {
 		if (!payment) return;
 		form = {
-			leaseId: String(payment.leaseId),
+			leaseId: payment.leaseId == null ? '' : String(payment.leaseId),
 			amount: String(payment.amount),
 			amountPaid: payment.amountPaid != null ? String(payment.amountPaid) : '',
 			dueDate: payment.dueDate?.slice(0, 10) ?? '',
@@ -210,7 +210,7 @@
 				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{heroAmount}</p>
 				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
 					<StatusBadge status={payment.status} />
-					{#if leaseDisplay}
+					{#if leaseDisplay && payment.leaseId != null}
 						<span aria-hidden="true">·</span>
 						<a href="/leases/{payment.leaseId}" class="font-medium text-foreground underline-offset-4 hover:underline">{leaseDisplay}</a>
 					{/if}

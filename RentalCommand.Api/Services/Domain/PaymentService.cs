@@ -197,6 +197,11 @@ public class PaymentService : IPaymentService
 
         if (query is PaymentListQuery paymentQuery)
         {
+            if (paymentQuery.ApplicationId.HasValue)
+            {
+                q = q.Where(p => p.ApplicationId == paymentQuery.ApplicationId.Value);
+            }
+
             if (paymentQuery.DueFrom.HasValue)
             {
                 var dueFrom = paymentQuery.DueFrom.Value.ToUtc();

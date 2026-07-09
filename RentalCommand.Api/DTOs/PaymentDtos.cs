@@ -121,6 +121,10 @@ public class PaymentListResponse
 
 public class PaymentListQuery : ListQuery
 {
+    [FromQuery(Name = "applicationId")]
+    [Range(1, int.MaxValue)]
+    public int? ApplicationId { get; set; }
+
     [FromQuery(Name = "dueFrom")]
     public DateTime? DueFrom { get; set; }
 

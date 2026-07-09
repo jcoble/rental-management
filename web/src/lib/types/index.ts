@@ -4,7 +4,7 @@ export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
 export type UnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
 export type LeaseStatus = 'Draft' | 'PendingSignature' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
 export type EsignStatus = 'None' | 'Sent' | 'Signed' | 'Declined';
-export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other';
+export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other' | 'ApplicationFee';
 export type PaymentStatus = 'Scheduled' | 'Paid' | 'Partial' | 'Late' | 'Waived' | 'Failed' | 'Refunded';
 export type ExpenseStatus = 'Pending' | 'Approved' | 'Paid' | 'Rejected' | 'Draft';
 export type WorkOrderPriority = 'Low' | 'Normal' | 'High' | 'Emergency';
@@ -392,7 +392,8 @@ export interface LeaseTenantSummary {
 export interface Payment {
 	id: number;
 	portfolioId: number;
-	leaseId: number;
+	leaseId?: number | null;
+	applicationId?: number | null;
 	/** Unit/Property the payment's lease is on; resolved DB-side via the lease join so the UI can route to the unit's tab. */
 	unitId?: number;
 	propertyId?: number;
