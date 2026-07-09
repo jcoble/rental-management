@@ -9,7 +9,6 @@
 	} from '$lib/api/endpoints/sign';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import {
-		Building,
 		FileText,
 		Download,
 		CheckCircle2,
@@ -23,6 +22,7 @@
 		XCircle
 	} from '@lucide/svelte';
 	import type { PageData } from './$types';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -264,11 +264,7 @@
 	<!-- Branded header -->
 	<header class="border-b border-border/60 bg-background/90 backdrop-blur">
 		<div class="mx-auto flex h-16 max-w-3xl items-center gap-2 px-4 sm:px-6">
-			<span
-				class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-			>
-				<Building class="h-4 w-4" />
-			</span>
+			<BrandMark class="h-8 w-8 shadow-sm" />
 			<span class="text-base font-semibold tracking-tight">Rental Command</span>
 			<span class="ml-auto hidden items-center gap-1.5 text-xs font-medium text-muted-foreground sm:inline-flex">
 				<ShieldCheck class="h-3.5 w-3.5 text-success" />

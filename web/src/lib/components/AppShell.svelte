@@ -64,6 +64,7 @@
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -596,13 +597,11 @@
 		<div class="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
 			{#if sidebarCollapsed && !isMobile}
 				<a href="/" class="flex w-full items-center justify-center">
-					<Building class="h-5 w-5 text-primary" />
+					<BrandMark class="h-7 w-7 shadow-sm" alt="Rental Command" />
 				</a>
 			{:else}
 				<a href="/" class="flex items-center gap-2">
-					<span class="flex h-7 w-7 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/15 text-primary ring-1 ring-inset ring-primary/25">
-						<Building class="h-4 w-4" />
-					</span>
+					<BrandMark class="h-7 w-7 shadow-sm" />
 					<span class="truncate font-semibold tracking-tight text-foreground">Rental Command</span>
 				</a>
 			{/if}
