@@ -35,9 +35,6 @@ const _monthNames = [
 
 String _fmtDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
-String _fmtIso(DateTime d) =>
-    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
 String _formatCurrency(double amount) {
   final rounded = amount.round();
   final s = rounded.toString();
@@ -59,6 +56,32 @@ const _leaseStatuses = [
   'Expired',
   'Terminated',
 ];
+
+enum _LeaseTenantMode { existing, newTenant }
+
+const _rentTrackingStartOptions = <String, String>{
+  'ForwardOnly': 'Start from today',
+  'BackfillFromLeaseStart': 'Backfill from lease start',
+  'CustomCutoffDate': 'Use cutoff date',
+  'OpeningBalanceOnly': 'Use opening balance',
+};
+
+const _maximumLeaseAmount = 99999999.0;
+
+bool _looksLikeEmail(String value) =>
+    RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(value.trim());
+
+bool _isFiniteAmountInRange(
+  double? value, {
+  required double minimum,
+  double maximum = _maximumLeaseAmount,
+}) => value != null && value.isFinite && value >= minimum && value <= maximum;
+
+DateTime _addCalendarYear(DateTime value) {
+  final nextYear = value.year + 1;
+  final lastDayOfMonth = DateTime(nextYear, value.month + 1, 0).day;
+  return DateTime(nextYear, value.month, value.day.clamp(1, lastDayOfMonth));
+}
 
 /// List of all leases with "+" FAB to create a new lease.
 class LeasesListScreen extends ConsumerStatefulWidget {
@@ -550,17 +573,30 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   int? _selectedPropertyId;
   int? _selectedUnitId;
   List<int> _selectedTenantIds = <int>[];
+  _LeaseTenantMode _tenantMode = _LeaseTenantMode.existing;
   String _selectedStatus = 'Active';
+  String _rentTrackingStartMode = 'ForwardOnly';
+  bool _rentTrackingChanged = false;
 
   // Date pickers
   DateTime? _startDate;
   DateTime? _endDate;
+  DateTime? _rentTrackingStartDate;
+  DateTime? _openingBalanceAsOfDate;
 
   // Text controllers
+  late final TextEditingController _leaseNumberCtrl;
   late final TextEditingController _rentCtrl;
   late final TextEditingController _depositCtrl;
   late final TextEditingController _lateFeeCtrl;
   late final TextEditingController _dueDayCtrl;
+  late final TextEditingController _notesCtrl;
+  late final TextEditingController _newTenantFirstNameCtrl;
+  late final TextEditingController _newTenantLastNameCtrl;
+  late final TextEditingController _newTenantEmailCtrl;
+  late final TextEditingController _newTenantPhoneCtrl;
+  late final TextEditingController _openingBalanceAmountCtrl;
+  late final TextEditingController _openingBalanceNoteCtrl;
 
   bool _saving = false;
   String? _error;
@@ -589,6 +625,9 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     final defaults = widget.unitDefaults;
     _selectedPropertyId = _initialPropertyId;
     _selectedUnitId = _initialUnitId;
+    _leaseNumberCtrl = TextEditingController(
+      text: e?.leaseNumber ?? 'L-${DateTime.now().year}-001',
+    );
     _rentCtrl = TextEditingController(
       text: e?.monthlyRent.toString() ?? defaults?.monthlyRent ?? '',
     );
@@ -596,11 +635,18 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       text: e?.securityDeposit.toString() ?? defaults?.securityDeposit ?? '',
     );
     _lateFeeCtrl = TextEditingController(
-      text: e?.lateFeeAmount.toString() ?? defaults?.lateFeeAmount ?? '50',
+      text: e?.lateFeeAmount.toString() ?? defaults?.lateFeeAmount ?? '75',
     );
     _dueDayCtrl = TextEditingController(
       text: e?.rentDueDay.toString() ?? defaults?.rentDueDay ?? '1',
     );
+    _notesCtrl = TextEditingController(text: e?.notes ?? '');
+    _newTenantFirstNameCtrl = TextEditingController();
+    _newTenantLastNameCtrl = TextEditingController();
+    _newTenantEmailCtrl = TextEditingController();
+    _newTenantPhoneCtrl = TextEditingController();
+    _openingBalanceAmountCtrl = TextEditingController();
+    _openingBalanceNoteCtrl = TextEditingController();
     _selectedStatus = defaults?.status ?? _selectedStatus;
 
     if (e != null) {
@@ -614,6 +660,10 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
           : _leaseStatuses.first;
       _startDate = e.startDate;
       _endDate = e.endDate;
+      _rentTrackingStartDate = e.rentTrackingStartDate;
+      _rentTrackingStartMode = e.rentTrackingStartDate != null
+          ? 'CustomCutoffDate'
+          : (e.status == 'Active' ? 'BackfillFromLeaseStart' : 'ForwardOnly');
     }
 
     // Load dropdowns
@@ -630,10 +680,18 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
   @override
   void dispose() {
+    _leaseNumberCtrl.dispose();
     _rentCtrl.dispose();
     _depositCtrl.dispose();
     _lateFeeCtrl.dispose();
     _dueDayCtrl.dispose();
+    _notesCtrl.dispose();
+    _newTenantFirstNameCtrl.dispose();
+    _newTenantLastNameCtrl.dispose();
+    _newTenantEmailCtrl.dispose();
+    _newTenantPhoneCtrl.dispose();
+    _openingBalanceAmountCtrl.dispose();
+    _openingBalanceNoteCtrl.dispose();
     super.dispose();
   }
 
@@ -651,6 +709,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       setState(() {
         if (isStart) {
           _startDate = picked;
+          _endDate ??= _addCalendarYear(picked);
         } else {
           _endDate = picked;
         }
@@ -661,6 +720,32 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
         }
       });
     }
+  }
+
+  Future<void> _pickTrackingDate(
+    BuildContext context, {
+    required bool isOpeningBalance,
+  }) async {
+    final current = isOpeningBalance
+        ? _openingBalanceAsOfDate
+        : _rentTrackingStartDate;
+    final initial = current ?? _startDate ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() {
+      if (isOpeningBalance) {
+        _openingBalanceAsOfDate = picked;
+      } else {
+        _rentTrackingStartDate = picked;
+      }
+      _rentTrackingChanged = true;
+      _error = null;
+    });
   }
 
   bool _validateLocationStep() {
@@ -679,11 +764,31 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   }
 
   bool _validateTenantsStep() {
-    if (_selectedTenantIds.isEmpty) {
+    if (_tenantMode == _LeaseTenantMode.existing &&
+        _selectedTenantIds.isEmpty) {
       setState(() => _error = 'Select at least one tenant.');
       return false;
     }
-    if (_error == 'Select at least one tenant.') {
+    if (_tenantMode == _LeaseTenantMode.newTenant) {
+      final firstName = _newTenantFirstNameCtrl.text.trim();
+      final lastName = _newTenantLastNameCtrl.text.trim();
+      final email = _newTenantEmailCtrl.text.trim();
+      final phone = _newTenantPhoneCtrl.text.trim();
+      if (firstName.isEmpty ||
+          lastName.isEmpty ||
+          firstName.length > 100 ||
+          lastName.length > 100 ||
+          email.isEmpty ||
+          email.length > 200 ||
+          !_looksLikeEmail(email) ||
+          phone.isEmpty ||
+          phone.length > 50) {
+        setState(() => _error = 'Complete the required tenant details.');
+        return false;
+      }
+    }
+    if (_error == 'Select at least one tenant.' ||
+        _error == 'Complete the required tenant details.') {
       setState(() => _error = null);
     }
     return true;
@@ -711,27 +816,116 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     return true;
   }
 
-  bool _validateTermsStep() {
-    if (_error == 'Please select an end date.' ||
-        _error == 'Please select start and end dates.') {
+  bool _validateIdentityStep() {
+    if (_leaseNumberCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'Enter a lease number.');
+      return false;
+    }
+    if (_leaseNumberCtrl.text.trim().length > 100) {
+      setState(() => _error = 'Lease number must be 100 characters or less.');
+      return false;
+    }
+    if (_error == 'Enter a lease number.' ||
+        _error == 'Lease number must be 100 characters or less.') {
       setState(() => _error = null);
     }
     return true;
   }
 
-  String _generatedLeaseNumber() {
-    final unitLabel = (_initialUnitLabel ?? 'Unit $_selectedUnitId').trim();
-    final propertyLabel = (_initialPropertyLabel ?? '').trim();
-    final dateLabel = _startDate == null ? '' : _fmtIso(_startDate!);
-    final label = [
-      if (propertyLabel.isNotEmpty) propertyLabel,
-      if (unitLabel.isNotEmpty) unitLabel,
-      if (dateLabel.isNotEmpty) dateLabel,
-    ].join(' - ');
-    final candidate = label.isEmpty
-        ? 'Lease ${DateTime.now().millisecondsSinceEpoch}'
-        : label;
-    return candidate.length <= 100 ? candidate : candidate.substring(0, 100);
+  bool _validateRentStep() {
+    final rent = double.tryParse(_rentCtrl.text);
+    final deposit = double.tryParse(_depositCtrl.text);
+    if (!_isFiniteAmountInRange(rent, minimum: 0.01)) {
+      setState(
+        () => _error = 'Monthly rent must be between \$0.01 and \$99,999,999.',
+      );
+      return false;
+    }
+    if (!_isFiniteAmountInRange(deposit, minimum: 0)) {
+      setState(
+        () => _error = 'Security deposit must be between \$0 and \$99,999,999.',
+      );
+      return false;
+    }
+    if (_error == 'Monthly rent must be between \$0.01 and \$99,999,999.' ||
+        _error == 'Security deposit must be between \$0 and \$99,999,999.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  bool _validateFeesStep() {
+    final lateFee = double.tryParse(_lateFeeCtrl.text);
+    final dueDay = int.tryParse(_dueDayCtrl.text);
+    if (!_isFiniteAmountInRange(lateFee, minimum: 0)) {
+      setState(() => _error = 'Late fee must be between \$0 and \$99,999,999.');
+      return false;
+    }
+    if (dueDay == null || dueDay < 1 || dueDay > 31) {
+      setState(() => _error = 'Rent due day must be between 1 and 31.');
+      return false;
+    }
+    if (_error == 'Late fee must be between \$0 and \$99,999,999.' ||
+        _error == 'Rent due day must be between 1 and 31.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  bool _validateStatusStep() {
+    if (_notesCtrl.text.trim().length > 2000) {
+      setState(() => _error = 'Notes must be 2,000 characters or less.');
+      return false;
+    }
+    if (_error == 'Notes must be 2,000 characters or less.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  bool _validateTrackingStep() {
+    if (_selectedStatus != 'Active') return true;
+    if (_rentTrackingStartMode == 'CustomCutoffDate' &&
+        _rentTrackingStartDate == null) {
+      setState(() => _error = 'Select a rent tracking cutoff date.');
+      return false;
+    }
+    if (_rentTrackingStartMode == 'OpeningBalanceOnly') {
+      final amountText = _openingBalanceAmountCtrl.text.trim();
+      final note = _openingBalanceNoteCtrl.text.trim();
+      final hasRelatedValue =
+          _openingBalanceAsOfDate != null || note.isNotEmpty;
+      if (hasRelatedValue && double.tryParse(amountText) == null) {
+        setState(() => _error = 'Enter the opening balance amount.');
+        return false;
+      }
+      if (amountText.isNotEmpty && double.tryParse(amountText) == null) {
+        setState(() => _error = 'Enter a valid opening balance amount.');
+        return false;
+      }
+      final amount = double.tryParse(amountText);
+      if (amountText.isNotEmpty &&
+          !_isFiniteAmountInRange(amount, minimum: -_maximumLeaseAmount)) {
+        setState(
+          () => _error =
+              'Opening balance must be between -\$99,999,999 and \$99,999,999.',
+        );
+        return false;
+      }
+      if (amountText.isNotEmpty && _openingBalanceAsOfDate == null) {
+        setState(() => _error = 'Select the opening balance as-of date.');
+        return false;
+      }
+      if (note.length > 2000) {
+        setState(
+          () =>
+              _error = 'Opening balance note must be 2,000 characters or less.',
+        );
+        return false;
+      }
+    }
+    setState(() => _error = null);
+    return true;
   }
 
   Future<void> _submit() async {
@@ -739,7 +933,11 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     if (!_validateLocationStep() ||
         !_validateTenantsStep() ||
         !_validateDatesStep() ||
-        !_validateTermsStep()) {
+        !_validateIdentityStep() ||
+        !_validateRentStep() ||
+        !_validateFeesStep() ||
+        !_validateStatusStep() ||
+        !_validateTrackingStep()) {
       return;
     }
 
@@ -752,7 +950,17 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       isEdit: _isEdit,
       propertyId: _selectedPropertyId!,
       unitId: _selectedUnitId!,
-      tenantIds: _selectedTenantIds,
+      tenantIds: _tenantMode == _LeaseTenantMode.existing
+          ? _selectedTenantIds
+          : const [],
+      newTenant: _tenantMode == _LeaseTenantMode.newTenant
+          ? buildInlineTenantPayload(
+              firstName: _newTenantFirstNameCtrl.text,
+              lastName: _newTenantLastNameCtrl.text,
+              email: _newTenantEmailCtrl.text,
+              phone: _newTenantPhoneCtrl.text,
+            )
+          : null,
       startDate: _startDate!,
       endDate: _endDate!,
       monthlyRent: _rentCtrl.text,
@@ -760,7 +968,15 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       lateFeeAmount: _lateFeeCtrl.text,
       rentDueDay: _dueDayCtrl.text,
       status: _selectedStatus,
-      leaseNumber: _generatedLeaseNumber(),
+      leaseNumber: _leaseNumberCtrl.text,
+      rentTrackingStartMode: _isEdit && !_rentTrackingChanged
+          ? null
+          : _rentTrackingStartMode,
+      rentTrackingStartDate: _rentTrackingStartDate,
+      openingBalanceAmount: _openingBalanceAmountCtrl.text,
+      openingBalanceAsOfDate: _openingBalanceAsOfDate,
+      openingBalanceNote: _openingBalanceNoteCtrl.text,
+      notes: _notesCtrl.text,
     );
 
     try {
@@ -917,25 +1133,155 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _TenantMultiSelect(
-                  tenants: tenants,
-                  selectedTenantIds: _selectedTenantIds,
-                  emptyText: _isEdit
-                      ? 'No tenants yet.'
-                      : 'No available tenants.',
-                  errorText: _error == 'Select at least one tenant.'
-                      ? _error
-                      : null,
-                  onChanged: (ids) {
-                    setState(() {
-                      _selectedTenantIds = ids;
-                      if (_error == 'Select at least one tenant.') {
+                if (!_isEdit) ...[
+                  Text(
+                    'Tenant type',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<_LeaseTenantMode>(
+                    segments: const [
+                      ButtonSegment(
+                        value: _LeaseTenantMode.existing,
+                        icon: Icon(Icons.people_outline),
+                        label: Text('Existing'),
+                      ),
+                      ButtonSegment(
+                        value: _LeaseTenantMode.newTenant,
+                        icon: Icon(Icons.person_add_outlined),
+                        label: Text('New tenant'),
+                      ),
+                    ],
+                    selected: {_tenantMode},
+                    onSelectionChanged: (selection) {
+                      setState(() {
+                        _tenantMode = selection.first;
+                        if (_tenantMode == _LeaseTenantMode.newTenant) {
+                          _selectedTenantIds = <int>[];
+                        }
                         _error = null;
-                      }
-                    });
-                  },
-                ),
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                if (_tenantMode == _LeaseTenantMode.existing)
+                  _TenantMultiSelect(
+                    tenants: tenants,
+                    selectedTenantIds: _selectedTenantIds,
+                    emptyText: _isEdit
+                        ? 'No tenants yet.'
+                        : 'No available tenants.',
+                    errorText: _error == 'Select at least one tenant.'
+                        ? _error
+                        : null,
+                    onChanged: (ids) {
+                      setState(() {
+                        _selectedTenantIds = ids;
+                        if (_error == 'Select at least one tenant.') {
+                          _error = null;
+                        }
+                      });
+                    },
+                  )
+                else
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'The tenant and lease are saved together. If the lease fails, neither record is created.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _LabeledTenantField(
+                        label: 'First name',
+                        controller: _newTenantFirstNameCtrl,
+                        maxLength: 100,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.givenName],
+                        validator: (value) {
+                          final name = value?.trim() ?? '';
+                          if (name.isEmpty) return 'First name is required';
+                          return name.length > 100
+                              ? 'Use 100 characters or fewer'
+                              : null;
+                        },
+                      ),
+                      gap,
+                      _LabeledTenantField(
+                        label: 'Last name',
+                        controller: _newTenantLastNameCtrl,
+                        maxLength: 100,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.familyName],
+                        validator: (value) {
+                          final name = value?.trim() ?? '';
+                          if (name.isEmpty) return 'Last name is required';
+                          return name.length > 100
+                              ? 'Use 100 characters or fewer'
+                              : null;
+                        },
+                      ),
+                      gap,
+                      _LabeledTenantField(
+                        label: 'Email',
+                        controller: _newTenantEmailCtrl,
+                        maxLength: 200,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.email],
+                        validator: (value) {
+                          final email = value?.trim() ?? '';
+                          if (email.isEmpty) return 'Email is required';
+                          if (email.length > 200) {
+                            return 'Use 200 characters or fewer';
+                          }
+                          return _looksLikeEmail(email)
+                              ? null
+                              : 'Enter a valid email address';
+                        },
+                      ),
+                      gap,
+                      _LabeledTenantField(
+                        label: 'Phone',
+                        controller: _newTenantPhoneCtrl,
+                        maxLength: 50,
+                        keyboardType: TextInputType.phone,
+                        textInputAction: TextInputAction.done,
+                        autofillHints: const [AutofillHints.telephoneNumber],
+                        validator: (value) {
+                          final phone = value?.trim() ?? '';
+                          if (phone.isEmpty) return 'Phone is required';
+                          return phone.length > 50
+                              ? 'Use 50 characters or fewer'
+                              : null;
+                        },
+                      ),
+                    ],
+                  ),
               ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Lease #',
+            validate: _validateIdentityStep,
+            child: TextFormField(
+              controller: _leaseNumberCtrl,
+              textInputAction: TextInputAction.done,
+              maxLength: 100,
+              decoration: const InputDecoration(
+                labelText: 'Lease number',
+                helperText: 'A reference you can recognize later',
+              ),
+              validator: (value) {
+                final number = value?.trim() ?? '';
+                if (number.isEmpty) return 'Enter a lease number';
+                return number.length > 100
+                    ? 'Use 100 characters or fewer'
+                    : null;
+              },
             ),
           ),
           TabbedFormStepSpec(
@@ -961,8 +1307,8 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
             ),
           ),
           TabbedFormStepSpec(
-            label: 'Terms',
-            validate: _validateTermsStep,
+            label: 'Rent',
+            validate: _validateRentStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -978,10 +1324,12 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                         decoration: const InputDecoration(
                           labelText: 'Monthly rent (\$)',
                         ),
-                        validator: (v) =>
-                            (v == null || double.tryParse(v) == null)
-                            ? 'Enter an amount'
-                            : null,
+                        validator: (v) {
+                          final amount = double.tryParse(v ?? '');
+                          return !_isFiniteAmountInRange(amount, minimum: 0.01)
+                              ? 'Enter \$0.01–\$99,999,999'
+                              : null;
+                        },
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -995,15 +1343,25 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                         decoration: const InputDecoration(
                           labelText: 'Security deposit (\$)',
                         ),
-                        validator: (v) =>
-                            (v == null || double.tryParse(v) == null)
-                            ? 'Enter an amount'
-                            : null,
+                        validator: (v) {
+                          final amount = double.tryParse(v ?? '');
+                          return !_isFiniteAmountInRange(amount, minimum: 0)
+                              ? 'Enter \$0–\$99,999,999'
+                              : null;
+                        },
                       ),
                     ),
                   ],
                 ),
-                gap,
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Fees',
+            validate: _validateFeesStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 TextFormField(
                   controller: _lateFeeCtrl,
                   keyboardType: const TextInputType.numberWithOptions(
@@ -1011,9 +1369,12 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                   ),
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(labelText: 'Late fee (\$)'),
-                  validator: (v) => (v == null || double.tryParse(v) == null)
-                      ? 'Enter an amount'
-                      : null,
+                  validator: (v) {
+                    final amount = double.tryParse(v ?? '');
+                    return !_isFiniteAmountInRange(amount, minimum: 0)
+                        ? 'Enter \$0–\$99,999,999'
+                        : null;
+                  },
                 ),
                 gap,
                 TextFormField(
@@ -1021,12 +1382,12 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                   keyboardType: TextInputType.number,
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
-                    labelText: 'Rent due day (1–28)',
+                    labelText: 'Rent due day (1–31)',
                   ),
                   validator: (v) {
                     final n = int.tryParse(v ?? '');
-                    if (n == null || n < 1 || n > 28) {
-                      return 'Enter 1–28';
+                    if (n == null || n < 1 || n > 31) {
+                      return 'Enter 1–31';
                     }
                     return null;
                   },
@@ -1036,11 +1397,12 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
           ),
           TabbedFormStepSpec(
             label: 'Status',
+            validate: _validateStatusStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'Set the lease status after the required terms are complete.',
+                  'Active starts rent tracking now. Choose Draft only when the lease is intentionally incomplete and should not occupy the unit yet.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -1056,11 +1418,169 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                     if (v != null) setState(() => _selectedStatus = v);
                   },
                 ),
+                gap,
+                TextFormField(
+                  controller: _notesCtrl,
+                  maxLines: 3,
+                  maxLength: 2000,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes',
+                    hintText: 'Optional lease notes',
+                    alignLabelWithHint: true,
+                  ),
+                  validator: (value) => (value?.trim().length ?? 0) > 2000
+                      ? 'Use 2,000 characters or fewer'
+                      : null,
+                ),
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Tracking',
+            validate: _validateTrackingStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_selectedStatus != 'Active')
+                  const _FormHint(
+                    text:
+                        'Rent tracking options apply after the lease becomes Active.',
+                  )
+                else ...[
+                  DropdownButtonFormField<String>(
+                    initialValue: _rentTrackingStartMode,
+                    decoration: const InputDecoration(
+                      labelText: 'Rent tracking start',
+                    ),
+                    items: _rentTrackingStartOptions.entries
+                        .map(
+                          (option) => DropdownMenuItem(
+                            value: option.key,
+                            child: Text(option.value),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _rentTrackingStartMode = value;
+                        _rentTrackingChanged = true;
+                        if (value != 'CustomCutoffDate') {
+                          _rentTrackingStartDate = null;
+                        }
+                        if (value != 'OpeningBalanceOnly') {
+                          _openingBalanceAmountCtrl.clear();
+                          _openingBalanceAsOfDate = null;
+                          _openingBalanceNoteCtrl.clear();
+                        }
+                        _error = null;
+                      });
+                    },
+                  ),
+                  gap,
+                  if (_rentTrackingStartMode == 'CustomCutoffDate')
+                    _DateTile(
+                      label: 'Cutoff date',
+                      date: _rentTrackingStartDate,
+                      onTap: () =>
+                          _pickTrackingDate(context, isOpeningBalance: false),
+                      hasError: _error == 'Select a rent tracking cutoff date.',
+                    ),
+                  if (_rentTrackingStartMode == 'OpeningBalanceOnly') ...[
+                    TextFormField(
+                      controller: _openingBalanceAmountCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                        signed: true,
+                      ),
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                        labelText: 'Opening balance (\$)',
+                        helperText:
+                            'Positive for money owed; negative for credit',
+                      ),
+                      validator: (value) {
+                        final amount = value?.trim() ?? '';
+                        if (amount.isEmpty) return null;
+                        return _isFiniteAmountInRange(
+                              double.tryParse(amount),
+                              minimum: -_maximumLeaseAmount,
+                            )
+                            ? null
+                            : 'Enter -\$99,999,999–\$99,999,999';
+                      },
+                      onChanged: (_) => _rentTrackingChanged = true,
+                    ),
+                    gap,
+                    _DateTile(
+                      label: 'Balance as-of date',
+                      date: _openingBalanceAsOfDate,
+                      onTap: () =>
+                          _pickTrackingDate(context, isOpeningBalance: true),
+                      hasError:
+                          _error == 'Select the opening balance as-of date.',
+                    ),
+                    gap,
+                    TextFormField(
+                      controller: _openingBalanceNoteCtrl,
+                      maxLines: 2,
+                      maxLength: 2000,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Opening balance note',
+                        hintText: 'Optional source or explanation',
+                        alignLabelWithHint: true,
+                      ),
+                      onChanged: (_) => _rentTrackingChanged = true,
+                    ),
+                  ],
+                ],
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _LabeledTenantField extends StatelessWidget {
+  const _LabeledTenantField({
+    required this.label,
+    required this.controller,
+    required this.validator,
+    this.keyboardType,
+    this.textInputAction,
+    this.autofillHints,
+    this.maxLength,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final FormFieldValidator<String> validator;
+  final TextInputType? keyboardType;
+  final TextInputAction? textInputAction;
+  final Iterable<String>? autofillHints;
+  final int? maxLength;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          textInputAction: textInputAction,
+          autofillHints: autofillHints,
+          maxLength: maxLength,
+          validator: validator,
+          decoration: InputDecoration(hintText: label),
+        ),
+      ],
     );
   }
 }
