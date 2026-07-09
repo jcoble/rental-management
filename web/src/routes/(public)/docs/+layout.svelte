@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { Building, ArrowUpRight, BookOpen } from '@lucide/svelte';
+	import { ArrowUpRight, BookOpen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { getCurrentUser } from '$lib/stores/auth.svelte';
 	import { page } from '$app/state';
 	import type { LayoutData } from './$types';
@@ -29,11 +30,7 @@
 		<div class="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
 			<div class="flex items-center gap-2">
 				<a href="/welcome" class="flex items-center gap-2">
-					<span
-						class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-					>
-						<Building class="h-4 w-4" />
-					</span>
+					<BrandMark class="h-8 w-8 shadow-sm" />
 					<span class="text-base font-semibold tracking-tight">Rental Command</span>
 				</a>
 				<span class="hidden text-border sm:inline">/</span>
@@ -100,9 +97,7 @@
 			class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-muted-foreground sm:flex-row sm:px-8"
 		>
 			<div class="flex items-center gap-2">
-				<span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
-					<Building class="h-4 w-4" />
-				</span>
+				<BrandMark class="h-7 w-7 shadow-sm" />
 				<span class="font-medium text-foreground">Rental Command</span>
 			</div>
 			<div class="flex items-center gap-5">

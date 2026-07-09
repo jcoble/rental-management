@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Building, ScanLine, Sparkles, ShieldCheck } from '@lucide/svelte';
+	import { ScanLine, Sparkles, ShieldCheck } from '@lucide/svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 
 	// Decorative split-panel shown beside the login/register card on wide screens.
 	// Reinforces the flagship promise: "the computer does the typing for you."
@@ -31,11 +32,7 @@
 
 	<div class="relative">
 		<a href="/" class="flex items-center gap-2">
-			<span
-				class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary ring-1 ring-inset ring-primary/30"
-			>
-				<Building class="h-5 w-5" />
-			</span>
+			<BrandMark variant="dark" class="h-9 w-9 shadow-lg" />
 			<span class="text-lg font-semibold tracking-tight text-white">Rental Command</span>
 		</a>
 	</div>
