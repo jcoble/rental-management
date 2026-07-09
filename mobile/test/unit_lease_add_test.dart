@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/models/models.dart';
+import 'package:rental_command/features/leases/eviction_cases_repository.dart';
 import 'package:rental_command/features/leases/lease_form_defaults.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 import 'package:rental_command/features/payments/payments_repository.dart';
@@ -27,13 +28,13 @@ void main() {
       expect(defaults.propertyLabel, 'Maple Ridge');
       expect(defaults.unitLabel, 'Unit 4B');
       expect(defaults.monthlyRent, '1400');
-      expect(defaults.status, 'Draft');
+      expect(defaults.status, 'Active');
       expect(defaults.lateFeeAmount, '75');
       expect(defaults.rentDueDay, '1');
     },
   );
 
-  testWidgets('unit lease tab offers Add lease from an existing lease detail', (
+  testWidgets('unit lease tab blocks Add lease while an active lease exists', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -45,6 +46,9 @@ void main() {
           ),
           paymentsRepositoryProvider.overrideWithValue(
             _FakePaymentsRepository(),
+          ),
+          evictionCasesRepositoryProvider.overrideWithValue(
+            _FakeEvictionCasesRepository(),
           ),
           tenantsRepositoryProvider.overrideWithValue(_FakeTenantsRepository()),
         ],
@@ -61,6 +65,40 @@ void main() {
 
     expect(find.text('Lease #L-2026-10'), findsAtLeastNWidgets(1));
     expect(find.text('Add lease'), findsOneWidget);
+    expect(
+      find.text('End or terminate the active lease before adding another.'),
+      findsOneWidget,
+    );
+    final addButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Add lease'),
+    );
+    expect(addButton.onPressed, isNull);
+  });
+
+  testWidgets('vacant unit lease tab opens the active lease form', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          leasesRepositoryProvider.overrideWithValue(_FakeLeasesRepository()),
+          propertiesRepositoryProvider.overrideWithValue(
+            _FakePropertiesRepository(),
+          ),
+          paymentsRepositoryProvider.overrideWithValue(
+            _FakePaymentsRepository(),
+          ),
+          tenantsRepositoryProvider.overrideWithValue(_FakeTenantsRepository()),
+        ],
+        child: MaterialApp(
+          home: UnitCommandCenterScreen(
+            dashboard: _unitDashboard(unitStatus: 'Vacant'),
+            initialTab: UnitCommandCenterTab.lease,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
 
     await tester.tap(find.text('Add lease'));
     await tester.pumpAndSettle();
@@ -119,9 +157,12 @@ void main() {
   );
 }
 
-UnitDashboard _unitDashboard({UnitLeaseSummary? currentLease}) {
+UnitDashboard _unitDashboard({
+  UnitLeaseSummary? currentLease,
+  String unitStatus = 'Occupied',
+}) {
   return UnitDashboard(
-    unit: _unit(),
+    unit: _unit(status: unitStatus),
     propertyName: 'Maple Ridge',
     lifecycleStage: 'Active',
     nextBestAction: const UnitNextBestAction(label: '', href: ''),
@@ -141,7 +182,7 @@ UnitDashboard _unitDashboard({UnitLeaseSummary? currentLease}) {
   );
 }
 
-Unit _unit() {
+Unit _unit({String status = 'Occupied'}) {
   return Unit(
     id: 42,
     propertyId: 7,
@@ -149,7 +190,7 @@ Unit _unit() {
     bedrooms: 2,
     bathrooms: 1,
     marketRent: 1400,
-    status: 'Occupied',
+    status: status,
     createdAt: DateTime(2026),
     updatedAt: DateTime(2026),
   );
@@ -211,6 +252,7 @@ class _FakePaymentsRepository extends PaymentsRepository {
   @override
   Future<List<Payment>> listPayments({
     int? leaseId,
+    int? applicationId,
     String sort = '-createdAt',
     String? dueFrom,
     String? dueTo,
@@ -222,6 +264,25 @@ class _FakePaymentsRepository extends PaymentsRepository {
 
   @override
   Future<Uint8List> scanBytes(int id) async => Uint8List(0);
+}
+
+class _FakeEvictionCasesRepository extends EvictionCasesRepository {
+  _FakeEvictionCasesRepository() : super(Dio());
+
+  @override
+  Future<EvictionCaseListPage> listCasesPage({
+    required int leaseId,
+    int skip = 0,
+    int take = 20,
+    String sort = '-filedOnDate',
+  }) async {
+    return EvictionCaseListPage(
+      items: const [],
+      totalCount: 0,
+      skip: skip,
+      take: take,
+    );
+  }
 }
 
 class _FakePropertiesRepository extends PropertiesRepository {

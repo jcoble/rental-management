@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -91,6 +93,7 @@ public class LeaseService : ILeaseService
     private readonly ILogger<LeaseService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
+    private readonly ITenantPortalProvisioningService? _tenantPortalProvisioning;
 
     public LeaseService(
         RentalCommandDbContext db,
@@ -101,7 +104,8 @@ public class LeaseService : ILeaseService
         ILogger<LeaseService> logger,
         TimeProvider timeProvider,
         ILeaseAgreementRenderer? agreementRenderer = null,
-        IAppTimeZoneProvider? tz = null)
+        IAppTimeZoneProvider? tz = null,
+        ITenantPortalProvisioningService? tenantPortalProvisioning = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -112,6 +116,7 @@ public class LeaseService : ILeaseService
         _logger = logger;
         _timeProvider = timeProvider;
         _tz = tz ?? UtcAppTimeZoneProvider.Instance;
+        _tenantPortalProvisioning = tenantPortalProvisioning;
     }
 
     // A lease is a legal contract, so high-stakes events (create / edit / terminate) get an explicit
@@ -161,24 +166,18 @@ public class LeaseService : ILeaseService
             return;
         }
 
-        if (leaseStatus == LeaseStatus.Active)
+        if (OccupiesUnit(leaseStatus))
         {
             unit.Status = UnitStatus.Occupied;
             return;
         }
 
-        // The lease is not Active. NoticeGiven keeps the unit occupied until move-out, so it does NOT free
-        // the unit here. For a real exit, only vacate when no OTHER lease still holds the unit Active.
-        if (leaseStatus == LeaseStatus.NoticeGiven)
-        {
-            return;
-        }
-
+        // For a real exit, only vacate when no OTHER lease still holds the unit.
         var stillOccupied = await _db.Leases.AnyAsync(
             l => l.UnitId == unitId
                 && l.PortfolioId == portfolioId
                 && l.Id != leaseId
-                && l.Status == LeaseStatus.Active,
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
             ct);
 
         if (!stillOccupied && unit.Status == UnitStatus.Occupied)
@@ -229,18 +228,21 @@ public class LeaseService : ILeaseService
         return PortfolioProrationSettings.ReadConvention(settings);
     }
 
-    private async Task AdjustFinalRentChargeForProrationAsync(Lease lease, CancellationToken ct)
+    private async Task<Payment?> AdjustFinalRentChargeForProrationAsync(
+        Lease lease,
+        CancellationToken ct,
+        bool broadcast = true)
     {
         if (lease.MonthlyRent <= 0m)
         {
-            return;
+            return null;
         }
 
         var rentEnd = EffectiveRentEndDate(lease);
         var finalOccupiedDate = rentEnd.AddDays(-1);
         if (finalOccupiedDate < lease.StartDate.Date)
         {
-            return;
+            return null;
         }
 
         var finalMonthStart = new DateTime(
@@ -262,7 +264,7 @@ public class LeaseService : ILeaseService
 
         if (finalPeriod.PeriodKey is null || !finalPeriod.IsPartial)
         {
-            return;
+            return null;
         }
 
         var payment = await _db.Payments
@@ -274,25 +276,30 @@ public class LeaseService : ILeaseService
                 ct);
         if (payment is null)
         {
-            return;
+            return null;
         }
 
         var convention = await GetProrationConventionAsync(lease.PortfolioId, ct);
         var proratedAmount = RentAmountForPeriod(lease, finalPeriod, convention);
         if (payment.Amount == proratedAmount)
         {
-            return;
+            return null;
         }
 
         payment.Amount = proratedAmount;
         payment.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            lease.PortfolioId,
-            PaymentEntityType,
-            payment.Id,
-            PaymentResponse.FromEntity(payment),
-            ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                lease.PortfolioId,
+                PaymentEntityType,
+                payment.Id,
+                PaymentResponse.FromEntity(payment),
+                ct);
+        }
+
+        return payment;
     }
 
     private static DateTime? ResolveRentTrackingStartDate(
@@ -359,7 +366,8 @@ public class LeaseService : ILeaseService
         decimal? amount,
         DateTime? asOfDate,
         string? note,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool broadcast = true)
     {
         if (!HasOpeningBalanceRequest(amount, asOfDate, note))
         {
@@ -392,17 +400,23 @@ public class LeaseService : ILeaseService
         opening.UpdatedAt = now;
 
         await _db.SaveChangesAsync(ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            lease.PortfolioId,
-            "OpeningBalance",
-            opening.Id,
-            OpeningBalanceResponse.FromEntity(opening),
-            ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                lease.PortfolioId,
+                "OpeningBalance",
+                opening.Id,
+                OpeningBalanceResponse.FromEntity(opening),
+                ct);
+        }
 
         return opening;
     }
 
-    private async Task<IReadOnlyList<Payment>> EnsureRentChargesThroughTodayAsync(Lease lease, CancellationToken ct)
+    private async Task<IReadOnlyList<Payment>> EnsureRentChargesThroughTodayAsync(
+        Lease lease,
+        CancellationToken ct,
+        bool broadcast = true)
     {
         if (lease.Status != LeaseStatus.Active || lease.MonthlyRent <= 0)
         {
@@ -460,20 +474,25 @@ public class LeaseService : ILeaseService
         _db.Payments.AddRange(created);
         await _db.SaveChangesAsync(ct);
 
-        foreach (var payment in created)
+        if (broadcast)
         {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                lease.PortfolioId,
-                PaymentEntityType,
-                payment.Id,
-                PaymentResponse.FromEntity(payment),
-                ct);
+            foreach (var payment in created)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    lease.PortfolioId,
+                    PaymentEntityType,
+                    payment.Id,
+                    PaymentResponse.FromEntity(payment),
+                    ct);
+            }
         }
 
         return created;
     }
 
-    private async Task<SecurityDepositHolding?> EnsureSecurityDepositHoldingAsync(Lease lease, CancellationToken ct)
+    private async Task<SecurityDepositHolding?> EnsureSecurityDepositHoldingAsync(
+        Lease lease,
+        CancellationToken ct)
     {
         if (!OccupiesUnit(lease.Status) || lease.SecurityDeposit <= 0m)
         {
@@ -590,6 +609,28 @@ public class LeaseService : ILeaseService
                 "Choose a vacant unit before activating this lease.",
                 statusCode: 409);
         }
+    }
+
+    private async Task LockUnitForLeaseMutationAsync(int unitId, CancellationToken ct)
+    {
+        // PostgreSQL row locks serialize create/activation decisions for the same unit. Locking lets
+        // the second request run the overlap and availability checks after the first commits, while
+        // still allowing intentional adjacent, non-overlapping active lease terms.
+        if (!_db.Database.IsNpgsql())
+        {
+            return;
+        }
+
+        var currentTransaction = _db.Database.CurrentTransaction
+            ?? throw new InvalidOperationException("A unit lease lock requires an active database transaction.");
+        await using var command = _db.Database.GetDbConnection().CreateCommand();
+        command.Transaction = currentTransaction.GetDbTransaction();
+        command.CommandText = "SELECT 1 FROM \"Units\" WHERE \"Id\" = @unitId FOR UPDATE";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "unitId";
+        parameter.Value = unitId;
+        command.Parameters.Add(parameter);
+        await command.ExecuteScalarAsync(ct);
     }
 
     private async Task EnsureTenantsAvailableForOccupyingLeaseAsync(
@@ -1145,7 +1186,20 @@ public class LeaseService : ILeaseService
 
     public async Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
     {
-        var tenantIds = NormalizeTenantIds(request.TenantId, request.TenantIds);
+        var suppliedTenantIds = NormalizeTenantIds(request.TenantId, request.TenantIds);
+        if (request.NewTenant is not null && suppliedTenantIds.Count > 0)
+        {
+            throw new DomainValidationException(
+                "Choose existing tenants or create one new tenant, not both.");
+        }
+
+        // Lease creation is one aggregate write. A generated tenant id requires an early SaveChanges,
+        // and the lease/audit/deposit/opening-balance/rent rows require later saves, but every one of
+        // those flushes participates in this transaction. Any failure rolls the entire user action back.
+        var ownsTransaction = _db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
 
         // Verify the referenced property, unit, and tenant all live in the caller's portfolio.
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
@@ -1158,7 +1212,8 @@ public class LeaseService : ILeaseService
             return null;
         }
 
-        if (!await AreTenantsInPortfolioAsync(portfolioId, tenantIds, ct))
+        if (request.NewTenant is null
+            && !await AreTenantsInPortfolioAsync(portfolioId, suppliedTenantIds, ct))
         {
             return null;
         }
@@ -1180,12 +1235,40 @@ public class LeaseService : ILeaseService
         // so it skips the check. Id 0 (unsaved) never matches an existing row.
         if (OccupiesUnit(request.Status))
         {
+            await LockUnitForLeaseMutationAsync(request.UnitId, ct);
             await EnsureUnitAvailableForOccupyingLeaseAsync(portfolioId, request.UnitId, ct);
-            await EnsureTenantsAvailableForOccupyingLeaseAsync(portfolioId, 0, tenantIds, ct);
+            if (suppliedTenantIds.Count > 0)
+            {
+                await EnsureTenantsAvailableForOccupyingLeaseAsync(portfolioId, 0, suppliedTenantIds, ct);
+            }
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, request.UnitId, 0, startUtc, endUtc, ct);
         }
 
         var now = _timeProvider.UtcNow();
+        Tenant? createdTenant = null;
+        IReadOnlyList<int> tenantIds = suppliedTenantIds;
+        if (request.NewTenant is not null)
+        {
+            createdTenant = new Tenant
+            {
+                PortfolioId = portfolioId,
+                FirstName = request.NewTenant.FirstName.Trim(),
+                LastName = request.NewTenant.LastName.Trim(),
+                Email = string.IsNullOrWhiteSpace(request.NewTenant.Email) ? null : request.NewTenant.Email.Trim(),
+                Phone = string.IsNullOrWhiteSpace(request.NewTenant.Phone) ? null : request.NewTenant.Phone.Trim(),
+                EmergencyContact = string.IsNullOrWhiteSpace(request.NewTenant.EmergencyContact)
+                    ? null
+                    : request.NewTenant.EmergencyContact.Trim(),
+                DateOfBirth = request.NewTenant.DateOfBirth.ToUtc(),
+                Notes = string.IsNullOrWhiteSpace(request.NewTenant.Notes) ? null : request.NewTenant.Notes.Trim(),
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Tenants.Add(createdTenant);
+            await _db.SaveChangesAsync(ct);
+            tenantIds = [createdTenant.Id];
+        }
+
         var rentTrackingStartDate = request.Status == LeaseStatus.Active
             ? ResolveRentTrackingStartDate(startUtc, request.RentTrackingStartMode, request.RentTrackingStartDate, now.Date)
             : null;
@@ -1218,7 +1301,7 @@ public class LeaseService : ILeaseService
         // A lease created Active immediately occupies its unit. (A non-Active new lease never frees a unit
         // here — that only happens when an existing Active lease exits.) Tracked unit is saved in the same
         // transaction below.
-        if (entity.Status == LeaseStatus.Active)
+        if (OccupiesUnit(entity.Status))
         {
             await SyncUnitOccupancyAsync(portfolioId, entity.UnitId, entity.Id, entity.Status, ct);
         }
@@ -1230,21 +1313,121 @@ public class LeaseService : ILeaseService
             changeReason: $"Lease {entity.LeaseNumber} created (status {entity.Status})", ct: ct);
 
         await EnsureSecurityDepositHoldingAsync(entity, ct);
-        await UpsertOpeningBalanceAsync(
+        var openingBalance = await UpsertOpeningBalanceAsync(
             entity,
             request.OpeningBalanceAmount,
             request.OpeningBalanceAsOfDate,
             request.OpeningBalanceNote,
-            ct);
-        await EnsureRentChargesThroughTodayAsync(entity, ct);
+            ct,
+            broadcast: false);
+        var rentCharges = await EnsureRentChargesThroughTodayAsync(entity, ct, broadcast: false);
+        if (createdTenant is not null)
+        {
+            await EnsureCreatedTenantPortalAsync(createdTenant.Id, portfolioId, ct);
+        }
 
+        // Build the response while the transaction is still open. A query/materialization failure must
+        // roll the write back instead of returning an error after the aggregate has already committed.
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (ownsTransaction)
+        {
+            await transaction!.CommitAsync(ct);
+            await TryBroadcastLeaseMutationAsync(
+                portfolioId: portfolioId,
+                lease: response,
+                tenant: createdTenant,
+                openingBalance: openingBalance,
+                payments: rentCharges,
+                deletedLeaseId: null,
+                ct: ct);
+        }
         return response;
+    }
+
+    private async Task TryBroadcastLeaseMutationAsync(
+        int portfolioId,
+        LeaseResponse? lease,
+        Tenant? tenant,
+        OpeningBalance? openingBalance,
+        IEnumerable<Payment> payments,
+        int? deletedLeaseId,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (tenant is not null)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    portfolioId,
+                    "Tenant",
+                    tenant.Id,
+                    TenantResponse.FromEntity(tenant),
+                    ct);
+            }
+            if (openingBalance is not null)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    portfolioId,
+                    "OpeningBalance",
+                    openingBalance.Id,
+                    OpeningBalanceResponse.FromEntity(openingBalance),
+                    ct);
+            }
+            foreach (var payment in payments.DistinctBy(p => p.Id))
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    portfolioId,
+                    PaymentEntityType,
+                    payment.Id,
+                    PaymentResponse.FromEntity(payment),
+                    ct);
+            }
+            if (lease is not null)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, lease.Id, lease, ct);
+            }
+            if (deletedLeaseId.HasValue)
+            {
+                await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, deletedLeaseId.Value, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Realtime is cache invalidation, not part of the committed aggregate. A dropped client or
+            // cancellation after commit must never make the API pretend the database write failed.
+            _logger.LogWarning(ex,
+                "Failed to broadcast committed lease mutation for portfolio {PortfolioId}; clients will refresh on their next query.",
+                portfolioId);
+        }
+    }
+
+    private async Task EnsureCreatedTenantPortalAsync(int tenantId, int portfolioId, CancellationToken ct)
+    {
+        if (_tenantPortalProvisioning is null)
+        {
+            return;
+        }
+
+        // Portal provisioning writes Identity and UserAccount rows through this scoped DbContext.
+        // Keep those SaveChanges calls inside the lease transaction as part of the same user action.
+        var result = await _tenantPortalProvisioning.EnsurePortalAccountForTenantAsync(
+            tenantId,
+            portfolioId,
+            ct);
+        if (result.Status is PortalAccountStatus.Failed or PortalAccountStatus.TenantNotFound)
+        {
+            throw new DomainValidationException(
+                result.Error ?? "Tenant portal access could not be provisioned.");
+        }
     }
 
     public async Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default)
     {
+        var ownsTransaction = _db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
+
         // Eager-load the label navigations so the PATCH response carries TenantName/PropertyName/UnitNumber
         // (the grid binds these) instead of flashing "-" until the next list refetch.
         var entity = await _db.Leases
@@ -1317,6 +1500,10 @@ public class LeaseService : ILeaseService
         //    range. A rent-only edit on an already-occupying lease does not re-run the check, so legacy
         //    overlapping data is not blocked unless the user changes the occupancy dates/status.
         var dateRangeChanged = newStartUtc != entity.StartDate || newEndUtc != entity.EndDate;
+        if (OccupiesUnit(newStatus))
+        {
+            await LockUnitForLeaseMutationAsync(entity.UnitId, ct);
+        }
         if (OccupiesUnit(newStatus) && (!OccupiesUnit(prevStatus) || dateRangeChanged))
         {
             await EnsureNoOverlappingActiveLeaseAsync(portfolioId, entity.UnitId, entity.Id, newStartUtc, newEndUtc, ct);
@@ -1395,33 +1582,51 @@ public class LeaseService : ILeaseService
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
 
         await EnsureSecurityDepositHoldingAsync(entity, ct);
-        await UpsertOpeningBalanceAsync(
+        var openingBalance = await UpsertOpeningBalanceAsync(
             entity,
             request.OpeningBalanceAmount,
             request.OpeningBalanceAsOfDate,
             request.OpeningBalanceNote,
-            ct);
+            ct,
+            broadcast: false);
 
+        IReadOnlyList<Payment> rentCharges = [];
         if ((prevStatus != LeaseStatus.Active && entity.Status == LeaseStatus.Active)
             || (entity.Status == LeaseStatus.Active && rentTrackingMode.HasValue))
         {
-            await EnsureRentChargesThroughTodayAsync(entity, ct);
+            rentCharges = await EnsureRentChargesThroughTodayAsync(entity, ct, broadcast: false);
         }
 
+        Payment? adjustedFinalCharge = null;
         if (entity.EndDate != prevEnd
             || entity.MoveOutDate != prevMoveOutDate
             || entity.MonthlyRent != prevRent)
         {
-            await AdjustFinalRentChargeForProrationAsync(entity, ct);
+            adjustedFinalCharge = await AdjustFinalRentChargeForProrationAsync(entity, ct, broadcast: false);
         }
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity, includeNavigations: true);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (ownsTransaction)
+        {
+            await transaction!.CommitAsync(ct);
+            await TryBroadcastLeaseMutationAsync(
+                portfolioId: portfolioId,
+                lease: response,
+                tenant: null,
+                openingBalance: openingBalance,
+                payments: adjustedFinalCharge is null ? rentCharges : rentCharges.Append(adjustedFinalCharge),
+                deletedLeaseId: null,
+                ct: ct);
+        }
         return response;
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
+        var ownsTransaction = _db.Database.CurrentTransaction is null;
+        await using var transaction = ownsTransaction
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
         var entity = await _db.Leases
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
         if (entity == null)
@@ -1439,6 +1644,7 @@ public class LeaseService : ILeaseService
         // still holds it. The soft-deleted lease is excluded both by the explicit Id guard and by the
         // global soft-delete query filter, so it never counts itself as the occupant. Tracked unit saves
         // in the same transaction below.
+        await LockUnitForLeaseMutationAsync(entity.UnitId, ct);
         await SyncUnitOccupancyAsync(portfolioId, entity.UnitId, entity.Id, LeaseStatus.Terminated, ct);
 
         await _db.SaveChangesAsync(ct);
@@ -1446,7 +1652,18 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, id, AuditLogOperation.Deleted,
             oldValues: before, changeReason: $"Lease {entity.LeaseNumber} terminated", ct: ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (ownsTransaction)
+        {
+            await transaction!.CommitAsync(ct);
+            await TryBroadcastLeaseMutationAsync(
+                portfolioId: portfolioId,
+                lease: null,
+                tenant: null,
+                openingBalance: null,
+                payments: [],
+                deletedLeaseId: id,
+                ct: ct);
+        }
         return true;
     }
 

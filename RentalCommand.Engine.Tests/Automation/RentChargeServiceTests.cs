@@ -19,11 +19,13 @@ public class RentChargeServiceTests : IDisposable
 {
     private readonly SqliteTestContext _ctx;
     private readonly Mock<IMessagePublisher> _publisher;
+    private readonly Mock<IDataUpdateService> _dataUpdate;
 
     public RentChargeServiceTests()
     {
         _ctx       = new SqliteTestContext();
         _publisher = new Mock<IMessagePublisher>();
+        _dataUpdate = new Mock<IDataUpdateService>();
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -77,6 +79,14 @@ public class RentChargeServiceTests : IDisposable
         p.Status.Should().Be(PaymentStatus.Scheduled);
         p.Amount.Should().Be(1000m);
         p.PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+        _dataUpdate.Verify(
+            update => update.BroadcastEntityUpdateAsync(
+                p.PortfolioId,
+                "Payment",
+                p.Id,
+                It.IsAny<object>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -205,6 +215,43 @@ public class RentChargeServiceTests : IDisposable
         publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 20 });
     }
 
+    [Fact]
+    public async Task NotificationFailure_RollsBackAndClearsAllIterationTracking()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedNotificationUsers(tenant.Id);
+        SeedActiveLease(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            monthlyRent: 1000m,
+            rentDueDay: today.Day,
+            startDate: new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc));
+        var cfg = new NotificationsConfig
+        {
+            EnableRentCharges = true,
+            RentChargeLeadDays = 5,
+            NotifyTenants = true,
+            ChannelPreferences =
+            {
+                [NotificationType.RentCharge] = new NotificationChannelPreference
+                {
+                    EnableInApp = true,
+                    EnablePush = true,
+                },
+            },
+        };
+
+        var result = await BuildService(cfg, new ThrowingPublisher()).GenerateAsync();
+
+        result.Should().Be(0);
+        _ctx.Db.Payments.Should().BeEmpty();
+        _ctx.Db.Notifications.Should().BeEmpty();
+        _ctx.Db.ChangeTracker.Entries()
+            .Should().NotContain(entry => entry.State == Microsoft.EntityFrameworkCore.EntityState.Added);
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -226,7 +273,7 @@ public class RentChargeServiceTests : IDisposable
             _ctx.Db,
             publisher,
             new FakeNotificationSettingsService(cfg),
-            Mock.Of<IDataUpdateService>(),
+            _dataUpdate.Object,
             TimeProvider.System,
             new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
             NullLogger<RentChargeService>.Instance);
@@ -371,5 +418,15 @@ public class RentChargeServiceTests : IDisposable
                         .ToArray();
                 })
                 .ToList();
+    }
+
+    private sealed class ThrowingPublisher : IMessagePublisher
+    {
+        public Task PublishAsync<TPayload>(
+            int portfolioId,
+            string messageType,
+            TPayload payload,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("Injected notification failure");
     }
 }
