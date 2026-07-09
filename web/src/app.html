@@ -92,8 +92,8 @@
 			}
 		</style>
 		<!-- Dev-only master simulation clock: hooks.server.ts replaces this with the inline Date shim
-		     when PUBLIC_SIMULATION_ENABLED === 'true', else with '' (nothing in prod). Kept ABOVE
-		     %sveltekit.head% so Date is patched before any app code runs. -->
+		     when PUBLIC_SIMULATION_ENABLED === 'true', else with '' (nothing in prod). Kept above
+		     the SvelteKit head marker so Date is patched before any app code runs. -->
 		<!--%sim-clock-shim%-->
 		%sveltekit.head%
 	</head>
