@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Building, Loader2 } from '@lucide/svelte';
+	import { Loader2 } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { auth } from '$lib/api/endpoints/auth';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -63,11 +64,7 @@
 		<div class="w-full max-w-sm">
 			<!-- Compact brand for narrow screens (the split panel is hidden there) -->
 			<div class="mb-8 flex items-center gap-2 lg:hidden">
-				<span
-					class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-				>
-					<Building class="h-5 w-5" />
-				</span>
+				<BrandMark class="h-9 w-9 shadow-sm" />
 				<span class="text-lg font-semibold tracking-tight text-foreground">Rental Command</span>
 			</div>
 
