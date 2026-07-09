@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/features/applications/applications_repository.dart';
 import 'package:rental_command/features/inspections/inspections_repository.dart';
+import 'package:rental_command/features/properties/properties_repository.dart';
 import 'package:rental_command/features/tenants/tenants_repository.dart';
 import 'package:rental_command/features/units/units_repository.dart';
 
@@ -32,6 +33,57 @@ void main() {
     expect(page.totalCount, 1);
     expect(page.items.single.firstName, 'Alex');
   });
+
+  test(
+    'tenants page sends lease availability and include-lease filters',
+    () async {
+      final adapter = _RecordingAdapter(_tenantPageJson());
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = TenantsRepository(dio);
+
+      await repo.listPage(
+        const TenantListQuery(
+          take: 200,
+          sort: 'name',
+          availableForLease: true,
+          includeLeaseId: 12,
+        ),
+      );
+
+      expect(adapter.path, '/tenants/page');
+      expect(adapter.queryParameters, containsPair('availableForLease', true));
+      expect(adapter.queryParameters, containsPair('includeLeaseId', 12));
+    },
+  );
+
+  test('properties repository sends available-for-lease filters', () async {
+    final adapter = _RecordingAdapter(_propertyListJson());
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = PropertiesRepository(dio);
+
+    await repo.listProperties(availableForLease: true);
+
+    expect(adapter.path, '/properties');
+    expect(adapter.queryParameters, containsPair('availableForLease', true));
+  });
+
+  test(
+    'units repository sends property and lease availability filters',
+    () async {
+      final adapter = _RecordingAdapter(_unitListJson());
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = PropertiesRepository(dio);
+
+      await repo.listUnits(7, availableForLease: true);
+
+      expect(adapter.path, '/units');
+      expect(adapter.queryParameters, containsPair('propertyId', 7));
+      expect(adapter.queryParameters, containsPair('availableForLease', true));
+    },
+  );
 
   test(
     'applications page sends status, search, sort, and paging to the server',
@@ -172,6 +224,36 @@ Map<String, dynamic> _tenantPageJson() => {
   'skip': 20,
   'take': 20,
 };
+
+List<Map<String, dynamic>> _propertyListJson() => [
+  {
+    'id': 7,
+    'portfolioId': 1,
+    'name': 'Maple Ridge',
+    'type': 'SingleFamily',
+    'status': 'Active',
+    'addressLine1': '100 Main St',
+    'city': 'Columbus',
+    'state': 'OH',
+    'postalCode': '43215',
+    'createdAt': '2026-06-01T00:00:00.000Z',
+    'updatedAt': '2026-06-02T00:00:00.000Z',
+  },
+];
+
+List<Map<String, dynamic>> _unitListJson() => [
+  {
+    'id': 42,
+    'propertyId': 7,
+    'unitNumber': '4B',
+    'bedrooms': 2,
+    'bathrooms': 1,
+    'marketRent': 1400,
+    'status': 'Vacant',
+    'createdAt': '2026-06-01T00:00:00.000Z',
+    'updatedAt': '2026-06-02T00:00:00.000Z',
+  },
+];
 
 Map<String, dynamic> _applicationPageJson() => {
   'items': [

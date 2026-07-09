@@ -147,10 +147,6 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
   late Lease _lease;
   bool _updatingStatus = false;
   String? _statusError;
-  final _questionController = TextEditingController();
-  bool _askingLease = false;
-  String? _leaseAnswer;
-  String? _leaseAskError;
 
   // Lease-agreement PDF actions.
   bool _generatingDoc = false;
@@ -169,12 +165,6 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     super.initState();
     _lease = widget.lease;
     _loadSignatureStatus();
-  }
-
-  @override
-  void dispose() {
-    _questionController.dispose();
-    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -247,28 +237,6 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
           ? 'tenant #${_lease.tenantId}'
           : tenantName,
     );
-  }
-
-  Future<void> _askLease() async {
-    final question = _questionController.text.trim();
-    if (question.isEmpty) return;
-
-    setState(() {
-      _askingLease = true;
-      _leaseAnswer = null;
-      _leaseAskError = null;
-    });
-
-    try {
-      final response = await ref
-          .read(leasesRepositoryProvider)
-          .ask(_lease.id, question);
-      if (mounted) setState(() => _leaseAnswer = response.answer);
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _leaseAskError = e.message);
-    } finally {
-      if (mounted) setState(() => _askingLease = false);
-    }
   }
 
   /// Builds (or rebuilds) the standard lease-agreement PDF from the lease's
@@ -548,95 +516,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
             ),
             const SizedBox(height: 16),
 
-            _LeaseAskCard(
-              controller: _questionController,
-              loading: _askingLease,
-              answer: _leaseAnswer,
-              error: _leaseAskError,
-              onAsk: _askLease,
-              theme: theme,
-              colorScheme: colorScheme,
-            ),
-
             const SizedBox(height: 32),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LeaseAskCard extends StatelessWidget {
-  const _LeaseAskCard({
-    required this.controller,
-    required this.loading,
-    required this.onAsk,
-    required this.theme,
-    required this.colorScheme,
-    this.answer,
-    this.error,
-  });
-
-  final TextEditingController controller;
-  final bool loading;
-  final String? answer;
-  final String? error;
-  final VoidCallback onAsk;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Ask This Lease',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 3,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => onAsk(),
-              decoration: const InputDecoration(
-                labelText: 'Question',
-                hintText: 'When is rent due? Can I have a pet?',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.tonal(
-                onPressed: loading ? null : onAsk,
-                child: loading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Ask'),
-              ),
-            ),
-            if (answer != null && answer!.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text(
-                answer!,
-                style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
-              ),
-            ],
-            if (error != null) ...[
-              const SizedBox(height: 12),
-              Text(error!, style: TextStyle(color: colorScheme.error)),
-            ],
           ],
         ),
       ),
