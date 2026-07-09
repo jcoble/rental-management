@@ -33,20 +33,27 @@ class NoticesRepository {
     }
   }
 
-  /// Generates notice draft(s) for a single tenant, optionally limited to one
-  /// [noticeType] (RenewalOffer / MoveOutReminder / LateRentNotice). Returns the
-  /// drafts that were created so the caller can review / send them. An empty list
+  /// Generates notice draft(s), optionally limited to a tenant, lease, payment,
+  /// and/or [noticeType]. Returns the drafts that were created or already exist
+  /// for the requested scope so the caller can review / send them. An empty list
   /// means nothing applied (e.g. a late notice with no overdue payment).
   ///
-  /// POST /notices/generate  body: { tenantId, noticeType? }
+  /// POST /notices/generate  body: { tenantId?, leaseId?, paymentId?, noticeType? }
   Future<List<NoticeDraft>> generateForTenant(
-    int tenantId, {
+    int? tenantId, {
+    int? leaseId,
+    int? paymentId,
     String? noticeType,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/notices/generate',
-        data: {'tenantId': tenantId, 'noticeType': ?noticeType},
+        data: {
+          'tenantId': ?tenantId,
+          'leaseId': ?leaseId,
+          'paymentId': ?paymentId,
+          'noticeType': ?noticeType,
+        },
       );
       final drafts = (response.data?['drafts'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()

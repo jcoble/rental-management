@@ -4,6 +4,7 @@ public class NoticeDraftResponse
 {
     public int Id { get; set; }
     public int LeaseId { get; set; }
+    public int? PaymentId { get; set; }
     public int TenantId { get; set; }
     public int? PropertyId { get; set; }
     public string TenantName { get; set; } = string.Empty;
@@ -31,13 +32,16 @@ public class GenerateNoticeDraftsResponse
 
 /// <summary>
 /// Optional scoping for notice generation. With no fields set, drafts are generated portfolio-wide for
-/// every applicable lease/late payment (the original behaviour). Supplying <see cref="TenantId"/> scopes
-/// generation to that one tenant; supplying <see cref="NoticeType"/> generates only that type and forces
-/// it for renewal/move-out even when outside the usual trigger window (the landlord asked for it).
+/// every applicable lease/late payment (the original behaviour). Supplying <see cref="TenantId"/>,
+/// <see cref="LeaseId"/>, or <see cref="PaymentId"/> narrows generation to that server-validated scope;
+/// supplying <see cref="NoticeType"/> generates only that type and forces it for renewal/move-out even
+/// when outside the usual trigger window (the landlord asked for it).
 /// </summary>
 public class GenerateNoticeDraftsRequest
 {
     public int? TenantId { get; set; }
+    public int? LeaseId { get; set; }
+    public int? PaymentId { get; set; }
 
     /// <summary>One of <c>RentReminder</c>, <c>RenewalOffer</c>, <c>MonthToMonthConversion</c>, <c>MoveOutReminder</c>, <c>LateRentNotice</c>; null = all applicable.</summary>
     public string? NoticeType { get; set; }

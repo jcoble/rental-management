@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { Pencil, Save, Trash2, X, Receipt, CircleCheck, FileText } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, Receipt, CircleCheck, FileText, BellRing } from '@lucide/svelte';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -20,6 +20,7 @@
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
@@ -42,6 +43,8 @@
 
 	let editing = $state(false);
 	let deleteTarget = $state<number | null>(null);
+	let showPaymentNoticeDialog = $state(false);
+	let selectedPaymentNoticeType = $state<string | undefined>(undefined);
 	let form = $state({
 		leaseId: '',
 		amount: '',
@@ -79,10 +82,39 @@
 	});
 
 	const leaseDisplay = $derived(formatPaymentLeaseDisplay(payment));
+	const availablePaymentNoticeType = $derived(payment ? noticeTypeForPayment(payment) : undefined);
 
 	const typeOptions = $derived(PAYMENT_TYPES.map((value) => ({ value, label: value })));
 	const statusOptions = $derived(PAYMENT_STATUSES.map((value) => ({ value, label: value })));
 	const leaseOptions = $derived([{ value: '', label: 'Select property / unit' }, ...(leasesQuery.data ?? []).map((lease) => ({ value: String(lease.id), label: formatLeasePickerLabel(lease) }))]);
+
+	function noticeTypeForPayment(p: { paymentType?: string; status?: string; dueDate?: string }) {
+		const status = (p.status ?? '').toLowerCase();
+		if (['paid', 'waived', 'failed', 'refunded'].includes(status)) return undefined;
+
+		const paymentType = (p.paymentType ?? '').toLowerCase();
+		const dueDateText = p.dueDate?.slice(0, 10);
+		const dueDate = dueDateText ? new Date(`${dueDateText}T00:00:00`) : undefined;
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const isPastDue = !!dueDate && dueDate < today;
+
+		if ((paymentType === 'rent' || paymentType === 'latefee') && (status === 'late' || status === 'partial' || isPastDue)) {
+			return 'LateRentNotice';
+		}
+
+		if (paymentType === 'rent' && status === 'scheduled' && !isPastDue) {
+			return 'RentReminder';
+		}
+
+		return undefined;
+	}
+
+	function openPaymentNoticeDialog() {
+		if (!availablePaymentNoticeType) return;
+		selectedPaymentNoticeType = availablePaymentNoticeType;
+		showPaymentNoticeDialog = true;
+	}
 
 	function startEditing() {
 		if (!payment) return;
@@ -186,11 +218,17 @@
 			<p class="text-sm text-muted-foreground">{payment ? `${paymentTypeLabel(payment.paymentType)} · ${formatPaymentMoney(payment.amount)} · ${payment.status}` : ''}</p>
 		</div>
 		{#if payment}
-			<div class="flex gap-2">
+			<div class="flex flex-wrap gap-2">
 				{#if editing}
 					<Button variant="outline" onclick={cancelEditing} disabled={saveMutation.isPending}><X class="h-4 w-4" />Cancel</Button>
 					<Button onclick={savePayment} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
 				{:else}
+					{#if availablePaymentNoticeType}
+						<Button variant="outline" onclick={openPaymentNoticeDialog}>
+							<BellRing class="h-4 w-4" />
+							Notice / reminder
+						</Button>
+					{/if}
 					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
 					<Button variant="destructive" onclick={() => (deleteTarget = paymentId)} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
 				{/if}
@@ -308,3 +346,13 @@
 	onconfirm={() => deleteTarget !== null && deleteMutation.mutate()}
 	oncancel={() => (deleteTarget = null)}
 />
+
+{#if payment}
+	<TenantNoticeDialog
+		bind:open={showPaymentNoticeDialog}
+		tenantName={payment.tenantName || payment.leaseNumber || 'this tenant'}
+		leaseId={payment.leaseId ?? undefined}
+		paymentId={payment.id}
+		initialNoticeType={selectedPaymentNoticeType}
+	/>
+{/if}
