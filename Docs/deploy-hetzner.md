@@ -1,8 +1,8 @@
-# Deploying Rental Command to Hetzner (rc.coblesolutions.com)
+# Deploying Rental Command to Hetzner (rentalcommand.net)
 
 Production deploy of the full stack (Traefik + Postgres + API + Engine + Web) onto a
 single fresh Ubuntu box, behind Let's Encrypt TLS, with **same-origin** routing
-(`https://rc.coblesolutions.com/api/*` → API, everything else → web).
+(`https://rentalcommand.net/api/*` → API, everything else → web).
 
 The files this uses:
 
@@ -19,18 +19,20 @@ Point an **A record** at the box, then wait for it to resolve before deploying
 (Let's Encrypt validates over the public DNS + port 443):
 
 ```
-A   rc.coblesolutions.com   →   49.13.236.209
+A       rentalcommand.net       →   49.13.236.209
+CNAME   www.rentalcommand.net   →   rentalcommand.net
 ```
 
 Verify from your laptop:
 
 ```bash
-dig +short rc.coblesolutions.com   # should print 49.13.236.209
+dig +short rentalcommand.net   # should print 49.13.236.209
 ```
 
-No `www`, no `api.` subdomain — Rental Command is single-host on purpose (its auth uses
+No `api.` subdomain — Rental Command is single-host on purpose (its auth uses
 httpOnly cookies first-party to the web origin plus a same-origin `/api/auth/refresh`
-proxy, so the API must live under the same host as the web app).
+proxy, so the API must live under the same host as the web app). `www` should redirect
+to the apex host so sessions and app links stay canonical.
 
 ## 2. Firewall (Hetzner Cloud)
 
@@ -87,13 +89,13 @@ Fill in **at minimum** the required values:
 - `POSTGRES_PASSWORD` — generate: `openssl rand -base64 32`
 - `JWT_SECRET_KEY` — generate: `openssl rand -base64 48`
   (the API refuses to start if this is missing, under 32 chars, or the dev placeholder).
-- `DOMAIN` / `APP_WEB_BASE_URL` — already set to `rc.coblesolutions.com`; leave them.
+- `DOMAIN` / `APP_WEB_BASE_URL` — already set to `rentalcommand.net`; leave them.
 
 Then the integrations you actually want on day one (all optional, all gated off until set):
 
 - **AI scanning** — `ASSISTANT_API_KEY` (OpenAI key, with `ASSISTANT_MODEL_ID=gpt-4o`).
   This powers the flagship scan→draft feature; without it the app runs but can't scan.
-- **Email** — either SendGrid (`SENDGRID_*`) or Zoho SMTP (see §8).
+- **Email** — either SendGrid (`SENDGRID_*`) or Google Workspace/Gmail SMTP (see §8).
 - **SMS** — `SIGNALWIRE_*` (preferred) for tenant texts. Only fires when `NOTIFY_TENANTS=true`.
 - **Stripe** — `STRIPE_*` (LIVE keys) for online rent payments.
 - **Google sign-in** — `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (see §7).
@@ -133,26 +135,27 @@ subdomain, the **authorized redirect URI** to register in the Google Cloud conso
 exactly:
 
 ```
-https://rc.coblesolutions.com/auth/google/callback
+https://rentalcommand.net/auth/google/callback
 ```
 
-Add `https://rc.coblesolutions.com` under *Authorized JavaScript origins* too. Until both
+Add `https://rentalcommand.net` under *Authorized JavaScript origins* too. Until both
 this and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set, the "Sign in with Google"
 button returns 501 and the rest of auth (email/password) works normally.
 
-## 8. Flip email to Zoho (optional)
+## 8. Flip email to Google Workspace SMTP (optional)
 
-SendGrid is the default transport. To send over an authenticated Zoho mailbox instead
-(better DMARC alignment if the sending domain's DKIM/SPF lives at Zoho), set in `.env`:
+SendGrid is the default transport. For early testing on `rentalcommand.net`, Google
+Workspace/Gmail authenticated SMTP is the fastest path: create an app password for
+`jcoble@rentalcommand.net`, then set:
 
 ```
 EMAIL_TRANSPORT=Smtp
-SMTP_HOST=smtp.zoho.com
-SMTP_PORT=465
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
 SMTP_USE_SSL=true
-SMTP_USERNAME=you@yourdomain.com
-SMTP_PASSWORD=<Zoho app-specific password>
-SMTP_FROM_EMAIL=you@yourdomain.com
+SMTP_USERNAME=jcoble@rentalcommand.net
+SMTP_PASSWORD=<Google app password>
+SMTP_FROM_EMAIL=jcoble@rentalcommand.net
 SMTP_FROM_NAME=Rental Command
 ```
 
@@ -162,26 +165,28 @@ Then re-apply:
 docker compose -f deploy/docker-compose.prod.yml up -d engine
 ```
 
-(Email is sent from the **engine** via the outbox dispatcher; only it needs the SMTP
-creds. Use a Zoho *app-specific password*, not the account password, and port 465 with
-SSL-on-connect.)
+(Email is sent from the **engine** via the outbox dispatcher. Use a provider-issued
+app-specific password, not the normal account password. If app passwords are blocked
+later, Google Workspace SMTP relay is also supported: use `smtp-relay.gmail.com:587`,
+allow the VPS IP `49.13.236.209` in Workspace Admin, and leave `SMTP_USERNAME` /
+`SMTP_PASSWORD` blank.)
 
 ## 9. Verify
 
 ```bash
 # Health endpoint (served by the API through the /api… same-origin route):
-curl -fsS https://rc.coblesolutions.com/health
+curl -fsS https://rentalcommand.net/health
 # → {"status":"ok"}
 
 # TLS cert is real (Let's Encrypt), not self-signed:
-echo | openssl s_client -servername rc.coblesolutions.com \
-  -connect rc.coblesolutions.com:443 2>/dev/null | openssl x509 -noout -issuer -dates
+echo | openssl s_client -servername rentalcommand.net \
+  -connect rentalcommand.net:443 2>/dev/null | openssl x509 -noout -issuer -dates
 
 # HTTP redirects to HTTPS:
-curl -sI http://rc.coblesolutions.com | grep -i location   # → https://rc.coblesolutions.com/
+curl -sI http://rentalcommand.net | grep -i location   # → https://rentalcommand.net/
 ```
 
-Then load **https://rc.coblesolutions.com** in a browser — the SvelteKit app should serve
+Then load **https://rentalcommand.net** in a browser — the SvelteKit app should serve
 over a valid padlock, and login / API calls (which go to `/api` on the same origin) should
 work. If the cert is missing, check `docker compose ... logs traefik` (usually DNS not yet
 propagated or port 443 not open).

@@ -46,13 +46,13 @@
                 <data android:scheme="rentalcommand" android:host="voice"/>
             </intent-filter>
             <!-- App Links for emailed auth links. Android verifies this against
-                 https://rc.coblesolutions.com/.well-known/assetlinks.json. -->
+                 https://rentalcommand.net/.well-known/assetlinks.json. -->
             <intent-filter android:autoVerify="true" android:label="Rental Command auth links">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="https" android:host="rc.coblesolutions.com" android:pathPrefix="/reset-password"/>
-                <data android:scheme="https" android:host="rc.coblesolutions.com" android:pathPrefix="/verify-email"/>
+                <data android:scheme="https" android:host="rentalcommand.net" android:pathPrefix="/reset-password"/>
+                <data android:scheme="https" android:host="rentalcommand.net" android:pathPrefix="/verify-email"/>
             </intent-filter>
             <!-- Declares which App Actions capabilities this app fulfills. -->
             <meta-data

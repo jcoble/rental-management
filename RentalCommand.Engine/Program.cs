@@ -61,7 +61,7 @@ builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
 // so it does not pin any framework auth clock.
 builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 
-// DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP/Zoho or SendGrid email,
+// DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP or SendGrid email,
 // config-selected; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".

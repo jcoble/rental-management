@@ -103,7 +103,7 @@ class VoiceCommand {
 /// today and future verified App Links on the production domain:
 ///
 ///   * custom scheme — `rentalcommand://voice/<action>?…` (host == `voice`)
-///   * https app link — `https://rc.coblesolutions.com/voice/<action>?…`
+///   * https app link — `https://rentalcommand.net/voice/<action>?…`
 ///
 /// Action matching is lenient (case-insensitive, `-`/`_` interchangeable, with
 /// natural-language aliases) because the spoken-phrase → action mapping is

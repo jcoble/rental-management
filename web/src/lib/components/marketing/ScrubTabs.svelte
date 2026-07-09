@@ -124,7 +124,7 @@
 						<div class="window s-win">
 							<div class="chrome" aria-hidden="true">
 								<span class="dots"><i></i><i></i><i></i></span>
-								<span class="url">rentalcommand.app</span>
+								<span class="url">rentalcommand.net</span>
 							</div>
 							<div class="viewport viewport-c">
 								<img class="s-shot" src={t.shot} alt={`${t.label} — Rental Command`} loading="lazy" decoding="async" />
@@ -163,7 +163,7 @@
 						<span class="win-glow" aria-hidden="true"></span>
 						<div class="chrome" aria-hidden="true">
 							<span class="dots"><i></i><i></i><i></i></span>
-							<span class="url">rentalcommand.app</span>
+							<span class="url">rentalcommand.net</span>
 						</div>
 						<div class="viewport">
 							{#each tabs as t, i (t.key)}

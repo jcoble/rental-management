@@ -1,4 +1,4 @@
-# Rental Command — PRODUCTION stack for rc.coblesolutions.com
+# Rental Command — PRODUCTION stack for rentalcommand.net
 #
 # Mirrors EdiPlatform's proven Hetzner prod setup (Traefik + Let's Encrypt ACME,
 # HTTP→HTTPS redirect, security-headers + CSP middleware) BUT keeps Rental Command's
@@ -70,6 +70,17 @@ services:
           cpus: "0.25"
     labels:
       - "traefik.enable=true"
+      # Canonical host: send www.rentalcommand.net to rentalcommand.net so auth cookies stay on one origin.
+      - "traefik.http.middlewares.www-to-apex.redirectregex.regex=^https://www\\.rentalcommand\\.net/(.*)"
+      - "traefik.http.middlewares.www-to-apex.redirectregex.replacement=https://rentalcommand.net/$${1}"
+      - "traefik.http.middlewares.www-to-apex.redirectregex.permanent=true"
+      - "traefik.http.routers.www-redirect.rule=Host(`www.${DOMAIN}`)"
+      - "traefik.http.routers.www-redirect.entrypoints=websecure"
+      - "traefik.http.routers.www-redirect.tls=true"
+      - "traefik.http.routers.www-redirect.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.www-redirect.middlewares=www-to-apex"
+      - "traefik.http.routers.www-redirect.priority=100"
+      - "traefik.http.routers.www-redirect.service=noop@internal"
       # ── Security headers (applied to both routers) ───────────────────────────
       - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
       - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
@@ -238,13 +249,13 @@ services:
       - Notifications__EnableRentCharges=${ENABLE_RENT_CHARGES:-false}
       - Notifications__EnableLateFees=${ENABLE_LATE_FEES:-false}
       - Notifications__EnableRecurringMaintenance=${ENABLE_RECURRING_MAINTENANCE:-true}
-      # ── Email transport: SendGrid (default) OR Smtp (Zoho). Flip TRANSPORT=Smtp. ──
+      # ── Email transport: SendGrid (default) OR SMTP. Flip EMAIL_TRANSPORT=Smtp. ──
       - Notifications__Email__Transport=${EMAIL_TRANSPORT:-SendGrid}
       - Notifications__SendGrid__ApiKey=${SENDGRID_API_KEY:-}
       - Notifications__SendGrid__FromEmail=${SENDGRID_FROM_EMAIL:-}
       - Notifications__SendGrid__FromName=${SENDGRID_FROM_NAME:-Rental Command}
       - Notifications__Smtp__Host=${SMTP_HOST:-}
-      - Notifications__Smtp__Port=${SMTP_PORT:-465}
+      - Notifications__Smtp__Port=${SMTP_PORT:-587}
       - Notifications__Smtp__UseSsl=${SMTP_USE_SSL:-true}
       - Notifications__Smtp__Username=${SMTP_USERNAME:-}
       - Notifications__Smtp__Password=${SMTP_PASSWORD:-}

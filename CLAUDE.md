@@ -65,7 +65,7 @@ Logs: `/tmp/rentalcommand-api.log`, `/tmp/rentalcommand-engine.log`.
 
 ## Production & deployment (CI/CD)
 
-Live at **https://rc.coblesolutions.com** on a small Hetzner box (`/opt/rental-command`,
+Live at **https://rentalcommand.net** on a small Hetzner box (`/opt/rental-command`,
 `deploy/docker-compose.prod.yml`: Traefik + Postgres + API + Engine + Web). Secrets live in
 `/opt/rental-command/.env` on the box (never committed).
 
@@ -82,7 +82,8 @@ Live at **https://rc.coblesolutions.com** on a small Hetzner box (`/opt/rental-c
 - Deploy needs repo secrets `DEPLOY_SSH_KEY` (dedicated `rc-deploy` key, **not** the personal
   multi-machine key), `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`. Migrations self-apply
   on boot under a shared Postgres advisory lock. Hetzner **blocks outbound SMTP 25/465** — use
-  Zoho on **587/STARTTLS**. Full box/SSH details are in agent memory (`rental-command-deployment`).
+  Google Workspace SMTP relay or another provider on **587/STARTTLS**. Full box/SSH details are in agent memory
+  (`rental-command-deployment`).
 
 ## Auth model
 

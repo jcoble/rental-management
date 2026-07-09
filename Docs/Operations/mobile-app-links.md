@@ -2,8 +2,8 @@
 
 Rental Command sends HTTPS links for password reset and email verification:
 
-- `https://rc.coblesolutions.com/reset-password?userId=...&token=...`
-- `https://rc.coblesolutions.com/verify-email?userId=...&token=...`
+- `https://rentalcommand.net/reset-password?userId=...&token=...`
+- `https://rentalcommand.net/verify-email?userId=...&token=...`
 
 The mobile app can handle both paths in-app. The web pages remain the fallback when
 the app is not installed.
@@ -44,7 +44,7 @@ MOBILE_APPLE_APP_ID=<Apple Team ID>.com.rentalcommand.rentalCommand
 ```
 
 The deployed file must be served from
-`https://rc.coblesolutions.com/.well-known/apple-app-site-association` without a
+`https://rentalcommand.net/.well-known/apple-app-site-association` without a
 `.json` extension and with JSON content.
 
 If the required environment variables are missing, the `.well-known` routes

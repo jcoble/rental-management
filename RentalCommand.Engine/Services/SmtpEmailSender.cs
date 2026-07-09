@@ -7,7 +7,7 @@ using RentalCommand.Core.Configuration;
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Sends an email over SMTP (e.g. Zoho — <c>smtp.zoho.com:465</c>). Pulled out of
+/// Sends an email over SMTP (authenticated mailbox SMTP or IP-authorized relay). Pulled out of
 /// <see cref="RoutingNotificationChannel"/> so the MailKit dependency and the connect/auth/send
 /// dance live in one focused, testable place. The channel decides WHICH transport to use; this
 /// class only knows HOW to talk SMTP. Throws on failure so the outbox worker can retry — mirroring
@@ -24,8 +24,8 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
     public async Task SendAsync(
         SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
     {
-        // Caller (RoutingNotificationChannel) only reaches here when smtp.Enabled, so Host/Username/
-        // Password are present. From falls back to the authenticated mailbox when FromEmail is unset.
+        // Caller (RoutingNotificationChannel) only reaches here when smtp.Enabled, so Host is present
+        // and either credentials exist or FromEmail is available for no-auth relay.
         var fromEmail = string.IsNullOrWhiteSpace(smtp.FromEmail) ? smtp.Username! : smtp.FromEmail!;
         var fromName = string.IsNullOrWhiteSpace(smtp.FromName) ? "Rental Command" : smtp.FromName!;
 
@@ -45,7 +45,7 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         };
         message.Body = bodyBuilder.ToMessageBody();
 
-        // Port 465 = SSL on connect (Zoho default); 587 = STARTTLS. UseSsl drives the choice but the
+        // Port 465 = SSL on connect; 587 = STARTTLS. UseSsl drives the choice but the
         // port stays authoritative so an explicit 587 still upgrades via STARTTLS even if UseSsl is true.
         var socketOptions = smtp.Port == 587
             ? SecureSocketOptions.StartTls
@@ -62,7 +62,10 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         try
         {
             await client.ConnectAsync(smtp.Host, smtp.Port, socketOptions, ct);
-            await client.AuthenticateAsync(smtp.Username, smtp.Password, ct);
+            if (smtp.HasCredentials)
+            {
+                await client.AuthenticateAsync(smtp.Username, smtp.Password, ct);
+            }
             await client.SendAsync(message, ct);
         }
         finally

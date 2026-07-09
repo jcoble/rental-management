@@ -98,7 +98,7 @@
 	// the request pre-filled so it actually reaches the team. Address is configurable via
 	// VITE_SUPPORT_EMAIL (same pattern as VITE_API_URL in $lib/config).
 	const SUPPORT_EMAIL =
-		(import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) || 'support@rentalcommand.app';
+		(import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) || 'jcoble@rentalcommand.net';
 	let customRequest = $state('');
 
 	function submitCustomRequest() {
