@@ -279,7 +279,10 @@ class _FakePropertiesRepository extends PropertiesRepository {
   _FakePropertiesRepository() : super(Dio());
 
   @override
-  Future<List<Unit>> listUnits(int propertyId) async => [
+  Future<List<Unit>> listUnits(
+    int propertyId, {
+    bool availableForLease = false,
+  }) async => [
     Unit(
       id: 9,
       propertyId: 7,

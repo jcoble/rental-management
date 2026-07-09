@@ -127,7 +127,7 @@ class LeaseListPage {
 ///
 /// Create / update body shape:
 ///   {
-///     propertyId, unitId, tenantId, tenantIds, startDate, endDate,
+///     propertyId, unitId, tenantId/tenantIds OR newTenant, startDate, endDate,
 ///     monthlyRent, securityDeposit,
 ///     lateFeeAmount, rentDueDay, status?,
 ///   }
@@ -233,7 +233,7 @@ class LeasesRepository {
   }
 
   /// Create body:
-  /// { propertyId, unitId, tenantId, tenantIds, leaseNumber,
+  /// { propertyId, unitId, tenantId/tenantIds OR newTenant, leaseNumber,
   ///   startDate (yyyy-MM-dd), endDate (yyyy-MM-dd), monthlyRent,
   ///   securityDeposit, lateFeeAmount, rentDueDay, status? }
   Future<Lease> createLease(Map<String, dynamic> data) async {
