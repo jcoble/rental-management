@@ -553,12 +553,32 @@ export interface YearEndRentRollRow {
 	pastDueBalance: number;
 }
 
+export interface YearEndPropertyDisposition {
+	id: number;
+	propertyId: number;
+	propertyName?: string | null;
+	closedOnDate: string;
+	salePrice: number;
+	sellingCosts: number;
+	netSaleProceeds: number;
+	purchasePrice: number;
+	landValue: number;
+	buildingBasis: number;
+	accumulatedDepreciationBeforeSale: number;
+	saleYearDepreciation: number;
+	totalDepreciation: number;
+	adjustedBasis: number;
+	gainLoss: number;
+	unrecapturedSection1250Gain: number;
+}
+
 /** The year-end three-block view: cash flow vs taxable income + rent roll + accountant caveats. */
 export interface YearEndView {
 	year: number;
 	cashFlow: CashFlowSummary;
 	scheduleE: ScheduleEReport;
 	rentRoll: YearEndRentRollRow[];
+	propertyDispositions: YearEndPropertyDisposition[];
 	accountantNotes: string[];
 }
 

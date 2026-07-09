@@ -6,6 +6,7 @@ import '../../features/appointments/appointments_repository.dart';
 import '../../features/applications/applications_repository.dart';
 import '../../features/activity/activity_repository.dart';
 import '../../features/inspections/inspections_repository.dart';
+import '../../features/leases/eviction_cases_repository.dart';
 import '../../features/leases/leases_repository.dart';
 import '../../features/maintenance/work_orders_repository.dart';
 import '../../features/messages/messages_repository.dart';
@@ -16,6 +17,7 @@ import '../../features/owner_reports/owner_reports_repository.dart';
 import '../../features/owners/owners_repository.dart';
 import '../../features/payments/payments_repository.dart';
 import '../../features/properties/capital_assets_repository.dart';
+import '../../features/properties/property_dispositions_repository.dart';
 import '../../features/properties/property_loans_repository.dart';
 import '../../features/properties/properties_repository.dart';
 import '../../features/scan/scan_repository.dart';
@@ -143,6 +145,26 @@ void _invalidateForEntity(Ref ref, String entityType) {
     case 'CapitalAsset':
       ref.invalidate(propertyCapitalAssetsProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
+
+    case 'PropertyDisposition':
+      ref.invalidate(propertyDispositionsProvider);
+      _refreshIfAlive(ref, propertiesProvider);
+      ref.invalidate(propertyDetailProvider);
+      ref.invalidate(unitsProvider);
+      ref.invalidate(propertyLeasesProvider);
+      ref.invalidate(leaseDetailProvider);
+      ref.invalidate(leasesPageProvider);
+      ref.invalidate(propertyCapitalAssetsProvider);
+      _refreshIfAlive(ref, accountingSummaryProvider);
+
+    case 'EvictionCase':
+    case 'EvictionCaseEvent':
+      ref.invalidate(leaseEvictionCasesProvider);
+      _refreshIfAlive(ref, leasesProvider);
+      ref.invalidate(leasesPageProvider);
+      ref.invalidate(leaseDetailProvider);
+      ref.invalidate(propertyLeasesProvider);
+      ref.invalidate(unitsProvider);
 
     case 'Portfolio':
       ref.invalidate(gettingStartedSignalsProvider);
