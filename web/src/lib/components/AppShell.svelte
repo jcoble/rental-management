@@ -341,10 +341,9 @@
 			...groupsForState.map((g) => g.id),
 			...(canSeeCommandCenter ? ['command-center'] : [])
 		];
-		const activeGroupId =
-			canSeeCommandCenter && commandCenterHasActive()
-				? 'command-center'
-				: groupsForState.find((g) => groupHasActive(g))?.id;
+		// Command Center is a selectable unit picker: keep its active highlight on unit pages, but do
+		// not auto-reopen it after a unit selection explicitly collapses the picker.
+		const activeGroupId = groupsForState.find((g) => groupHasActive(g))?.id;
 		if (activeGroupId) {
 			for (const id of groupIdsForState) {
 				const shouldOpen = id === activeGroupId;
