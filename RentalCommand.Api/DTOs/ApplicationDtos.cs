@@ -416,6 +416,10 @@ public class ScreeningResultResponse
 /// <summary>Body for <c>POST /api/v1/applications/{id}/adverse-action</c>.</summary>
 public class GenerateAdverseActionRequest
 {
+    /// <summary>Stable client-generated key reused when this logical generation attempt is retried.</summary>
+    [Required, MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     /// <summary>
     /// Optional override for the principal reason printed on the notice. When omitted, the reason is
     /// derived from the application's decision reason / screening recommendation.

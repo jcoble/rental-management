@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -333,6 +334,7 @@ class ApplicationsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/applications/$id/adverse-action',
         data: {
+          'operationKey': _newOperationId(),
           if (reason != null && reason.isNotEmpty) 'reason': reason,
           'sendToApplicant': sendToApplicant,
         },
@@ -348,6 +350,12 @@ class ApplicationsRepository {
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
+  }
+
+  static String _newOperationId() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    return bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// Raw bytes for a stored file (authed via the shared interceptor) — used to

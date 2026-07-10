@@ -223,10 +223,10 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(typeof(AdverseActionNoticeResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GenerateAdverseAction(
-        int id, [FromBody] GenerateAdverseActionRequest? body, CancellationToken ct)
+        int id, [FromBody] GenerateAdverseActionRequest body, CancellationToken ct)
     {
         var result = await _screening.GenerateAdverseActionAsync(
-            GetPortfolioId(), id, GetUserId(), body ?? new GenerateAdverseActionRequest(), ct);
+            GetPortfolioId(), id, GetUserId(), body, ct);
         return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
     }
 

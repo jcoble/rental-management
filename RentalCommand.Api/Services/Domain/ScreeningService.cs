@@ -1,10 +1,14 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Screening;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -13,18 +17,14 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IScreeningService"/>
 public sealed class ScreeningService : IScreeningService
 {
-    /// <summary>StoredFile.EntityType used for the adverse-action notice PDF (and any future application docs).</summary>
-    internal const string ApplicationEntityType = "Application";
-
     private const string ScreeningEntityType = "ScreeningResult";
-    private const string AdverseActionEntityType = "AdverseActionNotice";
 
     private readonly RentalCommandDbContext _db;
     private readonly IScreeningProvider _provider;
     private readonly ScreeningConfig _config;
     private readonly IFileStorage _storage;
     private readonly IAdverseActionNoticePdfGenerator _pdf;
-    private readonly IMessagePublisher _publisher;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScreeningService> _logger;
@@ -36,7 +36,7 @@ public sealed class ScreeningService : IScreeningService
         IOptions<ScreeningConfig> config,
         IFileStorage storage,
         IAdverseActionNoticePdfGenerator pdf,
-        IMessagePublisher publisher,
+        IAtomicUnitOfWork atomic,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         ILogger<ScreeningService> logger,
@@ -47,7 +47,7 @@ public sealed class ScreeningService : IScreeningService
         _config = config.Value;
         _storage = storage;
         _pdf = pdf;
-        _publisher = publisher;
+        _atomic = atomic;
         _dataUpdate = dataUpdate;
         _audit = audit;
         _logger = logger;
@@ -143,6 +143,8 @@ public sealed class ScreeningService : IScreeningService
     public async Task<AdverseActionNoticeResponse?> GenerateAdverseActionAsync(
         int portfolioId, int applicationId, int userId, GenerateAdverseActionRequest request, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.OperationKey);
+
         var application = await _db.RentalApplications
             .Include(a => a.Property)
             .FirstOrDefaultAsync(a => a.Id == applicationId && a.PortfolioId == portfolioId, ct);
@@ -186,72 +188,122 @@ public sealed class ScreeningService : IScreeningService
             storageKey = await _storage.UploadAsync(ms, fileName, "application/pdf", ct);
         }
 
-        var storedFile = new StoredFile
-        {
-            PortfolioId = portfolioId,
-            FileName = fileName,
-            FilePath = storageKey,
-            ContentType = "application/pdf",
-            FileSize = pdfBytes.Length,
-            EntityType = ApplicationEntityType,
-            EntityId = application.Id,
-            UploadedAt = now,
-        };
-
-        var notice = new AdverseActionNotice
-        {
-            PortfolioId = portfolioId,
-            ApplicationId = application.Id,
-            Reason = reason,
-            CreditReportingAgency = craBlock,
-            GeneratedAtUtc = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
+        AtomicCommandOutcome<CreateAdverseActionNoticeResult> outcome;
+        var scopedOperationKey = ScopedOperationKey(portfolioId, applicationId, request.OperationKey);
         try
         {
-            _db.StoredFiles.Add(storedFile);
-            notice.StoredFile = storedFile;
-            _db.AdverseActionNotices.Add(notice);
-
-            // Optionally enqueue the notice to the applicant via the email outbox.
-            if (request.SendToApplicant && !string.IsNullOrWhiteSpace(application.Email))
-            {
-                await _publisher.PublishAsync(
+            outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "adverse-action.generate",
+                    scopedOperationKey),
+                new CreateAdverseActionNoticeCommand(
                     portfolioId,
-                    "email",
-                    RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                        "adverse-action", portfolioId, application.Id, reason, application.Email),
-                    new
-                    {
-                        to = application.Email,
-                        subject = "Notice regarding your rental application",
-                        body = "Please find attached a notice regarding the decision on your rental application, "
-                            + "including your rights under the Fair Credit Reporting Act (FCRA).",
-                    },
-                    ct);
-                notice.SentAtUtc = now;
-            }
-
-            await _db.SaveChangesAsync(ct);
+                    application.Id,
+                    userId,
+                    reason,
+                    craBlock,
+                    fileName,
+                    storageKey,
+                    pdfBytes.LongLength,
+                    request.SendToApplicant,
+                    $"{scopedOperationKey}:email",
+                    now),
+                new AtomicJsonResultCodec<CreateAdverseActionNoticeResult>("adverse-action.generate.v1"),
+                ct);
         }
         catch
         {
-            try { await _storage.DeleteAsync(storageKey, ct); } catch { /* best-effort */ }
+            await DeleteFailedUploadIfUnreferencedAsync(storageKey);
             throw;
         }
 
-        await _audit.LogAsync(
-            portfolioId,
-            AdverseActionEntityType,
-            notice.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            changeReason: $"FCRA adverse-action notice generated for application #{application.Id}.",
-            ct: ct);
+        if (outcome.Disposition == AtomicCommandDisposition.Replayed)
+        {
+            await DeleteReplayUploadIfUnreferencedAsync(outcome.Value.StoredFileId, storageKey);
+        }
 
-        return AdverseActionNoticeResponse.FromEntity(notice);
+        return new AdverseActionNoticeResponse
+        {
+            Id = outcome.Value.NoticeId,
+            ApplicationId = outcome.Value.ApplicationId,
+            Reason = outcome.Value.Reason,
+            CreditReportingAgency = outcome.Value.CreditReportingAgency,
+            GeneratedAtUtc = outcome.Value.GeneratedAtUtc,
+            StoredFileId = outcome.Value.StoredFileId,
+            SentAtUtc = outcome.Value.SentAtUtc,
+        };
+    }
+
+    private async Task DeleteReplayUploadIfUnreferencedAsync(int storedFileId, string currentStorageKey)
+    {
+        try
+        {
+            var committedStorageKey = await _db.StoredFiles
+                .AsNoTracking()
+                .Where(file => file.Id == storedFileId)
+                .Select(file => file.FilePath)
+                .SingleOrDefaultAsync(CancellationToken.None);
+            if (committedStorageKey is null)
+            {
+                _logger.LogWarning(
+                    "Could not verify adverse-action stored file {StoredFileId}; preserving replay upload {StorageKey}.",
+                    storedFileId,
+                    currentStorageKey);
+                return;
+            }
+
+            if (!string.Equals(committedStorageKey, currentStorageKey, StringComparison.Ordinal))
+            {
+                await DeleteUploadedBlobAsync(currentStorageKey);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not verify whether adverse-action replay upload {StorageKey} is referenced; preserving it.",
+                currentStorageKey);
+        }
+    }
+
+    private async Task DeleteFailedUploadIfUnreferencedAsync(string currentStorageKey)
+    {
+        try
+        {
+            var referenced = await _db.StoredFiles
+                .AsNoTracking()
+                .AnyAsync(file => file.FilePath == currentStorageKey, CancellationToken.None);
+            if (!referenced)
+            {
+                await DeleteUploadedBlobAsync(currentStorageKey);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not verify failed adverse-action upload {StorageKey}; preserving it for reconciliation.",
+                currentStorageKey);
+        }
+    }
+
+    private async Task DeleteUploadedBlobAsync(string storageKey)
+    {
+        try
+        {
+            await _storage.DeleteAsync(storageKey, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not remove uncommitted adverse-action blob {StorageKey}.", storageKey);
+        }
+    }
+
+    private static string ScopedOperationKey(int portfolioId, int applicationId, string operationKey)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey.Trim())))
+            .ToLowerInvariant();
+        return $"adverse-action:{portfolioId}:{applicationId}:{hash}";
     }
 
     /// <summary>Builds a human reason from the most recent completed screening when no explicit reason exists.</summary>

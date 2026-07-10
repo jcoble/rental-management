@@ -363,21 +363,29 @@
 	let adverseReason = $state('');
 	let adverseSendToApplicant = $state(false);
 	let adverseNotice = $state<AdverseActionNoticeResponse | null>(null);
+	let adverseOperationKey = $state<string | null>(null);
 
 	function openAdverseAction() {
 		adverseReason = application?.decisionReason ?? '';
 		adverseSendToApplicant = false;
+		adverseOperationKey = crypto.randomUUID();
 		showAdverseAction = true;
+	}
+
+	function adverseActionOperationKey(): string {
+		return (adverseOperationKey ??= crypto.randomUUID());
 	}
 
 	const adverseActionMutation = createMutation(() => ({
 		mutationFn: () =>
 			applications.adverseAction(id, {
+				operationKey: adverseActionOperationKey(),
 				reason: adverseReason.trim() || undefined,
 				sendToApplicant: adverseSendToApplicant,
 			}),
 		onSuccess: (notice) => {
 			adverseNotice = notice;
+			adverseOperationKey = null;
 			showAdverseAction = false;
 			showSuccess(
 				notice.sentAtUtc
