@@ -45,6 +45,8 @@ public static class ServiceCollectionExtensions
         // token-scoped signing flow used by SignController.
         services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
             RentalCommand.Api.Services.Esign.ExecutedLeasePdfGenerator>();
+        services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
+            RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
         services.AddScoped<RentalCommand.Api.Services.Esign.INativeSigningService,
             RentalCommand.Api.Services.Esign.NativeSigningService>();
         services.AddScoped<IPaymentService, PaymentService>();

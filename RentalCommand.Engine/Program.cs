@@ -128,6 +128,13 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
+// Native e-sign execution is shared with the API. Signatures are committed before PDF/blob work;
+// this service lets the Engine finish any durable ExecutionPending request after a transient failure.
+builder.Services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
+    RentalCommand.Api.Services.Esign.ExecutedLeasePdfGenerator>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
+    RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
+builder.Services.AddScoped<NativeEsignReconciliationService>();
 // Realtime backplane (TSK-624): the Engine can't reach the API's in-memory SignalR hub, so it
 // publishes each entity change as a Postgres NOTIFY on its own pooled connection. The API-hosted
 // EntityChangeListener LISTENs and re-broadcasts to the hub. Shared NpgsqlDataSource so publishes
@@ -191,6 +198,7 @@ builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
+builder.Services.AddHostedService<NativeEsignReconciliationWorker>();
 
 // Dev-only (Simulation:Enabled, non-prod): the command-bridge worker that runs automation jobs on demand
 // at sim-time when the API enqueues a SimWorkerCommand. Never registered in production.
