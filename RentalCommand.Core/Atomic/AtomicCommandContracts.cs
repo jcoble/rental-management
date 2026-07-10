@@ -94,6 +94,7 @@ public enum AtomicLockResource
     SignatureRequest = 1,
     WorkOrder = 2,
     Conversation = 3,
+    RefreshTokenFamily = 4,
 }
 
 /// <summary>
@@ -103,6 +104,7 @@ public enum AtomicLockResource
 public interface IAtomicLockingPersistence
 {
     Task AcquireAsync(AtomicLockResource resource, int aggregateId, CancellationToken ct = default);
+    Task AcquireAsync(AtomicLockResource resource, Guid aggregateId, CancellationToken ct = default);
 }
 
 /// <summary>

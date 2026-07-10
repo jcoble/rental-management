@@ -174,6 +174,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Conversations.SendConversationMessageCommand,
     RentalCommand.Core.Conversations.SendConversationMessageResult,
     RentalCommand.Data.Conversations.SendConversationMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.IssueSessionRefreshCredentialCommand,
+    RentalCommand.Core.Auth.SessionRefreshMutationResult,
+    RentalCommand.Data.Auth.IssueSessionRefreshCredentialHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.RotateSessionRefreshCredentialCommand,
+    RentalCommand.Core.Auth.SessionRefreshMutationResult,
+    RentalCommand.Data.Auth.RotateSessionRefreshCredentialHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
