@@ -118,6 +118,7 @@ export interface RecordApplicationFeeRequest {
 
 /** Request body for generating an FCRA adverse-action notice. */
 export interface AdverseActionRequest {
+	operationKey: string;
 	reason?: string;
 	sendToApplicant: boolean;
 }

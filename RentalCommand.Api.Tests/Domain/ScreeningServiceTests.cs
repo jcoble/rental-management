@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -8,11 +9,14 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Screening;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Screening;
 using RentalCommand.Data;
+using RentalCommand.Data.Screening;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -28,8 +32,8 @@ public class ScreeningServiceTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly RecordingPublisher _publisher = new();
     private readonly FakeFileStorage _storage = new();
+    private readonly InlineAdverseActionAtomicUnitOfWork _atomic;
 
     public ScreeningServiceTests()
     {
@@ -55,6 +59,7 @@ public class ScreeningServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _atomic = new InlineAdverseActionAtomicUnitOfWork(_db);
     }
 
     public void Dispose()
@@ -75,7 +80,7 @@ public class ScreeningServiceTests : IDisposable
         }),
         _storage,
         new AdverseActionNoticePdfGenerator(),
-        _publisher,
+        _atomic,
         Mock.Of<IDataUpdateService>(),
         new RecordingAuditService(),
         NullLogger<ScreeningService>.Instance,
@@ -176,7 +181,12 @@ public class ScreeningServiceTests : IDisposable
         var sut = BuildService(new StubConfiguredProvider());
 
         var response = await sut.GenerateAdverseActionAsync(
-            PortfolioId, app.Id, userId: 7, new GenerateAdverseActionRequest { Reason = "Insufficient credit history.", SendToApplicant = true });
+            PortfolioId, app.Id, userId: 7, new GenerateAdverseActionRequest
+            {
+                OperationKey = "generate-notice-1",
+                Reason = "Insufficient credit history.",
+                SendToApplicant = true,
+            });
 
         response.Should().NotBeNull();
         response!.StoredFileId.Should().NotBeNull();
@@ -202,7 +212,19 @@ public class ScreeningServiceTests : IDisposable
         Encoding.ASCII.GetString(bytes, 0, 5).Should().StartWith("%PDF");
 
         // It was enqueued to the applicant via the email outbox.
-        _publisher.Published.Should().ContainSingle(p => p.messageType == "email");
+        var delivery = await _db.OutboxMessages.SingleAsync();
+        delivery.MessageType.Should().Be("email");
+        delivery.IdempotencyKey.Should().StartWith($"adverse-action:{PortfolioId}:{app.Id}:");
+        delivery.IdempotencyKey.Should().EndWith(":email");
+        using (var payload = JsonDocument.Parse(delivery.Payload))
+        {
+            payload.RootElement.GetProperty("attachmentStoredFileId").GetInt32()
+                .Should().Be(file.Id);
+        }
+        _atomic.SemanticEvents.Should().ContainSingle(audit =>
+            audit.EntityType == nameof(AdverseActionNotice)
+            && audit.EntityId == notice.Id
+            && audit.UserId == 7);
     }
 
     [Fact]
@@ -212,11 +234,61 @@ public class ScreeningServiceTests : IDisposable
         var sut = BuildService(new StubConfiguredProvider());
 
         var response = await sut.GenerateAdverseActionAsync(
-            PortfolioId, app.Id, userId: 7, new GenerateAdverseActionRequest { SendToApplicant = true });
+            PortfolioId, app.Id, userId: 7, new GenerateAdverseActionRequest
+            {
+                OperationKey = "generate-notice-no-email",
+                SendToApplicant = true,
+            });
 
         response.Should().NotBeNull();
         response!.SentAtUtc.Should().BeNull("there is no applicant email to send to");
-        _publisher.Published.Should().BeEmpty();
+        (await _db.OutboxMessages.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GenerateAdverseAction_SameOperation_ReplaysOneNoticeAndDeletesDuplicateUpload()
+    {
+        var app = await SeedApplicationAsync(consent: true);
+        var sut = BuildService(new StubConfiguredProvider());
+        var request = new GenerateAdverseActionRequest
+        {
+            OperationKey = "stable-retry-key",
+            Reason = "Insufficient credit history.",
+            SendToApplicant = true,
+        };
+
+        var first = await sut.GenerateAdverseActionAsync(PortfolioId, app.Id, userId: 7, request);
+        var replay = await sut.GenerateAdverseActionAsync(PortfolioId, app.Id, userId: 7, request);
+
+        replay.Should().BeEquivalentTo(first);
+        (await _db.AdverseActionNotices.CountAsync()).Should().Be(1);
+        (await _db.StoredFiles.CountAsync()).Should().Be(1);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(1);
+        _storage.Files.Should().ContainSingle("the replay upload is unreferenced and must be removed");
+    }
+
+    [Fact]
+    public async Task GenerateAdverseAction_AtomicFailure_DeletesUnreferencedUploadAndStoresNothing()
+    {
+        var app = await SeedApplicationAsync(consent: true);
+        var sut = BuildService(new StubConfiguredProvider());
+        _atomic.FailNext = true;
+
+        var act = () => sut.GenerateAdverseActionAsync(
+            PortfolioId,
+            app.Id,
+            userId: 7,
+            new GenerateAdverseActionRequest
+            {
+                OperationKey = "failed-generation",
+                SendToApplicant = true,
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        (await _db.AdverseActionNotices.CountAsync()).Should().Be(0);
+        (await _db.StoredFiles.CountAsync()).Should().Be(0);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(0);
+        _storage.Files.Should().BeEmpty();
     }
 
     // --- Test doubles ---------------------------------------------------------------------------
@@ -263,15 +335,88 @@ public class ScreeningServiceTests : IDisposable
         }
     }
 
-    private sealed class RecordingPublisher : IMessagePublisher
+    private sealed class InlineAdverseActionAtomicUnitOfWork : IAtomicUnitOfWork
     {
-        public List<(int portfolioId, string messageType)> Published { get; } = [];
+        private readonly RentalCommandDbContext _db;
+        private readonly Dictionary<(string CommandType, string Key), object> _receipts = [];
 
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey, TPayload payload, CancellationToken ct = default)
+        public InlineAdverseActionAtomicUnitOfWork(RentalCommandDbContext db) => _db = db;
+
+        public List<AtomicSemanticAudit> SemanticEvents { get; } = [];
+        public bool FailNext { get; set; }
+
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
         {
-            Published.Add((portfolioId, messageType));
-            return Task.CompletedTask;
+            if (FailNext)
+            {
+                FailNext = false;
+                throw new InvalidOperationException("Injected atomic command failure.");
+            }
+
+            if (_receipts.TryGetValue((identity.CommandType, identity.IdempotencyKey), out var receipt))
+            {
+                return new AtomicCommandOutcome<TResult>(
+                    (TResult)receipt,
+                    AtomicCommandDisposition.Replayed,
+                    Guid.Empty);
+            }
+
+            command.Should().BeOfType<CreateAdverseActionNoticeCommand>();
+            var attempt = new InlineAtomicWriteAttempt(_db, SemanticEvents);
+            var value = await new CreateAdverseActionNoticeHandler().HandleAsync(
+                (CreateAdverseActionNoticeCommand)(object)command,
+                attempt,
+                ct);
+            await attempt.FlushBusinessAsync(ct);
+            _receipts.Add((identity.CommandType, identity.IdempotencyKey), value);
+            return new AtomicCommandOutcome<TResult>(
+                (TResult)(object)value,
+                AtomicCommandDisposition.Executed,
+                attempt.AttemptId);
         }
+    }
+
+    private sealed class InlineAtomicWriteAttempt : IAtomicWriteAttempt, IAtomicPersistenceSession
+    {
+        private readonly RentalCommandDbContext _db;
+        private readonly List<AtomicSemanticAudit> _semanticEvents;
+
+        public InlineAtomicWriteAttempt(
+            RentalCommandDbContext db,
+            List<AtomicSemanticAudit> semanticEvents)
+        {
+            _db = db;
+            _semanticEvents = semanticEvents;
+        }
+
+        public Guid AttemptId { get; } = Guid.NewGuid();
+        public Guid AuditScopeId { get; } = Guid.NewGuid();
+        public Guid SessionId { get; } = Guid.NewGuid();
+        public IAtomicPersistenceSession Persistence => this;
+        public IAtomicSetBasedPersistence SetBased => Mock.Of<IAtomicSetBasedPersistence>();
+        public IAtomicLockingPersistence Locking => Mock.Of<IAtomicLockingPersistence>();
+
+        public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
+        public void Add<TEntity>(TEntity entity) where TEntity : class => _db.Add(entity);
+        public void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class => _db.AddRange(entities);
+        public void Remove<TEntity>(TEntity entity) where TEntity : class => _db.Remove(entity);
+
+        public async Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default)
+        {
+            var rows = await _db.SaveChangesAsync(ct);
+            return new AtomicBusinessFlush(rows, []);
+        }
+
+        public void BindSemanticAudit(object entityReference, AtomicSemanticAudit audit) { }
+        public void EnrichMutation(AtomicAuditMutation mutation, AtomicSemanticAudit audit) { }
+        public void StageSemanticEvent(AtomicSemanticAudit audit) => _semanticEvents.Add(audit);
+        public void StageOutbox(OutboxMessage message) => _db.OutboxMessages.Add(message);
     }
 
     private sealed class RecordingAuditService : IAuditTrailService
