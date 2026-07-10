@@ -5,7 +5,7 @@ namespace RentalCommand.Core.Interfaces;
 /// like Stripe and the LLM provider: when no API key is configured a disabled implementation is used
 /// that returns a clear "not configured" result and never contacts the provider.
 /// </summary>
-public interface IEsignProvider
+public interface IEsignProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>True when the provider is configured (an API key is present) and will make real calls.</summary>
     bool IsConfigured { get; }

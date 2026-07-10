@@ -1,8 +1,22 @@
 using System.Text.Json;
+using System.Linq.Expressions;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Core.Atomic;
+
+/// <summary>Explicit marker for immutable, service-free command DTOs.</summary>
+public interface IAtomicCommandData;
+
+/// <summary>Explicit marker for immutable, service-free result DTOs.</summary>
+public interface IAtomicResultData;
+
+/// <summary>
+/// Explicit allowlist marker for pure handler dependencies. Implementations are recursively
+/// inspected before a handler is constructed; remote, persistence, provider, and factory
+/// dependencies remain forbidden even through a marked wrapper.
+/// </summary>
+public interface IAtomicTransactionSafeDependency;
 
 /// <summary>
 /// Infrastructure-neutral entry point for retry-safe, receipt-backed database commands. A handler
@@ -15,13 +29,13 @@ public interface IAtomicUnitOfWork
         TCommand command,
         IAtomicResultCodec<TResult> resultCodec,
         CancellationToken ct = default)
-        where TCommand : notnull
+        where TCommand : notnull, IAtomicCommandData
         where TResult : notnull;
 }
 
 /// <summary>Application command code resolved once per physical execution-strategy attempt.</summary>
 public interface IAtomicCommandHandler<in TCommand, TResult>
-    where TCommand : notnull
+    where TCommand : notnull, IAtomicCommandData
     where TResult : notnull
 {
     Task<TResult> HandleAsync(
@@ -41,6 +55,8 @@ public interface IAtomicWriteAttempt
 {
     Guid AttemptId { get; }
     Guid AuditScopeId { get; }
+    IAtomicPersistenceSession Persistence { get; }
+    IAtomicSetBasedPersistence SetBased { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -61,6 +77,39 @@ public interface IAtomicWriteAttempt
     void StageOutbox(OutboxMessage message);
 }
 
+/// <summary>
+/// Restricted persistence capability for handlers. It intentionally exposes no DbContext,
+/// DatabaseFacade, connection, transaction, raw SQL, or service-provider escape hatch.
+/// </summary>
+public interface IAtomicPersistenceSession
+{
+    Guid SessionId { get; }
+    IQueryable<TEntity> Query<TEntity>() where TEntity : class;
+    void Add<TEntity>(TEntity entity) where TEntity : class;
+    void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class;
+    void Remove<TEntity>(TEntity entity) where TEntity : class;
+}
+
+/// <summary>Exact, audited set-based mutations constructed by the persistence kernel.</summary>
+public interface IAtomicSetBasedPersistence
+{
+    Task UpdatePropertyAsync<TEntity, TProperty>(
+        int portfolioId,
+        int entityId,
+        AtomicSemanticAudit audit,
+        Expression<Func<TEntity, TProperty>> property,
+        TProperty value,
+        CancellationToken ct = default)
+        where TEntity : class, RentalCommand.Core.Interfaces.IAuditable, RentalCommand.Core.Interfaces.IPortfolioScoped;
+
+    Task DeleteAsync<TEntity>(
+        int portfolioId,
+        int entityId,
+        AtomicSemanticAudit audit,
+        CancellationToken ct = default)
+        where TEntity : class, RentalCommand.Core.Interfaces.IAuditable, RentalCommand.Core.Interfaces.IPortfolioScoped;
+}
+
 public interface IAtomicResultCodec<TResult>
     where TResult : notnull
 {
@@ -73,9 +122,7 @@ public interface IAtomicResultCodec<TResult>
 public sealed class AtomicJsonResultCodec<TResult> : IAtomicResultCodec<TResult>
     where TResult : notnull
 {
-    private readonly JsonSerializerOptions? _options;
-
-    public AtomicJsonResultCodec(string contractName, JsonSerializerOptions? options = null)
+    public AtomicJsonResultCodec(string contractName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contractName);
         if (contractName.Length > 200)
@@ -86,14 +133,13 @@ public sealed class AtomicJsonResultCodec<TResult> : IAtomicResultCodec<TResult>
         }
 
         ContractName = contractName;
-        _options = options;
     }
 
     public string ContractName { get; }
-    public string Serialize(TResult result) => JsonSerializer.Serialize(result, _options);
+    public string Serialize(TResult result) => JsonSerializer.Serialize(result);
 
     public TResult Deserialize(string json) =>
-        JsonSerializer.Deserialize<TResult>(json, _options)
+        JsonSerializer.Deserialize<TResult>(json)
         ?? throw new InvalidOperationException(
             $"Receipt result for contract '{ContractName}' deserialized to null.");
 }

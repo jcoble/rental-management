@@ -7,7 +7,7 @@ namespace RentalCommand.Core.Interfaces;
 /// thrown, so the outbox dispatch worker is never crashed by SMS config state. A real transport
 /// error from a configured provider DOES throw so the worker can retry.
 /// </summary>
-public interface ISmsDispatcher
+public interface ISmsDispatcher : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Sends <paramref name="message"/> to <paramref name="toPhoneNumber"/> on behalf of

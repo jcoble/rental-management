@@ -5,7 +5,7 @@ namespace RentalCommand.Api.Services.Payments;
 /// All methods are gated: when Stripe is not configured (<see cref="CreateIntentResult.Outcome.NotEnabled"/>),
 /// they return gracefully without throwing.
 /// </summary>
-public interface IStripePaymentService
+public interface IStripePaymentService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// True when hosted online payments may be offered for the portfolio. This includes the global

@@ -23,6 +23,7 @@ internal sealed class AtomicAuditScope
     private long _ordinal;
     private int _transactionLifecycleDepth;
     private AtomicSetBasedTarget? _activeSetBasedTarget;
+    private AtomicRawDmlPermit? _activeRawDmlPermit;
 
     public Guid ScopeId { get; } = Guid.NewGuid();
     public bool IsActive => _command is not null;
@@ -50,6 +51,7 @@ internal sealed class AtomicAuditScope
                 _attemptId = default;
                 _transactionLifecycleDepth = 0;
                 _activeSetBasedTarget = null;
+                _activeRawDmlPermit = null;
                 _boundSemantic.Clear();
                 _mutations.Clear();
                 _rows.Clear();
@@ -80,6 +82,48 @@ internal sealed class AtomicAuditScope
         {
             throw new AtomicArchitectureException(
                 $"Atomic command handlers cannot {operation} transactions; the atomic executor owns the transaction lifecycle.");
+        }
+    }
+
+    public IDisposable BeginInternalRawDml(string tableName, AtomicRawDmlOperation operation)
+    {
+        RequireActive();
+        ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
+        lock (_gate)
+        {
+            if (_activeRawDmlPermit is not null)
+            {
+                throw new InvalidOperationException("An internal raw DML command is already executing.");
+            }
+
+            _activeRawDmlPermit = new AtomicRawDmlPermit(tableName, operation);
+        }
+
+        return new Lease(() =>
+        {
+            lock (_gate)
+            {
+                _activeRawDmlPermit = null;
+            }
+        });
+    }
+
+    public void GuardRawDml(
+        string commandText,
+        AtomicRawDmlOperation operation)
+    {
+        lock (_gate)
+        {
+            if (_command is null
+                || _activeRawDmlPermit is null
+                || _activeRawDmlPermit.Operation != operation
+                || !commandText.Contains(
+                    $"\"{_activeRawDmlPermit.TableName}\"",
+                    StringComparison.Ordinal))
+            {
+                throw new AtomicArchitectureException(
+                    $"Raw {operation} DML is forbidden without an exact internal atomic mutation lease.");
+            }
         }
     }
 
@@ -140,6 +184,17 @@ internal sealed class AtomicAuditScope
 
             if (_boundSemantic.Remove(entityReference, out var semantic))
             {
+                if (operation == AuditLogOperation.Created && semantic.EntityId == 0)
+                {
+                    if (entityId <= 0)
+                    {
+                        throw new InvalidOperationException(
+                            "A created semantic audit requires a generated positive entity id after SaveChanges.");
+                    }
+
+                    semantic = semantic with { EntityId = entityId };
+                }
+
                 ValidateSemantic(mutation, semantic);
                 ApplySemantic(row, semantic);
             }
@@ -339,10 +394,12 @@ internal sealed class AtomicAuditScope
             _ => throw new ArgumentException("The exact tracked object has no pending auditable mutation."),
         };
 
+        var unresolvedGeneratedId = operation == AuditLogOperation.Created
+            && audit.EntityId == 0
+            && id <= 0;
         if (!string.Equals(entityType, audit.EntityType, StringComparison.Ordinal)
             || portfolioId != audit.PortfolioId
-            || (id != 0 && id != audit.EntityId)
-            || (id == 0 && audit.EntityId != 0)
+            || (!unresolvedGeneratedId && id != audit.EntityId)
             || operation != audit.Operation)
         {
             throw new ArgumentException("Semantic audit does not match the exact pending tracked mutation.");
@@ -408,15 +465,19 @@ internal sealed class AtomicAuditScope
     }
 }
 
-public sealed record AtomicSetBasedTarget(
+internal sealed record AtomicSetBasedTarget(
     Type EntityClrType,
     int PortfolioId,
     int EntityId,
-    AuditLogOperation Operation)
+    AuditLogOperation Operation);
+
+internal sealed record AtomicRawDmlPermit(
+    string TableName,
+    AtomicRawDmlOperation Operation);
+
+internal enum AtomicRawDmlOperation
 {
-    public static AtomicSetBasedTarget For<TEntity>(
-        int portfolioId,
-        int entityId,
-        AuditLogOperation operation) =>
-        new(typeof(TEntity), portfolioId, entityId, operation);
+    Insert,
+    Update,
+    Delete,
 }

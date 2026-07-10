@@ -12,6 +12,24 @@ namespace RentalCommand.Data.Atomic;
 /// </summary>
 public static class AtomicPersistenceKernelExtensions
 {
+    public static IServiceCollection AddAtomicCommandHandler<TCommand, TResult, THandler>(
+        this IServiceCollection services)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+        where THandler : class, IAtomicCommandHandler<TCommand, TResult>
+    {
+        if (services.Any(descriptor =>
+                descriptor.ServiceType == typeof(AtomicHandlerRegistration<TCommand, TResult>)))
+        {
+            throw new InvalidOperationException(
+                $"An atomic handler is already registered for {typeof(TCommand).Name}/{typeof(TResult).Name}.");
+        }
+
+        services.AddSingleton(new AtomicHandlerRegistration<TCommand, TResult>(typeof(THandler)));
+        services.AddScoped<IAtomicCommandHandler<TCommand, TResult>, THandler>();
+        return services;
+    }
+
     public static IServiceCollection AddAtomicPersistenceKernel(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
@@ -19,7 +37,6 @@ public static class AtomicPersistenceKernelExtensions
         services.AddScoped<AtomicAuditSaveChangesInterceptor>();
         services.AddScoped<AtomicTransactionLifecycleInterceptor>();
         services.AddScoped<AtomicSetBasedCommandGuardInterceptor>();
-        services.AddScoped<IAtomicSetBasedMutationExecutor, AtomicSetBasedMutationExecutor>();
         services.TryAddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
         return services;
     }

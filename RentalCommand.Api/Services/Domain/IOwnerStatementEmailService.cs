@@ -7,7 +7,7 @@ public record StatementEmailResult(bool Sent, string? Reason = null);
 /// Renders an owner's annual statement as plain text and enqueues it for delivery
 /// via the DB outbox. The actual send is handled by the Engine's OutboxDispatchWorker.
 /// </summary>
-public interface IOwnerStatementEmailService
+public interface IOwnerStatementEmailService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Loads the owner statement for <paramref name="ownerId"/> / <paramref name="year"/>,

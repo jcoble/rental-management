@@ -8,7 +8,7 @@ namespace RentalCommand.Core.Interfaces;
 /// is used that reports itself unconfigured and returns a clear "not configured" result — never a false
 /// "passed". Callers MUST have recorded explicit FCRA consent before requesting a screening.
 /// </summary>
-public interface IScreeningProvider
+public interface IScreeningProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>True when the provider is configured (an API key is present) and will make real calls.</summary>
     bool IsConfigured { get; }

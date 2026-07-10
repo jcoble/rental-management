@@ -2,14 +2,20 @@ using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Metadata;
+using System.Text.RegularExpressions;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Data.Atomic;
 
-/// <summary>Blocks raw set-based DML on auditable tables; only the exact executor gets a lease.</summary>
+/// <summary>
+/// Blocks caller-authored raw DML and set-based writes; only kernel-owned exact operations get a lease.
+/// </summary>
 internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandInterceptor
 {
+    private static readonly Regex RawDml = new(
+        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)|(?<delete>DELETE\s+FROM))\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly AtomicAuditScope _scope;
 
     public AtomicSetBasedCommandGuardInterceptor(AtomicAuditScope scope) => _scope = scope;
@@ -35,6 +41,22 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
 
     private void Guard(DbCommand command, CommandEventData eventData)
     {
+        if (eventData.CommandSource == CommandSource.ExecuteSqlRaw)
+        {
+            var match = RawDml.Match(command.CommandText);
+            if (match.Success)
+            {
+                var rawOperation = match.Groups["insert"].Success
+                    ? AtomicRawDmlOperation.Insert
+                    : match.Groups["update"].Success
+                        ? AtomicRawDmlOperation.Update
+                        : AtomicRawDmlOperation.Delete;
+                _scope.GuardRawDml(command.CommandText, rawOperation);
+            }
+
+            return;
+        }
+
         var operation = eventData.CommandSource switch
         {
             CommandSource.ExecuteUpdate => AuditLogOperation.Updated,

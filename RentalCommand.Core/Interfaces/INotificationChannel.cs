@@ -5,7 +5,7 @@ namespace RentalCommand.Core.Interfaces;
 /// <see cref="Entities.OutboxMessage"/> entries to a channel. Phase 0 defines the contract
 /// only; concrete SMS/email providers land in Phase 4.
 /// </summary>
-public interface INotificationChannel
+public interface INotificationChannel : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Send an SMS message to a phone number on behalf of <paramref name="portfolioId"/>. The

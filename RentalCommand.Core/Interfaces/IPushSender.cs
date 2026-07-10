@@ -5,7 +5,7 @@ namespace RentalCommand.Core.Interfaces;
 /// must be fail-soft when no push provider credential is configured (log + no-op) so the rest of the
 /// notification rail is unaffected before Firebase is set up.
 /// </summary>
-public interface IPushSender
+public interface IPushSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Delivers a push to one registered device. <paramref name="data"/> carries the deep-link
