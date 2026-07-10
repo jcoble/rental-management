@@ -217,7 +217,11 @@ public class VendorService : IVendorService
         var message = BuildW9RequestSms(vendor.Name, companyName);
 
         // Enqueue the outbound SMS via the outbox (Engine delivers it).
-        await _publisher.PublishAsync(portfolioId, "sms", new
+        await _publisher.PublishAsync(
+            portfolioId,
+            "sms",
+            RentalCommand.Core.Outbox.OutboxIdempotency.Create("vendor-w9", portfolioId, vendor.Id, phone, message),
+            new
         {
             to = phone,
             message,

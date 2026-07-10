@@ -122,7 +122,11 @@ public class VendorDispatchService : IVendorDispatchService
         await _db.SaveChangesAsync(ct);
 
         // Enqueue the outbound job SMS via the outbox (Engine delivers it).
-        await SafeAsync("dispatch sms", () => _publisher.PublishAsync(portfolioId, "sms", new
+        await SafeAsync("dispatch sms", () => _publisher.PublishAsync(
+            portfolioId,
+            "sms",
+            RentalCommand.Core.Outbox.OutboxIdempotency.Create("vendor-dispatch", portfolioId, dispatch.Id, vendorPhone),
+            new
         {
             to = vendorPhone,
             message,

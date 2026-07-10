@@ -211,8 +211,7 @@ public class RentChargeServiceTests : IDisposable
             .Select(n => n.UserId)
             .Should().BeEquivalentTo(new int?[] { 10, 20 });
         _ctx.Db.Notifications.Single(n => n.UserId == 20).ActionUrl.Should().Be("/portal/payments");
-        publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 10 });
-        publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 20 });
+        publisher.TargetedPushDeviceTokens().Should().BeEquivalentTo("admin-device", "tenant-device");
     }
 
     [Fact]
@@ -358,6 +357,17 @@ public class RentChargeServiceTests : IDisposable
         _ctx.Db.UserRoles.AddRange(
             new IdentityUserRole<int> { UserId = 10, RoleId = 1 },
             new IdentityUserRole<int> { UserId = 20, RoleId = 2 });
+        _ctx.Db.DeviceTokens.AddRange(
+            new DeviceToken
+            {
+                PortfolioId = 1, UserId = 10, Token = "admin-device", Platform = "android",
+                CreatedAt = DateTime.UtcNow, LastSeenAt = DateTime.UtcNow,
+            },
+            new DeviceToken
+            {
+                PortfolioId = 1, UserId = 20, Token = "tenant-device", Platform = "android",
+                CreatedAt = DateTime.UtcNow, LastSeenAt = DateTime.UtcNow,
+            });
         _ctx.Db.SaveChanges();
     }
 
@@ -396,6 +406,7 @@ public class RentChargeServiceTests : IDisposable
         public Task PublishAsync<TPayload>(
             int portfolioId,
             string messageType,
+            string idempotencyKey,
             TPayload payload,
             CancellationToken ct = default)
         {
@@ -407,15 +418,12 @@ public class RentChargeServiceTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public IReadOnlyList<int[]> TargetedPushUserIds() =>
+        public IReadOnlyList<string> TargetedPushDeviceTokens() =>
             _pushPayloads
                 .Select(payload =>
                 {
                     using var doc = JsonDocument.Parse(payload);
-                    return doc.RootElement.GetProperty("userIds")
-                        .EnumerateArray()
-                        .Select(e => e.GetInt32())
-                        .ToArray();
+                    return doc.RootElement.GetProperty("deviceToken").GetString()!;
                 })
                 .ToList();
     }
@@ -425,6 +433,7 @@ public class RentChargeServiceTests : IDisposable
         public Task PublishAsync<TPayload>(
             int portfolioId,
             string messageType,
+            string idempotencyKey,
             TPayload payload,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("Injected notification failure");

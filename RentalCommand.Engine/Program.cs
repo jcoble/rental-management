@@ -64,6 +64,7 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 // DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP or SendGrid email,
 // config-selected; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
+builder.Services.AddScoped<RentalCommand.Data.Outbox.IOutboxClaimStore, RentalCommand.Data.Outbox.OutboxClaimStore>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the

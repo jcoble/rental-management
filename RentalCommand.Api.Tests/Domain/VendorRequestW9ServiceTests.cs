@@ -62,6 +62,7 @@ public class VendorRequestW9ServiceTests : IDisposable
         publisher.Verify(p => p.PublishAsync(
             PortfolioId,
             "sms",
+            It.IsAny<string>(),
             It.IsAny<object>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -77,7 +78,7 @@ public class VendorRequestW9ServiceTests : IDisposable
 
         result.Outcome.Should().Be(RequestW9Outcome.VendorHasNoPhone);
         publisher.Verify(p => p.PublishAsync(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -91,7 +92,7 @@ public class VendorRequestW9ServiceTests : IDisposable
 
         result.Outcome.Should().Be(RequestW9Outcome.NotFound);
         publisher.Verify(p => p.PublishAsync(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -107,7 +108,7 @@ public class VendorRequestW9ServiceTests : IDisposable
 
         result.Outcome.Should().Be(RequestW9Outcome.NotFound);
         publisher.Verify(p => p.PublishAsync(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 }

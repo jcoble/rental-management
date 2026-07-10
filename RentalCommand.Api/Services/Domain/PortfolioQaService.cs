@@ -479,7 +479,13 @@ public class PortfolioQaService : IPortfolioQaService
                 var to = string.IsNullOrWhiteSpace(delivery.ToEmail) ? null : delivery.ToEmail!.Trim();
                 if (to is not null)
                 {
-                    await _publisher.PublishAsync(portfolioId, "email", new { to, subject, body }, ct);
+                    await _publisher.PublishAsync(
+                        portfolioId,
+                        "email",
+                        RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                            "portfolio-qa", portfolioId, "email", to, question, answer),
+                        new { to, subject, body },
+                        ct);
                     delivered.Add("Email");
                 }
                 else
@@ -496,7 +502,13 @@ public class PortfolioQaService : IPortfolioQaService
                 var to = await ResolveDefaultOwnerPhoneAsync(portfolioId, ct);
                 if (!string.IsNullOrWhiteSpace(to))
                 {
-                    await _publisher.PublishAsync(portfolioId, "sms", new { to, message = body }, ct);
+                    await _publisher.PublishAsync(
+                        portfolioId,
+                        "sms",
+                        RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                            "portfolio-qa", portfolioId, "sms", to, question, answer),
+                        new { to, message = body },
+                        ct);
                     delivered.Add("Sms");
                 }
                 else

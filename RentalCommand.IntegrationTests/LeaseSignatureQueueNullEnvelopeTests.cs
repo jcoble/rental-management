@@ -89,8 +89,10 @@ public sealed class LeaseSignatureQueueNullEnvelopeTests : IAsyncLifetime
                 to = "tenant@example.com",
                 subject = "Lease L-NOENV",
             }),
-            CreatedAt = now.AddMinutes(-2),
-            SentAt = now.AddMinutes(-1),
+            IdempotencyKey = "lease-null-envelope-signing-link",
+            CreatedAtUtc = now.AddMinutes(-2),
+            NextAttemptAtUtc = now.AddMinutes(-2),
+            AcceptedAtUtc = now.AddMinutes(-1),
         });
         await ctx.SaveChangesAsync();
     }

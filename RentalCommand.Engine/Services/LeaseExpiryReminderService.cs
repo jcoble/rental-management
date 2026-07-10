@@ -62,7 +62,7 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
         // persisted settings row; missing rows use the same runtime defaults GetRuntimeAsync would create.
         var leases = await (
             from lease in _db.Leases
-            join setting in _db.NotificationSettings.AsNoTracking()
+            join setting in _db.NotificationSettings
                 on lease.PortfolioId equals setting.PortfolioId into settings
             from setting in settings.DefaultIfEmpty()
             where lease.Status == LeaseStatus.Active

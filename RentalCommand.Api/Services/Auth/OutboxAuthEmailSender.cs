@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
@@ -223,13 +225,17 @@ For your security, we recommend changing your password after you sign in for the
         // SendGrid adds a text/html part and SMTP uses it as the HtmlBody. kind is retained for
         // logging/diagnostics only — the routing key stays "email".
         var payload = JsonSerializer.Serialize(new { to, subject, body, htmlBody });
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+        var now = DateTime.UtcNow;
 
         _db.OutboxMessages.Add(new OutboxMessage
         {
             PortfolioId = null,
             MessageType = "email",
             Payload = payload,
-            CreatedAt = DateTime.UtcNow
+            IdempotencyKey = $"auth:{kind}:{payloadHash}",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
         });
 
         await _db.SaveChangesAsync(ct);

@@ -13,6 +13,7 @@ public interface IMessagePublisher
     Task PublishAsync<TPayload>(
         int portfolioId,
         string messageType,
+        string idempotencyKey,
         TPayload payload,
         CancellationToken ct = default);
 }
