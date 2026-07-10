@@ -320,6 +320,44 @@ public sealed class NativeEsignTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecutionService_FinalizationFailure_IsRecoveredWithoutSignerResubmission()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
+        var (token, envelopeId) = await SendAndGetTokenAsync(lease);
+        var signing = CreateSigningService();
+        _atomicFailure.ArmForFinalization();
+
+        var sign = () => signing.SignAsync(token, new SubmitSignatureRequest
+        {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            Consent = true,
+            SignatureType = "Typed",
+            TypedName = "Marcus Williams",
+        }, "198.51.100.9", "UA/sign", default);
+
+        await sign.Should().ThrowAsync<InjectedEsignFailure>();
+        var requestId = await _db.SignatureRequests.AsNoTracking()
+            .Where(request => request.PublicId == envelopeId)
+            .Select(request => request.Id)
+            .SingleAsync();
+        var execution = CreateExecutionService();
+
+        (await execution.FinalizePendingAsync(requestId)).Should().BeTrue();
+        (await execution.FinalizePendingAsync(requestId)).Should().BeTrue(
+            "reconciliation is idempotent after the request is completed");
+
+        var completed = await _db.SignatureRequests.AsNoTracking()
+            .SingleAsync(request => request.Id == requestId);
+        var finalLease = await _db.Leases.AsNoTracking().SingleAsync(candidate => candidate.Id == lease.Id);
+        completed.Status.Should().Be(SignatureRequestStatus.Completed);
+        completed.SignedStoredFileId.Should().Be(finalLease.SignedDocumentStoredFileId);
+        (await _db.StoredFiles.CountAsync()).Should().Be(2);
+        _storage.FileCount.Should().Be(2);
+        (await _db.SignatureAuditEvents.CountAsync(e => e.Type == SignatureAuditEventType.Completed))
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task Sign_MultiSigner_OnlyCompletesAfterLastSigner()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
@@ -601,11 +639,20 @@ public sealed class NativeEsignTests : IDisposable
             _db,
             _services.GetRequiredService<IAtomicUnitOfWork>(),
             _storage,
-            new ExecutedLeasePdfGenerator(),
+            CreateExecutionService(),
             leaseEsign,
             TimeProvider.System,
             NullLogger<NativeSigningService>.Instance);
     }
+
+    private NativeEsignExecutionService CreateExecutionService() =>
+        new(
+            _db,
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _storage,
+            new ExecutedLeasePdfGenerator(),
+            TimeProvider.System,
+            NullLogger<NativeEsignExecutionService>.Instance);
 
     private async Task<EsignResult> SendAsync(
         NativeEsignProvider provider,
