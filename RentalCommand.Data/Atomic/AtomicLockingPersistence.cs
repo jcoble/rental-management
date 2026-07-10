@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 
@@ -31,5 +33,32 @@ internal sealed class AtomicLockingPersistence : IAtomicLockingPersistence
         }
         // SQLite is used only by focused tests and serializes writes at the database level. Production
         // PostgreSQL uses the explicit aggregate lock above; concurrency proof runs against PostgreSQL.
+    }
+
+    public async Task AcquireAsync(
+        AtomicLockResource resource,
+        Guid aggregateId,
+        CancellationToken ct = default)
+    {
+        if (!Enum.IsDefined(resource) || aggregateId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(aggregateId), "An exact aggregate lock is required.");
+        }
+
+        if (_db.Database.IsNpgsql())
+        {
+            var input = new byte[20];
+            BinaryPrimitives.WriteInt32BigEndian(input, (int)resource);
+            aggregateId.TryWriteBytes(input.AsSpan(4));
+            var digest = SHA256.HashData(input);
+            var lockKey = BinaryPrimitives.ReadInt64BigEndian(digest);
+
+            // Hashing the fixed resource and GUID into PostgreSQL's bigint advisory-lock namespace
+            // can only introduce harmless over-serialization on a collision; it cannot allow two
+            // commands for the same aggregate to use different locks.
+            await _db.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT pg_advisory_xact_lock({lockKey})",
+                ct);
+        }
     }
 }
