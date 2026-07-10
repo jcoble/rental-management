@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Engine.Services;
 
@@ -39,6 +40,7 @@ public sealed class FcmPushSender : IPushSender
         string title,
         string body,
         IReadOnlyDictionary<string, string>? data,
+        NotificationDeliveryContext delivery,
         CancellationToken ct = default)
     {
         if (!_cfg.Enabled)
@@ -75,7 +77,7 @@ public sealed class FcmPushSender : IPushSender
         {
             var id = await FirebaseMessaging.GetMessaging(app).SendAsync(message, ct);
             _logger.LogInformation("[push sent] token=…{TokenTail} id={Id}", Tail(deviceToken), id);
-            return PushSendResult.Ok();
+            return PushSendResult.Ok(id);
         }
         catch (FirebaseMessagingException ex) when (
             ex.MessagingErrorCode == MessagingErrorCode.Unregistered

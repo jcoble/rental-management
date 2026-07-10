@@ -1,6 +1,7 @@
 using System.Text.Json;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Api.Services.Sms;
 
@@ -19,7 +20,12 @@ public sealed class VonageSmsProvider : ISmsProvider
 
     public SmsProviderKey Key => SmsProviderKey.Vonage;
 
-    public async Task SendAsync(SmsCredentials credentials, string toPhoneNumber, string message, CancellationToken ct = default)
+    public async Task<SmsProviderReceipt> SendAsync(
+        SmsCredentials credentials,
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        CancellationToken ct = default)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "https://rest.nexmo.com/sms/json")
         {
@@ -40,6 +46,7 @@ public sealed class VonageSmsProvider : ISmsProvider
         // outbox worker retries and the error is recorded.
         var body = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        string? providerMessageId = null;
         if (doc.RootElement.TryGetProperty("messages", out var messages) && messages.ValueKind == JsonValueKind.Array)
         {
             foreach (var m in messages.EnumerateArray())
@@ -50,7 +57,11 @@ public sealed class VonageSmsProvider : ISmsProvider
                     var error = m.TryGetProperty("error-text", out var e) ? e.GetString() : "(no error text)";
                     throw new HttpRequestException($"Vonage SMS send failed: status {status} — {error}");
                 }
+
+                providerMessageId ??= m.TryGetProperty("message-id", out var id) ? id.GetString() : null;
             }
         }
+
+        return new SmsProviderReceipt(providerMessageId);
     }
 }

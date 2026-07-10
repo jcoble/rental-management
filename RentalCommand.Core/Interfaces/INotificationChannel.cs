@@ -1,5 +1,7 @@
 namespace RentalCommand.Core.Interfaces;
 
+using RentalCommand.Core.Outbox;
+
 /// <summary>
 /// Abstraction over an outbound notification transport (SMS/email). The Engine routes
 /// <see cref="Entities.OutboxMessage"/> entries to a channel. Phase 0 defines the contract
@@ -12,7 +14,12 @@ public interface INotificationChannel : RentalCommand.Core.Atomic.IAtomicRemoteD
     /// portfolio's own configured SMS provider (BYO creds) is used when present, otherwise the
     /// platform-level fallback. Null portfolio = platform-level send.
     /// </summary>
-    Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default);
+    Task<NotificationDeliveryReceipt> SendSmsAsync(
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        int? portfolioId = null,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Send an email message. <paramref name="body"/> is the plaintext body (always present).
@@ -20,5 +27,11 @@ public interface INotificationChannel : RentalCommand.Core.Atomic.IAtomicRemoteD
     /// used verbatim as the rich part (SendGrid text/html, SMTP HtmlBody); when null the transport
     /// falls back to its own minimal HTML wrapping of the plaintext.
     /// </summary>
-    Task SendEmailAsync(string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default);
+    Task<NotificationDeliveryReceipt> SendEmailAsync(
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody = null,
+        CancellationToken ct = default);
 }

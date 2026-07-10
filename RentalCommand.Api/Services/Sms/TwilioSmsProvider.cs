@@ -1,5 +1,6 @@
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Api.Services.Sms;
 
@@ -16,7 +17,12 @@ public sealed class TwilioSmsProvider : ISmsProvider
 
     public SmsProviderKey Key => SmsProviderKey.Twilio;
 
-    public async Task SendAsync(SmsCredentials credentials, string toPhoneNumber, string message, CancellationToken ct = default)
+    public async Task<SmsProviderReceipt> SendAsync(
+        SmsCredentials credentials,
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        CancellationToken ct = default)
     {
         var accountSid = credentials.CredentialA!;
         var authToken = credentials.CredentialB!;
@@ -35,5 +41,7 @@ public sealed class TwilioSmsProvider : ISmsProvider
 
         var response = await _http.SendAsync(request, ct);
         await SmsProviderHttp.EnsureSuccessAsync(response, "Twilio", ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        return new SmsProviderReceipt(SmsProviderHttp.TryReadString(body, "sid"));
     }
 }

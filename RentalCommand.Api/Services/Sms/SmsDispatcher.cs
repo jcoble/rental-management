@@ -4,6 +4,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Api.Services.Sms;
 
@@ -37,7 +38,12 @@ public sealed class SmsDispatcher : ISmsDispatcher
         _logger = logger;
     }
 
-    public async Task SendAsync(int? portfolioId, string toPhoneNumber, string message, CancellationToken ct = default)
+    public async Task<NotificationDeliveryReceipt> SendAsync(
+        int? portfolioId,
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        CancellationToken ct = default)
     {
         var normalizedTo = NormalizeSmsNumber(toPhoneNumber);
 
@@ -47,7 +53,8 @@ public sealed class SmsDispatcher : ISmsDispatcher
             _logger.LogInformation(
                 "[SMS suppressed — no SMS provider configured] portfolio {PortfolioId} to {To}: {Message}",
                 portfolioId, normalizedTo, message);
-            return;
+            throw new NotificationDeliverySuppressedException(
+                "SMS delivery is not configured. No external provider accepted this message.");
         }
 
         if (!_providers.TryGetValue(creds.Provider, out var provider))
@@ -56,13 +63,15 @@ public sealed class SmsDispatcher : ISmsDispatcher
             _logger.LogError(
                 "[SMS suppressed — provider {Provider} has no registered implementation] portfolio {PortfolioId} to {To}.",
                 creds.Provider, portfolioId, normalizedTo);
-            return;
+            throw new NotificationDeliverySuppressedException(
+                $"SMS provider {creds.Provider} is configured but has no registered implementation.");
         }
 
-        await provider.SendAsync(creds, normalizedTo, message, ct);
+        var receipt = await provider.SendAsync(creds, normalizedTo, message, delivery, ct);
         _logger.LogInformation(
             "[SMS sent via {Provider}] portfolio {PortfolioId} To={To}",
             creds.Provider, portfolioId, normalizedTo);
+        return new NotificationDeliveryReceipt(creds.Provider.ToString(), receipt.ProviderMessageId);
     }
 
     /// <summary>Portfolio creds first, then platform-env fallback. Null = nothing usable configured.</summary>
