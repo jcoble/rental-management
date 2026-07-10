@@ -12,6 +12,17 @@ public class AuditLog
     public int Id { get; set; }
     public int PortfolioId { get; set; }
 
+    /// <summary>Stable atomic command identity and successful physical attempt that produced this row.</summary>
+    public string CommandType { get; set; } = string.Empty;
+    public string CommandIdempotencyKey { get; set; } = string.Empty;
+    public Guid CommandAttemptId { get; set; }
+
+    /// <summary>
+    /// Monotonic ordinal within the command attempt. Together with the stable command identity this
+    /// uniquely identifies one real mutation, including repeated updates to the same entity.
+    /// </summary>
+    public long MutationOrdinal { get; set; }
+
     /// <summary>FK → <see cref="ApplicationUser.Id"/>; null for non-user actors.</summary>
     public int? UserId { get; set; }
 

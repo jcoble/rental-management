@@ -654,6 +654,49 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("Appointments");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.AtomicCommandReceipt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CommandType")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ResultContract")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CommandType", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("AtomicCommandReceipts");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.AuditLog", b =>
                 {
                     b.Property<int>("Id")
@@ -670,6 +713,19 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
 
+                    b.Property<Guid>("CommandAttemptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CommandIdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CommandType")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
                     b.Property<int>("EntityId")
                         .HasColumnType("integer");
 
@@ -684,6 +740,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<string>("NewValues")
                         .HasColumnType("jsonb");
+
+                    b.Property<long>("MutationOrdinal")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("OldValues")
                         .HasColumnType("jsonb");
@@ -711,6 +770,9 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("EntityType", "EntityId");
 
                     b.HasIndex("PortfolioId", "Timestamp");
+
+                    b.HasIndex("CommandType", "CommandIdempotencyKey", "MutationOrdinal")
+                        .IsUnique();
 
                     b.ToTable("AuditLogs");
                 });
