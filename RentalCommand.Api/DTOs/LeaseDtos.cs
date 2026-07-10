@@ -234,18 +234,12 @@ public sealed record LeaseDocumentStatusResponse(
     string? DownloadUrl,
     DateTime? GeneratedAt);
 
-/// <summary>
-/// Body for <c>POST /leases/{id}/send-for-signature</c>. Signer override fields are retained for
-/// request compatibility, but the lease workflow sends to the tenant(s) tied to the lease.
-/// </summary>
+/// <summary>Body for <c>POST /leases/{id}/send-for-signature</c>.</summary>
 public sealed class SendForSignatureRequest
 {
+    [Required]
     [MaxLength(200)]
-    public string? SignerName { get; set; }
-
-    [EmailAddress]
-    [MaxLength(256)]
-    public string? SignerEmail { get; set; }
+    public string IdempotencyKey { get; set; } = string.Empty;
 }
 
 /// <summary>Outcome of a send-for-signature attempt, mapped to HTTP by the controller.</summary>

@@ -132,7 +132,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SendForSignature_UsesLeaseTenantEmailAndIgnoresOverride()
+    public async Task SendForSignature_UsesLeaseTenantEmail()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "tenant-on-lease@example.com");
         var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_tenant_only" };
@@ -141,11 +141,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
         var result = await sut.SendForSignatureAsync(
             PortfolioId,
             lease.Id,
-            new SendForSignatureRequest
-            {
-                SignerName = "Owner Admin",
-                SignerEmail = "owner-admin@example.com",
-            },
+            new SendForSignatureRequest(),
             changedByUserId: 7,
             ipAddress: null);
 
