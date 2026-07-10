@@ -161,8 +161,8 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                        + $"{lease.EndDate:MMMM d, yyyy} ({daysLeft} days). "
                        + "Consider a renewal or move-out plan.";
 
-            // Set the marker BEFORE publishing so the publisher's SaveChanges commits the outbox
-            // row(s) and the marker in one transaction — a crash can't leave one without the other.
+            // Set the marker before staging delivery. The trailing save commits the marker, in-app
+            // rows, and every outbox destination together.
             lease.ExpiryReminderSentAt = _timeProvider.UtcNow();
             try
             {
@@ -197,10 +197,7 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
             }
         }
 
-        // Each successful publish already committed its marker atomically with the outbox row(s) (the
-        // marker is set before PublishAsync, and the real publisher saves). This trailing save is a
-        // no-op in production but persists markers + in-app rows when the publisher is a test double
-        // that doesn't save.
+        // One save commits every successful marker, in-app notification, and staged outbox row.
         await _db.SaveChangesAsync(ct);
 
         foreach (var (portfolioId, row) in broadcast)

@@ -119,18 +119,18 @@ public class VendorDispatchService : IVendorDispatchService
         };
         _db.VendorDispatches.Add(dispatch);
 
-        await _db.SaveChangesAsync(ct);
-
-        // Enqueue the outbound job SMS via the outbox (Engine delivers it).
-        await SafeAsync("dispatch sms", () => _publisher.PublishAsync(
+        // Stage the dispatch and its outbound SMS before one atomic save.
+        await _publisher.PublishAsync(
             portfolioId,
             "sms",
-            RentalCommand.Core.Outbox.OutboxIdempotency.Create("vendor-dispatch", portfolioId, dispatch.Id, vendorPhone),
+            RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                "vendor-dispatch", portfolioId, workOrder.Id, vendor.Id, vendorPhone, message),
             new
         {
             to = vendorPhone,
             message,
-        }, ct));
+        }, ct);
+        await _db.SaveChangesAsync(ct);
 
         await SafeAsync("dispatch audit", () => _audit.LogAsync(
             portfolioId,

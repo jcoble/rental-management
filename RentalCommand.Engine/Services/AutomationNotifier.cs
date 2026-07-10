@@ -14,7 +14,7 @@ namespace RentalCommand.Engine.Services;
 /// staff/tenant user (when In-app is on), an email outbox row (when Email is on and an address is
 /// present), an SMS outbox row (when SMS is on and a phone is present), and/or targeted <c>push</c>
 /// outbox rows (when Push is on). Email/SMS/push go through <see cref="IMessagePublisher"/> so they
-/// enlist in the caller's transaction; the in-app rows are added to the shared
+/// are staged in the caller's transaction; the in-app rows are added to the shared
 /// <see cref="RentalCommandDbContext"/> for the caller to commit. Broadcasting the in-app rows is
 /// deferred to the caller (after commit) via the returned list.
 /// </summary>

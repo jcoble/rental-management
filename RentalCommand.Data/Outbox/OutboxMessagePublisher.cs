@@ -2,15 +2,13 @@ using System.Text.Json;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
-namespace RentalCommand.Engine.Services;
+namespace RentalCommand.Data.Outbox;
 
 /// <summary>
-/// DB-outbox implementation of <see cref="IMessagePublisher"/>: enqueues an
-/// <see cref="OutboxMessage"/> row that the <see cref="Workers.OutboxDispatchWorker"/> later
-/// dispatches. Writing the message and the business transaction in the same DbContext gives
-/// the usual transactional-outbox guarantee (no message is "sent" unless the work committed).
+/// Stages a reliable outbox row in the shared DbContext. It intentionally never calls SaveChanges:
+/// the application service or atomic command owns the commit that persists business state and every
+/// related destination together.
 /// </summary>
 public sealed class OutboxMessagePublisher : IMessagePublisher
 {
@@ -23,7 +21,7 @@ public sealed class OutboxMessagePublisher : IMessagePublisher
         _timeProvider = timeProvider;
     }
 
-    public async Task PublishAsync<TPayload>(
+    public Task PublishAsync<TPayload>(
         int portfolioId,
         string messageType,
         string idempotencyKey,
@@ -32,7 +30,7 @@ public sealed class OutboxMessagePublisher : IMessagePublisher
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
         var now = _timeProvider.UtcNow();
-        var message = new OutboxMessage
+        _db.OutboxMessages.Add(new OutboxMessage
         {
             PortfolioId = portfolioId,
             MessageType = messageType,
@@ -41,9 +39,8 @@ public sealed class OutboxMessagePublisher : IMessagePublisher
             AttemptCount = 0,
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
-        };
+        });
 
-        _db.OutboxMessages.Add(message);
-        await _db.SaveChangesAsync(ct);
+        return Task.CompletedTask;
     }
 }

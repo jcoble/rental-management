@@ -300,7 +300,7 @@ builder.Services.AddHostedService<EntityChangeListener>();
 builder.Services.AddDomainServices();
 
 // --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
-builder.Services.AddScoped<IMessagePublisher, RentalCommand.Api.Services.OutboxMessagePublisher>();
+builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
 
 // --- Scheduled owner statement worker (default OFF; set Reports:EmailOwnerStatementsMonthly=true to enable) ---
 builder.Services.AddHostedService<RentalCommand.Api.Services.ScheduledOwnerStatementWorker>();

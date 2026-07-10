@@ -518,11 +518,17 @@ public class PortfolioQaService : IPortfolioQaService
                         portfolioId);
                 }
             }
+
+            if (delivered.Count > 0)
+            {
+                await _db.SaveChangesAsync(ct);
+            }
         }
         catch (Exception ex)
         {
             // Delivery is best-effort — never fail the answer because a channel could not be queued.
             _logger.LogError(ex, "Q&A answer delivery failed for portfolio {PortfolioId}", portfolioId);
+            delivered.Clear();
         }
 
         return delivered.Count == 0 ? null : delivered;

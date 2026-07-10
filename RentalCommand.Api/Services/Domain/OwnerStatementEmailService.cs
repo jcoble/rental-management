@@ -64,6 +64,7 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
                 "owner-statement", portfolioId, ownerId, year, owner.Email),
             new { to = owner.Email, subject, body },
             ct);
+        await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
             "Enqueued owner statement email for owner {OwnerId} ({Name}), year {Year}, portfolio {PortfolioId}.",

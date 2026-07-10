@@ -257,6 +257,8 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
                     message,
                 }, ct);
             }
+
+            await _db.SaveChangesAsync(ct);
         });
     }
 
