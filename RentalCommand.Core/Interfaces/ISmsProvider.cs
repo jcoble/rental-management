@@ -54,5 +54,10 @@ public interface ISmsProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependenc
     /// normalized to E.164. Throws on a non-success HTTP response (with the provider's error body in
     /// the message) so the outbox worker can retry.
     /// </summary>
-    Task SendAsync(SmsCredentials credentials, string toPhoneNumber, string message, CancellationToken ct = default);
+    Task<RentalCommand.Core.Outbox.SmsProviderReceipt> SendAsync(
+        SmsCredentials credentials,
+        string toPhoneNumber,
+        string message,
+        RentalCommand.Core.Outbox.NotificationDeliveryContext delivery,
+        CancellationToken ct = default);
 }

@@ -7,6 +7,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -176,7 +177,16 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         var normalizedTo = Sms.SmsDispatcher.NormalizeSmsNumber(to);
         try
         {
-            await impl.SendAsync(creds, normalizedTo, "Rental Command test message — your SMS provider is configured correctly.", ct);
+            var delivery = new NotificationDeliveryContext(
+                0,
+                $"notification-settings-test:{portfolioId}:{Guid.NewGuid():N}",
+                1);
+            await impl.SendAsync(
+                creds,
+                normalizedTo,
+                "Rental Command test message — your SMS provider is configured correctly.",
+                delivery,
+                ct);
             return new TestSmsResponse { Success = true, Message = $"Test SMS sent to {normalizedTo} via {provider}." };
         }
         catch (Exception ex)

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Data;
 using RentalCommand.Data.Outbox;
 using RentalCommand.Engine.Services;
@@ -171,6 +172,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         var row = await verify.OutboxMessages.SingleAsync(message => message.IdempotencyKey == "dispatch-email");
         row.AcceptedAtUtc.Should().NotBeNull();
         row.Provider.Should().Be("email");
+        row.ProviderMessageId.Should().Be("email-provider-id");
         row.ClaimToken.Should().BeNull();
     }
 
@@ -219,8 +221,9 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
 
         push.Tokens.Should().Equal("device-a");
         await using var verify = NewContext();
-        (await verify.OutboxMessages.SingleAsync(message => message.IdempotencyKey == "dispatch-push:device-a"))
-            .Provider.Should().Be("fcm");
+        var row = await verify.OutboxMessages.SingleAsync(message => message.IdempotencyKey == "dispatch-push:device-a");
+        row.Provider.Should().Be("fcm");
+        row.ProviderMessageId.Should().Be("push-provider-id");
     }
 
     private async Task SeedAsync(params OutboxMessage[] messages)
@@ -323,17 +326,26 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         public List<string> Emails { get; } = [];
         public bool SuppressEmail { get; init; }
 
-        public Task SendSmsAsync(
-            string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task<NotificationDeliveryReceipt> SendSmsAsync(
+            string toPhoneNumber,
+            string message,
+            NotificationDeliveryContext delivery,
+            int? portfolioId = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new NotificationDeliveryReceipt("sms", "sms-provider-id"));
 
-        public Task SendEmailAsync(
-            string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
+        public Task<NotificationDeliveryReceipt> SendEmailAsync(
+            string toEmail,
+            string subject,
+            string body,
+            NotificationDeliveryContext delivery,
+            string? htmlBody = null,
+            CancellationToken ct = default)
         {
             if (SuppressEmail)
                 throw new NotificationDeliverySuppressedException("Email provider is not configured.");
             Emails.Add(toEmail);
-            return Task.CompletedTask;
+            return Task.FromResult(new NotificationDeliveryReceipt("email", "email-provider-id"));
         }
     }
 
@@ -346,10 +358,11 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
             string title,
             string body,
             IReadOnlyDictionary<string, string>? data,
+            NotificationDeliveryContext delivery,
             CancellationToken ct = default)
         {
             Tokens.Add(deviceToken);
-            return Task.FromResult(PushSendResult.Ok());
+            return Task.FromResult(PushSendResult.Ok("push-provider-id"));
         }
     }
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Data.Outbox;
 using RentalCommand.Engine.Services;
 
@@ -45,13 +46,13 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
             try
             {
-                var provider = await DispatchAsync(channel, pushSender, claim, cancellationToken);
+                var receipt = await DispatchAsync(channel, pushSender, claim, cancellationToken);
                 var changed = await store.MarkAcceptedAsync(
                     claim.Id,
                     claim.ClaimToken,
                     DateTime.UtcNow,
-                    provider,
-                    providerMessageId: null,
+                    receipt.Provider,
+                    receipt.ProviderMessageId,
                     CancellationToken.None);
                 if (changed == 1)
                 {
@@ -62,7 +63,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
                     logger.LogError(
                         "Outbox delivery {MessageId} was accepted by {Provider}, but claim {ClaimToken} " +
                         "was no longer current. Provider reconciliation is required.",
-                        claim.Id, provider, claim.ClaimToken);
+                        claim.Id, receipt.Provider, claim.ClaimToken);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -117,7 +118,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
     private static TimeSpan Backoff(int attemptCount) =>
         TimeSpan.FromSeconds(Math.Min(3600, 30 * Math.Pow(2, Math.Max(0, attemptCount - 1))));
 
-    private static async Task<string> DispatchAsync(
+    private static async Task<NotificationDeliveryReceipt> DispatchAsync(
         INotificationChannel channel,
         IPushSender pushSender,
         OutboxClaim claim,
@@ -125,25 +126,29 @@ public class OutboxDispatchWorker : EngineWorkerBase
     {
         using var document = JsonDocument.Parse(claim.Payload);
         var root = document.RootElement;
+        var delivery = new NotificationDeliveryContext(
+            claim.Id,
+            claim.IdempotencyKey,
+            claim.AttemptCount);
 
         switch (claim.MessageType.Trim().ToLowerInvariant())
         {
             case "sms":
-                await channel.SendSmsAsync(
+                return await channel.SendSmsAsync(
                     Required(root, "to", "toPhoneNumber"),
                     Optional(root, "message", "body") ?? string.Empty,
+                    delivery,
                     claim.PortfolioId,
                     ct);
-                return "sms";
 
             case "email":
-                await channel.SendEmailAsync(
+                return await channel.SendEmailAsync(
                     Required(root, "to", "toEmail"),
                     Optional(root, "subject") ?? string.Empty,
                     Optional(root, "body", "message") ?? string.Empty,
+                    delivery,
                     Optional(root, "htmlBody"),
                     ct);
-                return "email";
 
             case "push":
             {
@@ -160,13 +165,14 @@ public class OutboxDispatchWorker : EngineWorkerBase
                     Optional(root, "title") ?? "Rental Command",
                     Optional(root, "body") ?? string.Empty,
                     data,
+                    delivery,
                     ct);
                 if (result.TokenInvalid)
                     throw new OutboxPermanentDeliveryException("The destination push token is no longer valid.");
                 if (!result.Sent)
                     throw new NotificationDeliverySuppressedException(
                         "Push delivery is not configured. No external provider accepted this message.");
-                return "fcm";
+                return new NotificationDeliveryReceipt("fcm", result.ProviderMessageId);
             }
 
             default:
