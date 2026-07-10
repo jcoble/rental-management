@@ -20,4 +20,7 @@ public class ApplicationUser : IdentityUser<int>
     public Tenant? Tenant { get; set; }
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
+    public ICollection<WorkspaceAccessContext> WorkspaceAccessContexts { get; set; } =
+        new List<WorkspaceAccessContext>();
+    public ICollection<AuthSession> AuthSessions { get; set; } = new List<AuthSession>();
 }

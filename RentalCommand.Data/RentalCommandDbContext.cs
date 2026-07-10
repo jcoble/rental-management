@@ -66,6 +66,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AtomicCommandReceipt> AtomicCommandReceipts => Set<AtomicCommandReceipt>();
     public DbSet<AtomicAuditLog> AtomicAuditLogs => Set<AtomicAuditLog>();
+    public DbSet<WorkspaceAccessContext> WorkspaceAccessContexts => Set<WorkspaceAccessContext>();
+    public DbSet<WorkspaceMembership> WorkspaceMemberships => Set<WorkspaceMembership>();
+    public DbSet<RoleProfile> RoleProfiles => Set<RoleProfile>();
+    public DbSet<CapabilityDefinition> CapabilityDefinitions => Set<CapabilityDefinition>();
+    public DbSet<RoleProfileCapability> RoleProfileCapabilities => Set<RoleProfileCapability>();
+    public DbSet<MembershipRoleAssignment> MembershipRoleAssignments => Set<MembershipRoleAssignment>();
+    public DbSet<MembershipRoleAssignmentProperty> MembershipRoleAssignmentProperties =>
+        Set<MembershipRoleAssignmentProperty>();
+    public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
@@ -114,6 +123,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
         base.OnModelCreating(modelBuilder);
+        modelBuilder.ConfigureWorkspaceAccessKernel();
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
