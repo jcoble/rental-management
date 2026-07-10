@@ -57,7 +57,13 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
 
         // ── Enqueue via outbox ─────────────────────────────────────────────────────────────────
         var subject = $"Your {year} owner statement";
-        await _publisher.PublishAsync(portfolioId, "email", new { to = owner.Email, subject, body }, ct);
+        await _publisher.PublishAsync(
+            portfolioId,
+            "email",
+            RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                "owner-statement", portfolioId, ownerId, year, owner.Email),
+            new { to = owner.Email, subject, body },
+            ct);
 
         _logger.LogInformation(
             "Enqueued owner statement email for owner {OwnerId} ({Name}), year {Year}, portfolio {PortfolioId}.",

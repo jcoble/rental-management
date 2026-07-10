@@ -231,7 +231,12 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
 
             if (!string.IsNullOrWhiteSpace(owner.Email))
             {
-                await _publisher.PublishAsync(portfolioId, "email", new
+                await _publisher.PublishAsync(
+                    portfolioId,
+                    "email",
+                    RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                        "rent-confirmation-owner", portfolioId, payment.Id, owner.Id, "email"),
+                    new
                 {
                     to = owner.Email,
                     subject = title,
@@ -241,7 +246,12 @@ public sealed class SmsInboundRentConfirmationService : ISmsInboundRentConfirmat
 
             if (!string.IsNullOrWhiteSpace(owner.Phone))
             {
-                await _publisher.PublishAsync(portfolioId, "sms", new
+                await _publisher.PublishAsync(
+                    portfolioId,
+                    "sms",
+                    RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                        "rent-confirmation-owner", portfolioId, payment.Id, owner.Id, "sms"),
+                    new
                 {
                     to = owner.Phone,
                     message,

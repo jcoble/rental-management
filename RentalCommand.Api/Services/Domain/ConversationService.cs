@@ -538,7 +538,9 @@ public class ConversationService : IConversationService
                 PortfolioId = portfolioId,
                 MessageType = "email",
                 Payload = JsonSerializer.Serialize(new { to = tenant.Email, subject, body }),
-                CreatedAt = now,
+                IdempotencyKey = $"conversation:{portfolioId}:{tenant.Id}:email:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(subject + "\n" + body)))}",
+                CreatedAtUtc = now,
+                NextAttemptAtUtc = now,
             });
             actual.Add("Email");
         }
@@ -550,7 +552,9 @@ public class ConversationService : IConversationService
                 PortfolioId = portfolioId,
                 MessageType = "sms",
                 Payload = JsonSerializer.Serialize(new { to = tenant.Phone, message = body }),
-                CreatedAt = now,
+                IdempotencyKey = $"conversation:{portfolioId}:{tenant.Id}:sms:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(body)))}",
+                CreatedAtUtc = now,
+                NextAttemptAtUtc = now,
             });
             actual.Add("Sms");
         }

@@ -27,16 +27,21 @@ public sealed class OutboxMessagePublisher : IMessagePublisher
     public async Task PublishAsync<TPayload>(
         int portfolioId,
         string messageType,
+        string idempotencyKey,
         TPayload payload,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        var now = _timeProvider.UtcNow();
         var message = new OutboxMessage
         {
             PortfolioId = portfolioId,
             MessageType = messageType,
             Payload = JsonSerializer.Serialize(payload),
-            RetryCount = 0,
-            CreatedAt = _timeProvider.UtcNow(),
+            IdempotencyKey = idempotencyKey,
+            AttemptCount = 0,
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
         };
 
         _db.OutboxMessages.Add(message);

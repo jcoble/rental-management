@@ -611,7 +611,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         }
 
         return await query
-            .OrderByDescending(m => m.CreatedAt)
+            .OrderByDescending(m => m.CreatedAtUtc)
             .ThenByDescending(m => m.Id)
             .Take(SignatureQueueLimit)
             .ToListAsync(ct);
@@ -668,8 +668,8 @@ public sealed class LeaseEsignService : ILeaseEsignService
         IReadOnlyDictionary<string, string> signingUrls,
         IReadOnlyDictionary<string, int> tenantLinks)
     {
-        var sentAt = message.SentAt;
-        var failedAt = message.FailedAt;
+        var sentAt = message.AcceptedAtUtc;
+        var failedAt = message.DeadLetteredAtUtc ?? message.LastAttemptAtUtc;
         var status = ResolveQueueStatus(message);
         var recipientEmail = ReadPayloadValue(message.Payload, "to");
         var signatureRequestId = ReadPayloadValue(message.Payload, "signatureRequestId");
@@ -688,12 +688,12 @@ public sealed class LeaseEsignService : ILeaseEsignService
                 : null,
             Subject = ReadPayloadValue(message.Payload, "subject"),
             Status = status,
-            QueuedAt = message.CreatedAt,
-            StatusAt = sentAt ?? failedAt ?? message.CreatedAt,
+            QueuedAt = message.CreatedAtUtc,
+            StatusAt = sentAt ?? failedAt ?? message.CreatedAtUtc,
             SentAt = sentAt,
             FailedAt = failedAt,
-            RetryCount = message.RetryCount,
-            Error = message.Error,
+            RetryCount = message.AttemptCount,
+            Error = message.LastError,
             SignatureRequestId = signatureRequestId,
             SigningUrl = signingUrl,
         };
@@ -777,19 +777,21 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
     private static string ResolveQueueStatus(OutboxMessage message)
     {
-        if (message.SentAt.HasValue)
+        if (message.AcceptedAtUtc.HasValue)
         {
-            if (!string.IsNullOrWhiteSpace(message.Error))
-            {
-                return "DeliveryDisabled";
-            }
-
             return "Sent";
         }
 
-        if (message.FailedAt.HasValue)
+        if (message.DeadLetteredAtUtc.HasValue)
         {
-            return message.RetryCount >= 5 ? "Failed" : "Retrying";
+            return message.FailureKind == RentalCommand.Core.Enums.OutboxFailureKind.ConfigurationBlocked
+                ? "DeliveryDisabled"
+                : "Failed";
+        }
+
+        if (message.FailureKind == RentalCommand.Core.Enums.OutboxFailureKind.Retryable)
+        {
+            return "Retrying";
         }
 
         return "Queued";

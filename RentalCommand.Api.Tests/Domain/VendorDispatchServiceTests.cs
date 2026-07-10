@@ -71,6 +71,7 @@ public class VendorDispatchServiceTests : IDisposable
         publisher.Verify(p => p.PublishAsync(
             PortfolioId,
             "sms",
+            It.IsAny<string>(),
             It.IsAny<object>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }

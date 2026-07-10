@@ -222,6 +222,8 @@ public sealed class ScreeningService : IScreeningService
                 await _publisher.PublishAsync(
                     portfolioId,
                     "email",
+                    RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                        "adverse-action", portfolioId, application.Id, storedFile.Id, application.Email),
                     new
                     {
                         to = application.Email,

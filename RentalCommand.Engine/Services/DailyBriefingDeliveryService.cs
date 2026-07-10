@@ -80,7 +80,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                 {
                     PortfolioId = portfolio.Id,
                     MessageType = "sms",
-                    DedupKey = dedupKey,
+                    IdempotencyKey = $"{dedupKey}:sms:{to}",
                     Payload = JsonSerializer.Serialize(new
                     {
                         purpose = Purpose,
@@ -88,7 +88,8 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                         to,
                         message = body,
                     }),
-                    CreatedAt = now,
+                    CreatedAtUtc = now,
+                    NextAttemptAtUtc = now,
                 });
                 queued++;
             }
@@ -99,7 +100,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                 {
                     PortfolioId = portfolio.Id,
                     MessageType = "email",
-                    DedupKey = dedupKey,
+                    IdempotencyKey = $"{dedupKey}:email:{to}",
                     Payload = JsonSerializer.Serialize(new
                     {
                         purpose = Purpose,
@@ -108,7 +109,8 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                         subject = $"Rental Command briefing for {dateKey}",
                         body,
                     }),
-                    CreatedAt = now,
+                    CreatedAtUtc = now,
+                    NextAttemptAtUtc = now,
                 });
                 queued++;
             }
@@ -126,7 +128,8 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
     // Single indexed lookup on DedupKey — no payload scan, no in-memory JSON parse, bounded regardless
     // of how many historical outbox rows the portfolio has accumulated.
     private async Task<bool> AlreadyQueuedAsync(string dedupKey, CancellationToken ct) =>
-        await _db.OutboxMessages.AnyAsync(m => m.DedupKey == dedupKey, ct);
+        await _db.OutboxMessages.AnyAsync(
+            m => m.IdempotencyKey.StartsWith(dedupKey + ":"), ct);
 
     private static DateTime ToPortfolioLocalTime(DateTime utcNow, string? timeZoneId)
     {

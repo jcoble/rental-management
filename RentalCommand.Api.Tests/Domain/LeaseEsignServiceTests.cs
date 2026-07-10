@@ -419,9 +419,12 @@ public sealed class LeaseEsignServiceTests : IDisposable
                 to = "tenant-on-lease@example.com",
                 subject = "Lease L-2026-7",
             }),
-            CreatedAt = now.AddMinutes(-6),
-            SentAt = now.AddMinutes(-5),
-            Error = "Email delivery is not configured for this environment.",
+            IdempotencyKey = "queue-disabled",
+            CreatedAtUtc = now.AddMinutes(-6),
+            NextAttemptAtUtc = now.AddMinutes(-6),
+            DeadLetteredAtUtc = now.AddMinutes(-5),
+            FailureKind = OutboxFailureKind.ConfigurationBlocked,
+            LastError = "Email delivery is not configured for this environment.",
         });
         await _db.SaveChangesAsync();
 
@@ -502,8 +505,10 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "tenant-on-lease@example.com",
                     subject = "Lease L-2026-7",
                 }),
-                CreatedAt = now.AddMinutes(-10),
-                SentAt = now.AddMinutes(-9),
+                IdempotencyKey = "queue-current-sent",
+                CreatedAtUtc = now.AddMinutes(-10),
+                NextAttemptAtUtc = now.AddMinutes(-10),
+                AcceptedAtUtc = now.AddMinutes(-9),
             },
             new OutboxMessage
             {
@@ -517,10 +522,12 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "tenant-on-lease@example.com",
                     subject = "Lease L-2026-7",
                 }),
-                CreatedAt = now.AddMinutes(-4),
-                FailedAt = now.AddMinutes(-2),
-                RetryCount = 5,
-                Error = "SMTP rejected the message.",
+                IdempotencyKey = "queue-current-failed",
+                CreatedAtUtc = now.AddMinutes(-4),
+                NextAttemptAtUtc = now.AddMinutes(-4),
+                DeadLetteredAtUtc = now.AddMinutes(-2),
+                AttemptCount = 5,
+                LastError = "SMTP rejected the message.",
             },
             new OutboxMessage
             {
@@ -534,9 +541,12 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "tenant-on-lease@example.com",
                     subject = "Lease L-2026-7",
                 }),
-                CreatedAt = now.AddMinutes(-6),
-                SentAt = now.AddMinutes(-5),
-                Error = "Email delivery is not configured for this environment.",
+                IdempotencyKey = "queue-current-disabled",
+                CreatedAtUtc = now.AddMinutes(-6),
+                NextAttemptAtUtc = now.AddMinutes(-6),
+                DeadLetteredAtUtc = now.AddMinutes(-5),
+                FailureKind = OutboxFailureKind.ConfigurationBlocked,
+                LastError = "Email delivery is not configured for this environment.",
             },
             new OutboxMessage
             {
@@ -550,8 +560,10 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "other-tenant@example.com",
                     subject = "Lease L-2026-7",
                 }),
-                CreatedAt = now.AddMinutes(-1),
-                SentAt = now,
+                IdempotencyKey = "queue-other-lease",
+                CreatedAtUtc = now.AddMinutes(-1),
+                NextAttemptAtUtc = now.AddMinutes(-1),
+                AcceptedAtUtc = now,
             },
             new OutboxMessage
             {
@@ -565,8 +577,10 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "wrong-tenant@example.com",
                     subject = "Lease collision",
                 }),
-                CreatedAt = now.AddMinutes(-3),
-                SentAt = now.AddMinutes(-2),
+                IdempotencyKey = "queue-collision",
+                CreatedAtUtc = now.AddMinutes(-3),
+                NextAttemptAtUtc = now.AddMinutes(-3),
+                AcceptedAtUtc = now.AddMinutes(-2),
             },
             new OutboxMessage
             {
@@ -580,8 +594,10 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "old-recipient@example.com",
                     subject = "Old signing request",
                 }),
-                CreatedAt = now.AddMinutes(-1),
-                SentAt = now,
+                IdempotencyKey = "queue-old-request",
+                CreatedAtUtc = now.AddMinutes(-1),
+                NextAttemptAtUtc = now.AddMinutes(-1),
+                AcceptedAtUtc = now,
             },
             new OutboxMessage
             {
@@ -592,8 +608,10 @@ public sealed class LeaseEsignServiceTests : IDisposable
                     to = "owner@example.com",
                     subject = "Unrelated email",
                 }),
-                CreatedAt = now,
-                SentAt = now,
+                IdempotencyKey = "queue-unrelated",
+                CreatedAtUtc = now,
+                NextAttemptAtUtc = now,
+                AcceptedAtUtc = now,
             });
         await _db.SaveChangesAsync();
 
@@ -658,8 +676,10 @@ public sealed class LeaseEsignServiceTests : IDisposable
                 to = recipient,
                 subject = "Lease L-2026-7",
             }),
-            CreatedAt = createdAt,
-            SentAt = sentAt,
+            IdempotencyKey = $"signing-link:{signatureRequestId}:{recipient}:{createdAt.Ticks}",
+            CreatedAtUtc = createdAt,
+            NextAttemptAtUtc = createdAt,
+            AcceptedAtUtc = sentAt,
         };
 
     private LeaseEsignService CreateService(IEsignProvider provider)

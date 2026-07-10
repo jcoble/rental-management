@@ -344,10 +344,14 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                 throw new InvalidOperationException("The final outbox batch has already been materialized.");
             }
 
-            if (message.CreatedAt == default)
+            if (string.IsNullOrWhiteSpace(message.IdempotencyKey))
             {
-                message.CreatedAt = _timeProvider.GetUtcNow().UtcDateTime;
+                throw new ArgumentException("Outbox idempotency key is required.", nameof(message));
             }
+
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
+            if (message.CreatedAtUtc == default) message.CreatedAtUtc = now;
+            if (message.NextAttemptAtUtc == default) message.NextAttemptAtUtc = now;
 
             _outbox.Add(message);
         }

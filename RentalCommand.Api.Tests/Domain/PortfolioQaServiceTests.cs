@@ -576,7 +576,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
 
     private sealed class NoopMessagePublisher : IMessagePublisher
     {
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, TPayload payload, CancellationToken ct = default) =>
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey, TPayload payload, CancellationToken ct = default) =>
             Task.CompletedTask;
     }
 

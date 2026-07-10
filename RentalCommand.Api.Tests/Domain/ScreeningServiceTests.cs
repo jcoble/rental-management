@@ -267,7 +267,7 @@ public class ScreeningServiceTests : IDisposable
     {
         public List<(int portfolioId, string messageType)> Published { get; } = [];
 
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, TPayload payload, CancellationToken ct = default)
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey, TPayload payload, CancellationToken ct = default)
         {
             Published.Add((portfolioId, messageType));
             return Task.CompletedTask;

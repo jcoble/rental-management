@@ -194,7 +194,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         public int SmsCount { get; private set; }
         public string? LastSms { get; private set; }
 
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, TPayload payload, CancellationToken ct = default)
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey, TPayload payload, CancellationToken ct = default)
         {
             if (messageType == "sms" && payload is not null)
             {

@@ -57,7 +57,8 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
         second.Should().Be(0);
         _ctx.Db.OutboxMessages.Should().HaveCount(2);
         _ctx.Db.OutboxMessages.Select(m => m.MessageType).Should().BeEquivalentTo(["sms", "email"]);
-        _ctx.Db.OutboxMessages.Select(m => m.DedupKey).Should().AllBe("daily-briefing:1:2026-06-03");
+        _ctx.Db.OutboxMessages.Select(m => m.IdempotencyKey).Should()
+            .OnlyContain(key => key.StartsWith("daily-briefing:1:2026-06-03:"));
 
         var smsPayload = JsonDocument.Parse(_ctx.Db.OutboxMessages.Single(m => m.MessageType == "sms").Payload).RootElement;
         smsPayload.GetProperty("purpose").GetString().Should().Be("daily-briefing");
@@ -73,7 +74,7 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
         {
             PortfolioId = 1,
             MessageType = "sms",
-            DedupKey = "daily-briefing:1:2026-06-03",
+            IdempotencyKey = "daily-briefing:1:2026-06-03:sms:+15551234567",
             Payload = JsonSerializer.Serialize(new
             {
                 purpose = "daily-briefing",
@@ -81,7 +82,8 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
                 to = "+15551234567",
                 message = "Already queued",
             }),
-            CreatedAt = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc),
+            CreatedAtUtc = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc),
+            NextAttemptAtUtc = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc),
         });
         await _ctx.Db.SaveChangesAsync();
 

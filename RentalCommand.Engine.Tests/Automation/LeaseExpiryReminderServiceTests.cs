@@ -24,6 +24,14 @@ public class LeaseExpiryReminderServiceTests : IDisposable
     {
         _ctx       = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         _publisher = new Mock<IMessagePublisher>();
+        _publisher
+            .Setup(p => p.PublishAsync(
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<object>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -45,6 +53,7 @@ public class LeaseExpiryReminderServiceTests : IDisposable
             p => p.PublishAsync(
                 It.IsAny<int>(),
                 "email",
+                It.IsAny<string>(),
                 It.IsAny<object>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -61,6 +70,7 @@ public class LeaseExpiryReminderServiceTests : IDisposable
             p => p.PublishAsync(
                 It.IsAny<int>(),
                 "email",
+                It.IsAny<string>(),
                 It.IsAny<object>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -80,6 +90,7 @@ public class LeaseExpiryReminderServiceTests : IDisposable
         _publisher.Verify(
             p => p.PublishAsync(
                 It.IsAny<int>(),
+                It.IsAny<string>(),
                 It.IsAny<string>(),
                 It.IsAny<object>(),
                 It.IsAny<CancellationToken>()),

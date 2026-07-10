@@ -425,7 +425,12 @@ public class WorkOrderService : IWorkOrderService
             }
 
             var message = BuildTenantScheduleSms(entity.Title, localStart.Value, localEnd.Value);
-            await _publisher.PublishAsync(portfolioId, "sms", new
+            await _publisher.PublishAsync(
+                portfolioId,
+                "sms",
+                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                    "work-order-schedule", portfolioId, entity.Id, tenantPhone, entity.ScheduledFor),
+                new
             {
                 to = tenantPhone,
                 message,

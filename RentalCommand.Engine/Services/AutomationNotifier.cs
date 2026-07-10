@@ -87,6 +87,9 @@ public sealed class AutomationNotifier
             await _publisher.PublishAsync(
                 portfolioId,
                 "email",
+                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                    "automation", portfolioId, inApp.Type, inApp.RelatedEntityType,
+                    inApp.RelatedEntityId, "email", email.To),
                 new { to = email.To, subject = email.Subject, body = email.Body },
                 ct);
         }
@@ -96,6 +99,9 @@ public sealed class AutomationNotifier
             await _publisher.PublishAsync(
                 portfolioId,
                 "sms",
+                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                    "automation", portfolioId, inApp.Type, inApp.RelatedEntityType,
+                    inApp.RelatedEntityId, "sms", sms.To),
                 new { to = sms.To, message = sms.Message },
                 ct);
         }
@@ -137,20 +143,33 @@ public sealed class AutomationNotifier
         if (userIds.Count == 0)
             return;
 
-        await _publisher.PublishAsync(
-            portfolioId,
-            "push",
-            new
+        var deviceTokens = await _db.DeviceTokens
+            .AsNoTracking()
+            .Where(token => token.PortfolioId == portfolioId && userIds.Contains(token.UserId))
+            .Select(token => token.Token)
+            .Distinct()
+            .ToListAsync(ct);
+
+        foreach (var deviceToken in deviceTokens)
+        {
+            await _publisher.PublishAsync(
+                portfolioId,
+                "push",
+                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                    "automation", portfolioId, content.Type, content.RelatedEntityType,
+                    content.RelatedEntityId, "push", deviceToken),
+                new
             {
+                deviceToken,
                 title = content.Title,
                 body = content.Message,
                 actionUrl = content.ActionUrl,
                 type = content.Type,
                 relatedEntityType = content.RelatedEntityType,
                 relatedEntityId = content.RelatedEntityId,
-                userIds = userIds.Distinct().OrderBy(id => id).ToArray(),
             },
             ct);
+        }
     }
 
     private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct)

@@ -223,7 +223,9 @@ use electronic records and signatures (E-SIGN / UETA).
             PortfolioId = request.PortfolioId,
             MessageType = "email",
             Payload = payload,
-            CreatedAt = _timeProvider.UtcNow(),
+            IdempotencyKey = $"lease-esign:{request.Id}:signer:{signer.Id}:invite",
+            CreatedAtUtc = _timeProvider.UtcNow(),
+            NextAttemptAtUtc = _timeProvider.UtcNow(),
         });
         await _db.SaveChangesAsync(ct);
     }
