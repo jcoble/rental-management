@@ -50,6 +50,18 @@ builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesIntercept
 // same session GUCs the tenant_isolation policies read, mirroring EdiPlatform's Engine.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
 builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeSignatureCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeSignatureHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeDeclineCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeDeclineHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestCommand,
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
+    RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)

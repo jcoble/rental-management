@@ -67,6 +67,7 @@ public interface IAtomicWriteAttempt
     Guid AuditScopeId { get; }
     IAtomicPersistenceSession Persistence { get; }
     IAtomicSetBasedPersistence SetBased { get; }
+    IAtomicLockingPersistence Locking { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -85,6 +86,21 @@ public interface IAtomicWriteAttempt
 
     /// <summary>Stages an outbox companion for the owner's final flush.</summary>
     void StageOutbox(OutboxMessage message);
+}
+
+/// <summary>Small, fixed namespace of transaction-scoped aggregate locks owned by the kernel.</summary>
+public enum AtomicLockResource
+{
+    SignatureRequest = 1,
+}
+
+/// <summary>
+/// Serializes commands that must make a decision across several rows in one aggregate. The kernel
+/// maps the fixed resource/id pair to a database transaction lock; handlers cannot author SQL.
+/// </summary>
+public interface IAtomicLockingPersistence
+{
+    Task AcquireAsync(AtomicLockResource resource, int aggregateId, CancellationToken ct = default);
 }
 
 /// <summary>

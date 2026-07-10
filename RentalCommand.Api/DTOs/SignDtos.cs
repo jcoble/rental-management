@@ -46,6 +46,10 @@ public sealed class SignPackageResponse
 /// <summary>Body for <c>POST /api/v1/sign/{token}</c> — the captured signature + consent.</summary>
 public sealed class SubmitSignatureRequest
 {
+    [Required]
+    [MaxLength(200)]
+    public string IdempotencyKey { get; set; } = string.Empty;
+
     /// <summary>ESIGN/UETA consent. Must be true; the controller rejects a missing/false value.</summary>
     public bool Consent { get; set; }
 
@@ -68,6 +72,10 @@ public sealed class SubmitSignatureRequest
 /// <summary>Body for <c>POST /api/v1/sign/{token}/decline</c>.</summary>
 public sealed class DeclineSignatureRequest
 {
+    [Required]
+    [MaxLength(200)]
+    public string IdempotencyKey { get; set; } = string.Empty;
+
     /// <summary>Optional free-text reason captured on the audit trail.</summary>
     [MaxLength(1000)]
     public string? Reason { get; set; }
