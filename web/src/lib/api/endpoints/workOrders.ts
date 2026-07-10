@@ -33,6 +33,9 @@ export const workOrders = {
 	// Assign + text a vendor the job. The vendor replies DONE to auto-close it.
 	// Throws ApiError (400) when the chosen vendor has no phone number on file.
 	dispatch: (id: number, data: { vendorId: number; note?: string }) =>
-		api.post<VendorDispatch>(`/work-orders/${id}/dispatch`, data),
+		api.post<VendorDispatch>(`/work-orders/${id}/dispatch`, {
+			...data,
+			idempotencyKey: crypto.randomUUID()
+		}),
 	delete: (id: number) => api.delete(`/work-orders/${id}`),
 };

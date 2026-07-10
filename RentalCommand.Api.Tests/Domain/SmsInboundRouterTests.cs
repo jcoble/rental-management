@@ -59,11 +59,18 @@ public class SmsInboundRouterTests : IDisposable
         var rent = SeedRent(lease);
         await _ctx.Db.SaveChangesAsync();
 
-        // Dispatch the work order to the vendor (creates an open dispatch).
-        await new VendorDispatchService(
-                _ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
-                Mock.Of<IMessagePublisher>(), Mock.Of<ILogger<VendorDispatchService>>(), TimeProvider.System)
-            .DispatchAsync(PortfolioId, workOrder.Id, new DispatchWorkOrderRequest { VendorId = vendor.Id }, changedByUserId: 1);
+        // Seed the already-dispatched state; dispatch command atomicity has its own focused suite.
+        workOrder.VendorId = vendor.Id;
+        _ctx.Db.VendorDispatches.Add(new VendorDispatch
+        {
+            PortfolioId = PortfolioId,
+            WorkOrderId = workOrder.Id,
+            VendorId = vendor.Id,
+            Status = VendorDispatchStatus.Dispatched,
+            DispatchedAtUtc = DateTime.UtcNow,
+            Message = "Reply DONE when complete.",
+        });
+        await _ctx.Db.SaveChangesAsync();
 
         var reply = await CreateRouter().RouteAsync("+16145550199", "DONE", DateTime.UtcNow);
 

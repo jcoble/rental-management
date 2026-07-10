@@ -19,11 +19,12 @@ public sealed class SqliteTestContext : IDisposable
     private readonly SqliteConnection _conn;
 
     public RentalCommandDbContext Db { get; }
+    public string ConnectionString => _conn.ConnectionString;
 
     public SqliteTestContext(IEnumerable<IInterceptor>? interceptors = null)
     {
         // Keep the connection open for the lifetime of the test so the in-memory DB persists.
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=test-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var optionsBuilder = new DbContextOptionsBuilder<RentalCommandDbContext>()
