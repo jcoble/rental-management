@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -366,21 +367,13 @@ class LeasesRepository {
   /// Kicks off the e-signature workflow for a lease by sending it to the
   /// configured e-sign provider. Returns the resulting signature status.
   ///
-  /// The backend is gated: until provider keys are configured the call returns
-  /// **503** (surfaced as an [ApiException] with statusCode 503), which the UI
-  /// treats as "not set up yet" rather than a hard error.
+  /// Signers are resolved from the people attached to the lease. A fresh
+  /// operation key makes any automatic HTTP retry replay the same envelope.
   ///
   /// POST /leases/{id}/send-for-signature → { leaseId, esignStatus, … }
-  Future<LeaseSignatureStatus> sendForSignature(
-    int id, {
-    String? signerName,
-    String? signerEmail,
-  }) async {
+  Future<LeaseSignatureStatus> sendForSignature(int id) async {
     try {
-      final body = <String, dynamic>{
-        'signerName': signerName,
-        'signerEmail': signerEmail,
-      }..removeWhere((_, v) => v == null);
+      final body = <String, dynamic>{'idempotencyKey': _newOperationId()};
       final response = await _dio.post<Map<String, dynamic>>(
         '/leases/$id/send-for-signature',
         data: body,
@@ -396,6 +389,12 @@ class LeasesRepository {
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
+  }
+
+  static String _newOperationId() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    return bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// Current e-signature status for a lease.

@@ -116,6 +116,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
         var providerResult = await _provider.SendForSignatureAsync(new EsignRequest
         {
+            IdempotencyKey = request.IdempotencyKey,
             DocumentName = $"lease-{lease.Id}-agreement.pdf",
             Subject = string.IsNullOrWhiteSpace(lease.LeaseNumber) ? $"Lease #{lease.Id}" : $"Lease {lease.LeaseNumber}",
             DocumentBytes = pdf,
@@ -136,31 +137,38 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.ProviderError(providerResult.Error ?? "The e-sign provider did not return an envelope id.");
         }
 
-        lease.EsignEnvelopeId = providerResult.EnvelopeId;
-        lease.EsignStatus = EsignStatus.Sent;
-        if (lease.Status != LeaseStatus.Active)
+        if (providerResult.LeaseStateCommitted)
         {
-            lease.Status = LeaseStatus.PendingSignature;
+            await _db.Entry(lease).ReloadAsync(ct);
         }
-        lease.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await SafeAsync("send audit", () => _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            lease.Id,
-            AuditLogOperation.Updated,
-            userId: changedByUserId,
-            actorLabel: changedByUserId.HasValue ? null : "staff",
-            newValues: JsonSerializer.Serialize(new
+        else
+        {
+            lease.EsignEnvelopeId = providerResult.EnvelopeId;
+            lease.EsignStatus = EsignStatus.Sent;
+            if (lease.Status != LeaseStatus.Active)
             {
-                esignStatus = lease.EsignStatus.ToString(),
-                leaseStatus = lease.Status.ToString(),
-                envelopeId = lease.EsignEnvelopeId,
-            }),
-            changeReason: $"Lease #{lease.Id} sent to {FormatSignerEmails(tenantSigners)} for electronic signature.",
-            ipAddress: ipAddress,
-            ct: ct));
+                lease.Status = LeaseStatus.PendingSignature;
+            }
+            lease.UpdatedAt = _timeProvider.UtcNow();
+            await _db.SaveChangesAsync(ct);
+
+            await SafeAsync("send audit", () => _audit.LogAsync(
+                portfolioId,
+                EntityType,
+                lease.Id,
+                AuditLogOperation.Updated,
+                userId: changedByUserId,
+                actorLabel: changedByUserId.HasValue ? null : "staff",
+                newValues: JsonSerializer.Serialize(new
+                {
+                    esignStatus = lease.EsignStatus.ToString(),
+                    leaseStatus = lease.Status.ToString(),
+                    envelopeId = lease.EsignEnvelopeId,
+                }),
+                changeReason: $"Lease #{lease.Id} sent to {FormatSignerEmails(tenantSigners)} for electronic signature.",
+                ipAddress: ipAddress,
+                ct: ct));
+        }
 
         await BroadcastLeaseAsync(portfolioId, lease.Id, ct);
 

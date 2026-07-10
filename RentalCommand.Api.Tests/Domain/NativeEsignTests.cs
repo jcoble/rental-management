@@ -2,7 +2,9 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
@@ -10,10 +12,15 @@ using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Constants;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Esign;
+using RentalCommand.Core.Esign;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -29,6 +36,8 @@ public sealed class NativeEsignTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly ServiceProvider _services;
+    private readonly EsignAtomicFailureInterceptor _atomicFailure = new();
     private readonly InMemoryFileStorage _storage = new();
     private readonly IConfiguration _config = new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WebBaseUrl"] = "https://app.test" })
@@ -38,12 +47,26 @@ public sealed class NativeEsignTests : IDisposable
     {
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=native-esign-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>().UseSqlite(_conn).Options;
         _db = new EsignTestDbContext(options);
         _db.Database.EnsureCreated();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            CreateNativeEsignRequestCommand,
+            CreateNativeEsignRequestResult,
+            CreateNativeEsignRequestHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_conn.ConnectionString)
+                .UseAtomicPersistenceKernel(provider)
+                .AddInterceptors(_atomicFailure));
+        _services = services.BuildServiceProvider();
 
         _db.Portfolios.Add(new Portfolio
         {
@@ -59,6 +82,7 @@ public sealed class NativeEsignTests : IDisposable
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -106,6 +130,68 @@ public sealed class NativeEsignTests : IDisposable
         payload.RootElement.GetProperty("to").GetString().Should().Be("tenant@example.com");
         payload.RootElement.GetProperty("leaseId").GetInt32().Should().Be(lease.Id);
         payload.RootElement.GetProperty("signatureRequestId").GetInt32().Should().Be(request.Id);
+
+        await _db.Entry(lease).ReloadAsync();
+        lease.EsignEnvelopeId.Should().Be(request.PublicId);
+        lease.EsignStatus.Should().Be(EsignStatus.Sent);
+        lease.Status.Should().Be(LeaseStatus.PendingSignature);
+    }
+
+    [Fact]
+    public async Task Send_RetryWithSameKey_ReplaysEnvelope_AndDeletesDuplicateBlob()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
+        var provider = CreateProvider();
+        var operationId = Guid.NewGuid().ToString("N");
+
+        var first = await SendAsync(provider, lease, idempotencyKey: operationId);
+        var replay = await SendAsync(provider, lease, idempotencyKey: operationId);
+
+        replay.EnvelopeId.Should().Be(first.EnvelopeId);
+        (await _db.SignatureRequests.CountAsync()).Should().Be(1);
+        (await _db.StoredFiles.CountAsync()).Should().Be(1);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(1);
+        _storage.FileCount.Should().Be(1, "the blob uploaded by the replay is not referenced");
+    }
+
+    [Fact]
+    public async Task Send_UnknownCommitReplay_PreservesBlobReferencedByReceipt()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
+        var provider = CreateProvider();
+        var operationId = Guid.NewGuid().ToString("N");
+
+        var first = await SendAsync(provider, lease, idempotencyKey: operationId);
+        _storage.ReuseNextUploadKey(_storage.LastUploadedKey!);
+        var replay = await SendAsync(provider, lease, idempotencyKey: operationId);
+
+        replay.EnvelopeId.Should().Be(first.EnvelopeId);
+        _storage.FileCount.Should().Be(1);
+        var storedKey = await _db.StoredFiles.Select(file => file.FilePath).SingleAsync();
+        storedKey.Should().Be(_storage.LastUploadedKey);
+    }
+
+    [Fact]
+    public async Task Send_FinalCompanionFailure_RollsBackPackage_AndDeletesUploadedBlob()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
+        var provider = CreateProvider();
+        _atomicFailure.Arm();
+
+        var action = () => SendAsync(provider, lease, idempotencyKey: Guid.NewGuid().ToString("N"));
+
+        await action.Should().ThrowAsync<InjectedEsignFailure>();
+        (await _db.SignatureRequests.CountAsync()).Should().Be(0);
+        (await _db.StoredFiles.CountAsync()).Should().Be(0);
+        (await _db.OutboxMessages.CountAsync()).Should().Be(0);
+        (await _db.AtomicCommandReceipts.CountAsync()).Should().Be(0);
+        (await _db.AtomicAuditLogs.CountAsync()).Should().Be(0);
+        _storage.FileCount.Should().Be(0);
+
+        await _db.Entry(lease).ReloadAsync();
+        lease.EsignEnvelopeId.Should().BeNull();
+        lease.EsignStatus.Should().Be(EsignStatus.None);
+        lease.Status.Should().Be(LeaseStatus.Draft);
     }
 
     [Fact]
@@ -245,6 +331,7 @@ public sealed class NativeEsignTests : IDisposable
         var provider = CreateProvider();
         var sendResult = await provider.SendForSignatureAsync(new EsignRequest
         {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
             DocumentName = $"lease-{lease.Id}-agreement.pdf",
             Subject = $"Lease {lease.LeaseNumber}",
             DocumentBytes = LeaseTemplateFixturePdf(),
@@ -428,7 +515,13 @@ public sealed class NativeEsignTests : IDisposable
     // -------------------------------------------------------------------------
 
     private NativeEsignProvider CreateProvider()
-        => new(_db, _storage, _config, TimeProvider.System, NullLogger<NativeEsignProvider>.Instance);
+        => new(
+            _db,
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _storage,
+            _config,
+            TimeProvider.System,
+            NullLogger<NativeEsignProvider>.Instance);
 
     private LeaseEsignService CreateLeaseEsignService(IEsignProvider provider)
     {
@@ -453,7 +546,11 @@ public sealed class NativeEsignTests : IDisposable
             _db, _storage, new ExecutedLeasePdfGenerator(), leaseEsign, TimeProvider.System, NullLogger<NativeSigningService>.Instance);
     }
 
-    private async Task<EsignResult> SendAsync(NativeEsignProvider provider, Lease lease, (string Name, string Email)? extraSigner = null)
+    private async Task<EsignResult> SendAsync(
+        NativeEsignProvider provider,
+        Lease lease,
+        (string Name, string Email)? extraSigner = null,
+        string? idempotencyKey = null)
     {
         var pdf = new LeaseAgreementPdfGenerator().Generate(new LeaseAgreementData
         {
@@ -474,6 +571,7 @@ public sealed class NativeEsignTests : IDisposable
 
         return await provider.SendForSignatureAsync(new EsignRequest
         {
+            IdempotencyKey = idempotencyKey ?? Guid.NewGuid().ToString("N"),
             DocumentName = $"lease-{lease.Id}-agreement.pdf",
             Subject = $"Lease {lease.LeaseNumber}",
             DocumentBytes = pdf,
@@ -655,13 +753,21 @@ public sealed class NativeEsignTests : IDisposable
     private sealed class InMemoryFileStorage : IFileStorage
     {
         private readonly Dictionary<string, byte[]> _files = new();
+        private string? _nextUploadKey;
+
+        public int FileCount => _files.Count;
+        public string? LastUploadedKey { get; private set; }
+
+        public void ReuseNextUploadKey(string key) => _nextUploadKey = key;
 
         public async Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default)
         {
             using var ms = new MemoryStream();
             await content.CopyToAsync(ms, ct);
-            var key = $"{Guid.NewGuid():N}_{fileName}";
+            var key = _nextUploadKey ?? $"{Guid.NewGuid():N}_{fileName}";
+            _nextUploadKey = null;
             _files[key] = ms.ToArray();
+            LastUploadedKey = key;
             return key;
         }
 
@@ -677,6 +783,33 @@ public sealed class NativeEsignTests : IDisposable
             _files.Remove(path);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class EsignAtomicFailureInterceptor : SaveChangesInterceptor
+    {
+        private int _armed;
+
+        public void Arm() => Interlocked.Exchange(ref _armed, 1);
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref _armed) == 1
+                && eventData.Context?.ChangeTracker.Entries<OutboxMessage>()
+                    .Any(entry => entry.State == EntityState.Added) == true
+                && Interlocked.Exchange(ref _armed, 0) == 1)
+            {
+                throw new InjectedEsignFailure();
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class InjectedEsignFailure : Exception
+    {
     }
 
     /// <summary>SQLite-compatible context: strips Postgres-only column types the way other suites do.</summary>

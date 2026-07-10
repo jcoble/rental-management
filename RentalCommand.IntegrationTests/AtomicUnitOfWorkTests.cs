@@ -9,10 +9,12 @@ using Npgsql;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Esign;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -86,6 +88,10 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         services.AddAtomicCommandHandler<ServiceBearingCommand, ExpenseResult, ServiceBearingCommandHandler>();
         services.AddAtomicCommandHandler<ServiceBearingResultCommand, ServiceBearingResult, ServiceBearingResultHandler>();
         services.AddAtomicCommandHandler<QueryResultCommand, IQueryable<Expense>, QueryResultHandler>();
+        services.AddAtomicCommandHandler<
+            CreateNativeEsignRequestCommand,
+            CreateNativeEsignRequestResult,
+            CreateNativeEsignRequestHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(
                     _postgres.GetConnectionString(),
@@ -216,6 +222,72 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             && row.EntityId == atomicId)).Should().Be(0);
         (await verify.AtomicAuditLogs.CountAsync(row => row.EntityType == nameof(Expense)
             && row.EntityId == atomicId)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task NativeEsignCommand_CommitsLeaseEnvelopeDocumentSignersAuditAndOutbox_Once()
+    {
+        SkipIfDockerUnavailable();
+        var leaseId = await SeedLeaseAsync();
+        var identity = Identity(nameof(NativeEsignCommand_CommitsLeaseEnvelopeDocumentSignersAuditAndOutbox_Once));
+        var command = NativeEsignCommand(leaseId, "blob/first.pdf");
+        var codec = new AtomicJsonResultCodec<CreateNativeEsignRequestResult>("native-esign.send.v1");
+
+        var first = await UnitOfWork.ExecuteAsync(identity, command, codec);
+        var replay = await UnitOfWork.ExecuteAsync(
+            identity,
+            NativeEsignCommand(leaseId, "blob/retry.pdf"),
+            codec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        var lease = await verify.Db.Leases.AsNoTracking().SingleAsync(row => row.Id == leaseId);
+        lease.EsignEnvelopeId.Should().Be(first.Value.PublicId);
+        lease.EsignStatus.Should().Be(EsignStatus.Sent);
+        lease.Status.Should().Be(LeaseStatus.PendingSignature);
+        (await verify.Db.SignatureRequests.CountAsync(row => row.LeaseId == leaseId)).Should().Be(1);
+        (await verify.Db.SignatureSigners.CountAsync(row => row.SignatureRequestId == first.Value.SignatureRequestId))
+            .Should().Be(1);
+        (await verify.Db.SignatureAuditEvents.CountAsync(row =>
+            row.SignatureRequestId == first.Value.SignatureRequestId)).Should().Be(1);
+        (await verify.Db.StoredFiles.CountAsync(row => row.Id == first.Value.OriginalStoredFileId)).Should().Be(1);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey.StartsWith($"lease-esign:{first.Value.SignatureRequestId}:")))
+            .Should().Be(1);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task NativeEsignCommand_FinalAuditFailure_RollsBackEntirePackage()
+    {
+        SkipIfDockerUnavailable();
+        var leaseId = await SeedLeaseAsync();
+        var identity = Identity(nameof(NativeEsignCommand_FinalAuditFailure_RollsBackEntirePackage));
+        Services.GetRequiredService<AtomicFlushFailureInterceptor>().Arm();
+
+        var action = () => UnitOfWork.ExecuteAsync(
+            identity,
+            NativeEsignCommand(leaseId, "blob/rollback.pdf"),
+            new AtomicJsonResultCodec<CreateNativeEsignRequestResult>("native-esign.send.v1"));
+
+        await action.Should().ThrowAsync<InjectedFailureException>();
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        var lease = await verify.Db.Leases.AsNoTracking().SingleAsync(row => row.Id == leaseId);
+        lease.EsignEnvelopeId.Should().BeNull();
+        lease.EsignStatus.Should().Be(EsignStatus.None);
+        lease.Status.Should().Be(LeaseStatus.Draft);
+        (await verify.Db.SignatureRequests.CountAsync(row => row.LeaseId == leaseId)).Should().Be(0);
+        (await verify.Db.StoredFiles.CountAsync(row => row.EntityType == "esign-original" && row.EntityId == leaseId))
+            .Should().Be(0);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey.StartsWith("lease-esign:") && row.PortfolioId == _portfolioId))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
     }
 
     [SkippableFact]
@@ -541,6 +613,97 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private AtomicCommandIdentity Identity(string testName) =>
         new($"test.atomic.{testName}", Guid.NewGuid().ToString("N"));
+
+    private CreateNativeEsignRequestCommand NativeEsignCommand(int leaseId, string storageKey)
+    {
+        var now = DateTime.UtcNow;
+        return new CreateNativeEsignRequestCommand(
+            _portfolioId,
+            leaseId,
+            Guid.NewGuid().ToString("N"),
+            $"lease-{leaseId}-agreement.pdf",
+            $"Lease #{leaseId}",
+            storageKey,
+            FileSize: 1234,
+            DocumentTemplateId: null,
+            DocumentTemplateVersion: null,
+            TemplateFieldSnapshotJson: null,
+            WebBaseUrl: "https://app.test",
+            CreatedAtUtc: now,
+            LinkExpiresAtUtc: now.AddDays(14),
+            Signers:
+            new[]
+            {
+                new NativeEsignSignerCommand(
+                    "Tenant Signer",
+                    $"tenant-{Guid.NewGuid():N}@example.com",
+                    Guid.NewGuid().ToString("N")),
+            });
+    }
+
+    private async Task<int> SeedLeaseAsync()
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(_postgres!.GetConnectionString())
+            .Options;
+        await using var db = new RentalCommandDbContext(options);
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = _portfolioId,
+            Name = $"Atomic e-sign property {Guid.NewGuid():N}",
+            AddressLine1 = "100 Atomic Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = _portfolioId,
+            FirstName = "Atomic",
+            LastName = "Signer",
+            Email = $"atomic-{Guid.NewGuid():N}@example.com",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.AddRange(property, tenant);
+        await db.SaveChangesAsync();
+
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = $"A-{Guid.NewGuid():N}"[..20],
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.Units.Add(unit);
+        await db.SaveChangesAsync();
+
+        var lease = new Lease
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = $"AT-{Guid.NewGuid():N}"[..20],
+            Status = LeaseStatus.Draft,
+            StartDate = now.Date,
+            EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1000m,
+            SecurityDeposit = 1000m,
+            RentDueDay = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.Leases.Add(lease);
+        await db.SaveChangesAsync();
+        return lease.Id;
+    }
 
     private async Task AssertAdmissionRejected<TCommand>(TCommand command, string messagePattern)
         where TCommand : notnull, IAtomicCommandData

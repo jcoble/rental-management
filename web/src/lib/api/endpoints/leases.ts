@@ -151,12 +151,13 @@ export const leases = {
 
 	/**
 	 * POST /api/v1/leases/{id}/send-for-signature — kicks off the e-sign workflow.
-	 * Defaults the signer to the lease's tenant when no name/email is supplied.
-	 * Returns 503 (surfaced as ApiError.status) when no e-sign provider is configured;
-	 * callers should treat that as "not set up yet" rather than a hard failure.
+	 * Signers are always resolved from the people attached to the lease.
+	 * The operation key makes an automatic HTTP retry replay the same envelope.
 	 */
-	sendForSignature: (id: number, body?: { signerName?: string; signerEmail?: string }) =>
-		api.post<LeaseSignatureStatusResponse>(`/leases/${id}/send-for-signature`, body ?? {}),
+	sendForSignature: (id: number) =>
+		api.post<LeaseSignatureStatusResponse>(`/leases/${id}/send-for-signature`, {
+			idempotencyKey: crypto.randomUUID()
+		}),
 
 	/** GET /api/v1/leases/{id}/signature-status — current e-sign + lease status for this lease. */
 	signatureStatus: (id: number) =>

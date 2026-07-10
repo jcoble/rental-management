@@ -28,6 +28,9 @@ public interface IEsignProvider : RentalCommand.Core.Atomic.IAtomicRemoteDepende
 /// <summary>A document and its recipients submitted for signature.</summary>
 public class EsignRequest
 {
+    /// <summary>Stable identity for this single send attempt; retries must reuse the same value.</summary>
+    public required string IdempotencyKey { get; set; }
+
     public string DocumentName { get; set; } = string.Empty;
     public byte[] DocumentBytes { get; set; } = Array.Empty<byte>();
     public IReadOnlyList<EsignSigner> Signers { get; set; } = Array.Empty<EsignSigner>();
@@ -67,9 +70,21 @@ public class EsignResult
     /// <summary>Human-readable error/explanation when the operation could not be performed.</summary>
     public string? Error { get; set; }
 
+    /// <summary>
+    /// True when the provider committed the lease's envelope/status mutation with its native request.
+    /// Remote providers leave this false so the application commits that state after provider acceptance.
+    /// </summary>
+    public bool LeaseStateCommitted { get; set; }
+
     /// <summary>A successful, configured result carrying the provider envelope id + status.</summary>
-    public static EsignResult Sent(string envelopeId, string status)
-        => new() { EnvelopeId = envelopeId, Status = status, IsConfigured = true };
+    public static EsignResult Sent(string envelopeId, string status, bool leaseStateCommitted = false)
+        => new()
+        {
+            EnvelopeId = envelopeId,
+            Status = status,
+            IsConfigured = true,
+            LeaseStateCommitted = leaseStateCommitted,
+        };
 
     /// <summary>The provider is not configured — a clear no-op result, never a false success.</summary>
     public static EsignResult NotConfigured()

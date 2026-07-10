@@ -146,6 +146,10 @@ builder.Services.AddAtomicCommandHandler<
     ChangeWorkspaceAssignmentEndCommand,
     WorkspaceAccessMutationResult,
     ChangeWorkspaceAssignmentEndHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.CreateNativeEsignRequestCommand,
+    RentalCommand.Core.Esign.CreateNativeEsignRequestResult,
+    RentalCommand.Data.Esign.CreateNativeEsignRequestHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so

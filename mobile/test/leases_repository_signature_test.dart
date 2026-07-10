@@ -6,24 +6,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 
 void main() {
-  test(
-    'sendForSignature posts an empty request body when no overrides exist',
-    () async {
-      final adapter = _RecordingAdapter();
-      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
-        ..httpClientAdapter = adapter;
-      final repo = LeasesRepository(dio);
+  test('sendForSignature posts a fresh idempotency key', () async {
+    final adapter = _RecordingAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = LeasesRepository(dio);
 
-      final status = await repo.sendForSignature(44);
+    final status = await repo.sendForSignature(44);
 
-      expect(adapter.method, 'POST');
-      expect(adapter.path, '/leases/44/send-for-signature');
-      expect(adapter.data, isA<Map<String, dynamic>>());
-      expect(adapter.data, isEmpty);
-      expect(status.leaseId, 44);
-      expect(status.esignStatus, 'Sent');
-    },
-  );
+    expect(adapter.method, 'POST');
+    expect(adapter.path, '/leases/44/send-for-signature');
+    expect(adapter.data, isA<Map<String, dynamic>>());
+    final body = adapter.data! as Map<String, dynamic>;
+    expect(body.keys, ['idempotencyKey']);
+    expect(body['idempotencyKey'], matches(RegExp(r'^[0-9a-f]{32}$')));
+    expect(status.leaseId, 44);
+    expect(status.esignStatus, 'Sent');
+  });
 }
 
 class _RecordingAdapter implements HttpClientAdapter {
