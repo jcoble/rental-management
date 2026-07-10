@@ -654,6 +654,80 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("Appointments");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.AtomicAuditLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("ActorLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ChangeReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("CommandIdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CommandType")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.Property<int>("EntityId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long>("MutationOrdinal")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("NewValues")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("OldValues")
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("Operation")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("UserId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EntityType", "EntityId");
+
+                    b.HasIndex("PortfolioId", "Timestamp");
+
+                    b.HasIndex("CommandType", "CommandIdempotencyKey", "MutationOrdinal")
+                        .IsUnique();
+
+                    b.ToTable("AtomicAuditLogs");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.AtomicCommandReceipt", b =>
                 {
                     b.Property<Guid>("Id")
@@ -713,19 +787,6 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
 
-                    b.Property<Guid>("CommandAttemptId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("CommandIdempotencyKey")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("CommandType")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("character varying(160)");
-
                     b.Property<int>("EntityId")
                         .HasColumnType("integer");
 
@@ -740,9 +801,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<string>("NewValues")
                         .HasColumnType("jsonb");
-
-                    b.Property<long>("MutationOrdinal")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("OldValues")
                         .HasColumnType("jsonb");
@@ -770,9 +828,6 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("EntityType", "EntityId");
 
                     b.HasIndex("PortfolioId", "Timestamp");
-
-                    b.HasIndex("CommandType", "CommandIdempotencyKey", "MutationOrdinal")
-                        .IsUnique();
 
                     b.ToTable("AuditLogs");
                 });

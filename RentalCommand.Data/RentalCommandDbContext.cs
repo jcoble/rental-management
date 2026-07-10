@@ -65,6 +65,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AtomicCommandReceipt> AtomicCommandReceipts => Set<AtomicCommandReceipt>();
+    public DbSet<AtomicAuditLog> AtomicAuditLogs => Set<AtomicAuditLog>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
@@ -175,8 +176,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<AuditLog>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.CommandType).IsRequired().HasMaxLength(160);
-            entity.Property(e => e.CommandIdempotencyKey).IsRequired().HasMaxLength(200);
             entity.Property(e => e.ActorLabel).HasMaxLength(120);
             entity.Property(e => e.EntityType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.ChangeReason).HasMaxLength(1000);
@@ -190,13 +189,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.Timestamp);
             // Composite index for the paged viewer query (scope by portfolio, newest-first).
             entity.HasIndex(e => new { e.PortfolioId, e.Timestamp });
-            entity.HasIndex(e => new
-                {
-                    e.CommandType,
-                    e.CommandIdempotencyKey,
-                    e.MutationOrdinal,
-                })
-                .IsUnique();
             entity.HasOne(e => e.User)
                 .WithMany(u => u.AuditLogs)
                 .HasForeignKey(e => e.UserId)
@@ -214,6 +206,29 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ResultContract).IsRequired().HasMaxLength(200);
             entity.Property(e => e.ResultJson).HasColumnType("jsonb");
             entity.HasIndex(e => new { e.CommandType, e.IdempotencyKey }).IsUnique();
+        });
+
+        modelBuilder.Entity<AtomicAuditLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.CommandType).IsRequired().HasMaxLength(160);
+            entity.Property(e => e.CommandIdempotencyKey).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ActorLabel).HasMaxLength(120);
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.ChangeReason).HasMaxLength(1000);
+            entity.Property(e => e.IpAddress).HasMaxLength(64);
+            entity.Property(e => e.OldValues).HasColumnType("jsonb");
+            entity.Property(e => e.NewValues).HasColumnType("jsonb");
+            entity.Property(e => e.Operation).HasConversion<int>();
+            entity.HasIndex(e => new
+                {
+                    e.CommandType,
+                    e.CommandIdempotencyKey,
+                    e.MutationOrdinal,
+                })
+                .IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.Timestamp });
+            entity.HasIndex(e => new { e.EntityType, e.EntityId });
         });
 
         modelBuilder.Entity<OwnerEntity>(entity =>

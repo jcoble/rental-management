@@ -3,9 +3,8 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
-/// Stages append-only <see cref="Entities.AuditLog"/> entries in the active atomic command.
-/// Implementations must never call SaveChanges or make an audit independently durable; the owner
-/// transaction flushes the staged row with the business mutation and command receipt.
+/// Writes append-only <see cref="Entities.AuditLog"/> entries. Audit entries are never
+/// updated or deleted. Phase 0 defines the contract only; the implementation lands later.
 /// </summary>
 public interface IAuditTrailService
 {

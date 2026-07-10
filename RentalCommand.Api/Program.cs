@@ -139,7 +139,6 @@ builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
         .AddInterceptors(
             sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditableCommandGuardInterceptor>(),
             sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));
 
 // --- ASP.NET Identity (int keys) ---

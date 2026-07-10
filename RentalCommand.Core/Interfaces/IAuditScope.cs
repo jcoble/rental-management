@@ -1,80 +1,49 @@
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
-/// Attempt-scoped audit staging area. Mutation identity is the physical command attempt plus the
-/// tracked entity reference plus a monotonic mutation ordinal; it is deliberately not just
-/// (entity type, id, operation), because the same command may update one entity more than once.
+/// Per-request registry that coordinates the generic audit interceptor with the explicit
+/// <c>AuditTrailService.LogAsync</c> path so a single change yields exactly one <see cref="AuditLog"/>
+/// row — and the rich explicit row always wins, <b>regardless of whether it runs before or after the
+/// entity's <c>SaveChanges</c></b>. Both writers reconcile on the same (entityType, entityId,
+/// operation) key. Scoped to the request, thread-safe.
 /// </summary>
 public interface IAuditScope
 {
-    bool IsActive { get; }
-    AtomicCommandIdentity Command { get; }
-    Guid AttemptId { get; }
-    long CurrentMutationOrdinal { get; }
-
-    /// <summary>Activates a fresh audit scope for one physical execution-strategy attempt.</summary>
-    IDisposable BeginAttempt(AtomicCommandIdentity command, Guid attemptId);
-
     /// <summary>
-    /// Reserves the exact mutation captured by SavingChanges. A later SavedChanges call stages the
-    /// row under this ordinal after a database-generated key is available.
+    /// Called by the generic interceptor for a row it is about to write. Returns <c>true</c> if the
+    /// generic row should be written — in which case the scope keeps a reference to <paramref name="row"/>
+    /// so a later explicit log can enrich it in place. Returns <c>false</c> when an explicit rich log
+    /// already owns this key (it ran before the entity's save), so the generic twin is suppressed.
     /// </summary>
-    long ReserveMutation(
-        object entityReference,
-        string entityType,
-        int entityId,
-        AuditLogOperation operation);
-
-    /// <summary>Stages the generic row materialized after the business flush; never flushes it.</summary>
-    void StageGeneric(long mutationOrdinal, AuditLog row);
+    bool TryAddGenericRow(string entityType, int entityId, AuditLogOperation operation, AuditLog row);
 
     /// <summary>
-    /// Resolves a semantic audit against the newest unenriched generic mutation with the same
-    /// semantic signature. When there is no generic mutation, a new semantic-only ordinal is
-    /// reserved. The returned ordinal makes the enrichment target explicit.
+    /// Called by the explicit <c>AuditTrailService.LogAsync</c>. Takes ownership of the key and reports
+    /// how to record the rich row: <see cref="AuditWrite.Insert"/> a fresh row, <see cref="AuditWrite.Enrich"/>
+    /// the generic twin already written this request (returned in <see cref="AuditResolution.ExistingRow"/>),
+    /// or <see cref="AuditWrite.Skip"/> when a prior explicit log already covered this key.
     /// </summary>
     AuditResolution ResolveExplicit(string entityType, int entityId, AuditLogOperation operation);
-
-    /// <summary>Resolves semantic data against one exact mutation handle.</summary>
-    AuditResolution ResolveExplicit(long mutationOrdinal);
-
-    /// <summary>Returns generic mutations staged after the supplied ordinal.</summary>
-    IReadOnlyList<AuditMutationDescriptor> GetMutationsAfter(long mutationOrdinal);
-
-    /// <summary>Stages a semantic-only row for a previously reserved ordinal.</summary>
-    void StageExplicit(long mutationOrdinal, AuditLog row);
-
-    /// <summary>Returns all staged rows exactly once for the owner's final companion flush.</summary>
-    IReadOnlyList<AuditLog> TakeStagedRows();
-
-    /// <summary>
-    /// Grants one set-based ExecuteUpdate/ExecuteDelete command against the named auditable entity.
-    /// The semantic audit must be staged before granting the permit.
-    /// </summary>
-    void AuthorizeSetBasedMutation(string entityType);
-
-    /// <summary>Consumes one matching set-based mutation permit.</summary>
-    bool TryConsumeSetBasedMutation(string entityType);
 }
 
+/// <summary>How an explicit audit log should be recorded for a key (see <see cref="IAuditScope.ResolveExplicit"/>).</summary>
 public enum AuditWrite
 {
+    /// <summary>No row exists yet for this key — insert a fresh rich row.</summary>
     Insert,
+
+    /// <summary>A generic twin was already written this request — enrich it in place instead of inserting.</summary>
     Enrich,
+
+    /// <summary>A prior explicit log already owns this key — skip to avoid a duplicate.</summary>
+    Skip,
 }
 
-public readonly record struct AuditResolution(
-    AuditWrite Decision,
-    AuditLog? ExistingRow,
-    long MutationOrdinal);
-
-public sealed record AuditMutationDescriptor(
-    long MutationOrdinal,
-    object EntityReference,
-    string EntityType,
-    int EntityId,
-    AuditLogOperation Operation);
+/// <summary>
+/// Result of <see cref="IAuditScope.ResolveExplicit"/>: the decision plus the row to enrich when
+/// <see cref="Decision"/> is <see cref="AuditWrite.Enrich"/> (otherwise <c>null</c>).
+/// </summary>
+public readonly record struct AuditResolution(AuditWrite Decision, AuditLog? ExistingRow);
