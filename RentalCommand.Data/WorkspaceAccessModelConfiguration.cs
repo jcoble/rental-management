@@ -26,6 +26,7 @@ internal static class WorkspaceAccessModelConfiguration
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(24);
             entity.Property(e => e.AccessRevision).IsConcurrencyToken();
             entity.Property(e => e.LastAuthorizedExperience).HasConversion<string>().HasMaxLength(24);
+            entity.HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
             entity.HasIndex(e => new { e.UserId, e.PortfolioId }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.Status });
             entity.ToTable(table =>
@@ -59,6 +60,7 @@ internal static class WorkspaceAccessModelConfiguration
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(24);
             entity.Property(e => e.DefaultExperience).HasConversion<string>().HasMaxLength(24);
+            entity.HasQueryFilter(e => e.AccessContext!.Portfolio!.DeletedAt == null);
             entity.HasIndex(e => e.AccessContextId).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.Status, e.EffectiveFromUtc });
             entity.ToTable(table =>
@@ -155,6 +157,7 @@ internal static class WorkspaceAccessModelConfiguration
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(24);
             entity.Property(e => e.ScopeKind).HasConversion<string>().HasMaxLength(32);
+            entity.HasQueryFilter(e => e.WorkspaceMembership!.AccessContext!.Portfolio!.DeletedAt == null);
             entity.HasIndex(e => new { e.WorkspaceMembershipId, e.Status, e.EffectiveFromUtc });
             entity.HasIndex(e => new { e.PortfolioId, e.Status, e.EffectiveFromUtc });
             entity.HasIndex(e => new { e.RoleProfileId, e.Status });
@@ -187,6 +190,9 @@ internal static class WorkspaceAccessModelConfiguration
         modelBuilder.Entity<MembershipRoleAssignmentProperty>(entity =>
         {
             entity.HasKey(e => new { e.MembershipRoleAssignmentId, e.PropertyId });
+            entity.HasQueryFilter(e =>
+                e.Property!.DeletedAt == null &&
+                e.MembershipRoleAssignment!.WorkspaceMembership!.AccessContext!.Portfolio!.DeletedAt == null);
             entity.HasIndex(e => new { e.PortfolioId, e.PropertyId });
             entity.HasOne(e => e.MembershipRoleAssignment)
                 .WithMany(assignment => assignment.SelectedProperties)
@@ -209,6 +215,7 @@ internal static class WorkspaceAccessModelConfiguration
             entity.Property(e => e.Id).ValueGeneratedNever();
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(24);
             entity.Property(e => e.RevocationReason).HasMaxLength(500);
+            entity.HasQueryFilter(e => e.ActiveAccessContext!.Portfolio!.DeletedAt == null);
             entity.HasIndex(e => new { e.UserId, e.Status, e.ExpiresAtUtc });
             entity.HasIndex(e => new { e.ActiveAccessContextId, e.Status });
             entity.ToTable(table =>
@@ -240,6 +247,8 @@ internal static class WorkspaceAccessModelConfiguration
             entity.HasKey(family => family.Id);
             entity.Property(family => family.Id).ValueGeneratedNever();
             entity.Property(family => family.RevocationReason).HasMaxLength(500);
+            entity.HasQueryFilter(family =>
+                family.AuthSession!.ActiveAccessContext!.Portfolio!.DeletedAt == null);
             entity.HasIndex(family => new { family.AuthSessionId, family.AbsoluteExpiresAtUtc });
             entity.HasIndex(family => family.ReuseDetectedAtUtc);
             entity.ToTable(table =>
@@ -270,6 +279,8 @@ internal static class WorkspaceAccessModelConfiguration
             entity.Property(credential => credential.Id).ValueGeneratedNever();
             entity.Property(credential => credential.TokenHash).IsRequired().HasMaxLength(128);
             entity.Property(credential => credential.RevocationReason).HasMaxLength(500);
+            entity.HasQueryFilter(credential =>
+                credential.RefreshTokenFamily!.AuthSession!.ActiveAccessContext!.Portfolio!.DeletedAt == null);
             entity.HasIndex(credential => credential.TokenHash).IsUnique();
             entity.HasIndex(credential => new { credential.RefreshTokenFamilyId, credential.ExpiresAtUtc });
             entity.HasIndex(credential => credential.ReplacedByCredentialId)

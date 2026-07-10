@@ -136,8 +136,6 @@ builder.Services.AddHttpContextAccessor();
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
 // tenant isolation is enforced at the DB layer in addition to the app-layer PortfolioId filters.
 // Registered alongside the audit interceptor on the same DbContext.
-builder.Services.AddSingleton<RentalCommand.Api.Data.IRlsActorModeAccessor,
-    RentalCommand.Api.Data.RlsActorModeAccessor>();
 builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
@@ -234,8 +232,6 @@ builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAuthorizat
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IMembershipAssignmentScopeValidator,
     MembershipAssignmentScopeValidator>();
 builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
-builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAccessMutationBoundary,
-    WorkspaceAccessMutationBoundary>();
 
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");
@@ -371,8 +367,6 @@ var app = builder.Build();
 // Migration is idempotent (no-op when already applied); seeding is gated by Seed:Enabled (Development).
 using (var scope = app.Services.CreateScope())
 {
-    var rlsActorMode = scope.ServiceProvider.GetRequiredService<RentalCommand.Api.Data.IRlsActorModeAccessor>();
-    using var backgroundActor = rlsActorMode.Begin(RentalCommand.Api.Data.RlsActorMode.Background);
     var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
     // Advisory-locked so the API and Engine (both self-migrate on startup) don't race on a fresh batch.
     await DatabaseMigrator.MigrateWithLockAsync(db);
@@ -475,21 +469,6 @@ app.Use(async (context, next) =>
 });
 
 app.UseAuthentication();
-// Platform bypass is explicit and server-owned. The ordinary customer Admin/Workspace Administrator
-// role is intentionally irrelevant; only the separately configured platform allowlist opens it.
-app.Use(async (context, next) =>
-{
-    if (!RentalCommand.Api.Auth.PlatformAdminPolicy.IsPlatformAdmin(context.User, platformAdminAllowlist))
-    {
-        await next();
-        return;
-    }
-
-    var actorMode = context.RequestServices
-        .GetRequiredService<RentalCommand.Api.Data.IRlsActorModeAccessor>();
-    using var platformActor = actorMode.Begin(RentalCommand.Api.Data.RlsActorMode.Platform);
-    await next();
-});
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

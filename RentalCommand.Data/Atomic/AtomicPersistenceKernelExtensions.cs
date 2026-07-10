@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -37,6 +38,7 @@ public static class AtomicPersistenceKernelExtensions
         services.AddScoped<AtomicAuditSaveChangesInterceptor>();
         services.AddScoped<AtomicTransactionLifecycleInterceptor>();
         services.AddScoped<AtomicSetBasedCommandGuardInterceptor>();
+        services.AddScoped<WorkspaceAuthorityOwnershipInterceptor>();
         services.TryAddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
         return services;
     }
@@ -47,7 +49,8 @@ public static class AtomicPersistenceKernelExtensions
         options.AddInterceptors(
             services.GetRequiredService<AtomicAuditSaveChangesInterceptor>(),
             services.GetRequiredService<AtomicTransactionLifecycleInterceptor>(),
-            services.GetRequiredService<AtomicSetBasedCommandGuardInterceptor>());
+            services.GetRequiredService<AtomicSetBasedCommandGuardInterceptor>(),
+            services.GetRequiredService<WorkspaceAuthorityOwnershipInterceptor>());
 
     public static DbContextOptionsBuilder<TContext> UseAtomicPersistenceKernel<TContext>(
         this DbContextOptionsBuilder<TContext> options,

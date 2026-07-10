@@ -1,10 +1,14 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -18,7 +22,10 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 {
+    private static readonly AtomicJsonResultCodec<WorkspaceAccessMutationResult> MutationCodec =
+        new("workspace-access-mutation-result.v1");
     private PostgreSqlContainer? _postgres;
+    private ServiceProvider? _services;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
     private readonly DateTime _now = new(2026, 7, 10, 16, 0, 0, DateTimeKind.Utc);
@@ -57,10 +64,33 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await using var db = NewContext();
         await db.Database.EnsureCreatedAsync();
         await SeedKernelAsync(db);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, AccessTestActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            ChangeWorkspaceAssignmentScopeCommand,
+            WorkspaceAccessMutationResult,
+            ChangeWorkspaceAssignmentScopeHandler>();
+        services.AddAtomicCommandHandler<
+            ChangeWorkspaceAssignmentEndCommand,
+            WorkspaceAccessMutationResult,
+            ChangeWorkspaceAssignmentEndHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_connectionString)
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 
     public async Task DisposeAsync()
     {
+        if (_services is not null)
+        {
+            await _services.DisposeAsync();
+        }
+
         if (_postgres is not null)
         {
             await _postgres.DisposeAsync();
@@ -489,17 +519,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                                      assignment.RoleProfileId == 3)
                 .Select(assignment => assignment.Id)
                 .SingleAsync();
-            var boundary = MutationBoundary(db);
-
-            var act = async () => await boundary.ExecuteAsync(
-                _accessContextId,
-                expectedRevision: 7,
-                accessContext =>
-                {
-                    var assignment = accessContext.Membership!.RoleAssignments
-                        .Single(item => item.Id == leasingAssignmentId);
-                    assignment.ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties;
-                });
+            var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+                Identity(nameof(MutationBoundary_RollsBackRevisionAndAuthorityRowsWhenStoredScopeIsInvalid)),
+                new ChangeWorkspaceAssignmentScopeCommand(
+                    _accessContextId,
+                    ExpectedRevision: 7,
+                    leasingAssignmentId,
+                    MembershipRoleAssignmentScopeKind.AllProperties,
+                    _now.AddMinutes(1)),
+                MutationCodec);
 
             await act.Should().ThrowAsync<DomainValidationException>();
         }
@@ -536,23 +564,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                     .Select(assignment => assignment.Id)
                     .SingleAsync();
 
-                var mutationAct = async () => await MutationBoundary(db).ExecuteAsync(
-                    _accessContextId,
-                    expectedRevision: 7,
-                    accessContext =>
-                    {
-                        var assignment = accessContext.Membership!.RoleAssignments
-                            .Single(item => item.Id == assignmentId);
-                        assignment.ScopeKind = badScope;
-                        if (badScope == MembershipRoleAssignmentScopeKind.SelectedProperties)
-                        {
-                            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
-                            {
-                                PropertyId = _managerPropertyId,
-                                PortfolioId = _portfolioId,
-                            });
-                        }
-                    });
+                var mutationAct = async () => await AtomicUnitOfWork.ExecuteAsync(
+                    Identity($"{nameof(MutationBoundary_RollsBackMisScopedMaintenanceAndRevisionForEveryBadScope)}-{badScope}"),
+                    new ChangeWorkspaceAssignmentScopeCommand(
+                        _accessContextId,
+                        ExpectedRevision: 7,
+                        assignmentId,
+                        badScope,
+                        _now.AddMinutes(1)),
+                    MutationCodec);
 
                 await mutationAct.Should().ThrowAsync<DomainValidationException>();
             }
@@ -585,34 +605,27 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
         try
         {
-            await using var staleDb = NewContext();
-            _ = await staleDb.WorkspaceAccessContexts
-                .SingleAsync(context => context.Id == isolated.AccessContextId);
-
-            await using (var winningDb = NewContext())
-            {
-                await MutationBoundary(winningDb).ExecuteAsync(
+            await AtomicUnitOfWork.ExecuteAsync(
+                Identity($"{nameof(ConcurrentMutationWithStaleExpectedRevision_RollsBack)}-winner"),
+                new ChangeWorkspaceAssignmentEndCommand(
                     isolated.AccessContextId,
-                    expectedRevision: 1,
-                    accessContext =>
-                    {
-                        var assignment = accessContext.Membership!.RoleAssignments
-                            .Single(item => item.Id == isolated.AssignmentId);
-                        assignment.EffectiveToUtc = _now.AddDays(30);
-                    });
-            }
+                    ExpectedRevision: 1,
+                    isolated.AssignmentId,
+                    _now.AddDays(30),
+                    _now.AddMinutes(1)),
+                MutationCodec);
 
-            var staleAct = async () => await MutationBoundary(staleDb).ExecuteAsync(
-                isolated.AccessContextId,
-                expectedRevision: 1,
-                accessContext =>
-                {
-                    var assignment = accessContext.Membership!.RoleAssignments
-                        .Single(item => item.Id == isolated.AssignmentId);
-                    assignment.EffectiveToUtc = _now.AddDays(60);
-                });
+            var staleAct = async () => await AtomicUnitOfWork.ExecuteAsync(
+                Identity($"{nameof(ConcurrentMutationWithStaleExpectedRevision_RollsBack)}-stale"),
+                new ChangeWorkspaceAssignmentEndCommand(
+                    isolated.AccessContextId,
+                    ExpectedRevision: 1,
+                    isolated.AssignmentId,
+                    _now.AddDays(60),
+                    _now.AddMinutes(2)),
+                MutationCodec);
 
-            await staleAct.Should().ThrowAsync<DbUpdateConcurrencyException>();
+            await staleAct.Should().ThrowAsync<StaleAccessRevisionException>();
 
             await using var verificationDb = NewContext();
             (await verificationDb.WorkspaceAccessContexts
@@ -629,6 +642,42 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         finally
         {
             await DeleteIsolatedAccessRootAsync(isolated);
+        }
+    }
+
+    [SkippableFact]
+    public async Task AuthorityOwnershipCannotBeReparentedToAnotherAccessRoot()
+    {
+        SkipIfNoDocker();
+        IsolatedAccessRoot source;
+        IsolatedAccessRoot destination;
+        await using (var seedDb = NewContext())
+        {
+            source = await SeedIsolatedAccessRootAsync(seedDb, $"source-{Guid.NewGuid():N}");
+            destination = await SeedIsolatedAccessRootAsync(seedDb, $"destination-{Guid.NewGuid():N}");
+        }
+
+        try
+        {
+            await using var scope = Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var assignment = await db.MembershipRoleAssignments
+                .SingleAsync(item => item.Id == source.AssignmentId);
+            var destinationMembershipId = await db.WorkspaceMemberships
+                .Where(item => item.AccessContextId == destination.AccessContextId)
+                .Select(item => item.Id)
+                .SingleAsync();
+
+            assignment.WorkspaceMembershipId = destinationMembershipId;
+            var act = async () => await db.SaveChangesAsync();
+
+            await act.Should().ThrowAsync<AccessAuthorityMutationException>()
+                .WithMessage("*WorkspaceMembershipId*immutable*");
+        }
+        finally
+        {
+            await DeleteIsolatedAccessRootAsync(source);
+            await DeleteIsolatedAccessRootAsync(destination);
         }
     }
 
@@ -859,8 +908,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     private PropertyCapabilityAuthorizationTarget PropertyTarget(int propertyId) =>
         new(_portfolioId, propertyId);
 
-    private WorkspaceAccessMutationBoundary MutationBoundary(RentalCommandDbContext db) =>
-        new(db, new WorkspaceAccessRevisionGuard(), new MembershipAssignmentScopeValidator(db));
+    private IAtomicUnitOfWork AtomicUnitOfWork =>
+        _services?.GetRequiredService<IAtomicUnitOfWork>()
+        ?? throw new InvalidOperationException("Atomic access services are unavailable.");
+
+    private IServiceProvider Services =>
+        _services ?? throw new InvalidOperationException("Atomic access services are unavailable.");
+
+    private static AtomicCommandIdentity Identity(string commandType) =>
+        new(commandType, Guid.NewGuid().ToString("N"));
 
     private AuthSessionRefreshTokenFamily RefreshFamily() => new()
     {
@@ -965,4 +1021,11 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; workspace authorization kernel test skipped.");
+
+    private sealed class AccessTestActor : ICurrentActor
+    {
+        public int? UserId => null;
+        public string? ActorLabel => "integration:workspace-access";
+        public string? IpAddress => "127.0.0.1";
+    }
 }
