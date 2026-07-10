@@ -72,7 +72,7 @@ public class ConversationsController : ManagementControllerBase
     {
         var result = await _service.StartAsync(
             GetPortfolioId(), request.TenantId, request.Subject, request.Body, request.Channels,
-            request.AcknowledgedFairHousingReview, ct);
+            request.OperationKey, request.AcknowledgedFairHousingReview, ct);
 
         return result == null
             ? NotFound(new { error = "Tenant not found" })
@@ -87,7 +87,8 @@ public class ConversationsController : ManagementControllerBase
     public async Task<ActionResult<ConversationDetail>> PostMessage(
         int id, [FromBody] PostMessageRequest request, CancellationToken ct)
     {
-        var result = await _service.PostMessageAsync(GetPortfolioId(), id, request.Body, request.Channels, ct);
+        var result = await _service.PostMessageAsync(
+            GetPortfolioId(), id, request.Body, request.Channels, request.OperationKey, ct);
         return result == null ? NotFound(new { error = "Conversation not found" }) : Ok(result);
     }
 }

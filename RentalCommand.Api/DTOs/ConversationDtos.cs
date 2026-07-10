@@ -67,6 +67,10 @@ public class ConversationMessageDto
 /// <summary>Landlord → tenant: open a new topic thread and send the first message over one or more channels.</summary>
 public class StartConversationRequest : IValidatableObject
 {
+    [Required]
+    [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     /// <summary>The tenant (in the caller's portfolio) to start a conversation with.</summary>
     [Range(1, int.MaxValue)]
     public int TenantId { get; set; }
@@ -98,6 +102,10 @@ public class StartConversationRequest : IValidatableObject
 /// <summary>Landlord: append a message to an existing conversation over one or more channels.</summary>
 public class PostMessageRequest : IValidatableObject
 {
+    [Required]
+    [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     [Required]
     [MaxLength(4000)]
     public string Body { get; set; } = string.Empty;

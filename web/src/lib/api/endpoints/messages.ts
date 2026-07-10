@@ -47,6 +47,7 @@ export interface ConversationUnreadCountResponse {
 }
 
 export interface StartConversationRequest {
+	operationKey: string;
 	tenantId: number;
 	subject: string;
 	body: string;
@@ -60,6 +61,7 @@ export interface StartConversationRequest {
 }
 
 export interface SendMessageRequest {
+	operationKey: string;
 	body: string;
 	channels: string[];
 }

@@ -90,6 +90,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   bool _sms = false;
 
   bool _sending = false;
+  String? _sendOperationKey;
 
   @override
   void didChangeDependencies() {
@@ -153,13 +154,15 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       return;
     }
 
+    _sendOperationKey ??= MessagesRepository.createOperationKey();
     setState(() => _sending = true);
     try {
       await ref
           .read(conversationProvider(widget.conversationId).notifier)
-          .sendMessage(text, channels);
+          .sendMessage(text, channels, operationKey: _sendOperationKey);
       if (!mounted) return;
       _composeCtrl.clear();
+      _sendOperationKey = null;
       _scrollToBottom(animated: true);
     } on ApiException catch (e) {
       _showError(e.message);

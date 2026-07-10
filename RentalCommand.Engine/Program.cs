@@ -62,6 +62,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.FinalizeNativeEsignRequestCommand,
     RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
     RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Conversations.SendConversationMessageCommand,
+    RentalCommand.Core.Conversations.SendConversationMessageResult,
+    RentalCommand.Data.Conversations.SendConversationMessageHandler>();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)

@@ -38,14 +38,15 @@ public interface IConversationService
     /// </summary>
     Task<ConversationDetail?> StartAsync(
         int portfolioId, int tenantId, string subject, string body, List<string> channels,
-        bool acknowledgedFairHousingReview = false, CancellationToken ct = default);
+        string operationKey, bool acknowledgedFairHousingReview = false, CancellationToken ct = default);
 
     /// <summary>
     /// Append a landlord message to an existing conversation, bumping the tenant's unread count and
     /// fanning out to the requested channels. Returns null when the conversation is not in the portfolio.
     /// </summary>
     Task<ConversationDetail?> PostMessageAsync(
-        int portfolioId, int id, string body, List<string> channels, CancellationToken ct = default);
+        int portfolioId, int id, string body, List<string> channels, string operationKey,
+        CancellationToken ct = default);
 
     // --- Tenant ---
 

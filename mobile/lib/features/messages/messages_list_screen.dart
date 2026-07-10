@@ -431,6 +431,7 @@ class _ComposeConversationSheetState
 
   bool _saving = false;
   String? _error;
+  String? _operationKey;
 
   @override
   void initState() {
@@ -476,6 +477,7 @@ class _ComposeConversationSheetState
       _saving = true;
       _error = null;
     });
+    _operationKey ??= MessagesRepository.createOperationKey();
 
     try {
       final convo = await ref
@@ -485,7 +487,9 @@ class _ComposeConversationSheetState
             subject: _subjectCtrl.text.trim(),
             body: _bodyCtrl.text.trim(),
             channels: channels,
+            operationKey: _operationKey,
           );
+      _operationKey = null;
       if (mounted) Navigator.of(context).pop<Conversation>(convo);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);

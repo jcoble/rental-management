@@ -93,6 +93,7 @@ public enum AtomicLockResource
 {
     SignatureRequest = 1,
     WorkOrder = 2,
+    Conversation = 3,
 }
 
 /// <summary>
