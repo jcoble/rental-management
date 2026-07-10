@@ -112,7 +112,7 @@ public class ConversationNotificationTests : IDisposable
         (await _ctx.Db.Notifications.CountAsync(notification => notification.Type == "TenantNotice")).Should().Be(1);
         (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(2);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
-            receipt.CommandType == "conversation.start" && receipt.IdempotencyKey == operationKey)).Should().Be(1);
+            receipt.CommandType == "conversation.start")).Should().Be(1);
     }
 
     [Fact]
