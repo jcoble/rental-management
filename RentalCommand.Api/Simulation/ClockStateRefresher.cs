@@ -1,5 +1,4 @@
 using RentalCommand.Core.Time;
-using RentalCommand.Api.Data;
 
 namespace RentalCommand.Api.Simulation;
 
@@ -15,24 +14,15 @@ public sealed class ClockStateRefresher : BackgroundService
 
     private readonly IClockStateProvider _provider;
     private readonly ILogger<ClockStateRefresher> _logger;
-    private readonly IRlsActorModeAccessor? _rlsActorMode;
 
-    public ClockStateRefresher(
-        IClockStateProvider provider,
-        ILogger<ClockStateRefresher> logger,
-        IRlsActorModeAccessor? rlsActorMode = null)
+    public ClockStateRefresher(IClockStateProvider provider, ILogger<ClockStateRefresher> logger)
     {
         _provider = provider;
         _logger = logger;
-        _rlsActorMode = rlsActorMode;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // The API host installs the RLS interceptor and supplies this accessor; the Engine host does
-        // neither. In API, make server-owned polling authority explicit instead of relying on the
-        // absence of an HTTP context as an implicit bypass.
-        using var backgroundActor = _rlsActorMode?.Begin(RlsActorMode.Background);
         _logger.LogInformation("ClockStateRefresher starting (poll interval {Interval}).", PollInterval);
 
         while (!stoppingToken.IsCancellationRequested)

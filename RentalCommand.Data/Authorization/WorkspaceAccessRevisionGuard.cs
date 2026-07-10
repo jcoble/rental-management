@@ -20,6 +20,8 @@ public sealed class WorkspaceAccessRevisionGuard
         long expectedRevision,
         CancellationToken cancellationToken = default)
     {
+        WorkspaceAuthorityOwnershipInterceptor.Validate(db);
+
         var rootEntries = db.ChangeTracker.Entries<WorkspaceAccessContext>()
             .Where(entry => entry.Entity.Id == accessContextId)
             .ToArray();

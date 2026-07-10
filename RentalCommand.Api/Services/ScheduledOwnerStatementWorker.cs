@@ -4,7 +4,6 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
-using RentalCommand.Api.Data;
 
 namespace RentalCommand.Api.Services;
 
@@ -25,7 +24,6 @@ public sealed class ScheduledOwnerStatementWorker : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ScheduledOwnerStatementWorker> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IRlsActorModeAccessor _rlsActorMode;
 
     // Tracks the last UTC date on which the batch ran so we don't double-send within the same day.
     private DateOnly? _lastRunDate;
@@ -33,13 +31,11 @@ public sealed class ScheduledOwnerStatementWorker : BackgroundService
     public ScheduledOwnerStatementWorker(
         IServiceScopeFactory scopeFactory,
         ILogger<ScheduledOwnerStatementWorker> logger,
-        TimeProvider timeProvider,
-        IRlsActorModeAccessor rlsActorMode)
+        TimeProvider timeProvider)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
         _timeProvider = timeProvider;
-        _rlsActorMode = rlsActorMode;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -78,7 +74,6 @@ public sealed class ScheduledOwnerStatementWorker : BackgroundService
 
     private async Task RunCycleAsync(CancellationToken ct)
     {
-        using var backgroundActor = _rlsActorMode.Begin(RlsActorMode.Background);
         using var scope = _scopeFactory.CreateScope();
         var config = scope.ServiceProvider
             .GetRequiredService<IOptionsSnapshot<ReportsConfig>>()

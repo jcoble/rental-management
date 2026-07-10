@@ -228,7 +228,22 @@ Capabilities are stable action keys. An authorization decision succeeds only whe
 - cross-scope decoy records never appear in list, count, aggregate, search, or detail responses;
 - generated SQL applies authorization joins before ordering and paging.
 
-The current `RlsConnectionInterceptor` must stop mapping the customer-facing Admin role—or a missing portfolio claim—to database administrator bypass. Workspace Administrator remains workspace scoped. Only an explicit platform/background actor mode may bypass workspace RLS.
+The final access cutover must replace the current `RlsConnectionInterceptor` behavior that maps the
+customer-facing Admin role—or a missing portfolio claim—to database administrator bypass. Workspace
+Administrator remains workspace scoped, and only an explicit platform/background actor mode may
+bypass workspace RLS.
+
+Checkpoint 1 deliberately does **not** activate that replacement globally. Review found that doing so
+before converting registration, public applications, signing, provider webhooks, accounting OAuth,
+startup, and every background worker would either deny legitimate work or encourage a broad platform
+bypass around the entire request pipeline. The new capability/scope evaluator is opt-in in this
+checkpoint; the later destructive auth cutover replaces the old interceptor once every entry path has
+an explicit actor context. There is no endpoint running both authorization models simultaneously.
+
+Access-authority writes in this checkpoint use typed atomic commands. Caller-supplied mutation
+delegates and load-all membership/assignment graphs are forbidden. Ownership foreign keys are
+immutable after insertion, so moving authority between roots requires revoking the old durable fact
+and creating a new one while advancing the affected revisions.
 
 ## Task 4 — Surviving-path conversions
 

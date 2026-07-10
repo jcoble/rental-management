@@ -57,20 +57,6 @@ public interface IMembershipAssignmentScopeValidator
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// Opt-in, non-shipping mutation boundary for the new access model. The delegate may stage tracked
-/// authority changes but must not call SaveChanges; the boundary owns revision, flush, validation,
-/// transaction commit, and rollback.
-/// </summary>
-public interface IWorkspaceAccessMutationBoundary
-{
-    Task ExecuteAsync(
-        int accessContextId,
-        long expectedRevision,
-        Action<WorkspaceAccessContext> stageTrackedChanges,
-        CancellationToken cancellationToken = default);
-}
-
 public sealed class AccessAuthorityMutationException : InvalidOperationException
 {
     public AccessAuthorityMutationException(string message) : base(message) { }
