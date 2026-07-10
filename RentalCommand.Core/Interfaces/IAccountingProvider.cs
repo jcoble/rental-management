@@ -19,7 +19,7 @@ namespace RentalCommand.Core.Interfaces;
 /// rather than reaching into the persisted connection or a credential store.
 /// </para>
 /// </summary>
-public interface IAccountingProvider
+public interface IAccountingProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>Which provider this implementation handles (the resolver key).</summary>
     AccountingProvider Provider { get; }

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -30,18 +29,20 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         TCommand command,
         IAtomicResultCodec<TResult> resultCodec,
         CancellationToken ct = default)
-        where TCommand : notnull
+        where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(command);
         ValidateCodec(resultCodec);
+        AtomicCommandAdmission.ValidateCommand(command);
+        AtomicCommandAdmission.ValidateResultType(typeof(TResult));
 
         if (Ambient.Value is { } owner)
         {
-            var joinedHandler = owner.Services.GetRequiredService<IAtomicCommandHandler<TCommand, TResult>>();
-            ValidateHandler(joinedHandler);
+            var joinedHandler = ResolveHandler<TCommand, TResult>(owner.Services);
             var joinedValue = await joinedHandler.HandleAsync(command, owner.Attempt, ct);
+            ValidateResultValue(joinedValue);
             return new AtomicCommandOutcome<TResult>(
                 joinedValue,
                 AtomicCommandDisposition.Joined,
@@ -60,7 +61,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         TCommand command,
         IAtomicResultCodec<TResult> resultCodec,
         CancellationToken ct)
-        where TCommand : notnull
+        where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
         await using var attemptScope = _scopeFactory.CreateAsyncScope();
@@ -80,14 +81,20 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             }
 
             var startedAt = _timeProvider.GetUtcNow().UtcDateTime;
-            var claimed = await db.Database.ExecuteSqlInterpolatedAsync($$"""
-                INSERT INTO "AtomicCommandReceipts"
-                    ("Id", "AttemptId", "CommandType", "IdempotencyKey", "Status", "ResultContract", "StartedAt")
-                VALUES
-                    ({{Guid.NewGuid()}}, {{attemptId}}, {{identity.CommandType}}, {{identity.IdempotencyKey}},
-                     {{(int)AtomicCommandReceiptStatus.Pending}}, {{resultCodec.ContractName}}, {{startedAt}})
-                ON CONFLICT ("CommandType", "IdempotencyKey") DO NOTHING
-                """, ct);
+            int claimed;
+            using (auditScope.BeginInternalRawDml(
+                "AtomicCommandReceipts",
+                AtomicRawDmlOperation.Insert))
+            {
+                claimed = await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                    INSERT INTO "AtomicCommandReceipts"
+                        ("Id", "AttemptId", "CommandType", "IdempotencyKey", "Status", "ResultContract", "StartedAt")
+                    VALUES
+                        ({{Guid.NewGuid()}}, {{attemptId}}, {{identity.CommandType}}, {{identity.IdempotencyKey}},
+                         {{(int)AtomicCommandReceiptStatus.Pending}}, {{resultCodec.ContractName}}, {{startedAt}})
+                    ON CONFLICT ("CommandType", "IdempotencyKey") DO NOTHING
+                    """, ct);
+            }
 
             var receipt = await db.AtomicCommandReceipts.SingleAsync(
                 row => row.CommandType == identity.CommandType
@@ -107,8 +114,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                     receipt.AttemptId);
             }
 
-            var handler = services.GetRequiredService<IAtomicCommandHandler<TCommand, TResult>>();
-            ValidateHandler(handler);
+            var handler = ResolveHandler<TCommand, TResult>(services);
             var priorAmbient = Ambient.Value;
             Ambient.Value = new AmbientAttempt(services, attempt);
             TResult value;
@@ -121,6 +127,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                 Ambient.Value = priorAmbient;
             }
 
+            ValidateResultValue(value);
             await attempt.FlushBusinessAsync(ct);
             var resultJson = resultCodec.Serialize(value);
             using (JsonDocument.Parse(resultJson))
@@ -181,6 +188,13 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         where TResult : notnull
     {
         ArgumentNullException.ThrowIfNull(codec);
+        if (codec.GetType() != typeof(AtomicJsonResultCodec<TResult>))
+        {
+            throw new AtomicArchitectureException(
+                $"Atomic result codec {codec.GetType().FullName} is forbidden. Use the sealed " +
+                $"{typeof(AtomicJsonResultCodec<TResult>).FullName} codec.");
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(codec.ContractName);
         if (codec.ContractName.Length > 200)
         {
@@ -190,21 +204,36 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         }
     }
 
-    private static void ValidateHandler<TCommand, TResult>(
-        IAtomicCommandHandler<TCommand, TResult> handler)
-        where TCommand : notnull
+    private static void ValidateResultValue<TResult>(TResult result)
         where TResult : notnull
     {
-        var forbidden = handler.GetType()
-            .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-            .SelectMany(constructor => constructor.GetParameters())
-            .FirstOrDefault(parameter => typeof(IAtomicRemoteDependency).IsAssignableFrom(parameter.ParameterType));
-        if (forbidden is not null)
+        if (result is null)
+        {
+            throw new AtomicArchitectureException("Atomic handlers cannot return a null result.");
+        }
+
+        AtomicCommandAdmission.ValidateResult(result);
+    }
+
+    private static IAtomicCommandHandler<TCommand, TResult> ResolveHandler<TCommand, TResult>(
+        IServiceProvider services)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var registration = services.GetService<AtomicHandlerRegistration<TCommand, TResult>>()
+            ?? throw new AtomicArchitectureException(
+                $"Atomic handler {typeof(TCommand).Name}/{typeof(TResult).Name} must be registered " +
+                $"through AddAtomicCommandHandler.");
+        AtomicCommandAdmission.ValidateHandler(registration.HandlerType);
+        var handler = services.GetRequiredService<IAtomicCommandHandler<TCommand, TResult>>();
+        if (handler.GetType() != registration.HandlerType)
         {
             throw new AtomicArchitectureException(
-                $"Atomic handler {handler.GetType().Name} directly depends on remote dependency " +
-                $"{forbidden.ParameterType.Name}. Stage durable outbox intent instead.");
+                $"Resolved atomic handler {handler.GetType().FullName} does not match the admitted " +
+                $"type {registration.HandlerType.FullName}.");
         }
+
+        return handler;
     }
 
     private static TResult DeserializeReplay<TResult>(
@@ -231,17 +260,20 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                 $"Completed receipt {receipt.CommandType}/{receipt.IdempotencyKey} has no result JSON.");
         }
 
-        return resultCodec.Deserialize(receipt.ResultJson);
+        var result = resultCodec.Deserialize(receipt.ResultJson);
+        ValidateResultValue(result);
+        return result;
     }
 
     private sealed record AmbientAttempt(
         IServiceProvider Services,
         AtomicWriteAttempt Attempt);
 
-    private sealed class AtomicWriteAttempt : IAtomicWriteAttempt
+    private sealed class AtomicWriteAttempt : IAtomicWriteAttempt, IAtomicPersistenceSession
     {
         private readonly RentalCommandDbContext _db;
         private readonly AtomicAuditScope _auditScope;
+        private readonly IAtomicSetBasedPersistence _setBased;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -255,11 +287,35 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             AttemptId = attemptId;
             _db = db;
             _auditScope = auditScope;
+            _setBased = new AtomicSetBasedMutationExecutor(db, auditScope, timeProvider);
             _timeProvider = timeProvider;
         }
 
         public Guid AttemptId { get; }
         public Guid AuditScopeId => _auditScope.ScopeId;
+        public IAtomicPersistenceSession Persistence => this;
+        public IAtomicSetBasedPersistence SetBased => _setBased;
+        public Guid SessionId => _db.ContextId.InstanceId;
+
+        public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
+
+        public void Add<TEntity>(TEntity entity) where TEntity : class
+        {
+            ArgumentNullException.ThrowIfNull(entity);
+            _db.Set<TEntity>().Add(entity);
+        }
+
+        public void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class
+        {
+            ArgumentNullException.ThrowIfNull(entities);
+            _db.Set<TEntity>().AddRange(entities);
+        }
+
+        public void Remove<TEntity>(TEntity entity) where TEntity : class
+        {
+            ArgumentNullException.ThrowIfNull(entity);
+            _db.Set<TEntity>().Remove(entity);
+        }
 
         public async Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default)
         {

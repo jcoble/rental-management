@@ -29,7 +29,7 @@ public class GoogleAuthResult
         new() { Success = false, Error = error };
 }
 
-public interface IGoogleAuthService
+public interface IGoogleAuthService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Exchanges a Google authorization <paramref name="code"/> for an id_token, validates it,

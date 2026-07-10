@@ -24,6 +24,10 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         new("atomic-expense-result.v2");
     private static readonly AtomicJsonResultCodec<EventResult> EventCodec =
         new("atomic-event-result.v1");
+    private static readonly AtomicJsonResultCodec<ServiceBearingResult> ServiceBearingResultCodec =
+        new("atomic-service-bearing-result.v1");
+    private static readonly AtomicJsonResultCodec<IQueryable<Expense>> QueryResultCodec =
+        new("atomic-query-result.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -54,19 +58,33 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         services.AddSingleton<NestedProbe>();
         services.AddSingleton<AtomicFlushFailureInterceptor>();
         services.AddSingleton<TransactionEvidenceInterceptor>();
+        services.AddSingleton<ILlmProvider, FakeLlmProvider>();
+        services.AddSingleton<IndirectRemoteWrapper>();
+        services.AddSingleton(new HttpClient());
+        services.AddHttpClient();
+        services.AddSingleton<DbConnection>(new NpgsqlConnection(_postgres.GetConnectionString()));
+        services.AddSingleton<Func<string>>(() => "forbidden-factory");
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
-        services.AddScoped<IAtomicCommandHandler<CreateExpenseCommand, ExpenseResult>, CreateExpenseHandler>();
-        services.AddScoped<IAtomicCommandHandler<RetryExpenseCommand, ExpenseResult>, RetryExpenseHandler>();
-        services.AddScoped<IAtomicCommandHandler<ExactAuditCommand, ExpenseResult>, ExactAuditHandler>();
-        services.AddScoped<IAtomicCommandHandler<SemanticEventCommand, EventResult>, SemanticEventHandler>();
-        services.AddScoped<IAtomicCommandHandler<SetBasedCommand, ExpenseResult>, SetBasedHandler>();
-        services.AddScoped<IAtomicCommandHandler<RawSetBasedCommand, ExpenseResult>, RawSetBasedHandler>();
-        services.AddScoped<IAtomicCommandHandler<TransactionCommand, ExpenseResult>, TransactionHandler>();
-        services.AddScoped<IAtomicCommandHandler<NestedOuterCommand, ExpenseResult>, NestedOuterHandler>();
-        services.AddScoped<IAtomicCommandHandler<NestedInnerCommand, ExpenseResult>, NestedInnerHandler>();
-        services.AddScoped<FakeRemoteDependency>();
-        services.AddScoped<IAtomicCommandHandler<RemoteCommand, ExpenseResult>, RemoteHandler>();
+        services.AddAtomicCommandHandler<CreateExpenseCommand, ExpenseResult, CreateExpenseHandler>();
+        services.AddAtomicCommandHandler<RetryExpenseCommand, ExpenseResult, RetryExpenseHandler>();
+        services.AddAtomicCommandHandler<CreatedSemanticCommand, ExpenseResult, CreatedSemanticHandler>();
+        services.AddAtomicCommandHandler<ExactAuditCommand, ExpenseResult, ExactAuditHandler>();
+        services.AddAtomicCommandHandler<SemanticEventCommand, EventResult, SemanticEventHandler>();
+        services.AddAtomicCommandHandler<SetBasedCommand, ExpenseResult, SetBasedHandler>();
+        services.AddAtomicCommandHandler<NestedOuterCommand, ExpenseResult, NestedOuterHandler>();
+        services.AddAtomicCommandHandler<NestedInnerCommand, ExpenseResult, NestedInnerHandler>();
+        services.AddAtomicCommandHandler<DbContextDependencyCommand, ExpenseResult, DbContextDependencyHandler>();
+        services.AddAtomicCommandHandler<AdoDependencyCommand, ExpenseResult, AdoDependencyHandler>();
+        services.AddAtomicCommandHandler<RealRemoteCommand, ExpenseResult, RealRemoteHandler>();
+        services.AddAtomicCommandHandler<IndirectRemoteCommand, ExpenseResult, IndirectRemoteHandler>();
+        services.AddAtomicCommandHandler<HttpClientDependencyCommand, ExpenseResult, HttpClientDependencyHandler>();
+        services.AddAtomicCommandHandler<HttpClientFactoryDependencyCommand, ExpenseResult, HttpClientFactoryDependencyHandler>();
+        services.AddAtomicCommandHandler<ServiceProviderDependencyCommand, ExpenseResult, ServiceProviderDependencyHandler>();
+        services.AddAtomicCommandHandler<DelegateDependencyCommand, ExpenseResult, DelegateDependencyHandler>();
+        services.AddAtomicCommandHandler<ServiceBearingCommand, ExpenseResult, ServiceBearingCommandHandler>();
+        services.AddAtomicCommandHandler<ServiceBearingResultCommand, ServiceBearingResult, ServiceBearingResultHandler>();
+        services.AddAtomicCommandHandler<QueryResultCommand, IQueryable<Expense>, QueryResultHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(
                     _postgres.GetConnectionString(),
@@ -191,7 +209,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         var attempts = Probe.Entries.Where(entry => entry.Marker == command.Marker).ToArray();
         attempts.Should().HaveCount(2);
         attempts.Select(entry => entry.HandlerId).Should().OnlyHaveUniqueItems();
-        attempts.Select(entry => entry.DbContextId).Should().OnlyHaveUniqueItems();
+        attempts.Select(entry => entry.PersistenceSessionId).Should().OnlyHaveUniqueItems();
         attempts.Select(entry => entry.AuditScopeId).Should().OnlyHaveUniqueItems();
         attempts.Select(entry => entry.AttemptId).Should().OnlyHaveUniqueItems();
         await using var verify = await VerificationScope.CreateAsync(Services);
@@ -199,6 +217,28 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         (await verify.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
             row.CommandType == identity.CommandType && row.CommandIdempotencyKey == identity.IdempotencyKey))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task CreatedSemanticAudit_BindsUnresolvedId_AndStampsGeneratedId()
+    {
+        SkipIfDockerUnavailable();
+        var identity = Identity(nameof(CreatedSemanticAudit_BindsUnresolvedId_AndStampsGeneratedId));
+
+        var outcome = await UnitOfWork.ExecuteAsync(
+            identity,
+            new CreatedSemanticCommand(_portfolioId, "atomic-created-semantic"),
+            ExpenseCodec);
+
+        outcome.Value.Id.Should().BePositive();
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        var row = await verify.Db.AtomicAuditLogs.AsNoTracking().SingleAsync(audit =>
+            audit.CommandType == identity.CommandType
+            && audit.CommandIdempotencyKey == identity.IdempotencyKey);
+        row.EntityId.Should().Be(outcome.Value.Id);
+        row.Operation.Should().Be(AuditLogOperation.Created);
+        row.ChangeReason.Should().Be("rich-created-audit");
+        row.NewValues.Should().Contain("atomic-created-semantic");
     }
 
     [SkippableFact]
@@ -288,37 +328,43 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task RawSetBasedWrite_IsRejectedWithoutExactExecutorLease()
+    public async Task RawExecuteSqlDml_IsRejectedBeforeDatabaseMutation()
     {
         SkipIfDockerUnavailable();
-        var identity = Identity(nameof(RawSetBasedWrite_IsRejectedWithoutExactExecutorLease));
-
-        Func<Task> act = async () => await UnitOfWork.ExecuteAsync(
+        var identity = Identity(nameof(RawExecuteSqlDml_IsRejectedBeforeDatabaseMutation));
+        var created = await UnitOfWork.ExecuteAsync(
             identity,
-            new RawSetBasedCommand(_portfolioId, "atomic-raw-set"),
+            new CreateExpenseCommand(_portfolioId, "atomic-raw-sql"),
             ExpenseCodec);
+        await using var rawScope = await VerificationScope.CreateAsync(Services);
 
-        await act.Should().ThrowAsync<AtomicArchitectureException>().WithMessage("*exact atomic set-based executor*");
-        await AssertNothingCommitted(identity, "atomic-raw-set");
+        Func<Task> act = () => rawScope.Db.Database.ExecuteSqlRawAsync(
+            """UPDATE "Expenses" SET "Amount" = 999 WHERE "Id" = {0}""",
+            created.Value.Id);
+
+        await act.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage("*Raw Update DML is forbidden*");
+        Func<Task> interpolatedAct = () => rawScope.Db.Database.ExecuteSqlInterpolatedAsync(
+            $"""UPDATE "Expenses" SET "Amount" = 998 WHERE "Id" = {created.Value.Id}""");
+        await interpolatedAct.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage("*Raw Update DML is forbidden*");
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.Expenses.AsNoTracking()
+            .Where(expense => expense.Id == created.Value.Id)
+            .Select(expense => expense.Amount)
+            .SingleAsync()).Should().Be(100m);
     }
 
-    [SkippableTheory]
-    [InlineData(TransactionAction.Begin)]
-    [InlineData(TransactionAction.Commit)]
-    [InlineData(TransactionAction.Rollback)]
-    public async Task HandlerCannotOwnTransactionLifecycle(TransactionAction action)
+    [SkippableFact]
+    public async Task HandlerAdmission_RejectsDbContextAndRawAdoDependencies()
     {
         SkipIfDockerUnavailable();
-        var marker = $"atomic-transaction-{action}";
-        var identity = Identity($"{nameof(HandlerCannotOwnTransactionLifecycle)}-{action}");
-
-        Func<Task> act = async () => await UnitOfWork.ExecuteAsync(
-            identity,
-            new TransactionCommand(_portfolioId, marker, action),
-            ExpenseCodec);
-
-        await act.Should().ThrowAsync<AtomicArchitectureException>().WithMessage("*executor owns the transaction lifecycle*");
-        await AssertNothingCommitted(identity, marker);
+        await AssertAdmissionRejected(
+            new DbContextDependencyCommand(_portfolioId),
+            "*RentalCommandDbContext*");
+        await AssertAdmissionRejected(
+            new AdoDependencyCommand(_portfolioId),
+            "*DbConnection*");
     }
 
     [SkippableFact]
@@ -343,20 +389,84 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task DirectRemoteDependency_IsRejectedBeforeHandlerRuns()
+    public async Task HandlerAdmission_RejectsActualRemoteAndIndirectWrapper()
     {
         SkipIfDockerUnavailable();
-        var identity = Identity(nameof(DirectRemoteDependency_IsRejectedBeforeHandlerRuns));
+        await AssertAdmissionRejected(
+            new RealRemoteCommand(_portfolioId),
+            "*ILlmProvider*");
+        await AssertAdmissionRejected(
+            new IndirectRemoteCommand(_portfolioId),
+            "*ILlmProvider*");
+    }
+
+    [SkippableFact]
+    public async Task HandlerAdmission_RejectsHttpClientServiceProviderAndDelegateFactories()
+    {
+        SkipIfDockerUnavailable();
+        await AssertAdmissionRejected(
+            new HttpClientDependencyCommand(_portfolioId),
+            "*HttpClient*");
+        await AssertAdmissionRejected(
+            new HttpClientFactoryDependencyCommand(_portfolioId),
+            "*IHttpClientFactory*");
+        await AssertAdmissionRejected(
+            new ServiceProviderDependencyCommand(_portfolioId),
+            "*IServiceProvider*");
+        await AssertAdmissionRejected(
+            new DelegateDependencyCommand(_portfolioId),
+            "*Func*");
+    }
+
+    [SkippableFact]
+    public async Task CommandAdmission_RejectsServiceBearingInputBeforeReceiptClaim()
+    {
+        SkipIfDockerUnavailable();
+        await AssertAdmissionRejected(
+            new ServiceBearingCommand(
+                _portfolioId,
+                Services.GetRequiredService<ILlmProvider>()),
+            "*command member*ILlmProvider*");
+    }
+
+    [SkippableFact]
+    public async Task ResultAdmission_RejectsServiceBearingAndQueryableContractsBeforeReceiptClaim()
+    {
+        SkipIfDockerUnavailable();
+        var serviceIdentity = Identity("admission-service-bearing-result");
+        Func<Task> serviceAct = async () => await UnitOfWork.ExecuteAsync(
+            serviceIdentity,
+            new ServiceBearingResultCommand(_portfolioId),
+            ServiceBearingResultCodec);
+        await serviceAct.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage("*result member*ILlmProvider*");
+        await AssertNoReceipt(serviceIdentity);
+
+        var queryIdentity = Identity("admission-queryable-result");
+        Func<Task> queryAct = async () => await UnitOfWork.ExecuteAsync(
+            queryIdentity,
+            new QueryResultCommand(_portfolioId),
+            QueryResultCodec);
+        await queryAct.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage("*IQueryable*");
+        await AssertNoReceipt(queryIdentity);
+    }
+
+    [SkippableFact]
+    public async Task CodecAdmission_RejectsCallerCodecCapturingRemoteBeforeReceiptClaim()
+    {
+        SkipIfDockerUnavailable();
+        var identity = Identity("admission-remote-result-codec");
+        var codec = new RemoteResultCodec(Services.GetRequiredService<ILlmProvider>());
 
         Func<Task> act = async () => await UnitOfWork.ExecuteAsync(
             identity,
-            new RemoteCommand(_portfolioId),
-            ExpenseCodec);
+            new CreateExpenseCommand(_portfolioId, "forbidden-codec"),
+            codec);
 
-        await act.Should().ThrowAsync<AtomicArchitectureException>().WithMessage("*remote dependency*");
-        await using var verify = await VerificationScope.CreateAsync(Services);
-        (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
-            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        await act.Should().ThrowAsync<AtomicArchitectureException>()
+            .WithMessage("*result codec*RemoteResultCodec*forbidden*");
+        await AssertNoReceipt(identity);
     }
 
     private IServiceProvider Services => _services!;
@@ -366,6 +476,19 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private AtomicCommandIdentity Identity(string testName) =>
         new($"test.atomic.{testName}", Guid.NewGuid().ToString("N"));
+
+    private async Task AssertAdmissionRejected<TCommand>(TCommand command, string messagePattern)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        var identity = Identity($"admission-{typeof(TCommand).Name}");
+        Func<Task> act = async () => await UnitOfWork.ExecuteAsync(identity, command, ExpenseCodec);
+
+        await act.Should().ThrowAsync<AtomicArchitectureException>().WithMessage(messagePattern);
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
 
     private async Task AssertNothingCommitted(AtomicCommandIdentity identity, string marker)
     {
@@ -377,6 +500,14 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
             .Should().Be(0);
+    }
+
+    private async Task AssertNoReceipt(AtomicCommandIdentity identity)
+    {
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
     }
 
     private void SkipIfDockerUnavailable() =>
@@ -437,49 +568,53 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         UpdatedAt = DateTime.UtcNow,
     };
 
-    private sealed record ExpenseResult(int Id);
-    private sealed record EventResult(string Name);
-    private sealed record CreateExpenseCommand(int PortfolioId, string Marker, int DelayMilliseconds = 0);
-    private sealed record RetryExpenseCommand(int PortfolioId, string Marker);
-    private sealed record ExactAuditCommand(int PortfolioId, string Marker);
-    private sealed record SemanticEventCommand(int PortfolioId, string Name);
-    private sealed record SetBasedCommand(int PortfolioId, string Marker, bool MismatchAudit);
-    private sealed record RawSetBasedCommand(int PortfolioId, string Marker);
-    private sealed record TransactionCommand(int PortfolioId, string Marker, TransactionAction Action);
+    private sealed record ExpenseResult(int Id) : IAtomicResultData;
+    private sealed record EventResult(string Name) : IAtomicResultData;
+    private sealed record ServiceBearingResult(ILlmProvider Provider) : IAtomicResultData;
+    private sealed record CreateExpenseCommand(int PortfolioId, string Marker, int DelayMilliseconds = 0)
+        : IAtomicCommandData;
+    private sealed record RetryExpenseCommand(int PortfolioId, string Marker) : IAtomicCommandData;
+    private sealed record CreatedSemanticCommand(int PortfolioId, string Marker) : IAtomicCommandData;
+    private sealed record ExactAuditCommand(int PortfolioId, string Marker) : IAtomicCommandData;
+    private sealed record SemanticEventCommand(int PortfolioId, string Name) : IAtomicCommandData;
+    private sealed record SetBasedCommand(int PortfolioId, string Marker, bool MismatchAudit) : IAtomicCommandData;
     private sealed record NestedOuterCommand(
         int PortfolioId,
         string Marker,
-        AtomicCommandIdentity InnerIdentity);
-    private sealed record NestedInnerCommand(int PortfolioId, string Marker);
-    private sealed record RemoteCommand(int PortfolioId);
-
-    public enum TransactionAction { Begin, Commit, Rollback }
+        AtomicCommandIdentity InnerIdentity) : IAtomicCommandData;
+    private sealed record NestedInnerCommand(int PortfolioId, string Marker) : IAtomicCommandData;
+    private sealed record DbContextDependencyCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record AdoDependencyCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record RealRemoteCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record IndirectRemoteCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record HttpClientDependencyCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record HttpClientFactoryDependencyCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record ServiceProviderDependencyCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record DelegateDependencyCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record ServiceBearingCommand(int PortfolioId, ILlmProvider Provider) : IAtomicCommandData;
+    private sealed record ServiceBearingResultCommand(int PortfolioId) : IAtomicCommandData;
+    private sealed record QueryResultCommand(int PortfolioId) : IAtomicCommandData;
 
     private sealed class CreateExpenseHandler : IAtomicCommandHandler<CreateExpenseCommand, ExpenseResult>
     {
-        private readonly RentalCommandDbContext _db;
         private readonly HandlerProbe _probe;
         private readonly Guid _handlerId = Guid.NewGuid();
 
-        public CreateExpenseHandler(RentalCommandDbContext db, HandlerProbe probe)
-        {
-            _db = db;
-            _probe = probe;
-        }
+        public CreateExpenseHandler(HandlerProbe probe) => _probe = probe;
 
         public async Task<ExpenseResult> HandleAsync(
             CreateExpenseCommand command,
             IAtomicWriteAttempt attempt,
             CancellationToken ct)
         {
-            _probe.Record(command.Marker, _handlerId, _db, attempt);
+            _probe.Record(command.Marker, _handlerId, attempt);
             if (command.DelayMilliseconds > 0)
             {
                 await Task.Delay(command.DelayMilliseconds, ct);
             }
 
             var expense = NewExpense(command.PortfolioId, command.Marker);
-            _db.Expenses.Add(expense);
+            attempt.Persistence.Add(expense);
             await attempt.FlushBusinessAsync(ct);
             return new ExpenseResult(expense.Id);
         }
@@ -487,24 +622,19 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private sealed class RetryExpenseHandler : IAtomicCommandHandler<RetryExpenseCommand, ExpenseResult>
     {
-        private readonly RentalCommandDbContext _db;
         private readonly HandlerProbe _probe;
         private readonly Guid _handlerId = Guid.NewGuid();
 
-        public RetryExpenseHandler(RentalCommandDbContext db, HandlerProbe probe)
-        {
-            _db = db;
-            _probe = probe;
-        }
+        public RetryExpenseHandler(HandlerProbe probe) => _probe = probe;
 
         public async Task<ExpenseResult> HandleAsync(
             RetryExpenseCommand command,
             IAtomicWriteAttempt attempt,
             CancellationToken ct)
         {
-            _probe.Record(command.Marker, _handlerId, _db, attempt);
+            _probe.Record(command.Marker, _handlerId, attempt);
             var expense = NewExpense(command.PortfolioId, command.Marker);
-            _db.Expenses.Add(expense);
+            attempt.Persistence.Add(expense);
             await attempt.FlushBusinessAsync(ct);
             if (_probe.Entries.Count(entry => entry.Marker == command.Marker) == 1)
             {
@@ -515,10 +645,34 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         }
     }
 
+    private sealed class CreatedSemanticHandler : IAtomicCommandHandler<CreatedSemanticCommand, ExpenseResult>
+    {
+        public CreatedSemanticHandler() { }
+
+        public async Task<ExpenseResult> HandleAsync(
+            CreatedSemanticCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct)
+        {
+            var expense = NewExpense(command.PortfolioId, command.Marker);
+            attempt.Persistence.Add(expense);
+            attempt.BindSemanticAudit(
+                expense,
+                new AtomicSemanticAudit(
+                    command.PortfolioId,
+                    nameof(Expense),
+                    EntityId: 0,
+                    Operation: AuditLogOperation.Created,
+                    NewValues: $$"""{"Description":"{{command.Marker}}"}""",
+                    ChangeReason: "rich-created-audit"));
+            await attempt.FlushBusinessAsync(ct);
+            return new ExpenseResult(expense.Id);
+        }
+    }
+
     private sealed class ExactAuditHandler : IAtomicCommandHandler<ExactAuditCommand, ExpenseResult>
     {
-        private readonly RentalCommandDbContext _db;
-        public ExactAuditHandler(RentalCommandDbContext db) => _db = db;
+        public ExactAuditHandler() { }
 
         public async Task<ExpenseResult> HandleAsync(
             ExactAuditCommand command,
@@ -526,7 +680,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct)
         {
             var expense = NewExpense(command.PortfolioId, command.Marker);
-            _db.Expenses.Add(expense);
+            attempt.Persistence.Add(expense);
             await attempt.FlushBusinessAsync(ct);
 
             expense.Amount = 150m;
@@ -555,6 +709,8 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private sealed class SemanticEventHandler : IAtomicCommandHandler<SemanticEventCommand, EventResult>
     {
+        public SemanticEventHandler() { }
+
         public Task<EventResult> HandleAsync(
             SemanticEventCommand command,
             IAtomicWriteAttempt attempt,
@@ -573,14 +729,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private sealed class SetBasedHandler : IAtomicCommandHandler<SetBasedCommand, ExpenseResult>
     {
-        private readonly RentalCommandDbContext _db;
-        private readonly IAtomicSetBasedMutationExecutor _setBased;
-
-        public SetBasedHandler(RentalCommandDbContext db, IAtomicSetBasedMutationExecutor setBased)
-        {
-            _db = db;
-            _setBased = setBased;
-        }
+        public SetBasedHandler() { }
 
         public async Task<ExpenseResult> HandleAsync(
             SetBasedCommand command,
@@ -589,15 +738,13 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         {
             var first = NewExpense(command.PortfolioId, $"{command.Marker}-1");
             var second = NewExpense(command.PortfolioId, $"{command.Marker}-2");
-            _db.Expenses.AddRange(first, second);
+            attempt.Persistence.AddRange([first, second]);
             await attempt.FlushBusinessAsync(ct);
 
             var firstAuditId = command.MismatchAudit ? second.Id : first.Id;
-            await _setBased.UpdateAsync<Expense>(
-                AtomicSetBasedTarget.For<Expense>(
-                    command.PortfolioId,
-                    first.Id,
-                    AuditLogOperation.Updated),
+            await attempt.SetBased.UpdatePropertyAsync<Expense, decimal>(
+                command.PortfolioId,
+                first.Id,
                 new AtomicSemanticAudit(
                     command.PortfolioId,
                     nameof(Expense),
@@ -605,15 +752,14 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
                     AuditLogOperation.Updated,
                     NewValues: """{"Amount":301}""",
                     ChangeReason: "exact-set-1"),
-                setters => setters.SetProperty(row => row.Amount, 301m),
+                row => row.Amount,
+                301m,
                 ct);
             if (!command.MismatchAudit)
             {
-                await _setBased.UpdateAsync<Expense>(
-                    AtomicSetBasedTarget.For<Expense>(
-                        command.PortfolioId,
-                        second.Id,
-                        AuditLogOperation.Updated),
+                await attempt.SetBased.UpdatePropertyAsync<Expense, decimal>(
+                    command.PortfolioId,
+                    second.Id,
                     new AtomicSemanticAudit(
                         command.PortfolioId,
                         nameof(Expense),
@@ -621,71 +767,12 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
                         AuditLogOperation.Updated,
                         NewValues: """{"Amount":302}""",
                         ChangeReason: "exact-set-2"),
-                    setters => setters.SetProperty(row => row.Amount, 302m),
+                    row => row.Amount,
+                    302m,
                     ct);
             }
 
             return new ExpenseResult(first.Id);
-        }
-    }
-
-    private sealed class RawSetBasedHandler : IAtomicCommandHandler<RawSetBasedCommand, ExpenseResult>
-    {
-        private readonly RentalCommandDbContext _db;
-        public RawSetBasedHandler(RentalCommandDbContext db) => _db = db;
-
-        public async Task<ExpenseResult> HandleAsync(
-            RawSetBasedCommand command,
-            IAtomicWriteAttempt attempt,
-            CancellationToken ct)
-        {
-            var expense = NewExpense(command.PortfolioId, command.Marker);
-            _db.Expenses.Add(expense);
-            await attempt.FlushBusinessAsync(ct);
-            await _db.Expenses.Where(row => row.Id == expense.Id)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.Amount, 999m), ct);
-            return new ExpenseResult(expense.Id);
-        }
-    }
-
-    private sealed class TransactionHandler : IAtomicCommandHandler<TransactionCommand, ExpenseResult>
-    {
-        private readonly RentalCommandDbContext _db;
-        private readonly DbContextOptions<RentalCommandDbContext> _options;
-
-        public TransactionHandler(
-            RentalCommandDbContext db,
-            DbContextOptions<RentalCommandDbContext> options)
-        {
-            _db = db;
-            _options = options;
-        }
-
-        public async Task<ExpenseResult> HandleAsync(
-            TransactionCommand command,
-            IAtomicWriteAttempt attempt,
-            CancellationToken ct)
-        {
-            var expense = NewExpense(command.PortfolioId, command.Marker);
-            _db.Expenses.Add(expense);
-            await attempt.FlushBusinessAsync(ct);
-            switch (command.Action)
-            {
-                case TransactionAction.Begin:
-                    await using (var secondContext = new RentalCommandDbContext(_options))
-                    {
-                        await secondContext.Database.BeginTransactionAsync(ct);
-                    }
-                    break;
-                case TransactionAction.Commit:
-                    await _db.Database.CurrentTransaction!.CommitAsync(ct);
-                    break;
-                case TransactionAction.Rollback:
-                    await _db.Database.CurrentTransaction!.RollbackAsync(ct);
-                    break;
-            }
-
-            return new ExpenseResult(expense.Id);
         }
     }
 
@@ -716,8 +803,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private sealed class NestedInnerHandler : IAtomicCommandHandler<NestedInnerCommand, ExpenseResult>
     {
-        private readonly RentalCommandDbContext _db;
-        public NestedInnerHandler(RentalCommandDbContext db) => _db = db;
+        public NestedInnerHandler() { }
 
         public async Task<ExpenseResult> HandleAsync(
             NestedInnerCommand command,
@@ -725,37 +811,183 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CancellationToken ct)
         {
             var expense = NewExpense(command.PortfolioId, command.Marker);
-            _db.Expenses.Add(expense);
+            attempt.Persistence.Add(expense);
             await attempt.FlushBusinessAsync(ct);
             return new ExpenseResult(expense.Id);
         }
     }
 
-    private sealed class FakeRemoteDependency : IAtomicRemoteDependency;
-
-    private sealed class RemoteHandler : IAtomicCommandHandler<RemoteCommand, ExpenseResult>
+    private sealed class DbContextDependencyHandler
+        : IAtomicCommandHandler<DbContextDependencyCommand, ExpenseResult>
     {
-        public RemoteHandler(FakeRemoteDependency remote) { }
+        public DbContextDependencyHandler(RentalCommandDbContext db) { }
 
         public Task<ExpenseResult> HandleAsync(
-            RemoteCommand command,
+            DbContextDependencyCommand command,
             IAtomicWriteAttempt attempt,
-            CancellationToken ct) => throw new InvalidOperationException("Remote handler must never run.");
+            CancellationToken ct) => throw ForbiddenHandlerRan();
     }
 
-    private sealed class HandlerProbe
+    private sealed class AdoDependencyHandler : IAtomicCommandHandler<AdoDependencyCommand, ExpenseResult>
     {
+        public AdoDependencyHandler(DbConnection connection) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            AdoDependencyCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class RealRemoteHandler : IAtomicCommandHandler<RealRemoteCommand, ExpenseResult>
+    {
+        public RealRemoteHandler(ILlmProvider provider) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            RealRemoteCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class IndirectRemoteWrapper : IAtomicTransactionSafeDependency
+    {
+        public IndirectRemoteWrapper(ILlmProvider provider) { }
+    }
+
+    private sealed class IndirectRemoteHandler : IAtomicCommandHandler<IndirectRemoteCommand, ExpenseResult>
+    {
+        public IndirectRemoteHandler(IndirectRemoteWrapper wrapper) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            IndirectRemoteCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class HttpClientDependencyHandler
+        : IAtomicCommandHandler<HttpClientDependencyCommand, ExpenseResult>
+    {
+        public HttpClientDependencyHandler(HttpClient httpClient) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            HttpClientDependencyCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class HttpClientFactoryDependencyHandler
+        : IAtomicCommandHandler<HttpClientFactoryDependencyCommand, ExpenseResult>
+    {
+        public HttpClientFactoryDependencyHandler(IHttpClientFactory factory) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            HttpClientFactoryDependencyCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class ServiceProviderDependencyHandler
+        : IAtomicCommandHandler<ServiceProviderDependencyCommand, ExpenseResult>
+    {
+        public ServiceProviderDependencyHandler(IServiceProvider services) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            ServiceProviderDependencyCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class DelegateDependencyHandler
+        : IAtomicCommandHandler<DelegateDependencyCommand, ExpenseResult>
+    {
+        public DelegateDependencyHandler(Func<string> factory) { }
+
+        public Task<ExpenseResult> HandleAsync(
+            DelegateDependencyCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class ServiceBearingCommandHandler
+        : IAtomicCommandHandler<ServiceBearingCommand, ExpenseResult>
+    {
+        public ServiceBearingCommandHandler() { }
+
+        public Task<ExpenseResult> HandleAsync(
+            ServiceBearingCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class ServiceBearingResultHandler
+        : IAtomicCommandHandler<ServiceBearingResultCommand, ServiceBearingResult>
+    {
+        public ServiceBearingResultHandler() { }
+
+        public Task<ServiceBearingResult> HandleAsync(
+            ServiceBearingResultCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class QueryResultHandler
+        : IAtomicCommandHandler<QueryResultCommand, IQueryable<Expense>>
+    {
+        public QueryResultHandler() { }
+
+        public Task<IQueryable<Expense>> HandleAsync(
+            QueryResultCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct) => throw ForbiddenHandlerRan();
+    }
+
+    private sealed class RemoteResultCodec : IAtomicResultCodec<ExpenseResult>
+    {
+        private readonly ILlmProvider _provider;
+
+        public RemoteResultCodec(ILlmProvider provider) => _provider = provider;
+
+        public string ContractName => _provider.GetType().FullName!;
+        public string Serialize(ExpenseResult result) => throw ForbiddenHandlerRan();
+        public ExpenseResult Deserialize(string json) => throw ForbiddenHandlerRan();
+    }
+
+    private static InvalidOperationException ForbiddenHandlerRan() =>
+        new("A forbidden handler must be rejected before construction/execution.");
+
+    private sealed class FakeLlmProvider : ILlmProvider
+    {
+        public Task<string> ChatAsync(string prompt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ExtractedFields> ExtractAsync(
+            byte[] documentBytes,
+            string contentType,
+            string instructions,
+            IReadOnlyList<ExtractionFieldSpec> fields,
+            string? groundingContext = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<LlmToolResult> ChatWithToolsAsync(
+            string systemPrompt,
+            IReadOnlyList<LlmChatMessage> messages,
+            IReadOnlyList<LlmToolSpec> tools,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class HandlerProbe : IAtomicTransactionSafeDependency
+    {
+        public HandlerProbe() { }
+
         public ConcurrentBag<AttemptEvidence> Entries { get; } = [];
 
         public void Record(
             string marker,
             Guid handlerId,
-            RentalCommandDbContext db,
             IAtomicWriteAttempt attempt) =>
             Entries.Add(new AttemptEvidence(
                 marker,
                 handlerId,
-                db.ContextId.InstanceId,
+                attempt.Persistence.SessionId,
                 attempt.AuditScopeId,
                 attempt.AttemptId));
     }
@@ -763,12 +995,14 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     private sealed record AttemptEvidence(
         string Marker,
         Guid HandlerId,
-        Guid DbContextId,
+        Guid PersistenceSessionId,
         Guid AuditScopeId,
         Guid AttemptId);
 
-    private sealed class NestedProbe
+    private sealed class NestedProbe : IAtomicTransactionSafeDependency
     {
+        public NestedProbe() { }
+
         public AtomicCommandOutcome<ExpenseResult>? InnerOutcome { get; set; }
     }
 

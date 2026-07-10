@@ -13,7 +13,7 @@ namespace RentalCommand.Engine.Services;
 /// class only knows HOW to talk SMTP. Throws on failure so the outbox worker can retry — mirroring
 /// the SendGrid path's exception-on-failure contract.
 /// </summary>
-public interface ISmtpEmailSender
+public interface ISmtpEmailSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     Task SendAsync(SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default);
 }

@@ -1,5 +1,5 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Query;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -10,23 +10,7 @@ namespace RentalCommand.Data.Atomic;
 /// Exact set-based mutation path. It constructs the portfolio/id predicate itself, executes one SQL
 /// statement, and requires exactly one affected row so a broad caller query cannot slip through.
 /// </summary>
-public interface IAtomicSetBasedMutationExecutor
-{
-    Task UpdateAsync<TEntity>(
-        AtomicSetBasedTarget target,
-        AtomicSemanticAudit audit,
-        Action<UpdateSettersBuilder<TEntity>> setters,
-        CancellationToken ct = default)
-        where TEntity : class, IAuditable, IPortfolioScoped;
-
-    Task DeleteAsync<TEntity>(
-        AtomicSetBasedTarget target,
-        AtomicSemanticAudit audit,
-        CancellationToken ct = default)
-        where TEntity : class, IAuditable, IPortfolioScoped;
-}
-
-internal sealed class AtomicSetBasedMutationExecutor : IAtomicSetBasedMutationExecutor
+internal sealed class AtomicSetBasedMutationExecutor : IAtomicSetBasedPersistence
 {
     private readonly RentalCommandDbContext _db;
     private readonly AtomicAuditScope _scope;
@@ -42,27 +26,41 @@ internal sealed class AtomicSetBasedMutationExecutor : IAtomicSetBasedMutationEx
         _timeProvider = timeProvider;
     }
 
-    public async Task UpdateAsync<TEntity>(
-        AtomicSetBasedTarget target,
+    public async Task UpdatePropertyAsync<TEntity, TProperty>(
+        int portfolioId,
+        int entityId,
         AtomicSemanticAudit audit,
-        Action<UpdateSettersBuilder<TEntity>> setters,
+        Expression<Func<TEntity, TProperty>> property,
+        TProperty value,
         CancellationToken ct = default)
         where TEntity : class, IAuditable, IPortfolioScoped
     {
-        ArgumentNullException.ThrowIfNull(setters);
+        ArgumentNullException.ThrowIfNull(property);
+        var target = new AtomicSetBasedTarget(
+            typeof(TEntity),
+            portfolioId,
+            entityId,
+            AuditLogOperation.Updated);
         ValidateTarget<TEntity>(target, AuditLogOperation.Updated);
         using var lease = _scope.BeginSetBasedMutation(target, audit);
-        var affected = await ExactQuery<TEntity>(target).ExecuteUpdateAsync(setters, ct);
+        var affected = await ExactQuery<TEntity>(target)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(property, value), ct);
         RequireOneRow(target, affected);
         _scope.CompleteSetBasedMutation(target, audit, _timeProvider.GetUtcNow().UtcDateTime);
     }
 
     public async Task DeleteAsync<TEntity>(
-        AtomicSetBasedTarget target,
+        int portfolioId,
+        int entityId,
         AtomicSemanticAudit audit,
         CancellationToken ct = default)
         where TEntity : class, IAuditable, IPortfolioScoped
     {
+        var target = new AtomicSetBasedTarget(
+            typeof(TEntity),
+            portfolioId,
+            entityId,
+            AuditLogOperation.Deleted);
         ValidateTarget<TEntity>(target, AuditLogOperation.Deleted);
         using var lease = _scope.BeginSetBasedMutation(target, audit);
         var affected = await ExactQuery<TEntity>(target).ExecuteDeleteAsync(ct);

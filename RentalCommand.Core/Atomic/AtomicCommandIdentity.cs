@@ -5,7 +5,7 @@ namespace RentalCommand.Core.Atomic;
 /// so replay after a timeout or unknown commit can return the original result without executing the
 /// mutation again.
 /// </summary>
-public sealed record AtomicCommandIdentity
+public sealed record AtomicCommandIdentity : IAtomicCommandData
 {
     public AtomicCommandIdentity(string commandType, string idempotencyKey)
     {
