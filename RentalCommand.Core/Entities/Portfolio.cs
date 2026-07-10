@@ -53,4 +53,5 @@ public class Portfolio
     public List<PortalMessage> PortalMessages { get; set; } = [];
     public List<RentalApplication> RentalApplications { get; set; } = [];
     public List<DocumentTemplate> DocumentTemplates { get; set; } = [];
+    public List<WorkspaceAccessContext> AccessContexts { get; set; } = [];
 }
