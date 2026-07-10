@@ -35,8 +35,7 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
                 HasWorkspaceCapabilityAsync(accessContext, capabilityKey, workspace, utcNow, cancellationToken),
             PropertyCapabilityAuthorizationTarget property =>
                 HasPropertyCapabilityAsync(accessContext, capabilityKey, property, utcNow, cancellationToken),
-            WorkOrderCapabilityAuthorizationTarget workOrder =>
-                HasWorkOrderCapabilityAsync(accessContext, capabilityKey, workOrder, utcNow, cancellationToken),
+            WorkOrderCapabilityAuthorizationTarget => DenyAssignedWorkUntilResponsibilityExists(),
             _ => Task.FromResult(false),
         };
     }
@@ -84,35 +83,11 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
             cancellationToken);
     }
 
-    private Task<bool> HasWorkOrderCapabilityAsync(
-        ActiveAccessContext accessContext,
-        string capabilityKey,
-        WorkOrderCapabilityAuthorizationTarget target,
-        DateTime utcNow,
-        CancellationToken cancellationToken)
-    {
-        var assignments = EffectiveAssignments(
-            accessContext,
-            capabilityKey,
-            CapabilityAuthorizationTargetKind.WorkOrder,
-            utcNow);
-
-        return _db.WorkOrders.AsNoTracking().AnyAsync(workOrder =>
-                workOrder.Id == target.WorkOrderId &&
-                workOrder.PortfolioId == target.PortfolioId &&
-                workOrder.PortfolioId == accessContext.PortfolioId &&
-                workOrder.DeletedAt == null &&
-                assignments.Any(assignment =>
-                    assignment.PortfolioId == workOrder.PortfolioId &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(scope =>
-                          scope.PropertyId == workOrder.PropertyId &&
-                          scope.PortfolioId == workOrder.PortfolioId)))),
-            cancellationToken);
-        // Deliberately no AssignedWorkOrders branch. It remains fail-closed until the reviewed
-        // responsibility model can be joined to this exact work-order row in the same SQL decision.
-    }
+    private static Task<bool> DenyAssignedWorkUntilResponsibilityExists() =>
+        // Every current WorkOrder-target capability is maintenance.assigned-work.*. No role scope,
+        // including bad AllProperties/SelectedProperties data, may substitute for the missing
+        // same-assignment responsibility join. This branch stays closed until that model lands.
+        Task.FromResult(false);
 
     private IQueryable<MembershipRoleAssignment> EffectiveAssignments(
         ActiveAccessContext accessContext,

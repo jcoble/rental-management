@@ -233,6 +233,49 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task MisScopedMaintenanceAssignments_RemainUnauthorizedAndFailStoredValidation()
+    {
+        SkipIfNoDocker();
+        foreach (var badScope in new[]
+                 {
+                     MembershipRoleAssignmentScopeKind.AllProperties,
+                     MembershipRoleAssignmentScopeKind.SelectedProperties,
+                 })
+        {
+            await using var db = NewContext();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            var assignment = await db.MembershipRoleAssignments.SingleAsync(item =>
+                item.WorkspaceMembershipId == _membershipId && item.RoleProfileId == 4);
+            assignment.ScopeKind = badScope;
+            if (badScope == MembershipRoleAssignmentScopeKind.SelectedProperties)
+            {
+                db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+                {
+                    MembershipRoleAssignmentId = assignment.Id,
+                    PropertyId = _managerPropertyId,
+                    PortfolioId = _portfolioId,
+                });
+            }
+
+            await db.SaveChangesAsync();
+            var active = await ResolveAsync(db, presentedRevision: 7);
+            var evaluator = new WorkspaceAuthorizationEvaluator(db);
+
+            (await evaluator.HasCapabilityAsync(
+                active,
+                CapabilityKeys.AssignedWorkRead,
+                new WorkOrderCapabilityAuthorizationTarget(_portfolioId, _managerWorkOrderId),
+                _now)).Should().BeFalse(
+                $"maintenance assigned-work capabilities must ignore bad {badScope} data");
+
+            var validationAct = async () => await new MembershipAssignmentScopeValidator(db)
+                .ValidateAsync([assignment.Id]);
+            await validationAct.Should().ThrowAsync<DomainValidationException>();
+            await transaction.RollbackAsync();
+        }
+    }
+
+    [SkippableFact]
     public async Task StaleAccessRevisionIsRejectedWithCurrentRevision()
     {
         SkipIfNoDocker();
@@ -375,6 +418,47 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task StoredRoleScopeMatrix_RejectsEveryInvalidRoleCombination()
+    {
+        SkipIfNoDocker();
+        var invalidCombinations = new[]
+        {
+            (RoleProfileId: 1, Scope: MembershipRoleAssignmentScopeKind.SelectedProperties),
+            (RoleProfileId: 2, Scope: MembershipRoleAssignmentScopeKind.AssignedWorkOrders),
+            (RoleProfileId: 3, Scope: MembershipRoleAssignmentScopeKind.AssignedWorkOrders),
+            (RoleProfileId: 4, Scope: MembershipRoleAssignmentScopeKind.AllProperties),
+            (RoleProfileId: 4, Scope: MembershipRoleAssignmentScopeKind.SelectedProperties),
+        };
+
+        foreach (var combination in invalidCombinations)
+        {
+            await using var db = NewContext();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            var assignment = Assignment(
+                _membershipId,
+                _portfolioId,
+                combination.RoleProfileId,
+                combination.Scope);
+            if (combination.Scope == MembershipRoleAssignmentScopeKind.SelectedProperties)
+            {
+                assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+                {
+                    PropertyId = _managerPropertyId,
+                    PortfolioId = _portfolioId,
+                });
+            }
+
+            db.MembershipRoleAssignments.Add(assignment);
+            await db.SaveChangesAsync();
+
+            var validationAct = async () => await new MembershipAssignmentScopeValidator(db)
+                .ValidateAsync([assignment.Id]);
+            await validationAct.Should().ThrowAsync<DomainValidationException>();
+            await transaction.RollbackAsync();
+        }
+    }
+
+    [SkippableFact]
     public async Task RevisionGuard_RejectsAuthorityMutationWithoutExactSingleAdvance()
     {
         SkipIfNoDocker();
@@ -431,6 +515,62 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 .Select(assignment => assignment.ScopeKind)
                 .SingleAsync())
             .Should().Be(MembershipRoleAssignmentScopeKind.SelectedProperties);
+    }
+
+    [SkippableFact]
+    public async Task MutationBoundary_RollsBackMisScopedMaintenanceAndRevisionForEveryBadScope()
+    {
+        SkipIfNoDocker();
+        foreach (var badScope in new[]
+                 {
+                     MembershipRoleAssignmentScopeKind.AllProperties,
+                     MembershipRoleAssignmentScopeKind.SelectedProperties,
+                 })
+        {
+            int assignmentId;
+            await using (var db = NewContext())
+            {
+                assignmentId = await db.MembershipRoleAssignments
+                    .Where(assignment => assignment.WorkspaceMembershipId == _membershipId &&
+                                         assignment.RoleProfileId == 4)
+                    .Select(assignment => assignment.Id)
+                    .SingleAsync();
+
+                var mutationAct = async () => await MutationBoundary(db).ExecuteAsync(
+                    _accessContextId,
+                    expectedRevision: 7,
+                    accessContext =>
+                    {
+                        var assignment = accessContext.Membership!.RoleAssignments
+                            .Single(item => item.Id == assignmentId);
+                        assignment.ScopeKind = badScope;
+                        if (badScope == MembershipRoleAssignmentScopeKind.SelectedProperties)
+                        {
+                            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+                            {
+                                PropertyId = _managerPropertyId,
+                                PortfolioId = _portfolioId,
+                            });
+                        }
+                    });
+
+                await mutationAct.Should().ThrowAsync<DomainValidationException>();
+            }
+
+            await using var verificationDb = NewContext();
+            var persisted = await verificationDb.MembershipRoleAssignments
+                .Where(assignment => assignment.Id == assignmentId)
+                .Select(assignment => new
+                {
+                    assignment.ScopeKind,
+                    SelectedCount = assignment.SelectedProperties.Count(),
+                    Revision = assignment.WorkspaceMembership!.AccessContext!.AccessRevision,
+                })
+                .SingleAsync();
+            persisted.ScopeKind.Should().Be(MembershipRoleAssignmentScopeKind.AssignedWorkOrders);
+            persisted.SelectedCount.Should().Be(0);
+            persisted.Revision.Should().Be(7);
+        }
     }
 
     [SkippableFact]
