@@ -6,10 +6,9 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Data.Authorization;
 
 /// <summary>
-/// Validates the cross-row scope invariant with one database-side EXISTS. PostgreSQL CHECK
-/// constraints cannot reference child rows, so assignment mutation commands call this validator
-/// after flushing their selected-scope rows inside the command transaction and before commit. The
-/// final baseline may additionally enforce the same invariant with a deferred constraint trigger.
+/// Validates stored assignment scope kind and stored child cardinality in one translated SQL
+/// projection. Mutation commands call this after their final flush and before transaction commit.
+/// The final baseline may additionally enforce the invariant with a deferred constraint trigger.
 /// </summary>
 public sealed class MembershipAssignmentScopeValidator : IMembershipAssignmentScopeValidator
 {
@@ -18,28 +17,43 @@ public sealed class MembershipAssignmentScopeValidator : IMembershipAssignmentSc
     public MembershipAssignmentScopeValidator(RentalCommandDbContext db) => _db = db;
 
     public async Task ValidateAsync(
-        int assignmentId,
-        MembershipRoleAssignmentScopeKind scopeKind,
+        IReadOnlyCollection<int> assignmentIds,
         CancellationToken cancellationToken = default)
     {
-        var hasSelectedScope = await _db.MembershipRoleAssignmentProperties
-            .AsNoTracking()
-            .AnyAsync(scope => scope.MembershipRoleAssignmentId == assignmentId, cancellationToken);
-
-        var isValid = scopeKind switch
+        ArgumentNullException.ThrowIfNull(assignmentIds);
+        if (assignmentIds.Count == 0)
         {
-            MembershipRoleAssignmentScopeKind.SelectedProperties => hasSelectedScope,
-            MembershipRoleAssignmentScopeKind.AllProperties => !hasSelectedScope,
-            MembershipRoleAssignmentScopeKind.AssignedWorkOrders => !hasSelectedScope,
-            _ => false,
-        };
-
-        if (!isValid)
-        {
-            throw new DomainValidationException(
-                scopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                    ? "A selected-properties assignment must contain at least one property scope."
-                    : "Only a selected-properties assignment may contain property scope rows.");
+            return;
         }
+
+        var invalid = await _db.MembershipRoleAssignments
+            .AsNoTracking()
+            .Where(assignment => assignmentIds.Contains(assignment.Id))
+            .Select(assignment => new
+            {
+                assignment.Id,
+                assignment.ScopeKind,
+                SelectedPropertyCount = assignment.SelectedProperties.Count(),
+            })
+            .Where(scope =>
+                (scope.ScopeKind != MembershipRoleAssignmentScopeKind.AllProperties &&
+                 scope.ScopeKind != MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                 scope.ScopeKind != MembershipRoleAssignmentScopeKind.AssignedWorkOrders) ||
+                (scope.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                 scope.SelectedPropertyCount == 0) ||
+                (scope.ScopeKind != MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                 scope.SelectedPropertyCount != 0))
+            .OrderBy(scope => scope.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (invalid is null)
+        {
+            return;
+        }
+
+        throw new DomainValidationException(
+            invalid.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                ? $"Assignment {invalid.Id} must contain at least one selected property."
+                : $"Assignment {invalid.Id} cannot contain selected-property rows for {invalid.ScopeKind} scope.");
     }
 }

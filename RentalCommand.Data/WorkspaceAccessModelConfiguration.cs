@@ -13,6 +13,7 @@ internal static class WorkspaceAccessModelConfiguration
         ConfigureCatalog(modelBuilder);
         ConfigureAssignments(modelBuilder);
         ConfigureAuthSession(modelBuilder);
+        ConfigureSessionRefreshCredentials(modelBuilder);
     }
 
     private static void ConfigureAccessContext(ModelBuilder modelBuilder)
@@ -33,11 +34,10 @@ internal static class WorkspaceAccessModelConfiguration
                     "CK_WorkspaceAccessContexts_AccessRevision_Positive",
                     "\"AccessRevision\" > 0");
                 table.HasCheckConstraint(
-                    "CK_WorkspaceAccessContexts_SuspendedAt_Status",
-                    "\"Status\" <> 'Suspended' OR \"SuspendedAtUtc\" IS NOT NULL");
-                table.HasCheckConstraint(
-                    "CK_WorkspaceAccessContexts_RevokedAt_Status",
-                    "\"Status\" <> 'Revoked' OR \"RevokedAtUtc\" IS NOT NULL");
+                    "CK_WorkspaceAccessContexts_StatusFacts",
+                    "(\"Status\" = 'Active' AND \"SuspendedAtUtc\" IS NULL AND \"RevokedAtUtc\" IS NULL) OR " +
+                    "(\"Status\" = 'Suspended' AND \"SuspendedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NULL) OR " +
+                    "(\"Status\" = 'Revoked' AND \"RevokedAtUtc\" IS NOT NULL)");
             });
 
             entity.HasOne(e => e.User)
@@ -67,11 +67,10 @@ internal static class WorkspaceAccessModelConfiguration
                     "CK_WorkspaceMemberships_EffectivePeriod",
                     "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
                 table.HasCheckConstraint(
-                    "CK_WorkspaceMemberships_SuspendedAt_Status",
-                    "\"Status\" <> 'Suspended' OR \"SuspendedAtUtc\" IS NOT NULL");
-                table.HasCheckConstraint(
-                    "CK_WorkspaceMemberships_RevokedAt_Status",
-                    "\"Status\" <> 'Revoked' OR \"RevokedAtUtc\" IS NOT NULL");
+                    "CK_WorkspaceMemberships_StatusFacts",
+                    "(\"Status\" = 'Active' AND \"SuspendedAtUtc\" IS NULL AND \"RevokedAtUtc\" IS NULL) OR " +
+                    "(\"Status\" = 'Suspended' AND \"SuspendedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NULL) OR " +
+                    "(\"Status\" = 'Revoked' AND \"RevokedAtUtc\" IS NOT NULL)");
             });
 
             entity.HasOne(e => e.AccessContext)
@@ -111,12 +110,14 @@ internal static class WorkspaceAccessModelConfiguration
             entity.Property(e => e.Id).ValueGeneratedNever();
             entity.Property(e => e.Key).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Description).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.AuthorizationTargetKind).HasConversion<string>().HasMaxLength(24);
             entity.HasIndex(e => e.Key).IsUnique();
             entity.HasData(AccessCatalog.Capabilities.Select(capability => new
             {
                 capability.Id,
                 capability.Key,
                 capability.Description,
+                capability.AuthorizationTargetKind,
             }));
         });
 
@@ -163,11 +164,13 @@ internal static class WorkspaceAccessModelConfiguration
                     "CK_MembershipRoleAssignments_EffectivePeriod",
                     "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
                 table.HasCheckConstraint(
-                    "CK_MembershipRoleAssignments_SuspendedAt_Status",
-                    "\"Status\" <> 'Suspended' OR \"SuspendedAtUtc\" IS NOT NULL");
+                    "CK_MembershipRoleAssignments_ScopeKind",
+                    "\"ScopeKind\" IN ('AllProperties', 'SelectedProperties', 'AssignedWorkOrders')");
                 table.HasCheckConstraint(
-                    "CK_MembershipRoleAssignments_RevokedAt_Status",
-                    "\"Status\" <> 'Revoked' OR \"RevokedAtUtc\" IS NOT NULL");
+                    "CK_MembershipRoleAssignments_StatusFacts",
+                    "(\"Status\" = 'Active' AND \"SuspendedAtUtc\" IS NULL AND \"RevokedAtUtc\" IS NULL) OR " +
+                    "(\"Status\" = 'Suspended' AND \"SuspendedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NULL) OR " +
+                    "(\"Status\" = 'Revoked' AND \"RevokedAtUtc\" IS NOT NULL)");
             });
 
             entity.HasOne(e => e.WorkspaceMembership)
@@ -226,6 +229,91 @@ internal static class WorkspaceAccessModelConfiguration
                 .WithMany(context => context.ActiveSessions)
                 .HasForeignKey(e => new { e.ActiveAccessContextId, e.UserId })
                 .HasPrincipalKey(context => new { context.Id, context.UserId })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureSessionRefreshCredentials(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AuthSessionRefreshTokenFamily>(entity =>
+        {
+            entity.HasKey(family => family.Id);
+            entity.Property(family => family.Id).ValueGeneratedNever();
+            entity.Property(family => family.RevocationReason).HasMaxLength(500);
+            entity.HasIndex(family => new { family.AuthSessionId, family.AbsoluteExpiresAtUtc });
+            entity.HasIndex(family => family.ReuseDetectedAtUtc);
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshTokenFamilies_Expiry",
+                    "\"AbsoluteExpiresAtUtc\" > \"CreatedAtUtc\"");
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshTokenFamilies_RevocationFacts",
+                    "(\"RevokedAtUtc\" IS NULL AND \"RevocationReason\" IS NULL) OR " +
+                    "(\"RevokedAtUtc\" IS NOT NULL AND \"RevocationReason\" IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshTokenFamilies_ReuseRevokes",
+                    "\"ReuseDetectedAtUtc\" IS NULL OR " +
+                    "(\"RevokedAtUtc\" IS NOT NULL AND \"ReuseDetectedAtUtc\" >= \"CreatedAtUtc\")");
+            });
+
+            entity.HasOne(family => family.AuthSession)
+                .WithMany(session => session.RefreshTokenFamilies)
+                .HasForeignKey(family => family.AuthSessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AuthSessionRefreshCredential>(entity =>
+        {
+            entity.HasKey(credential => credential.Id);
+            entity.HasAlternateKey(credential => new { credential.Id, credential.RefreshTokenFamilyId });
+            entity.Property(credential => credential.Id).ValueGeneratedNever();
+            entity.Property(credential => credential.TokenHash).IsRequired().HasMaxLength(128);
+            entity.Property(credential => credential.RevocationReason).HasMaxLength(500);
+            entity.HasIndex(credential => credential.TokenHash).IsUnique();
+            entity.HasIndex(credential => new { credential.RefreshTokenFamilyId, credential.ExpiresAtUtc });
+            entity.HasIndex(credential => credential.ReplacedByCredentialId)
+                .IsUnique()
+                .HasFilter("\"ReplacedByCredentialId\" IS NOT NULL");
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshCredentials_Expiry",
+                    "\"ExpiresAtUtc\" > \"IssuedAtUtc\"");
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshCredentials_ConsumedFacts",
+                    "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"IssuedAtUtc\"");
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshCredentials_ReplacementRequiresConsumption",
+                    "\"ReplacedByCredentialId\" IS NULL OR " +
+                    "(\"ConsumedAtUtc\" IS NOT NULL AND \"ReplacedByCredentialId\" <> \"Id\")");
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshCredentials_RevocationFacts",
+                    "(\"RevokedAtUtc\" IS NULL AND \"RevocationReason\" IS NULL) OR " +
+                    "(\"RevokedAtUtc\" IS NOT NULL AND \"RevocationReason\" IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_AuthSessionRefreshCredentials_ReuseFacts",
+                    "\"ReuseDetectedAtUtc\" IS NULL OR " +
+                    "(\"ConsumedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NOT NULL AND " +
+                    "\"ReuseDetectedAtUtc\" >= \"ConsumedAtUtc\")");
+            });
+
+            entity.HasOne(credential => credential.RefreshTokenFamily)
+                .WithMany(family => family.Credentials)
+                .HasForeignKey(credential => credential.RefreshTokenFamilyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(credential => credential.ReplacedByCredential)
+                .WithMany()
+                .HasForeignKey(credential => new
+                {
+                    credential.ReplacedByCredentialId,
+                    credential.RefreshTokenFamilyId,
+                })
+                .HasPrincipalKey(replacement => new
+                {
+                    replacement.Id,
+                    replacement.RefreshTokenFamilyId,
+                })
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

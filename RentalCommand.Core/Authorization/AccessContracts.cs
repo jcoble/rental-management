@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Core.Authorization;
 
@@ -29,30 +30,50 @@ public interface IWorkspaceAuthorizationEvaluator
     Task<bool> HasCapabilityAsync(
         ActiveAccessContext accessContext,
         string capabilityKey,
-        int? propertyId,
+        WorkspaceAuthorizationTarget? target,
         DateTime utcNow,
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Optional resource passed to the dynamic capability policy for property-scoped checks.</summary>
-public interface ICapabilityAuthorizationResource
-{
-    int PortfolioId { get; }
-    int? PropertyId { get; }
-}
+/// <summary>
+/// Required typed target for every capability decision. A bare policy invocation has no target and
+/// therefore fails closed; callers cannot reinterpret a property capability as workspace-wide.
+/// </summary>
+public abstract record WorkspaceAuthorizationTarget(int PortfolioId);
 
-public sealed record PropertyCapabilityAuthorizationResource(int PortfolioId, int PropertyId)
-    : ICapabilityAuthorizationResource
-{
-    int? ICapabilityAuthorizationResource.PropertyId => PropertyId;
-}
+public sealed record WorkspaceCapabilityAuthorizationTarget(int PortfolioId)
+    : WorkspaceAuthorizationTarget(PortfolioId);
+
+public sealed record PropertyCapabilityAuthorizationTarget(int PortfolioId, int PropertyId)
+    : WorkspaceAuthorizationTarget(PortfolioId);
+
+public sealed record WorkOrderCapabilityAuthorizationTarget(int PortfolioId, int WorkOrderId)
+    : WorkspaceAuthorizationTarget(PortfolioId);
 
 public interface IMembershipAssignmentScopeValidator
 {
     Task ValidateAsync(
-        int assignmentId,
-        MembershipRoleAssignmentScopeKind scopeKind,
+        IReadOnlyCollection<int> assignmentIds,
         CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Opt-in, non-shipping mutation boundary for the new access model. The delegate may stage tracked
+/// authority changes but must not call SaveChanges; the boundary owns revision, flush, validation,
+/// transaction commit, and rollback.
+/// </summary>
+public interface IWorkspaceAccessMutationBoundary
+{
+    Task ExecuteAsync(
+        int accessContextId,
+        long expectedRevision,
+        Action<WorkspaceAccessContext> stageTrackedChanges,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class AccessAuthorityMutationException : InvalidOperationException
+{
+    public AccessAuthorityMutationException(string message) : base(message) { }
 }
 
 public sealed class AccessContextUnavailableException : UnauthorizedAccessException

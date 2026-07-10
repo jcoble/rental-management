@@ -75,6 +75,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<MembershipRoleAssignmentProperty> MembershipRoleAssignmentProperties =>
         Set<MembershipRoleAssignmentProperty>();
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
+    public DbSet<AuthSessionRefreshTokenFamily> AuthSessionRefreshTokenFamilies =>
+        Set<AuthSessionRefreshTokenFamily>();
+    public DbSet<AuthSessionRefreshCredential> AuthSessionRefreshCredentials =>
+        Set<AuthSessionRefreshCredential>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();

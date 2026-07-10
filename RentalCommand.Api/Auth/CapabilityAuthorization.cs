@@ -104,14 +104,14 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
             return;
         }
 
-        var resourceScope = context.Resource as ICapabilityAuthorizationResource;
-        if (resourceScope is not null && resourceScope.PortfolioId != activeContext.PortfolioId)
+        if (context.Resource is not WorkspaceAuthorizationTarget target ||
+            target.PortfolioId != activeContext.PortfolioId)
         {
             return;
         }
 
         if (await _authorizationEvaluator.HasCapabilityAsync(
-                activeContext, requirement.CapabilityKey, resourceScope?.PropertyId, utcNow))
+                activeContext, requirement.CapabilityKey, target, utcNow))
         {
             context.Succeed(requirement);
         }
