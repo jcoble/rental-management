@@ -212,9 +212,8 @@ public sealed class ScreeningService : IScreeningService
         try
         {
             _db.StoredFiles.Add(storedFile);
-            await _db.SaveChangesAsync(ct);
-
-            notice.StoredFileId = storedFile.Id;
+            notice.StoredFile = storedFile;
+            _db.AdverseActionNotices.Add(notice);
 
             // Optionally enqueue the notice to the applicant via the email outbox.
             if (request.SendToApplicant && !string.IsNullOrWhiteSpace(application.Email))
@@ -223,7 +222,7 @@ public sealed class ScreeningService : IScreeningService
                     portfolioId,
                     "email",
                     RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                        "adverse-action", portfolioId, application.Id, storedFile.Id, application.Email),
+                        "adverse-action", portfolioId, application.Id, reason, application.Email),
                     new
                     {
                         to = application.Email,
@@ -235,7 +234,6 @@ public sealed class ScreeningService : IScreeningService
                 notice.SentAtUtc = now;
             }
 
-            _db.AdverseActionNotices.Add(notice);
             await _db.SaveChangesAsync(ct);
         }
         catch

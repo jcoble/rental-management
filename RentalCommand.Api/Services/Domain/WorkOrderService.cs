@@ -378,13 +378,11 @@ public class WorkOrderService : IWorkOrderService
             CreatedAtUtc = now,
         });
 
-        await _db.SaveChangesAsync(ct);
-
         // When the work order is scheduled with an arrival window AND tied to a tenant, text the tenant
-        // the appointment window so they know when to expect access. The original offset-bearing window
-        // (the landlord's local time) is passed through so the SMS renders in their local time rather
-        // than UTC. Best-effort: a notification failure must never roll back the created work order.
+        // the appointment window. Stage the SMS before saving so the work order, timeline, and outbox
+        // row commit atomically. Serialization/recipient lookup remains best-effort.
         await NotifyTenantOfScheduleAsync(portfolioId, entity, request.ScheduledFor, request.ScheduledWindowEnd, ct);
+        await _db.SaveChangesAsync(ct);
 
         var response = WorkOrderResponse.FromEntity(entity);
         await HydrateDisplayNamesAsync(portfolioId, response, ct);
@@ -429,7 +427,8 @@ public class WorkOrderService : IWorkOrderService
                 portfolioId,
                 "sms",
                 RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                    "work-order-schedule", portfolioId, entity.Id, tenantPhone, entity.ScheduledFor),
+                    "work-order-schedule", portfolioId, entity.PropertyId, entity.UnitId, entity.TenantId,
+                    entity.Title, tenantPhone, entity.ScheduledFor, entity.ScheduledWindowEnd),
                 new
             {
                 to = tenantPhone,

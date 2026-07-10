@@ -226,6 +226,7 @@ public class VendorService : IVendorService
             to = phone,
             message,
         }, ct);
+        await _db.SaveChangesAsync(ct);
 
         await SafeAsync("request-w9 audit", () => _audit.LogAsync(
             portfolioId,
