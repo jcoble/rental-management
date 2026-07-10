@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Data.Authorization;
@@ -12,11 +13,17 @@ namespace RentalCommand.Data.Authorization;
 /// </summary>
 public sealed class WorkspaceAuthorityOwnershipInterceptor : SaveChangesInterceptor
 {
+    private readonly IAtomicExecutionState _atomicExecution;
+
+    public WorkspaceAuthorityOwnershipInterceptor(IAtomicExecutionState atomicExecution) =>
+        _atomicExecution = atomicExecution;
+
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData,
         InterceptionResult<int> result)
     {
-        Validate(eventData.Context);
+        if (_atomicExecution.IsActive || !_atomicExecution.AllowsUnconvertedWrites)
+            Validate(eventData.Context);
         return result;
     }
 
@@ -25,7 +32,8 @@ public sealed class WorkspaceAuthorityOwnershipInterceptor : SaveChangesIntercep
         InterceptionResult<int> result,
         CancellationToken cancellationToken = default)
     {
-        Validate(eventData.Context);
+        if (_atomicExecution.IsActive || !_atomicExecution.AllowsUnconvertedWrites)
+            Validate(eventData.Context);
         return ValueTask.FromResult(result);
     }
 

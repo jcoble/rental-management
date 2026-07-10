@@ -80,6 +80,8 @@ internal sealed class AtomicAuditSaveChangesInterceptor : SaveChangesInterceptor
             return;
         }
 
+        if (!_scope.IsActive && _scope.AllowsUnconvertedWrites) return;
+
         var auditable = context.ChangeTracker.Entries()
             .Where(entry => entry.Entity is IAuditable and IPortfolioScoped
                 && entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
@@ -119,6 +121,12 @@ internal sealed class AtomicAuditSaveChangesInterceptor : SaveChangesInterceptor
 
     private void Stage()
     {
+        if (!_scope.IsActive)
+        {
+            _pending.Clear();
+            return;
+        }
+
         var timestamp = _timeProvider.GetUtcNow().UtcDateTime;
         foreach (var pending in _pending)
         {
