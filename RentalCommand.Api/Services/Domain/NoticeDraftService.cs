@@ -528,6 +528,7 @@ public class NoticeDraftService : INoticeDraftService
             draft.Subject,
             draft.Body,
             channels,
+            operationKey: $"notice-draft:{draft.Id}:approve-conversation",
             acknowledgedFairHousingReview: request.AcknowledgedFairHousingReview,
             ct: ct);
         if (conversation == null) return null;

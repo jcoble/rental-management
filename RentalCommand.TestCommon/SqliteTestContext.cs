@@ -20,6 +20,7 @@ public sealed class SqliteTestContext : IDisposable
 
     public RentalCommandDbContext Db { get; }
     public string ConnectionString => _conn.ConnectionString;
+    public SqliteConnection Connection => _conn;
 
     public SqliteTestContext(IEnumerable<IInterceptor>? interceptors = null)
     {

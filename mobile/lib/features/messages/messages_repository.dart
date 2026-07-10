@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -22,6 +24,13 @@ class MessagesRepository {
 
   final Dio _dio;
   final bool tenantMode;
+
+  static String createOperationKey() {
+    final random = Random.secure();
+    return List.generate(16, (_) => random.nextInt(256))
+        .map((value) => value.toRadixString(16).padLeft(2, '0'))
+        .join();
+  }
 
   /// GET /conversations → ConversationSummary[] (messages list empty).
   Future<List<Conversation>> listConversations() async {
@@ -64,6 +73,7 @@ class MessagesRepository {
     required String subject,
     required String body,
     required List<String> channels,
+    String? operationKey,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
@@ -71,6 +81,7 @@ class MessagesRepository {
         data: tenantMode
             ? {'subject': subject, 'body': body}
             : {
+                'operationKey': operationKey ?? createOperationKey(),
                 'tenantId': tenantId,
                 'subject': subject,
                 'body': body,
@@ -95,6 +106,7 @@ class MessagesRepository {
     int id, {
     required String body,
     required List<String> channels,
+    String? operationKey,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
@@ -103,7 +115,11 @@ class MessagesRepository {
             : '/conversations/$id/messages',
         data: tenantMode
             ? {'body': body}
-            : {'body': body, 'channels': channels},
+            : {
+                'operationKey': operationKey ?? createOperationKey(),
+                'body': body,
+                'channels': channels,
+              },
       );
       final data = response.data;
       if (data == null) {
@@ -189,11 +205,16 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
   ///
   /// Rethrows [ApiException] so the compose bar can surface the error without
   /// dropping the thread out of its loaded state.
-  Future<void> sendMessage(String body, List<String> channels) async {
+  Future<void> sendMessage(
+    String body,
+    List<String> channels, {
+    String? operationKey,
+  }) async {
     final updated = await _repo.sendMessage(
       _id,
       body: body,
       channels: channels,
+      operationKey: operationKey,
     );
     state = AsyncValue.data(updated);
     ref.read(conversationsProvider.notifier).refresh();

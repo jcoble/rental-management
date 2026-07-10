@@ -1,13 +1,19 @@
 using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Conversations;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Conversations;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -16,22 +22,44 @@ public class ConversationNotificationTests : IDisposable
 {
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
+    private readonly ServiceProvider _services;
 
     public ConversationNotificationTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicCommandHandler<
+            SendConversationMessageCommand,
+            SendConversationMessageResult,
+            SendConversationMessageHandler>();
+        services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_ctx.Connection)
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
+
+    private ConversationService CreateSut() => new(
+        _ctx.Db,
+        new NoopDataUpdateService(),
+        new NoopFairHousingReviewService(),
+        NullLogger<ConversationService>.Instance,
+        TimeProvider.System,
+        _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
 
     [Fact]
     public async Task TenantStartAsync_CreatesTenantMessageNotificationsForStaffOnly()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
-        var sut = new ConversationService(
-            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance,
-            TimeProvider.System);
+        var sut = CreateSut();
 
         var result = await sut.TenantStartAsync(1, tenant.Id, "Sink leak", "Water under the cabinet");
 
@@ -47,23 +75,66 @@ public class ConversationNotificationTests : IDisposable
     public async Task LandlordStartAsync_WithPortalChannel_CreatesTenantNotification()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
-        var sut = new ConversationService(
-            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance,
-            TimeProvider.System);
+        var sut = CreateSut();
 
         var result = await sut.StartAsync(
             1,
             tenant.Id,
             "Rent reminder",
             "Please check the payment portal.",
-            ["Portal"]);
+            ["Portal"],
+            Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         var notification = _ctx.Db.Notifications.Should().ContainSingle(n => n.Type == "TenantNotice").Subject;
         notification.UserId.Should().Be(20);
         notification.ActionUrl.Should().Be($"/portal/messages?conversation={result!.Id}");
         _ctx.Db.OutboxMessages.Should().NotContain(m => m.MessageType == "push");
+    }
+
+    [Fact]
+    public async Task LandlordStartAsync_ReplayedOperation_CommitsOneMessageAndOneIntentPerDestination()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        tenant.Phone = "+15551234567";
+        _ctx.Db.SaveChanges();
+        var sut = CreateSut();
+        const string operationKey = "conversation-retry-1";
+
+        var first = await sut.StartAsync(
+            1, tenant.Id, "Inspection", "Can we visit Friday?", ["Portal", "Email", "Sms"], operationKey);
+        var replay = await sut.StartAsync(
+            1, tenant.Id, "Inspection", "Can we visit Friday?", ["Portal", "Email", "Sms"], operationKey);
+
+        replay!.Id.Should().Be(first!.Id);
+        (await _ctx.Db.Conversations.CountAsync()).Should().Be(1);
+        (await _ctx.Db.ConversationMessages.CountAsync()).Should().Be(1);
+        (await _ctx.Db.Notifications.CountAsync(notification => notification.Type == "TenantNotice")).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(2);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "conversation.start" && receipt.IdempotencyKey == operationKey)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task LandlordPostAsync_ReplayedOperation_AppendsOnceAndIncrementsUnreadOnce()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var sut = CreateSut();
+        var started = await sut.StartAsync(
+            1, tenant.Id, "Keys", "Your replacement key is ready.", ["Portal"], "conversation-start-keys");
+
+        var first = await sut.PostMessageAsync(
+            1, started!.Id, "The office closes at five.", ["Portal"], "conversation-post-keys");
+        var replay = await sut.PostMessageAsync(
+            1, started.Id, "The office closes at five.", ["Portal"], "conversation-post-keys");
+
+        replay!.Messages.Should().HaveCount(2);
+        first!.Messages.Should().HaveCount(2);
+        (await _ctx.Db.ConversationMessages.CountAsync()).Should().Be(2);
+        (await _ctx.Db.Conversations.AsNoTracking()
+            .Where(conversation => conversation.Id == started.Id)
+            .Select(conversation => conversation.TenantUnreadCount)
+            .SingleAsync()).Should().Be(2);
     }
 
     [Fact]
@@ -158,10 +229,7 @@ public class ConversationNotificationTests : IDisposable
         _ctx.Db.SaveChanges();
         _ctx.Db.ChangeTracker.Clear();
 
-        var sut = new ConversationService(
-            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance,
-            TimeProvider.System);
+        var sut = CreateSut();
 
         var list = await sut.ListAsync(1);
         var summary = list.Should().ContainSingle(c => c.Id == conversation.Id).Subject;
@@ -187,10 +255,7 @@ public class ConversationNotificationTests : IDisposable
         SeedConversation(tenant.Id, "Cedar", now.AddMinutes(-2));
         SeedConversation(tenant.Id, "Delta", now.AddMinutes(-1));
 
-        var sut = new ConversationService(
-            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance,
-            TimeProvider.System);
+        var sut = CreateSut();
 
         _commands.Clear();
         var page = await sut.ListPageAsync(1, new ListQuery
@@ -232,10 +297,7 @@ public class ConversationNotificationTests : IDisposable
         SeedConversation(tenant.Id, "Bravo", DateTime.UtcNow.AddMinutes(-2), landlordUnreadCount: 5);
         SeedConversation(tenant.Id, "Other portfolio", DateTime.UtcNow.AddMinutes(-1), portfolioId: 2, landlordUnreadCount: 11);
 
-        var sut = new ConversationService(
-            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
-            NullLogger<ConversationService>.Instance,
-            TimeProvider.System);
+        var sut = CreateSut();
 
         _commands.Clear();
         var unreadCount = await sut.GetUnreadCountAsync(1);

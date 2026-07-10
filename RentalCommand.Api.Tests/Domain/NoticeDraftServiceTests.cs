@@ -878,6 +878,7 @@ public class NoticeDraftServiceTests : IDisposable
             string subject,
             string body,
             List<string> channels,
+            string operationKey,
             bool acknowledgedFairHousingReview = false,
             CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(new ConversationDetail { Id = 1, TenantId = tenantId, Subject = subject });
@@ -887,6 +888,7 @@ public class NoticeDraftServiceTests : IDisposable
             int id,
             string body,
             List<string> channels,
+            string operationKey,
             CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(null);
 
