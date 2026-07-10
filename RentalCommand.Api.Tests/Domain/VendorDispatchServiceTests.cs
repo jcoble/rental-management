@@ -1,12 +1,20 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Operations;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -20,16 +28,41 @@ public class VendorDispatchServiceTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteTestContext _ctx = new();
+    private readonly ServiceProvider _services;
 
-    public void Dispose() => _ctx.Dispose();
+    public VendorDispatchServiceTests()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            DispatchWorkOrderToVendorCommand,
+            DispatchWorkOrderToVendorResult,
+            DispatchWorkOrderToVendorHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+    }
 
-    private VendorDispatchService CreateDispatchSut(Mock<IMessagePublisher>? publisher = null) => new(
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
+
+    private VendorDispatchService CreateDispatchSut() => new(
         _ctx.Db,
         Mock.Of<IDataUpdateService>(),
-        Mock.Of<IAuditTrailService>(),
-        (publisher ?? new Mock<IMessagePublisher>()).Object,
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
         Mock.Of<ILogger<VendorDispatchService>>(),
         TimeProvider.System);
+
+    private static DispatchWorkOrderRequest Request(int vendorId) => new()
+    {
+        IdempotencyKey = Guid.NewGuid().ToString("N"),
+        VendorId = vendorId,
+    };
 
     private SmsInboundVendorDoneService CreateDoneSut() => new(
         _ctx.Db,
@@ -45,11 +78,15 @@ public class VendorDispatchServiceTests : IDisposable
         var workOrder = SeedWorkOrder(property);
         await _ctx.Db.SaveChangesAsync();
 
-        var publisher = new Mock<IMessagePublisher>();
-        var sut = CreateDispatchSut(publisher);
+        var sut = CreateDispatchSut();
 
         var result = await sut.DispatchAsync(
-            PortfolioId, workOrder.Id, new DispatchWorkOrderRequest { VendorId = vendor.Id, Note = "Gate code 1234" }, changedByUserId: 5);
+            PortfolioId, workOrder.Id, new DispatchWorkOrderRequest
+            {
+                IdempotencyKey = Guid.NewGuid().ToString("N"),
+                VendorId = vendor.Id,
+                Note = "Gate code 1234",
+            }, changedByUserId: 5);
 
         result.Outcome.Should().Be(DispatchOutcome.Dispatched);
         result.Dispatch.Should().NotBeNull();
@@ -60,6 +97,7 @@ public class VendorDispatchServiceTests : IDisposable
         result.Dispatch.Message.Should().Contain("Gate code 1234");
 
         // The work order was assigned to the vendor.
+        _ctx.Db.ChangeTracker.Clear();
         var reloaded = await _ctx.Db.WorkOrders.FindAsync(workOrder.Id);
         reloaded!.VendorId.Should().Be(vendor.Id);
 
@@ -67,13 +105,11 @@ public class VendorDispatchServiceTests : IDisposable
         var dispatch = await _ctx.Db.VendorDispatches.SingleAsync();
         dispatch.Status.Should().Be(VendorDispatchStatus.Dispatched);
 
-        // An SMS to the vendor's normalized phone was enqueued.
-        publisher.Verify(p => p.PublishAsync(
-            PortfolioId,
-            "sms",
-            It.IsAny<string>(),
-            It.IsAny<object>(),
-            It.IsAny<CancellationToken>()), Times.Once);
+        // An SMS to the vendor's normalized phone was durably enqueued in the same command.
+        var outbox = await _ctx.Db.OutboxMessages.SingleAsync();
+        outbox.MessageType.Should().Be("sms");
+        using var payload = JsonDocument.Parse(outbox.Payload);
+        payload.RootElement.GetProperty("to").GetString().Should().Be("+16145550199");
     }
 
     [Fact]
@@ -86,10 +122,55 @@ public class VendorDispatchServiceTests : IDisposable
         var sut = CreateDispatchSut();
 
         var result = await sut.DispatchAsync(
-            PortfolioId, workOrder.Id, new DispatchWorkOrderRequest { VendorId = vendor.Id }, changedByUserId: 5);
+            PortfolioId, workOrder.Id, Request(vendor.Id), changedByUserId: 5);
 
         result.Outcome.Should().Be(DispatchOutcome.VendorHasNoPhone);
         (await _ctx.Db.VendorDispatches.AnyAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_SameOperationKey_ReplaysOneDispatchAuditAndSmsIntent()
+    {
+        var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        var workOrder = SeedWorkOrder(property);
+        await _ctx.Db.SaveChangesAsync();
+        var request = new DispatchWorkOrderRequest
+        {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            VendorId = vendor.Id,
+        };
+        var sut = CreateDispatchSut();
+
+        var first = await sut.DispatchAsync(PortfolioId, workOrder.Id, request, changedByUserId: 5);
+        var replay = await sut.DispatchAsync(PortfolioId, workOrder.Id, request, changedByUserId: 5);
+
+        replay.Outcome.Should().Be(DispatchOutcome.Dispatched);
+        replay.Dispatch!.Id.Should().Be(first.Dispatch!.Id);
+        (await _ctx.Db.VendorDispatches.CountAsync()).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(log => log.EntityType == nameof(VendorDispatch)))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_DifferentOperationKey_DoesNotCreateSecondOpenDispatch()
+    {
+        var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        var workOrder = SeedWorkOrder(property);
+        await _ctx.Db.SaveChangesAsync();
+        var sut = CreateDispatchSut();
+
+        var first = await sut.DispatchAsync(
+            PortfolioId, workOrder.Id, Request(vendor.Id), changedByUserId: 5);
+        var second = await sut.DispatchAsync(
+            PortfolioId, workOrder.Id, Request(vendor.Id), changedByUserId: 5);
+
+        first.Outcome.Should().Be(DispatchOutcome.Dispatched);
+        second.Outcome.Should().Be(DispatchOutcome.AlreadyDispatched);
+        (await _ctx.Db.VendorDispatches.CountAsync()).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(2);
     }
 
     [Fact]
@@ -101,7 +182,7 @@ public class VendorDispatchServiceTests : IDisposable
 
         // Dispatch first.
         await CreateDispatchSut().DispatchAsync(
-            PortfolioId, workOrder.Id, new DispatchWorkOrderRequest { VendorId = vendor.Id }, changedByUserId: 5);
+            PortfolioId, workOrder.Id, Request(vendor.Id), changedByUserId: 5);
 
         var doneSut = CreateDoneSut();
         var receivedAt = new DateTime(2026, 06, 03, 15, 0, 0, DateTimeKind.Utc);
@@ -174,7 +255,7 @@ public class VendorDispatchServiceTests : IDisposable
         await _ctx.Db.SaveChangesAsync();
 
         await CreateDispatchSut().DispatchAsync(
-            PortfolioId, workOrder.Id, new DispatchWorkOrderRequest { VendorId = vendor.Id }, changedByUserId: 5);
+            PortfolioId, workOrder.Id, Request(vendor.Id), changedByUserId: 5);
 
         // Force a known 2-hour gap between dispatch and response.
         var dispatch = await _ctx.Db.VendorDispatches.SingleAsync();

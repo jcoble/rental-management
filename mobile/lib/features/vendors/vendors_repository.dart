@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
@@ -191,6 +192,7 @@ class VendorsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/work-orders/$workOrderId/dispatch',
         data: {
+          'idempotencyKey': const Uuid().v4(),
           'vendorId': vendorId,
           if (trimmed != null && trimmed.isNotEmpty) 'note': trimmed,
         },

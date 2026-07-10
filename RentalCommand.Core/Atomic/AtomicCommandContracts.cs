@@ -92,6 +92,7 @@ public interface IAtomicWriteAttempt
 public enum AtomicLockResource
 {
     SignatureRequest = 1,
+    WorkOrder = 2,
 }
 
 /// <summary>

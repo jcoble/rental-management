@@ -1,11 +1,12 @@
 using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -18,38 +19,32 @@ public class VendorDispatchService : IVendorDispatchService
     private const string WorkOrderEntityType = "WorkOrder";
     private const string DispatchEntityType = "VendorDispatch";
 
-    // A dispatch is still "open" (awaiting the vendor's DONE) in these statuses. Matches the set the
-    // inbound-DONE handler uses to find the dispatch to close, so the idempotency guard and the closer
-    // agree on what "already dispatched" means.
-    private static readonly VendorDispatchStatus[] OpenStatuses =
-        { VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged };
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAuditTrailService _audit;
-    private readonly IMessagePublisher _publisher;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<VendorDispatchService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public VendorDispatchService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IAuditTrailService audit,
-        IMessagePublisher publisher,
+        IAtomicUnitOfWork atomic,
         ILogger<VendorDispatchService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _audit = audit;
-        _publisher = publisher;
+        _atomic = atomic;
         _logger = logger;
         _timeProvider = timeProvider;
     }
 
     public async Task<DispatchResult> DispatchAsync(int portfolioId, int workOrderId, DispatchWorkOrderRequest request, int? changedByUserId, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.IdempotencyKey);
+
         var workOrder = await _db.WorkOrders
+            .AsNoTracking()
             .FirstOrDefaultAsync(w => w.Id == workOrderId && w.PortfolioId == portfolioId, ct);
         if (workOrder is null)
         {
@@ -57,6 +52,7 @@ public class VendorDispatchService : IVendorDispatchService
         }
 
         var vendor = await _db.Vendors
+            .AsNoTracking()
             .FirstOrDefaultAsync(v => v.Id == request.VendorId && v.PortfolioId == portfolioId, ct);
         if (vendor is null)
         {
@@ -67,21 +63,6 @@ public class VendorDispatchService : IVendorDispatchService
         if (string.IsNullOrWhiteSpace(vendorPhone))
         {
             return DispatchResult.NoPhone();
-        }
-
-        // Idempotency: if this work order already has an OPEN dispatch to this same vendor, refuse to
-        // create a second one. Re-dispatching the same job to the same vendor would stack duplicate open
-        // dispatches and duplicate SMS, yet a single "DONE" reply only closes the most recent — leaving
-        // the rest permanently open and double-counting the vendor's job stats. Re-dispatch to a DIFFERENT
-        // vendor, or after this one is completed/cancelled, is still allowed.
-        var alreadyOpen = await _db.VendorDispatches
-            .AnyAsync(d => d.PortfolioId == portfolioId
-                && d.WorkOrderId == workOrder.Id
-                && d.VendorId == vendor.Id
-                && OpenStatuses.Contains(d.Status), ct);
-        if (alreadyOpen)
-        {
-            return DispatchResult.AlreadyDispatched();
         }
 
         // Property/unit context for the job summary (best-effort labels).
@@ -104,53 +85,43 @@ public class VendorDispatchService : IVendorDispatchService
         var now = _timeProvider.UtcNow();
         var message = BuildJobSms(workOrder, property?.Name, property?.AddressLine1, unitNumber, request.Note);
 
-        // Assign the vendor + record an open dispatch in the same save.
-        workOrder.VendorId = vendor.Id;
-        workOrder.UpdatedAt = now;
-
-        var dispatch = new VendorDispatch
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "vendor-dispatch.create",
+                $"{portfolioId}:{workOrderId}:{request.IdempotencyKey.Trim()}"),
+            new DispatchWorkOrderToVendorCommand(
+                portfolioId,
+                workOrderId,
+                vendor.Id,
+                vendorPhone,
+                message,
+                changedByUserId,
+                now),
+            new AtomicJsonResultCodec<DispatchWorkOrderToVendorResult>("vendor-dispatch.create.v1"),
+            ct);
+        if (outcome.Value.Outcome == DispatchWorkOrderToVendorOutcome.NotFound)
         {
-            PortfolioId = portfolioId,
-            WorkOrderId = workOrder.Id,
-            VendorId = vendor.Id,
-            Status = VendorDispatchStatus.Dispatched,
-            DispatchedAtUtc = now,
-            Message = message,
+            return DispatchResult.NotFound();
+        }
+        if (outcome.Value.Outcome == DispatchWorkOrderToVendorOutcome.AlreadyDispatched)
+        {
+            return DispatchResult.AlreadyDispatched();
+        }
+
+        workOrder.VendorId = outcome.Value.VendorId;
+        workOrder.UpdatedAt = outcome.Value.DispatchedAtUtc;
+        var response = new VendorDispatchResponse
+        {
+            Id = outcome.Value.DispatchId,
+            PortfolioId = outcome.Value.PortfolioId,
+            WorkOrderId = outcome.Value.WorkOrderId,
+            VendorId = outcome.Value.VendorId,
+            Status = outcome.Value.Status,
+            DispatchedAtUtc = outcome.Value.DispatchedAtUtc,
+            Message = outcome.Value.Message,
         };
-        _db.VendorDispatches.Add(dispatch);
-
-        // Stage the dispatch and its outbound SMS before one atomic save.
-        await _publisher.PublishAsync(
-            portfolioId,
-            "sms",
-            RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                "vendor-dispatch", portfolioId, workOrder.Id, vendor.Id, vendorPhone, message),
-            new
-        {
-            to = vendorPhone,
-            message,
-        }, ct);
-        await _db.SaveChangesAsync(ct);
-
-        await SafeAsync("dispatch audit", () => _audit.LogAsync(
-            portfolioId,
-            DispatchEntityType,
-            dispatch.Id,
-            AuditLogOperation.Created,
-            userId: changedByUserId,
-            actorLabel: changedByUserId.HasValue ? null : "staff",
-            newValues: JsonSerializer.Serialize(new
-            {
-                workOrderId = workOrder.Id,
-                vendorId = vendor.Id,
-                status = dispatch.Status.ToString(),
-            }),
-            changeReason: $"Work order #{workOrder.Id} dispatched to vendor {vendor.Name} by SMS.",
-            ct: ct));
-
-        var response = VendorDispatchResponse.FromEntity(dispatch);
         await SafeAsync("dispatch broadcast", () => _dataUpdate.BroadcastEntityUpdateAsync(
-            portfolioId, DispatchEntityType, dispatch.Id, response, ct));
+            portfolioId, DispatchEntityType, response.Id, response, ct));
         await SafeAsync("work order broadcast", () => _dataUpdate.BroadcastEntityUpdateAsync(
             portfolioId, WorkOrderEntityType, workOrder.Id, WorkOrderResponse.FromEntity(workOrder), ct));
 
@@ -210,21 +181,17 @@ public class VendorDispatchService : IVendorDispatchService
             return null;
         }
 
-        // Average response time across completed dispatches (DispatchedAt → RespondedAt).
-        var responseSpans = await _db.VendorDispatches
+        // Filtering and averaging stay in one translated SQL statement; scorecards must not load
+        // every historical dispatch merely to compute one scalar.
+        var avgResponseTicks = await _db.VendorDispatches
             .AsNoTracking()
             .Where(d => d.VendorId == vendorId && d.PortfolioId == portfolioId &&
                         d.Status == VendorDispatchStatus.Completed && d.RespondedAtUtc != null)
-            .Select(d => new { d.DispatchedAtUtc, RespondedAtUtc = d.RespondedAtUtc!.Value })
-            .ToListAsync(ct);
-
-        decimal? avgResponseHours = null;
-        if (responseSpans.Count > 0)
-        {
-            var totalHours = responseSpans
-                .Sum(s => (s.RespondedAtUtc - s.DispatchedAtUtc).TotalHours);
-            avgResponseHours = Math.Round((decimal)(totalHours / responseSpans.Count), 2);
-        }
+            .Select(d => (double?)(d.RespondedAtUtc!.Value.Ticks - d.DispatchedAtUtc.Ticks))
+            .AverageAsync(ct);
+        var avgResponseHours = avgResponseTicks.HasValue
+            ? Math.Round((decimal)(avgResponseTicks.Value / TimeSpan.TicksPerHour), 2)
+            : (decimal?)null;
 
         return new VendorScorecardResponse
         {
