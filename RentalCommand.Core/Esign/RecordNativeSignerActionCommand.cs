@@ -1,0 +1,40 @@
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Core.Esign;
+
+public enum NativeSignerActionOutcome
+{
+    Applied,
+    NotFound,
+    Expired,
+}
+
+/// <summary>Captures one signer's legally significant signature and consent.</summary>
+public sealed record RecordNativeSignatureCommand(
+    string Token,
+    SignatureSignatureType SignatureType,
+    string? TypedName,
+    byte[]? DrawnSignatureImage,
+    string? IpAddress,
+    string? UserAgent,
+    DateTime OccurredAtUtc) : IAtomicCommandData;
+
+/// <summary>Captures one signer's refusal and closes the request and lease workflow.</summary>
+public sealed record RecordNativeDeclineCommand(
+    string Token,
+    string? Reason,
+    string? IpAddress,
+    string? UserAgent,
+    DateTime OccurredAtUtc) : IAtomicCommandData;
+
+/// <summary>Receipt-safe result shared by sign and decline commands.</summary>
+public sealed record NativeSignerActionResult(
+    NativeSignerActionOutcome Outcome,
+    string? Error,
+    int SignatureRequestId,
+    string? PublicId,
+    int LeaseId,
+    SignatureSignerStatus SignerStatus,
+    SignatureRequestStatus RequestStatus,
+    bool ExecutionRequired) : IAtomicResultData;

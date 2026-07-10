@@ -274,6 +274,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly RentalCommandDbContext _db;
         private readonly AtomicAuditScope _auditScope;
         private readonly IAtomicSetBasedPersistence _setBased;
+        private readonly IAtomicLockingPersistence _locking;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -288,6 +289,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _db = db;
             _auditScope = auditScope;
             _setBased = new AtomicSetBasedMutationExecutor(db, auditScope, timeProvider);
+            _locking = new AtomicLockingPersistence(db);
             _timeProvider = timeProvider;
         }
 
@@ -295,6 +297,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public Guid AuditScopeId => _auditScope.ScopeId;
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => _setBased;
+        public IAtomicLockingPersistence Locking => _locking;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();

@@ -62,6 +62,18 @@ public sealed class NativeEsignTests : IDisposable
             CreateNativeEsignRequestCommand,
             CreateNativeEsignRequestResult,
             CreateNativeEsignRequestHandler>();
+        services.AddAtomicCommandHandler<
+            RecordNativeSignatureCommand,
+            NativeSignerActionResult,
+            RecordNativeSignatureHandler>();
+        services.AddAtomicCommandHandler<
+            RecordNativeDeclineCommand,
+            NativeSignerActionResult,
+            RecordNativeDeclineHandler>();
+        services.AddAtomicCommandHandler<
+            FinalizeNativeEsignRequestCommand,
+            FinalizeNativeEsignRequestResult,
+            FinalizeNativeEsignRequestHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_conn.ConnectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -262,6 +274,49 @@ public sealed class NativeEsignTests : IDisposable
         // The Completed audit event records the hash.
         (await _db.SignatureAuditEvents.AsNoTracking()
             .AnyAsync(e => e.Type == SignatureAuditEventType.Completed)).Should().BeTrue();
+        reloaded.SignedDocumentStoredFileId.Should().Be(request.SignedStoredFileId,
+            "the request and lease reference one immutable executed PDF instead of duplicate blobs");
+    }
+
+    [Fact]
+    public async Task Sign_FinalizationFailure_LeavesRecoverablePendingState_AndRetryCompletesExactlyOnce()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
+        var (token, envelopeId) = await SendAndGetTokenAsync(lease);
+        var signing = CreateSigningService();
+        var body = new SubmitSignatureRequest
+        {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            Consent = true,
+            SignatureType = "Typed",
+            TypedName = "Marcus Williams",
+        };
+        _atomicFailure.ArmForFinalization();
+
+        var first = () => signing.SignAsync(token, body, "198.51.100.9", "UA/sign", default);
+
+        await first.Should().ThrowAsync<InjectedEsignFailure>();
+        var pending = await _db.SignatureRequests.AsNoTracking().SingleAsync(r => r.PublicId == envelopeId);
+        pending.Status.Should().Be(SignatureRequestStatus.ExecutionPending);
+        pending.SignedStoredFileId.Should().BeNull();
+        (await _db.SignatureSigners.AsNoTracking().SingleAsync(s => s.Token == token)).Status
+            .Should().Be(SignatureSignerStatus.Signed);
+        (await _db.Leases.AsNoTracking().SingleAsync(l => l.Id == lease.Id)).EsignStatus
+            .Should().Be(EsignStatus.Sent);
+        (await _db.StoredFiles.CountAsync()).Should().Be(1, "only the original document is committed");
+        _storage.FileCount.Should().Be(1, "the uncommitted executed PDF upload is compensated");
+
+        var replay = await signing.SignAsync(token, body, "198.51.100.9", "UA/sign", default);
+
+        replay.Value!.RequestCompleted.Should().BeTrue();
+        var completed = await _db.SignatureRequests.AsNoTracking().SingleAsync(r => r.PublicId == envelopeId);
+        var finalLease = await _db.Leases.AsNoTracking().SingleAsync(l => l.Id == lease.Id);
+        completed.Status.Should().Be(SignatureRequestStatus.Completed);
+        completed.SignedStoredFileId.Should().Be(finalLease.SignedDocumentStoredFileId);
+        (await _db.StoredFiles.CountAsync()).Should().Be(2);
+        _storage.FileCount.Should().Be(2);
+        (await _db.SignatureAuditEvents.CountAsync(e => e.Type == SignatureAuditEventType.Completed))
+            .Should().Be(1);
     }
 
     [Fact]
@@ -543,7 +598,13 @@ public sealed class NativeEsignTests : IDisposable
         var provider = CreateProvider();
         var leaseEsign = CreateLeaseEsignService(provider);
         return new NativeSigningService(
-            _db, _storage, new ExecutedLeasePdfGenerator(), leaseEsign, TimeProvider.System, NullLogger<NativeSigningService>.Instance);
+            _db,
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _storage,
+            new ExecutedLeasePdfGenerator(),
+            leaseEsign,
+            TimeProvider.System,
+            NullLogger<NativeSigningService>.Instance);
     }
 
     private async Task<EsignResult> SendAsync(
@@ -790,16 +851,26 @@ public sealed class NativeEsignTests : IDisposable
         private int _armed;
 
         public void Arm() => Interlocked.Exchange(ref _armed, 1);
+        public void ArmForFinalization() => Interlocked.Exchange(ref _armed, 2);
 
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
             DbContextEventData eventData,
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            if (Volatile.Read(ref _armed) == 1
+            var mode = Volatile.Read(ref _armed);
+            if (mode == 1
                 && eventData.Context?.ChangeTracker.Entries<OutboxMessage>()
                     .Any(entry => entry.State == EntityState.Added) == true
                 && Interlocked.Exchange(ref _armed, 0) == 1)
+            {
+                throw new InjectedEsignFailure();
+            }
+            if (mode == 2
+                && eventData.Context?.ChangeTracker.Entries<SignatureRequest>()
+                    .Any(entry => entry.State == EntityState.Modified
+                        && entry.Entity.Status == SignatureRequestStatus.Completed) == true
+                && Interlocked.Exchange(ref _armed, 0) == 2)
             {
                 throw new InjectedEsignFailure();
             }

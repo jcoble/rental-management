@@ -150,6 +150,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.CreateNativeEsignRequestCommand,
     RentalCommand.Core.Esign.CreateNativeEsignRequestResult,
     RentalCommand.Data.Esign.CreateNativeEsignRequestHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeSignatureCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeSignatureHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeDeclineCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeDeclineHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestCommand,
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
+    RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so

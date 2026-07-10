@@ -18,6 +18,9 @@ public enum SignatureRequestStatus
     /// <summary>Some — but not all — signers have signed.</summary>
     PartiallySigned,
 
+    /// <summary>Every signer has signed; executed-document rendering/finalization is durably pending.</summary>
+    ExecutionPending,
+
     /// <summary>Every signer has signed; the executed PDF + certificate have been generated and stored.</summary>
     Completed,
 

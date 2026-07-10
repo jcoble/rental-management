@@ -92,6 +92,18 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CreateNativeEsignRequestCommand,
             CreateNativeEsignRequestResult,
             CreateNativeEsignRequestHandler>();
+        services.AddAtomicCommandHandler<
+            RecordNativeSignatureCommand,
+            NativeSignerActionResult,
+            RecordNativeSignatureHandler>();
+        services.AddAtomicCommandHandler<
+            RecordNativeDeclineCommand,
+            NativeSignerActionResult,
+            RecordNativeDeclineHandler>();
+        services.AddAtomicCommandHandler<
+            FinalizeNativeEsignRequestCommand,
+            FinalizeNativeEsignRequestResult,
+            FinalizeNativeEsignRequestHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(
                     _postgres.GetConnectionString(),
@@ -288,6 +300,53 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             .Should().Be(0);
         (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task NativeEsignConcurrentFinalSigners_SerializeAggregate_AndLeaveExecutionPending()
+    {
+        SkipIfDockerUnavailable();
+        var leaseId = await SeedLeaseAsync();
+        var send = NativeEsignCommand(leaseId, "blob/concurrent.pdf") with
+        {
+            Signers = new[]
+            {
+                new NativeEsignSignerCommand("First Signer", "first@example.test", $"token-{Guid.NewGuid():N}"),
+                new NativeEsignSignerCommand("Second Signer", "second@example.test", $"token-{Guid.NewGuid():N}"),
+            },
+        };
+        var sent = await UnitOfWork.ExecuteAsync(
+            Identity(nameof(NativeEsignConcurrentFinalSigners_SerializeAggregate_AndLeaveExecutionPending) + "-send"),
+            send,
+            new AtomicJsonResultCodec<CreateNativeEsignRequestResult>("native-esign.send.v1"));
+        var now = DateTime.UtcNow;
+        var codec = new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.sign.v1");
+
+        var actions = send.Signers.Select((signer, index) => UnitOfWork.ExecuteAsync(
+            Identity(nameof(NativeEsignConcurrentFinalSigners_SerializeAggregate_AndLeaveExecutionPending) + index),
+            new RecordNativeSignatureCommand(
+                signer.Token,
+                SignatureSignatureType.Typed,
+                signer.Name,
+                null,
+                $"198.51.100.{index + 1}",
+                "integration-test",
+                now),
+            codec));
+        var outcomes = await Task.WhenAll(actions);
+
+        outcomes.Should().OnlyContain(outcome => outcome.Value.Outcome == NativeSignerActionOutcome.Applied);
+        outcomes.Count(outcome => outcome.Value.ExecutionRequired).Should().Be(1);
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        var request = await verify.Db.SignatureRequests.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == sent.Value.SignatureRequestId);
+        request.Status.Should().Be(SignatureRequestStatus.ExecutionPending);
+        (await verify.Db.SignatureSigners.AsNoTracking()
+            .CountAsync(signer => signer.SignatureRequestId == request.Id
+                && signer.Status == SignatureSignerStatus.Signed)).Should().Be(2);
+        (await verify.Db.SignatureAuditEvents.AsNoTracking()
+            .CountAsync(audit => audit.SignatureRequestId == request.Id
+                && audit.Type == SignatureAuditEventType.Signed)).Should().Be(2);
     }
 
     [SkippableFact]

@@ -29,6 +29,7 @@ export type SignRequestStatus =
 	| 'Sent'
 	| 'Viewed'
 	| 'PartiallySigned'
+	| 'ExecutionPending'
 	| 'Completed'
 	| 'Declined'
 	| 'Voided'
@@ -52,6 +53,7 @@ export interface SignPackageResponse {
 
 /** Body for POST /api/v1/sign/{token}. */
 export interface SubmitSignatureBody {
+	idempotencyKey: string;
 	consent: boolean;
 	signatureType: 'Typed' | 'Drawn';
 	/** Required when signatureType === 'Typed'. */
@@ -62,6 +64,7 @@ export interface SubmitSignatureBody {
 
 /** Body for POST /api/v1/sign/{token}/decline. */
 export interface DeclineSignatureBody {
+	idempotencyKey: string;
 	reason?: string;
 }
 
@@ -185,7 +188,7 @@ export async function submitSignature(
 /** POST a decline (with an optional reason). Browser-only. */
 export async function declineSignature(
 	token: string,
-	body: DeclineSignatureBody = {}
+	body: DeclineSignatureBody
 ): Promise<SignActionResponse> {
 	const response = await signFetch(`/sign/${encodeURIComponent(token)}/decline`, {
 		method: 'POST',

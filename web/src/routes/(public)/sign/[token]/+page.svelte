@@ -189,16 +189,19 @@
 	// ── Submit ──────────────────────────────────────────────────────────────────
 	let submitting = $state(false);
 	let submitError = $state<string | null>(null);
+	let signOperationId = $state<string | null>(null);
 
 	async function handleSign() {
 		if (!canSign || submitting) return;
 		submitError = null;
 		submitting = true;
 		try {
+			signOperationId ??= crypto.randomUUID();
 			const body =
 				signatureType === 'Typed'
-					? { consent, signatureType: 'Typed' as const, typedName: typedName.trim() }
+					? { idempotencyKey: signOperationId, consent, signatureType: 'Typed' as const, typedName: typedName.trim() }
 					: {
+							idempotencyKey: signOperationId,
 							consent,
 							signatureType: 'Drawn' as const,
 							drawnImage: canvasEl?.toDataURL('image/png') ?? ''
@@ -220,13 +223,16 @@
 	let declineReason = $state('');
 	let declining = $state(false);
 	let declineError = $state<string | null>(null);
+	let declineOperationId = $state<string | null>(null);
 
 	async function handleDecline() {
 		if (declining) return;
 		declineError = null;
 		declining = true;
 		try {
+			declineOperationId ??= crypto.randomUUID();
 			actionResult = await declineSignature(token, {
+				idempotencyKey: declineOperationId,
 				reason: declineReason.trim() || undefined
 			});
 			declineOpen = false;
