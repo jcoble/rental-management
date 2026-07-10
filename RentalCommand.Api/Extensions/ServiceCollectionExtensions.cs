@@ -4,7 +4,6 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Api.Extensions;
 
@@ -133,7 +132,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IScanFileService, ScanFileService>();
         services.AddScoped<IScanService, ScanService>();
         services.AddScoped<IAuditTrailService, AuditTrailService>();
-        services.AddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
         services.AddScoped<IVoiceIntakeService, VoiceIntakeService>();
 
         // --- unified audit trail (auto-capture + viewer) ---
@@ -147,7 +145,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<RentalCommand.Api.Services.Auditing.AuditDiffBuilder>();
         services.AddScoped<IAuditQueryService, AuditQueryService>();
         services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
-        services.AddScoped<RentalCommand.Data.Auditing.AuditableCommandGuardInterceptor>();
 
         // --- AI (phase 3) ---
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();

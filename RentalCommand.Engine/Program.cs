@@ -13,8 +13,6 @@ using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
-using RentalCommand.Data.Atomic;
-using RentalCommand.Data.Auditing;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -45,9 +43,6 @@ builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
     RentalCommand.Data.Auditing.AuditScope>();
 builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
-builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditableCommandGuardInterceptor>();
-builder.Services.AddScoped<IAuditTrailService, StagedAuditTrailService>();
-builder.Services.AddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
 
 // Row-Level Security backstop (audit M-1): the Engine operates across all portfolios, so its RLS
 // interceptor always sets app.is_admin = true (no HTTP context, no single portfolio). It sets the
@@ -58,7 +53,6 @@ builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
         .AddInterceptors(
             sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditableCommandGuardInterceptor>(),
             sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
 
 // --- Master simulation clock (TSK-615) ---

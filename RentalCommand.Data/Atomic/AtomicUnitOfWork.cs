@@ -1,23 +1,21 @@
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Data.Atomic;
 
 /// <summary>
-/// Retry-safe operation kernel. The EF execution strategy owns the complete explicit transaction;
-/// every strategy attempt creates a fresh DI scope, DbContext, audit scope, and change tracker.
+/// Retry-safe operation kernel. The execution strategy owns the complete explicit transaction and
+/// every physical attempt gets a fresh DI scope, handler, DbContext, audit scope, and tracker.
 /// </summary>
 public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
 {
-    private static readonly AsyncLocal<AtomicWriteAttempt?> AmbientAttempt = new();
-    private static readonly AtomicJsonResultCodec<AtomicAuditCommandResult> AuditOnlyCodec =
-        new("atomic-audit-command-result.v1");
-
+    private static readonly AsyncLocal<AmbientAttempt?> Ambient = new();
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeProvider _timeProvider;
 
@@ -27,151 +25,186 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         _timeProvider = timeProvider;
     }
 
-    public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TResult>(
-        AtomicCommandIdentity command,
+    public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
         IAtomicResultCodec<TResult> resultCodec,
-        Func<IAtomicWriteAttempt, CancellationToken, Task<TResult>> dbOnlyCallback,
         CancellationToken ct = default)
+        where TCommand : notnull
         where TResult : notnull
     {
+        ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(resultCodec);
-        ArgumentNullException.ThrowIfNull(dbOnlyCallback);
-        ArgumentException.ThrowIfNullOrWhiteSpace(resultCodec.ContractName);
-        if (resultCodec.ContractName.Length > 200)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(resultCodec),
-                "Result contract cannot exceed 200 characters.");
-        }
+        ValidateCodec(resultCodec);
 
-        var ownerAttempt = AmbientAttempt.Value;
-        if (ownerAttempt is not null)
+        if (Ambient.Value is { } owner)
         {
-            // Nested code has no receipt/transaction/retry ownership. The outer receipt makes the
-            // entire joined callback idempotent and the outer transaction decides commit/rollback.
-            var joinedValue = await dbOnlyCallback(ownerAttempt, ct);
+            var joinedHandler = owner.Services.GetRequiredService<IAtomicCommandHandler<TCommand, TResult>>();
+            ValidateHandler(joinedHandler);
+            var joinedValue = await joinedHandler.HandleAsync(command, owner.Attempt, ct);
             return new AtomicCommandOutcome<TResult>(
                 joinedValue,
                 AtomicCommandDisposition.Joined,
-                ownerAttempt.AttemptId);
+                owner.Attempt.AttemptId);
         }
 
-        // This context is only the execution-strategy coordinator. Physical mutation attempts below
-        // each resolve a different scope and context, so a rolled-back tracker is never retried.
         await using var coordinatorScope = _scopeFactory.CreateAsyncScope();
-        var coordinatorDb = coordinatorScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var strategy = coordinatorDb.Database.CreateExecutionStrategy();
-
+        var coordinator = coordinatorScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var strategy = coordinator.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(
-            () => ExecuteAttemptAsync(command, resultCodec, dbOnlyCallback, ct));
+            () => ExecuteAttemptAsync(identity, command, resultCodec, ct));
     }
 
-    public Task<AtomicCommandOutcome<AtomicAuditCommandResult>> ExecuteAuditOnlyAsync(
-        AtomicCommandIdentity command,
-        AtomicAuditEntry audit,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(audit);
-        return ExecuteAsync(
-            command,
-            AuditOnlyCodec,
-            async (attempt, token) =>
-            {
-                await StageAuditAsync(attempt.AuditTrail, audit, token);
-                return new AtomicAuditCommandResult(command.CommandType, command.IdempotencyKey);
-            },
-            ct);
-    }
-
-    private async Task<AtomicCommandOutcome<TResult>> ExecuteAttemptAsync<TResult>(
-        AtomicCommandIdentity command,
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAttemptAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
         IAtomicResultCodec<TResult> resultCodec,
-        Func<IAtomicWriteAttempt, CancellationToken, Task<TResult>> dbOnlyCallback,
         CancellationToken ct)
+        where TCommand : notnull
         where TResult : notnull
     {
         await using var attemptScope = _scopeFactory.CreateAsyncScope();
         var services = attemptScope.ServiceProvider;
         var db = services.GetRequiredService<RentalCommandDbContext>();
-        var auditScope = services.GetRequiredService<IAuditScope>();
-        var auditTrail = services.GetRequiredService<IAuditTrailService>();
+        var auditScope = services.GetRequiredService<AtomicAuditScope>();
         var attemptId = Guid.NewGuid();
-        var startedAt = _timeProvider.GetUtcNow().UtcDateTime;
+        var attempt = new AtomicWriteAttempt(attemptId, db, auditScope, _timeProvider);
+        using var auditLease = auditScope.BeginAttempt(identity, attemptId);
+        IDbContextTransaction? transaction = null;
 
-        using var auditLease = auditScope.BeginAttempt(command, attemptId);
-        var attempt = new AtomicWriteAttempt(attemptId, db, auditTrail, auditScope, _timeProvider);
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
-
-        // ON CONFLICT handles concurrent duplicate callers without using an exception as control flow.
-        // The loser waits for the owner transaction and then reads the completed receipt DB-side.
-        var claimed = await db.Database.ExecuteSqlInterpolatedAsync($$"""
-            INSERT INTO "AtomicCommandReceipts"
-                ("Id", "AttemptId", "CommandType", "IdempotencyKey", "Status", "ResultContract", "StartedAt")
-            VALUES
-                ({{Guid.NewGuid()}}, {{attemptId}}, {{command.CommandType}}, {{command.IdempotencyKey}},
-                 {{(int)AtomicCommandReceiptStatus.Pending}}, {{resultCodec.ContractName}}, {{startedAt}})
-            ON CONFLICT ("CommandType", "IdempotencyKey") DO NOTHING
-            """, ct);
-
-        var receipt = await db.AtomicCommandReceipts.SingleAsync(
-            row => row.CommandType == command.CommandType
-                && row.IdempotencyKey == command.IdempotencyKey,
-            ct);
-
-        if (claimed == 0)
-        {
-            var replay = DeserializeReplay(receipt, resultCodec);
-            await transaction.CommitAsync(ct);
-            return new AtomicCommandOutcome<TResult>(
-                replay,
-                AtomicCommandDisposition.Replayed,
-                receipt.AttemptId);
-        }
-
-        var priorAmbient = AmbientAttempt.Value;
-        AmbientAttempt.Value = attempt;
-        TResult value;
         try
         {
-            value = await dbOnlyCallback(attempt, ct);
+            using (auditScope.BeginExecutorTransactionLifecycle())
+            {
+                transaction = await db.Database.BeginTransactionAsync(ct);
+            }
+
+            var startedAt = _timeProvider.GetUtcNow().UtcDateTime;
+            var claimed = await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                INSERT INTO "AtomicCommandReceipts"
+                    ("Id", "AttemptId", "CommandType", "IdempotencyKey", "Status", "ResultContract", "StartedAt")
+                VALUES
+                    ({{Guid.NewGuid()}}, {{attemptId}}, {{identity.CommandType}}, {{identity.IdempotencyKey}},
+                     {{(int)AtomicCommandReceiptStatus.Pending}}, {{resultCodec.ContractName}}, {{startedAt}})
+                ON CONFLICT ("CommandType", "IdempotencyKey") DO NOTHING
+                """, ct);
+
+            var receipt = await db.AtomicCommandReceipts.SingleAsync(
+                row => row.CommandType == identity.CommandType
+                    && row.IdempotencyKey == identity.IdempotencyKey,
+                ct);
+            if (claimed == 0)
+            {
+                var replay = DeserializeReplay(receipt, resultCodec);
+                using (auditScope.BeginExecutorTransactionLifecycle())
+                {
+                    await transaction.CommitAsync(ct);
+                }
+
+                return new AtomicCommandOutcome<TResult>(
+                    replay,
+                    AtomicCommandDisposition.Replayed,
+                    receipt.AttemptId);
+            }
+
+            var handler = services.GetRequiredService<IAtomicCommandHandler<TCommand, TResult>>();
+            ValidateHandler(handler);
+            var priorAmbient = Ambient.Value;
+            Ambient.Value = new AmbientAttempt(services, attempt);
+            TResult value;
+            try
+            {
+                value = await handler.HandleAsync(command, attempt, ct);
+            }
+            finally
+            {
+                Ambient.Value = priorAmbient;
+            }
+
+            await attempt.FlushBusinessAsync(ct);
+            var resultJson = resultCodec.Serialize(value);
+            using (JsonDocument.Parse(resultJson))
+            {
+                // A receipt codec must persist valid JSON for the PostgreSQL jsonb column.
+            }
+
+            receipt.ResultJson = resultJson;
+            receipt.Status = AtomicCommandReceiptStatus.Completed;
+            receipt.CompletedAt = _timeProvider.GetUtcNow().UtcDateTime;
+            var auditRows = auditScope.TakeRows();
+            if (auditRows.Count > 0)
+            {
+                db.AtomicAuditLogs.AddRange(auditRows);
+            }
+
+            attempt.MaterializeOutbox();
+            await db.SaveChangesAsync(ct);
+            using (auditScope.BeginExecutorTransactionLifecycle())
+            {
+                await transaction.CommitAsync(ct);
+            }
+
+            return new AtomicCommandOutcome<TResult>(
+                value,
+                AtomicCommandDisposition.Executed,
+                attemptId);
+        }
+        catch
+        {
+            if (transaction is not null && db.Database.CurrentTransaction is not null)
+            {
+                try
+                {
+                    using (auditScope.BeginExecutorTransactionLifecycle())
+                    {
+                        await transaction.RollbackAsync(CancellationToken.None);
+                    }
+                }
+                catch
+                {
+                    // Preserve the command failure. Transaction disposal still releases resources.
+                }
+            }
+
+            throw;
         }
         finally
         {
-            AmbientAttempt.Value = priorAmbient;
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync();
+            }
         }
+    }
 
-        // Flush all remaining business mutations first. The audit interceptor only stages rows in
-        // AuditScope, so no audit is made durable by this generated-id flush.
-        await attempt.FlushBusinessAsync(ct);
-
-        var resultJson = resultCodec.Serialize(value);
-        using (JsonDocument.Parse(resultJson))
+    private static void ValidateCodec<TResult>(IAtomicResultCodec<TResult> codec)
+        where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(codec);
+        ArgumentException.ThrowIfNullOrWhiteSpace(codec.ContractName);
+        if (codec.ContractName.Length > 200)
         {
-            // Validate that custom codecs really persisted JSON before assigning the jsonb column.
+            throw new ArgumentOutOfRangeException(
+                nameof(codec),
+                "Result contract cannot exceed 200 characters.");
         }
+    }
 
-        receipt.ResultJson = resultJson;
-        receipt.Status = AtomicCommandReceiptStatus.Completed;
-        receipt.CompletedAt = _timeProvider.GetUtcNow().UtcDateTime;
-
-        var auditRows = auditScope.TakeStagedRows();
-        if (auditRows.Count > 0)
+    private static void ValidateHandler<TCommand, TResult>(
+        IAtomicCommandHandler<TCommand, TResult> handler)
+        where TCommand : notnull
+        where TResult : notnull
+    {
+        var forbidden = handler.GetType()
+            .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            .SelectMany(constructor => constructor.GetParameters())
+            .FirstOrDefault(parameter => typeof(IAtomicRemoteDependency).IsAssignableFrom(parameter.ParameterType));
+        if (forbidden is not null)
         {
-            db.AuditLogs.AddRange(auditRows);
+            throw new AtomicArchitectureException(
+                $"Atomic handler {handler.GetType().Name} directly depends on remote dependency " +
+                $"{forbidden.ParameterType.Name}. Stage durable outbox intent instead.");
         }
-
-        attempt.MaterializeOutbox();
-
-        // One final flush writes audit/outbox/receipt companions. Any failure rolls the preceding
-        // generated-id business flushes back with this explicit transaction.
-        await db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
-
-        return new AtomicCommandOutcome<TResult>(
-            value,
-            AtomicCommandDisposition.Executed,
-            attemptId);
     }
 
     private static TResult DeserializeReplay<TResult>(
@@ -201,54 +234,51 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         return resultCodec.Deserialize(receipt.ResultJson);
     }
 
-    private static Task StageAuditAsync(
-        IAuditTrailService auditTrail,
-        AtomicAuditEntry audit,
-        CancellationToken ct) =>
-        auditTrail.LogAsync(
-            audit.PortfolioId,
-            audit.EntityType,
-            audit.EntityId,
-            audit.Operation,
-            audit.UserId,
-            audit.ActorLabel,
-            audit.OldValues,
-            audit.NewValues,
-            audit.ChangeReason,
-            audit.IpAddress,
-            ct);
+    private sealed record AmbientAttempt(
+        IServiceProvider Services,
+        AtomicWriteAttempt Attempt);
 
     private sealed class AtomicWriteAttempt : IAtomicWriteAttempt
     {
-        private readonly IAuditScope _auditScope;
+        private readonly RentalCommandDbContext _db;
+        private readonly AtomicAuditScope _auditScope;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
 
         public AtomicWriteAttempt(
             Guid attemptId,
-            RentalCommandDbContext dbContext,
-            IAuditTrailService auditTrail,
-            IAuditScope auditScope,
+            RentalCommandDbContext db,
+            AtomicAuditScope auditScope,
             TimeProvider timeProvider)
         {
             AttemptId = attemptId;
-            DbContext = dbContext;
-            AuditTrail = auditTrail;
+            _db = db;
             _auditScope = auditScope;
             _timeProvider = timeProvider;
         }
 
         public Guid AttemptId { get; }
-        public RentalCommandDbContext DbContext { get; }
-        public IAuditTrailService AuditTrail { get; }
+        public Guid AuditScopeId => _auditScope.ScopeId;
 
         public async Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default)
         {
             var priorOrdinal = _auditScope.CurrentMutationOrdinal;
-            var rows = await DbContext.SaveChangesAsync(ct);
+            var rows = await _db.SaveChangesAsync(ct);
             return new AtomicBusinessFlush(rows, _auditScope.GetMutationsAfter(priorOrdinal));
         }
+
+        public void BindSemanticAudit(object entityReference, AtomicSemanticAudit audit)
+        {
+            ArgumentNullException.ThrowIfNull(entityReference);
+            _auditScope.BindSemantic(entityReference, _db.Entry(entityReference), audit);
+        }
+
+        public void EnrichMutation(AtomicAuditMutation mutation, AtomicSemanticAudit audit) =>
+            _auditScope.Enrich(mutation, audit);
+
+        public void StageSemanticEvent(AtomicSemanticAudit audit) =>
+            _auditScope.StageSemanticEvent(audit, _timeProvider.GetUtcNow().UtcDateTime);
 
         public void StageOutbox(OutboxMessage message)
         {
@@ -266,58 +296,6 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _outbox.Add(message);
         }
 
-        public async Task StageSetBasedAuditAsync(
-            string entityType,
-            AtomicAuditEntry audit,
-            CancellationToken ct = default)
-        {
-            if (!string.Equals(entityType, audit.EntityType, StringComparison.Ordinal))
-            {
-                throw new ArgumentException(
-                    "Set-based permit entity type must match the semantic audit entity type.",
-                    nameof(entityType));
-            }
-
-            await StageAuditAsync(AuditTrail, audit, ct);
-            _auditScope.AuthorizeSetBasedMutation(entityType);
-        }
-
-        public Task StageExactAuditAsync(
-            AuditMutationDescriptor mutation,
-            AtomicAuditEntry audit,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(mutation);
-            ArgumentNullException.ThrowIfNull(audit);
-            ct.ThrowIfCancellationRequested();
-            if (!ReferenceEquals(mutation.EntityReference, FindTrackedEntity(mutation.EntityReference))
-                || mutation.EntityType != audit.EntityType
-                || mutation.EntityId != audit.EntityId
-                || mutation.Operation != audit.Operation)
-            {
-                throw new ArgumentException(
-                    "Semantic audit does not match the exact tracked mutation handle.",
-                    nameof(audit));
-            }
-
-            var resolution = _auditScope.ResolveExplicit(mutation.MutationOrdinal);
-            var existing = resolution.ExistingRow
-                ?? throw new InvalidOperationException(
-                    $"Audit mutation {mutation.MutationOrdinal} has no generic row to enrich.");
-            if (audit.OldValues is not null) existing.OldValues = audit.OldValues;
-            if (audit.NewValues is not null) existing.NewValues = audit.NewValues;
-            if (audit.ChangeReason is not null) existing.ChangeReason = audit.ChangeReason;
-            if (audit.UserId.HasValue) existing.UserId = audit.UserId;
-            if (audit.ActorLabel is not null) existing.ActorLabel = audit.ActorLabel;
-            if (audit.IpAddress is not null) existing.IpAddress = audit.IpAddress;
-            return Task.CompletedTask;
-        }
-
-        private object? FindTrackedEntity(object entityReference) =>
-            DbContext.ChangeTracker.Entries()
-                .Select(entry => entry.Entity)
-                .FirstOrDefault(entity => ReferenceEquals(entity, entityReference));
-
         public void MaterializeOutbox()
         {
             if (_outboxMaterialized)
@@ -328,7 +306,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _outboxMaterialized = true;
             if (_outbox.Count > 0)
             {
-                DbContext.OutboxMessages.AddRange(_outbox);
+                _db.OutboxMessages.AddRange(_outbox);
             }
         }
     }
