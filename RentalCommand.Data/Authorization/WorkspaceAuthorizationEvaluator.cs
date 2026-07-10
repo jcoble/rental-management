@@ -1,12 +1,14 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Authorization;
 
 /// <summary>
-/// Makes a capability decision with one correlated database EXISTS. Capability and property scope
-/// are intentionally predicates on the same assignment row, preventing multi-assignment leakage.
+/// Makes one typed resource decision in SQL. Capability and scope predicates remain on the same
+/// assignment row, while the target record itself is joined to the active workspace in that same
+/// statement. A missing or mismatched target never degrades to capability-only authorization.
 /// </summary>
 public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEvaluator
 {
@@ -17,38 +19,127 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
     public Task<bool> HasCapabilityAsync(
         ActiveAccessContext accessContext,
         string capabilityKey,
-        int? propertyId,
+        WorkspaceAuthorizationTarget? target,
         DateTime utcNow,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(capabilityKey);
+        if (target is null || target.PortfolioId != accessContext.PortfolioId)
+        {
+            return Task.FromResult(false);
+        }
+
+        return target switch
+        {
+            WorkspaceCapabilityAuthorizationTarget workspace =>
+                HasWorkspaceCapabilityAsync(accessContext, capabilityKey, workspace, utcNow, cancellationToken),
+            PropertyCapabilityAuthorizationTarget property =>
+                HasPropertyCapabilityAsync(accessContext, capabilityKey, property, utcNow, cancellationToken),
+            WorkOrderCapabilityAuthorizationTarget workOrder =>
+                HasWorkOrderCapabilityAsync(accessContext, capabilityKey, workOrder, utcNow, cancellationToken),
+            _ => Task.FromResult(false),
+        };
+    }
+
+    private Task<bool> HasWorkspaceCapabilityAsync(
+        ActiveAccessContext accessContext,
+        string capabilityKey,
+        WorkspaceCapabilityAuthorizationTarget target,
+        DateTime utcNow,
+        CancellationToken cancellationToken) =>
+        EffectiveAssignments(
+                accessContext,
+                capabilityKey,
+                CapabilityAuthorizationTargetKind.Workspace,
+                utcNow)
+            .AnyAsync(assignment =>
+                assignment.PortfolioId == target.PortfolioId &&
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties,
+                cancellationToken);
+
+    private Task<bool> HasPropertyCapabilityAsync(
+        ActiveAccessContext accessContext,
+        string capabilityKey,
+        PropertyCapabilityAuthorizationTarget target,
+        DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var assignments = EffectiveAssignments(
+            accessContext,
+            capabilityKey,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+
+        return _db.Properties.AsNoTracking().AnyAsync(property =>
+                property.Id == target.PropertyId &&
+                property.PortfolioId == target.PortfolioId &&
+                property.PortfolioId == accessContext.PortfolioId &&
+                assignments.Any(assignment =>
+                    assignment.PortfolioId == property.PortfolioId &&
+                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                      assignment.SelectedProperties.Any(scope =>
+                          scope.PropertyId == property.Id &&
+                          scope.PortfolioId == property.PortfolioId)))),
+            cancellationToken);
+    }
+
+    private Task<bool> HasWorkOrderCapabilityAsync(
+        ActiveAccessContext accessContext,
+        string capabilityKey,
+        WorkOrderCapabilityAuthorizationTarget target,
+        DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var assignments = EffectiveAssignments(
+            accessContext,
+            capabilityKey,
+            CapabilityAuthorizationTargetKind.WorkOrder,
+            utcNow);
+
+        return _db.WorkOrders.AsNoTracking().AnyAsync(workOrder =>
+                workOrder.Id == target.WorkOrderId &&
+                workOrder.PortfolioId == target.PortfolioId &&
+                workOrder.PortfolioId == accessContext.PortfolioId &&
+                workOrder.DeletedAt == null &&
+                assignments.Any(assignment =>
+                    assignment.PortfolioId == workOrder.PortfolioId &&
+                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                      assignment.SelectedProperties.Any(scope =>
+                          scope.PropertyId == workOrder.PropertyId &&
+                          scope.PortfolioId == workOrder.PortfolioId)))),
+            cancellationToken);
+        // Deliberately no AssignedWorkOrders branch. It remains fail-closed until the reviewed
+        // responsibility model can be joined to this exact work-order row in the same SQL decision.
+    }
+
+    private IQueryable<MembershipRoleAssignment> EffectiveAssignments(
+        ActiveAccessContext accessContext,
+        string capabilityKey,
+        CapabilityAuthorizationTargetKind targetKind,
+        DateTime utcNow)
+    {
+        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
+        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
 
         return _db.MembershipRoleAssignments
             .AsNoTracking()
-            .AnyAsync(assignment =>
+            .WhereEffective(utcNow)
+            .Where(assignment =>
                 assignment.WorkspaceMembershipId == accessContext.WorkspaceMembershipId &&
                 assignment.PortfolioId == accessContext.PortfolioId &&
-                assignment.WorkspaceMembership!.AccessContextId == accessContext.AccessContextId &&
-                assignment.WorkspaceMembership.AccessContext!.UserId == accessContext.UserId &&
-                assignment.WorkspaceMembership.AccessContext.AccessRevision == accessContext.AccessRevision &&
-                assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
-                assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
-                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.RevokedAtUtc == null &&
-                assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
-                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-                 assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
-                assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                assignment.SuspendedAtUtc == null &&
-                assignment.RevokedAtUtc == null &&
-                assignment.EffectiveFromUtc <= utcNow &&
-                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+                effectiveMemberships.Any(membership =>
+                    membership.Id == assignment.WorkspaceMembershipId &&
+                    membership.AccessContextId == accessContext.AccessContextId &&
+                    membership.PortfolioId == assignment.PortfolioId) &&
+                effectiveContexts.Any(context =>
+                    context.Id == accessContext.AccessContextId &&
+                    context.UserId == accessContext.UserId &&
+                    context.PortfolioId == assignment.PortfolioId &&
+                    context.AccessRevision == accessContext.AccessRevision) &&
                 assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                    profileCapability.CapabilityDefinition!.Key == capabilityKey) &&
-                (propertyId == null ||
-                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                 (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                  assignment.SelectedProperties.Any(scope => scope.PropertyId == propertyId))),
-                cancellationToken);
+                    profileCapability.CapabilityDefinition!.Key == capabilityKey &&
+                    profileCapability.CapabilityDefinition.AuthorizationTargetKind == targetKind));
     }
 }

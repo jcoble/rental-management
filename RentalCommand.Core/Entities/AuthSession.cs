@@ -3,8 +3,8 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
-/// Durable signed-in session. Refresh-token ownership moves here only when the new authentication
-/// flow is activated; this kernel does not dual-write or reinterpret current refresh tokens.
+/// Durable signed-in session. New refresh-token families are owned here, but the current auth flow
+/// is deliberately not activated or dual-written by this kernel.
 /// </summary>
 public sealed class AuthSession
 {
@@ -20,4 +20,6 @@ public sealed class AuthSession
 
     public ApplicationUser? User { get; set; }
     public WorkspaceAccessContext? ActiveAccessContext { get; set; }
+    public ICollection<AuthSessionRefreshTokenFamily> RefreshTokenFamilies { get; set; } =
+        new List<AuthSessionRefreshTokenFamily>();
 }

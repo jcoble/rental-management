@@ -17,7 +17,7 @@ public sealed class WorkspaceAccessContext
     /// Monotonic authorization version. Every membership, assignment, scope, responsibility,
     /// relationship, or status mutation must increment this value in the same database command.
     /// </summary>
-    public long AccessRevision { get; set; } = 1;
+    public long AccessRevision { get; private set; } = 1;
 
     public WorkspaceExperience? LastAuthorizedExperience { get; set; }
     public DateTime CreatedAtUtc { get; set; }

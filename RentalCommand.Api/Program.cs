@@ -233,6 +233,9 @@ builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAuthorizat
     WorkspaceAuthorizationEvaluator>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IMembershipAssignmentScopeValidator,
     MembershipAssignmentScopeValidator>();
+builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAccessMutationBoundary,
+    WorkspaceAccessMutationBoundary>();
 
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");

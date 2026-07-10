@@ -23,42 +23,32 @@ public sealed class ActiveAccessContextResolver : IActiveAccessContextResolver
         DateTime utcNow,
         CancellationToken cancellationToken = default)
     {
-        var context = await _db.AuthSessions
-            .AsNoTracking()
-            .Where(session =>
-                session.Id == sessionId &&
-                session.UserId == userId &&
-                session.ActiveAccessContextId == accessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > utcNow &&
-                session.ActiveAccessContext!.Status == WorkspaceAccessContextStatus.Active &&
-                session.ActiveAccessContext.RevokedAtUtc == null)
-            .Select(session => new ActiveAccessContext(
-                session.Id,
-                session.UserId,
-                session.ActiveAccessContextId,
-                session.ActiveAccessContext!.PortfolioId,
-                session.ActiveAccessContext.AccessRevision,
-                session.ActiveAccessContext.LastAuthorizedExperience,
-                session.ActiveAccessContext.Membership != null &&
-                session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
-                session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
-                (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
-                 session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow)
-                    ? session.ActiveAccessContext.Membership.Id
-                    : null,
-                session.ActiveAccessContext.Membership != null &&
-                session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
-                session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
-                (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
-                 session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow)
-                    ? session.ActiveAccessContext.Membership.DefaultExperience
-                    : null))
+        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
+        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
+
+        var context = await (
+                from session in _db.AuthSessions.AsNoTracking()
+                join accessContext in effectiveContexts
+                    on new { Id = session.ActiveAccessContextId, session.UserId }
+                    equals new { accessContext.Id, accessContext.UserId }
+                join membership in effectiveMemberships
+                    on accessContext.Id equals membership.AccessContextId into memberships
+                from membership in memberships.DefaultIfEmpty()
+                where session.Id == sessionId &&
+                      session.UserId == userId &&
+                      session.ActiveAccessContextId == accessContextId &&
+                      session.Status == AuthSessionStatus.Active &&
+                      session.RevokedAtUtc == null &&
+                      session.ExpiresAtUtc > utcNow
+                select new ActiveAccessContext(
+                    session.Id,
+                    session.UserId,
+                    accessContext.Id,
+                    accessContext.PortfolioId,
+                    accessContext.AccessRevision,
+                    accessContext.LastAuthorizedExperience,
+                    membership == null ? null : membership.Id,
+                    membership == null ? null : membership.DefaultExperience))
             .SingleOrDefaultAsync(cancellationToken);
 
         if (context is null)
