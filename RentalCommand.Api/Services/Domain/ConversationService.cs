@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
@@ -184,7 +186,9 @@ public class ConversationService : IConversationService
         int portfolioId, int tenantId, string subject, string body, List<string> channels,
         string operationKey, bool acknowledgedFairHousingReview = false, CancellationToken ct = default)
     {
-        var identity = new AtomicCommandIdentity("conversation.start", operationKey);
+        var identity = new AtomicCommandIdentity(
+            "conversation.start",
+            ScopedOperationKey(portfolioId, tenantId, operationKey));
         var completedReceiptExists = await _db.AtomicCommandReceipts
             .AsNoTracking()
             .AnyAsync(receipt => receipt.CommandType == identity.CommandType
@@ -221,11 +225,21 @@ public class ConversationService : IConversationService
         CancellationToken ct = default)
     {
         return await ExecuteLandlordSendAsync(
-            new AtomicCommandIdentity("conversation.post-message", operationKey),
+            new AtomicCommandIdentity(
+                "conversation.post-message",
+                ScopedOperationKey(portfolioId, id, operationKey)),
             new SendConversationMessageCommand(
                 portfolioId, id, 0, string.Empty, body, ConversationSenderRole.Landlord,
                 channels, _timeProvider.UtcNow()),
             ct);
+    }
+
+    private static string ScopedOperationKey(int portfolioId, int targetId, string operationKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey.Trim())))
+            .ToLowerInvariant();
+        return $"conversation:{portfolioId}:{targetId}:{hash}";
     }
 
     private async Task<ConversationDetail?> ExecuteLandlordSendAsync(
