@@ -17,10 +17,12 @@ using RentalCommand.Api.Services.Payments;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Atomic;
 
 // QuestPDF Community license (free for small businesses / OSS) — required before any PDF is generated.
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
@@ -132,6 +134,19 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddHttpContextAccessor();
 
+// Converted commands opt into the atomic executor. Both interceptors are attached to the shared
+// context during this unmerged rewrite: the legacy audit interceptor stands down only while an
+// admitted atomic attempt is active, and the atomic interceptors are inert for unconverted paths.
+builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+builder.Services.AddAtomicCommandHandler<
+    ChangeWorkspaceAssignmentScopeCommand,
+    WorkspaceAccessMutationResult,
+    ChangeWorkspaceAssignmentScopeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ChangeWorkspaceAssignmentEndCommand,
+    WorkspaceAccessMutationResult,
+    ChangeWorkspaceAssignmentEndHandler>();
+
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
 // tenant isolation is enforced at the DB layer in addition to the app-layer PortfolioId filters.
@@ -139,6 +154,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
+        .UseAtomicPersistenceKernel(sp)
         .AddInterceptors(
             sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
             sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));

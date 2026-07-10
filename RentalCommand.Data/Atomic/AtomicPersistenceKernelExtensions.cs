@@ -31,10 +31,15 @@ public static class AtomicPersistenceKernelExtensions
         return services;
     }
 
-    public static IServiceCollection AddAtomicPersistenceKernel(this IServiceCollection services)
+    public static IServiceCollection AddAtomicPersistenceKernel(
+        this IServiceCollection services,
+        bool allowUnconvertedWrites = false)
     {
         services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton(new AtomicPersistenceMode(allowUnconvertedWrites));
         services.AddScoped<AtomicAuditScope>();
+        services.AddScoped<IAtomicExecutionState>(provider =>
+            provider.GetRequiredService<AtomicAuditScope>());
         services.AddScoped<AtomicAuditSaveChangesInterceptor>();
         services.AddScoped<AtomicTransactionLifecycleInterceptor>();
         services.AddScoped<AtomicSetBasedCommandGuardInterceptor>();
@@ -61,3 +66,5 @@ public static class AtomicPersistenceKernelExtensions
         return options;
     }
 }
+
+internal sealed record AtomicPersistenceMode(bool AllowUnconvertedWrites);

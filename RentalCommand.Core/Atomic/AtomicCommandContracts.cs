@@ -19,6 +19,16 @@ public interface IAtomicResultData;
 public interface IAtomicTransactionSafeDependency;
 
 /// <summary>
+/// Read-only indication that the current scoped DbContext is executing an admitted atomic command.
+/// Legacy infrastructure uses this only to stand down while the atomic kernel owns the write.
+/// </summary>
+public interface IAtomicExecutionState : IAtomicTransactionSafeDependency
+{
+    bool IsActive { get; }
+    bool AllowsUnconvertedWrites { get; }
+}
+
+/// <summary>
 /// Infrastructure-neutral entry point for retry-safe, receipt-backed database commands. A handler
 /// is resolved from the fresh physical-attempt scope; callers cannot close over a DbContext.
 /// </summary>

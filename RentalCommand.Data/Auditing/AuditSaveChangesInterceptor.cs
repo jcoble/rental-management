@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Time;
 
 namespace RentalCommand.Data.Auditing;
@@ -29,6 +30,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
     private readonly ICurrentActor _actor;
     private readonly IAuditScope _scope;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicExecutionState? _atomicExecution;
 
     // Property names (case-insensitive substring match) whose values are redacted from the JSON.
     private static readonly string[] RedactedFragments =
@@ -39,17 +41,22 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
     private readonly List<PendingAudit> _pending = new();
     private bool _writing;
 
-    public AuditSaveChangesInterceptor(ICurrentActor actor, IAuditScope scope, TimeProvider timeProvider)
+    public AuditSaveChangesInterceptor(
+        ICurrentActor actor,
+        IAuditScope scope,
+        TimeProvider timeProvider,
+        IAtomicExecutionState? atomicExecution = null)
     {
         _actor = actor;
         _scope = scope;
         _timeProvider = timeProvider;
+        _atomicExecution = atomicExecution;
     }
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
     {
-        if (!_writing)
+        if (!_writing && _atomicExecution?.IsActive != true)
         {
             CapturePending(eventData.Context);
         }
@@ -60,7 +67,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
     public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
         DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
     {
-        if (!_writing)
+        if (!_writing && _atomicExecution?.IsActive != true)
         {
             CapturePending(eventData.Context);
         }
@@ -70,7 +77,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
 
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
     {
-        if (!_writing)
+        if (!_writing && _atomicExecution?.IsActive != true)
         {
             WritePending(eventData.Context);
         }
@@ -81,7 +88,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
     public override async ValueTask<int> SavedChangesAsync(
         SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
     {
-        if (!_writing)
+        if (!_writing && _atomicExecution?.IsActive != true)
         {
             await WritePendingAsync(eventData.Context, cancellationToken);
         }

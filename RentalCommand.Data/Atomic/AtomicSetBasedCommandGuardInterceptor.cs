@@ -41,6 +41,11 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
 
     private void Guard(DbCommand command, CommandEventData eventData)
     {
+        if (!_scope.IsActive && _scope.AllowsUnconvertedWrites)
+        {
+            return;
+        }
+
         if (eventData.CommandSource == CommandSource.ExecuteSqlRaw)
         {
             var match = RawDml.Match(command.CommandText);

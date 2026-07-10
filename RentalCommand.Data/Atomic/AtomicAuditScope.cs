@@ -5,8 +5,12 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Atomic;
 
-internal sealed class AtomicAuditScope
+internal sealed class AtomicAuditScope : IAtomicExecutionState
 {
+    private readonly AtomicPersistenceMode _mode;
+
+    public AtomicAuditScope(AtomicPersistenceMode mode) => _mode = mode;
+
     private sealed class MutationSlot
     {
         public required AtomicAuditMutation Mutation { get; init; }
@@ -27,6 +31,7 @@ internal sealed class AtomicAuditScope
 
     public Guid ScopeId { get; } = Guid.NewGuid();
     public bool IsActive => _command is not null;
+    public bool AllowsUnconvertedWrites => _mode.AllowUnconvertedWrites;
     public long CurrentMutationOrdinal => _ordinal;
 
     public IDisposable BeginAttempt(AtomicCommandIdentity command, Guid attemptId)

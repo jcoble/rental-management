@@ -13,6 +13,7 @@ using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -48,9 +49,11 @@ builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesIntercept
 // interceptor always sets app.is_admin = true (no HTTP context, no single portfolio). It sets the
 // same session GUCs the tenant_isolation policies read, mirroring EdiPlatform's Engine.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
+builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
+        .UseAtomicPersistenceKernel(sp)
         .AddInterceptors(
             sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
             sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
