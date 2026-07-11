@@ -263,20 +263,66 @@ public class VendorDispatchServiceTests : IDisposable
         vendor.JobsCompleted = 1;
         var completedWorkOrder = SeedWorkOrder(property);
         completedWorkOrder.Status = WorkOrderStatus.Completed;
-        completedWorkOrder.CompletedAt = DateTime.UtcNow.AddMinutes(-10);
+        var firstCompletionAt = DateTime.UtcNow.AddMinutes(-10);
+        completedWorkOrder.CompletedAt = firstCompletionAt;
         await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.VendorDispatches.Add(OpenDispatch(
-            completedWorkOrder.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-20)));
+        var completedDispatch = OpenDispatch(
+            completedWorkOrder.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-20));
+        completedDispatch.Status = VendorDispatchStatus.Completed;
+        completedDispatch.RespondedAtUtc = firstCompletionAt;
+        var openSibling = OpenDispatch(
+            completedWorkOrder.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-5));
+        _ctx.Db.VendorDispatches.AddRange(completedDispatch, openSibling);
+        _ctx.Db.WorkOrderStatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = PortfolioId,
+            WorkOrderId = completedWorkOrder.Id,
+            FromStatus = WorkOrderStatus.InProgress,
+            ToStatus = WorkOrderStatus.Completed,
+            ChangedByLabel = "Vendor",
+            CreatedAtUtc = firstCompletionAt,
+        });
+        SeedScopedManager(userId: 100, property.Id);
         await _ctx.Db.SaveChangesAsync();
 
+        var siblingCompletionAt = DateTime.UtcNow;
         var result = await CreateDoneSut().TryHandleAsync(
-            "SM-sibling-after-completion", "+16145550199", "DONE", DateTime.UtcNow);
+            "SM-sibling-after-completion", "+16145550199", "DONE", siblingCompletionAt);
+        var replay = await CreateDoneSut().TryHandleAsync(
+            "SM-sibling-after-completion", "+16145550199", "DONE", siblingCompletionAt);
 
         result.Handled.Should().BeTrue();
-        (await _ctx.Db.VendorDispatches.SingleAsync()).Status.Should().Be(VendorDispatchStatus.Completed);
+        result.WorkOrderId.Should().Be(completedWorkOrder.Id);
+        replay.Handled.Should().BeTrue();
+        replay.WorkOrderId.Should().Be(completedWorkOrder.Id);
+        _ctx.Db.ChangeTracker.Clear();
+        var closedSibling = await _ctx.Db.VendorDispatches.SingleAsync(row => row.Id == openSibling.Id);
+        closedSibling.Status.Should().Be(VendorDispatchStatus.Completed);
+        closedSibling.RespondedAtUtc.Should().Be(siblingCompletionAt);
+        (await _ctx.Db.VendorDispatches.CountAsync(row =>
+            row.WorkOrderId == completedWorkOrder.Id
+            && row.Status == VendorDispatchStatus.Completed)).Should().Be(2);
         (await _ctx.Db.Vendors.SingleAsync(row => row.Id == vendor.Id)).JobsCompleted.Should().Be(1);
         (await _ctx.Db.WorkOrderStatusEvents.CountAsync(row =>
-            row.WorkOrderId == completedWorkOrder.Id)).Should().Be(0);
+            row.WorkOrderId == completedWorkOrder.Id)).Should().Be(1);
+        (await _ctx.Db.Notifications.CountAsync(row =>
+            row.RelatedEntityId == completedWorkOrder.Id)).Should().Be(0);
+        var receipt = (await _ctx.Db.AtomicCommandReceipts
+            .Where(row => row.CommandType == "sms.vendor-done")
+            .ToListAsync()).Should().ContainSingle().Subject;
+        receipt.Status.Should().Be(AtomicCommandReceiptStatus.Completed);
+        receipt.CompletedAt.Should().NotBeNull();
+        var audits = await _ctx.Db.AtomicAuditLogs
+            .Where(row => row.CommandType == "sms.vendor-done")
+            .ToListAsync();
+        audits.Should().ContainSingle(row =>
+            row.EntityType == nameof(VendorDispatch)
+            && row.EntityId == openSibling.Id);
+        audits.Should().NotContain(row =>
+            row.EntityType == nameof(Vendor)
+            || row.EntityType == nameof(WorkOrder)
+            || row.EntityType == nameof(WorkOrderStatusEvent)
+            || row.EntityType == nameof(Notification));
     }
 
     [Fact]
