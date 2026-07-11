@@ -2,12 +2,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Automation;
 
 namespace RentalCommand.Engine.Services;
 
@@ -22,25 +22,25 @@ namespace RentalCommand.Engine.Services;
 public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly INotificationSettingsService _settings;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
+    private readonly IScheduledAutomationClaimStore _claims;
     private readonly ILogger<RecurringMaintenanceService> _logger;
 
     public RecurringMaintenanceService(
         RentalCommandDbContext db,
-        INotificationSettingsService settings,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
         IAppTimeZoneProvider tz,
+        IScheduledAutomationClaimStore claims,
         ILogger<RecurringMaintenanceService> logger)
     {
         _db = db;
-        _settings = settings;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _tz = tz;
+        _claims = claims;
         _logger = logger;
     }
 
@@ -61,28 +61,60 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), businessTimeZone).Date,
             DateTimeKind.Utc);
 
-        // Active, non-deleted tasks that are due. The query filter already excludes soft-deleted rows.
-        var tasks = await _db.RecurringMaintenanceTasks
-            .Where(t => t.IsActive && t.NextDueDate <= today)
-            .ToListAsync(ct);
-
-        var configCache = new Dictionary<int, NotificationsConfig>();
+        var claims = await _claims.ClaimRecurringMaintenanceAsync(
+            $"{Environment.MachineName}:recurring-maintenance", today, _timeProvider.UtcNow(),
+            TimeSpan.FromMinutes(6), 25, ct);
         var created = 0;
 
-        foreach (var task in tasks)
+        foreach (var claim in claims)
         {
             ct.ThrowIfCancellationRequested();
+            created += await ProcessClaimAsync(claim, today, businessTimeZone, ct);
+        }
 
-            // Settings are per-portfolio. The master EnableRecurringMaintenance flag is the outer gate;
-            // the per-task IsActive (filtered above) is the real switch.
-            if (!configCache.TryGetValue(task.PortfolioId, out var cfg))
+        if (created > 0)
+        {
+            _logger.LogInformation(
+                "RecurringMaintenanceService created {Count} work order(s) from recurring maintenance schedules.",
+                created);
+        }
+
+        return created;
+    }
+
+    private async Task<int> ProcessClaimAsync(
+        ScheduledAutomationClaim claim,
+        DateTime today,
+        TimeZoneInfo businessTimeZone,
+        CancellationToken ct)
+    {
+        WorkOrder? workOrder = null;
+        int portfolioId = 0;
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var ownedTask = _db.Database.IsNpgsql()
+                ? _db.RecurringMaintenanceTasks.FromSqlInterpolated($"""
+                    SELECT * FROM "RecurringMaintenanceTasks"
+                    WHERE "Id" = {claim.Id} AND "WorkerClaimToken" = {claim.ClaimToken}
+                    FOR UPDATE
+                    """)
+                : _db.RecurringMaintenanceTasks.Where(row =>
+                    row.Id == claim.Id && row.WorkerClaimToken == claim.ClaimToken);
+            var task = await ownedTask.SingleOrDefaultAsync(ct);
+            if (task is null)
             {
-                cfg = await _settings.GetRuntimeAsync(task.PortfolioId, ct);
-                configCache[task.PortfolioId] = cfg;
+                await tx.RollbackAsync(ct);
+                return 0;
             }
 
-            if (!cfg.EnableRecurringMaintenance)
-                continue;
+            if (!task.IsActive || task.NextDueDate > today)
+            {
+                ClearClaim(task);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
             var now = _timeProvider.UtcNow();
 
@@ -97,7 +129,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             }
             while (nextDue <= today);
 
-            var workOrder = new WorkOrder
+            workOrder = new WorkOrder
             {
                 PortfolioId = task.PortfolioId,
                 PropertyId = task.PropertyId,
@@ -130,47 +162,57 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             });
 
             _db.WorkOrders.Add(workOrder);
+            portfolioId = task.PortfolioId;
 
             // The work-order insert and the schedule advance must commit atomically: a crash between two
             // separate saves could create a work order without rolling NextDueDate forward, double-billing
             // the chore on the next cycle. Wrap both in one transaction; the (active, due) re-scan retries
             // the whole unit if it rolls back.
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            try
-            {
-                task.LastGeneratedAtUtc = now;
-                task.NextDueDate = nextDue;
-                task.UpdatedAt = now;
+            task.LastGeneratedAtUtc = now;
+            task.NextDueDate = nextDue;
+            task.UpdatedAt = now;
+            ClearClaim(task);
 
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                created++;
-
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    task.PortfolioId, "WorkOrder", workOrder.Id, WorkOrderResponse.FromEntity(workOrder), ct);
-            }
-            catch (Exception ex)
-            {
-                await tx.RollbackAsync(ct);
-                _logger.LogWarning(
-                    ex,
-                    "Failed to generate work order for recurring maintenance task {TaskId} (portfolio {PortfolioId}); rolled back, will retry",
-                    task.Id, task.PortfolioId);
-
-                // Detach so the context stays usable for the next iteration.
-                _db.Entry(workOrder).State = EntityState.Detached;
-                continue;
-            }
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
         }
-
-        if (created > 0)
+        catch (OperationCanceledException)
         {
-            _logger.LogInformation(
-                "RecurringMaintenanceService created {Count} work order(s) from recurring maintenance schedules.",
-                created);
+            await tx.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            _logger.LogWarning(
+                ex,
+                "Failed recurring-maintenance claim for task {TaskId}; lease will expire for retry",
+                claim.Id);
+            return 0;
         }
 
-        return created;
+        // Realtime is a post-commit hint. A transient NOTIFY failure must never roll back or duplicate
+        // the durable work order/schedule advance; the next read still sees the committed record.
+        try
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, "WorkOrder", workOrder!.Id, WorkOrderResponse.FromEntity(workOrder), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Work order {WorkOrderId} committed but realtime broadcast failed", workOrder!.Id);
+        }
+
+        return 1;
+    }
+
+    private static void ClearClaim(RecurringMaintenanceTask task)
+    {
+        task.WorkerClaimOwner = null;
+        task.WorkerClaimToken = null;
+        task.WorkerClaimExpiresAtUtc = null;
     }
 
     /// <summary>Advance a due date by one recurrence period (Weekly = +7d, else calendar months/years).</summary>

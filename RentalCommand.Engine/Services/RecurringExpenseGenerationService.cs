@@ -4,6 +4,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Automation;
 
 namespace RentalCommand.Engine.Services;
 
@@ -26,17 +27,20 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
+    private readonly IScheduledAutomationClaimStore _claims;
     private readonly ILogger<RecurringExpenseGenerationService> _logger;
 
     public RecurringExpenseGenerationService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         IAppTimeZoneProvider tz,
+        IScheduledAutomationClaimStore claims,
         ILogger<RecurringExpenseGenerationService> logger)
     {
         _db = db;
         _timeProvider = timeProvider;
         _tz = tz;
+        _claims = claims;
         _logger = logger;
     }
 
@@ -49,15 +53,51 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
             TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date,
             DateTimeKind.Utc);
 
-        var templates = await _db.RecurringExpenses
-            .Where(t => t.Active && t.NextRunDate <= today)
-            .ToListAsync(ct);
-
+        var claims = await _claims.ClaimRecurringExpensesAsync(
+            $"{Environment.MachineName}:recurring-expense", today, _timeProvider.UtcNow(),
+            TimeSpan.FromMinutes(3), 25, ct);
         var created = 0;
 
-        foreach (var template in templates)
+        foreach (var claim in claims)
         {
             ct.ThrowIfCancellationRequested();
+            created += await ProcessClaimAsync(claim, today, ct);
+        }
+
+        if (created > 0)
+            _logger.LogInformation(
+                "RecurringExpenseGenerationService created {Count} expense(s) from recurring templates.", created);
+
+        return created;
+    }
+
+    private async Task<int> ProcessClaimAsync(
+        ScheduledAutomationClaim claim, DateTime today, CancellationToken ct)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var ownedTemplate = _db.Database.IsNpgsql()
+                ? _db.RecurringExpenses.FromSqlInterpolated($"""
+                    SELECT * FROM "RecurringExpenses"
+                    WHERE "Id" = {claim.Id} AND "WorkerClaimToken" = {claim.ClaimToken}
+                    FOR UPDATE
+                    """)
+                : _db.RecurringExpenses.Where(row => row.Id == claim.Id && row.WorkerClaimToken == claim.ClaimToken);
+            var template = await ownedTemplate.SingleOrDefaultAsync(ct);
+            if (template is null)
+            {
+                await tx.RollbackAsync(ct);
+                return 0;
+            }
+
+            if (!template.Active || template.NextRunDate > today)
+            {
+                ClearClaim(template);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
             var now = _timeProvider.UtcNow();
             var newExpenses = new List<Expense>();
@@ -92,42 +132,48 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
                 runDate = Advance(runDate, template.Frequency);
 
             if (newExpenses.Count == 0)
-                continue;
+            {
+                ClearClaim(template);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
             // The expense inserts and the NextRunDate advance must commit atomically: a crash between
             // separate saves could create expenses without advancing the schedule, double-billing the
             // cost next cycle. One transaction; the (active, due) re-scan retries the whole unit.
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            try
-            {
-                _db.Expenses.AddRange(newExpenses);
-                template.NextRunDate = runDate;
-                template.UpdatedAt = now;
+            _db.Expenses.AddRange(newExpenses);
+            template.NextRunDate = runDate;
+            template.UpdatedAt = now;
+            ClearClaim(template);
 
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                created += newExpenses.Count;
-            }
-            catch (Exception ex)
-            {
-                await tx.RollbackAsync(ct);
-                _logger.LogWarning(
-                    ex,
-                    "Failed to materialize recurring expense template {TemplateId} (portfolio {PortfolioId}); rolled back, will retry",
-                    template.Id, template.PortfolioId);
-
-                foreach (var e in newExpenses)
-                    _db.Entry(e).State = EntityState.Detached;
-                _db.Entry(template).State = EntityState.Unchanged;
-                continue;
-            }
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return newExpenses.Count;
         }
+        catch (OperationCanceledException)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            _logger.LogWarning(
+                ex,
+                "Failed recurring-expense claim for template {TemplateId}; lease will expire for retry",
+                claim.Id);
+            return 0;
+        }
+    }
 
-        if (created > 0)
-            _logger.LogInformation(
-                "RecurringExpenseGenerationService created {Count} expense(s) from recurring templates.", created);
-
-        return created;
+    private static void ClearClaim(RecurringExpense template)
+    {
+        template.WorkerClaimOwner = null;
+        template.WorkerClaimToken = null;
+        template.WorkerClaimExpiresAtUtc = null;
     }
 
     /// <summary>Advance a run date by one period (Monthly = +1mo, Quarterly = +3mo, Annual = +1yr).</summary>

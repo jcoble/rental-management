@@ -152,6 +152,8 @@ builder.Services.AddScoped<NativeEsignReconciliationService>();
 builder.Services.AddScoped<RentalCommand.Data.Payments.IProviderInboxClaimStore,
     RentalCommand.Data.Payments.ProviderInboxClaimStore>();
 builder.Services.AddScoped<ProviderInboxReconciliationService>();
+builder.Services.AddScoped<RentalCommand.Data.Automation.IScheduledAutomationClaimStore,
+    RentalCommand.Data.Automation.ScheduledAutomationClaimStore>();
 // Realtime backplane (TSK-624): the Engine can't reach the API's in-memory SignalR hub, so it
 // publishes each entity change as a Postgres NOTIFY on its own pooled connection. The API-hosted
 // EntityChangeListener LISTENs and re-broadcasts to the hub. Shared NpgsqlDataSource so publishes

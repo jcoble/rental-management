@@ -5,6 +5,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Automation;
 
 namespace RentalCommand.Engine.Services;
 
@@ -23,17 +24,20 @@ public sealed class DebtServiceService : IDebtServiceService
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
+    private readonly IScheduledAutomationClaimStore _claims;
     private readonly ILogger<DebtServiceService> _logger;
 
     public DebtServiceService(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         IAppTimeZoneProvider tz,
+        IScheduledAutomationClaimStore claims,
         ILogger<DebtServiceService> logger)
     {
         _db = db;
         _timeProvider = timeProvider;
         _tz = tz;
+        _claims = claims;
         _logger = logger;
     }
 
@@ -44,32 +48,53 @@ public sealed class DebtServiceService : IDebtServiceService
         // RentChargeService). Drives the "current period" math only; DB writes stay UTC.
         var today = TimeZoneInfo.ConvertTimeFromUtc(_timeProvider.UtcNow(), _tz.BusinessTimeZone).Date;
 
-        var loans = await _db.Loans
-            .Where(l => l.Status == LoanStatus.Active)
-            .ToListAsync(ct);
-
-        var loanIds = loans.Select(l => l.Id).ToList();
-        var tailRowsByLoanId = loanIds.Count == 0
-            ? new Dictionary<int, LoanPaymentTail>()
-            : await _db.LoanPayments
-                .AsNoTracking()
-                .Where(p => loanIds.Contains(p.LoanId))
-                .GroupBy(p => p.LoanId)
-                .Select(g => g
-                    .OrderByDescending(p => p.PeriodKey)
-                    .Select(p => new LoanPaymentTail(p.LoanId, p.PeriodKey, p.BalanceAfter))
-                    .First())
-                .ToDictionaryAsync(x => x.LoanId, x => x, ct);
-
+        var claims = await _claims.ClaimDebtServiceAsync(
+            $"{Environment.MachineName}:debt-service", today, _timeProvider.UtcNow(),
+            TimeSpan.FromMinutes(3), 25, ct);
         var created = 0;
 
-        foreach (var loan in loans)
+        foreach (var claim in claims)
         {
             ct.ThrowIfCancellationRequested();
+            created += await ProcessClaimAsync(claim, today, ct);
+        }
+
+        if (created > 0)
+            _logger.LogInformation("DebtServiceService created {Count} loan payment(s)", created);
+
+        return created;
+    }
+
+    private async Task<int> ProcessClaimAsync(
+        ScheduledAutomationClaim claim, DateTime today, CancellationToken ct)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            // Lock and re-check ownership before creating any child rows. If the lease expired and
+            // another worker reclaimed it, this transaction performs no business write.
+            var ownedLoan = _db.Database.IsNpgsql()
+                ? _db.Loans.FromSqlInterpolated($"""
+                    SELECT * FROM "Loans"
+                    WHERE "Id" = {claim.Id} AND "WorkerClaimToken" = {claim.ClaimToken}
+                    FOR UPDATE
+                    """)
+                : _db.Loans.Where(row => row.Id == claim.Id && row.WorkerClaimToken == claim.ClaimToken);
+            var loan = await ownedLoan.SingleOrDefaultAsync(ct);
+            if (loan is null)
+            {
+                await tx.RollbackAsync(ct);
+                return 0;
+            }
 
             // Nothing to amortize for a non-positive term or balance.
-            if (loan.TermMonths <= 0)
-                continue;
+            if (loan.Status != LoanStatus.Active || loan.TermMonths <= 0)
+            {
+                ClearClaim(loan);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
             var startMonth = new DateTime(loan.StartDate.Year, loan.StartDate.Month, 1);
             var currentMonth = new DateTime(today.Year, today.Month, 1);
@@ -78,14 +103,22 @@ public sealed class DebtServiceService : IDebtServiceService
             // elapsed (inclusive). Before the loan starts there is nothing to generate.
             var currentPeriodIndex = MonthsBetween(startMonth, currentMonth) + 1;
             if (currentPeriodIndex < 1)
-                continue;
+            {
+                ClearClaim(loan);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
             // Never generate past the loan term (maturity stop, §18).
             var lastPeriodToGenerate = Math.Min(currentPeriodIndex, loan.TermMonths);
 
-            // Resume from the immutable schedule: the most recent existing row is the chain's tail.
-            // The tails for all active loans were loaded in one grouped SQL query above.
-            tailRowsByLoanId.TryGetValue(loan.Id, out var lastRow);
+            var lastRow = await _db.LoanPayments
+                .AsNoTracking()
+                .Where(p => p.LoanId == loan.Id)
+                .OrderByDescending(p => p.PeriodKey)
+                .Select(p => new LoanPaymentTail(p.LoanId, p.PeriodKey, p.BalanceAfter))
+                .FirstOrDefaultAsync(ct);
 
             var nextPeriodIndex = lastRow is null
                 ? 1
@@ -139,7 +172,12 @@ public sealed class DebtServiceService : IDebtServiceService
             }
 
             if (loanCreated == 0)
-                continue;
+            {
+                ClearClaim(loan);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+                return 0;
+            }
 
             // Update the derived cache (CurrentBalance/Status). This is a convenience mirror; the
             // authoritative figures live in the LoanPayment rows.
@@ -147,30 +185,31 @@ public sealed class DebtServiceService : IDebtServiceService
             loan.UpdatedAt = _timeProvider.UtcNow();
             if (paidOff)
                 loan.Status = LoanStatus.PaidOff;
-
-            try
-            {
-                await _db.SaveChangesAsync(ct);
-                created += loanCreated;
-            }
-            catch (DbUpdateException ex)
-            {
-                // The unique (LoanId, PeriodKey) index is a backstop against a race between two worker
-                // instances. Treat as a no-op for this loan and move on; the next cycle re-attempts.
-                _logger.LogDebug(
-                    ex,
-                    "Debt-service rows for loan {LoanId} already exist (DB unique violation — skipping)",
-                    loan.Id);
-                foreach (var entry in _db.ChangeTracker.Entries<LoanPayment>().ToList())
-                    entry.State = EntityState.Detached;
-                _db.Entry(loan).State = EntityState.Unchanged;
-            }
+            ClearClaim(loan);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return loanCreated;
         }
+        catch (OperationCanceledException)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            _logger.LogWarning(ex, "Failed debt-service claim for loan {LoanId}; lease will expire for retry", claim.Id);
+            return 0;
+        }
+    }
 
-        if (created > 0)
-            _logger.LogInformation("DebtServiceService created {Count} loan payment(s)", created);
-
-        return created;
+    private static void ClearClaim(Loan loan)
+    {
+        loan.WorkerClaimOwner = null;
+        loan.WorkerClaimToken = null;
+        loan.WorkerClaimExpiresAtUtc = null;
     }
 
     /// <summary>Whole calendar months from <paramref name="from"/> to <paramref name="to"/> (both 1st-of-month).</summary>

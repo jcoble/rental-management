@@ -2647,6 +2647,19 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("WorkerClaimAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("WorkerClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WorkerClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("WorkerClaimToken")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("PortfolioId");
@@ -2654,6 +2667,9 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PropertyId");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("Status", "WorkerClaimExpiresAtUtc", "StartDate", "Id")
+                        .HasDatabaseName("IX_Loans_DebtServiceClaim");
 
                     b.ToTable("Loans");
                 });
@@ -4215,6 +4231,19 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("WorkerClaimAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("WorkerClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WorkerClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("WorkerClaimToken")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("PortfolioId");
@@ -4223,7 +4252,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("UnitId");
 
-                    b.HasIndex("Active", "NextRunDate");
+                    b.HasIndex("Active", "NextRunDate", "WorkerClaimExpiresAtUtc", "Id")
+                        .HasDatabaseName("IX_RecurringExpenses_GenerationClaim");
 
                     b.ToTable("RecurringExpenses");
                 });
@@ -4296,6 +4326,19 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int?>("VendorId")
                         .HasColumnType("integer");
 
+                    b.Property<int>("WorkerClaimAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("WorkerClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WorkerClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("WorkerClaimToken")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("PropertyId");
@@ -4306,6 +4349,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("IsActive", "NextDueDate")
                         .HasDatabaseName("IX_RecurringMaintenanceTasks_Active_NextDueDate");
+
+                    b.HasIndex("IsActive", "NextDueDate", "WorkerClaimExpiresAtUtc", "Id")
+                        .HasDatabaseName("IX_RecurringMaintenanceTasks_GenerationClaim");
 
                     b.HasIndex("PortfolioId", "IsActive", "NextDueDate");
 

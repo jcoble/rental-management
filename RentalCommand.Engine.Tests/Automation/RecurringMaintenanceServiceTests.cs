@@ -120,21 +120,6 @@ public class RecurringMaintenanceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task MasterFlagDisabled_GeneratesNothing()
-    {
-        var today = DateTime.UtcNow.Date;
-        var property = SeedProperty();
-        SeedTask(property.Id, interval: RecurrenceInterval.Monthly, nextDueDate: today, isActive: true);
-
-        var sut = BuildService(enable: false);
-
-        var result = await sut.GenerateAsync();
-
-        result.Should().Be(0);
-        _ctx.Db.WorkOrders.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task BackloggedTask_GeneratesOnlyOne_AndCatchesUpPastToday()
     {
         // A task that fell several weeks behind (Engine was down) should produce exactly ONE work
@@ -163,17 +148,12 @@ public class RecurringMaintenanceServiceTests : IDisposable
 
     private RecurringMaintenanceService BuildService(bool enable)
     {
-        var cfg = new NotificationsConfig
-        {
-            EnableRecurringMaintenance = enable,
-        };
-
         return new RecurringMaintenanceService(
             _ctx.Db,
-            new FakeNotificationSettingsService(cfg),
             Mock.Of<IDataUpdateService>(),
             TimeProvider.System,
             new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
+            new TestScheduledAutomationClaimStore(_ctx.Db),
             NullLogger<RecurringMaintenanceService>.Instance);
     }
 
