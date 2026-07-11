@@ -92,7 +92,9 @@ public sealed record ApplyPlaidSyncCommand(
     string? ExpectedCursorCipherText,
     string? NextCursorCipherText,
     IReadOnlyList<BankTransactionInput> Added,
+    int AddedInputCount,
     IReadOnlyList<BankTransactionInput> Modified,
+    int ModifiedInputCount,
     IReadOnlyList<string> RemovedProviderTransactionIds,
     string ProviderRequestIdentity,
     DateTime AppliedAtUtc) : IAtomicCommandData;

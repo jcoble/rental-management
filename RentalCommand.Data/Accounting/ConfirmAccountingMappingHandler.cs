@@ -15,6 +15,8 @@ internal sealed record AccountingPromotionContext(
     string ClientOperationId,
     DateTime OccurredAtUtc);
 
+internal sealed record AccountingPromotionBatchResult(int PromotedCount, bool HasMore);
+
 public sealed class ConfirmAccountingMappingHandler
     : IAtomicCommandHandler<ConfirmAccountingMappingCommand, ConfirmAccountingMappingResult>
 {
@@ -73,17 +75,12 @@ public sealed class ConfirmAccountingMappingHandler
         mapping.ConfirmedByUserId = command.ConfirmedByUserId;
         mapping.UpdatedAt = confirmationTimestamp;
         mapping.Revision++;
-        if (!created)
-            attempt.BindSemanticAudit(mapping, MappingAudit(command, mapping.Id, mapping.Revision, confirmationTimestamp));
+        var mappingAudit = MappingAudit(command, created ? 0 : mapping.Id, mapping.Revision, confirmationTimestamp);
+        attempt.BindSemanticAudit(mapping, created
+            ? mappingAudit with { Operation = AuditLogOperation.Created }
+            : mappingAudit);
 
         await attempt.FlushBusinessAsync(ct);
-        if (created)
-        {
-            attempt.StageSemanticEvent(MappingAudit(command, mapping.Id, mapping.Revision, confirmationTimestamp) with
-            {
-                Operation = AuditLogOperation.Created,
-            });
-        }
 
         var context = new AccountingPromotionContext(
             command.PortfolioId,
@@ -91,8 +88,9 @@ public sealed class ConfirmAccountingMappingHandler
             command.ConfirmedByUserId,
             command.ClientOperationId,
             command.ConfirmedAtUtc);
-        var promoted = await PromoteOneBatchAsync(context, attempt, ct);
-        var hasMore = await HasPromotableAsync(context, attempt, ct);
+        var promotion = await PromoteOneBatchAsync(context, attempt, ct);
+        var promoted = promotion.PromotedCount;
+        var hasMore = promotion.HasMore;
         AccountingMappingPromotionJob? continuation = null;
         if (hasMore)
         {
@@ -173,17 +171,20 @@ public sealed class ConfirmAccountingMappingHandler
             && Enum.TryParse<ScheduleECategory>(category, out _);
     }
 
-    internal static async Task<int> PromoteOneBatchAsync(
+    internal static async Task<AccountingPromotionBatchResult> PromoteOneBatchAsync(
         AccountingPromotionContext command,
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
         var payments = await PromotePaymentBatchAsync(command, attempt, PromotionBatchSize, ct);
-        var remaining = PromotionBatchSize - payments;
-        return payments + (remaining == 0 ? 0 : await PromoteExpenseBatchAsync(command, attempt, remaining, ct));
+        var remaining = PromotionBatchSize - payments.PromotedCount;
+        var expenses = await PromoteExpenseBatchAsync(command, attempt, remaining, ct);
+        return new AccountingPromotionBatchResult(
+            payments.PromotedCount + expenses.PromotedCount,
+            payments.HasMore || expenses.HasMore);
     }
 
-    private static async Task<int> PromotePaymentBatchAsync(
+    private static async Task<AccountingPromotionBatchResult> PromotePaymentBatchAsync(
         AccountingPromotionContext command,
         IAtomicWriteAttempt attempt,
         int take,
@@ -193,7 +194,7 @@ public sealed class ConfirmAccountingMappingHandler
         var parked = attempt.Persistence.Query<AccountingParkedTransaction>();
         var mappings = attempt.Persistence.Query<AccountingEntityMapping>();
         var leases = attempt.Persistence.Query<Lease>();
-        var batch = await (
+        var candidates =
             from ledger in ledgers
             join payload in parked on ledger.Id equals payload.Id
             join customer in mappings on payload.CustomerExternalId equals customer.ExternalId
@@ -219,7 +220,6 @@ public sealed class ConfirmAccountingMappingHandler
                     && LiveLeaseStatuses.Contains(other.Status)
                     && (other.StartDate > lease.StartDate
                         || (other.StartDate == lease.StartDate && other.Id > lease.Id)))
-            orderby ledger.Id
             select new
             {
                 Ledger = ledger,
@@ -237,9 +237,24 @@ public sealed class ConfirmAccountingMappingHandler
                     && (account.ExternalDisplayName.ToLower().Contains("security deposit")
                         || account.ExternalDisplayName.ToLower().Contains("deposit held")
                         || account.ExternalDisplayName.ToLower().Contains("tenant deposit"))),
+            };
+        var batch = await candidates
+            .OrderBy(row => row.Ledger.Id)
+            .Select(row => new
+            {
+                row.Ledger,
+                row.LeaseId,
+                row.Amount,
+                row.TxnDateUtc,
+                row.PaymentMethod,
+                row.ReferenceNumber,
+                row.ExternalId,
+                row.IsDeposit,
+                HasFollowing = candidates.Any(other => other.Ledger.Id > row.Ledger.Id),
             })
             .Take(take)
             .ToListAsync(ct);
+        var hasMore = batch.Count == take && batch[^1].HasFollowing;
 
         var pairs = batch.Select(row => new
         {
@@ -267,10 +282,10 @@ public sealed class ConfirmAccountingMappingHandler
             attempt.StageSemanticEvent(PromotionAudit(command, pair.Ledger, LocalEntityKind.Payment, pair.Payment.Id));
         }
         if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
-        return pairs.Count;
+        return new AccountingPromotionBatchResult(pairs.Count, hasMore);
     }
 
-    private static async Task<int> PromoteExpenseBatchAsync(
+    private static async Task<AccountingPromotionBatchResult> PromoteExpenseBatchAsync(
         AccountingPromotionContext command,
         IAtomicWriteAttempt attempt,
         int take,
@@ -324,14 +339,32 @@ public sealed class ConfirmAccountingMappingHandler
                     .Select(mapping => mapping.LocalEnumValue)
                     .FirstOrDefault(),
             };
-        var batch = await candidates
-            .Where(row => (row.Category == null || row.Category != nameof(ScheduleECategory.Depreciation))
+        var eligible = candidates.Where(row => (row.Category == null || row.Category != nameof(ScheduleECategory.Depreciation))
                 && (row.VendorId != null || row.PropertyId != null
                     || (row.Category != null && ImportableCategoryNames.Contains(row.Category)
-                        && row.Category != nameof(ScheduleECategory.Other))))
+                        && row.Category != nameof(ScheduleECategory.Other))));
+        var queryTake = take == 0 ? 1 : take;
+        var batch = await eligible
             .OrderBy(row => row.Ledger.Id)
-            .Take(take)
+            .Select(row => new
+            {
+                row.Ledger,
+                row.Amount,
+                row.TxnDateUtc,
+                row.ReferenceNumber,
+                row.ExternalId,
+                row.VendorId,
+                row.PropertyId,
+                row.Category,
+                HasFollowing = eligible.Any(other => other.Ledger.Id > row.Ledger.Id),
+            })
+            .Take(queryTake)
             .ToListAsync(ct);
+        if (take == 0)
+        {
+            return new AccountingPromotionBatchResult(0, batch.Count != 0);
+        }
+        var hasMore = batch.Count == take && batch[^1].HasFollowing;
         var pairs = batch.Select(row => new
         {
             row.Ledger,
@@ -359,85 +392,7 @@ public sealed class ConfirmAccountingMappingHandler
             attempt.StageSemanticEvent(PromotionAudit(command, pair.Ledger, LocalEntityKind.Expense, pair.Expense.Id));
         }
         if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
-        return pairs.Count;
-    }
-
-    internal static async Task<bool> HasPromotableAsync(
-        AccountingPromotionContext command,
-        IAtomicWriteAttempt attempt,
-        CancellationToken ct)
-    {
-        var ledgers = attempt.Persistence.Query<AccountingSyncMap>();
-        var parked = attempt.Persistence.Query<AccountingParkedTransaction>();
-        var mappings = attempt.Persistence.Query<AccountingEntityMapping>();
-        var leases = attempt.Persistence.Query<Lease>();
-        var hasPayment = await (
-            from ledger in ledgers
-            join payload in parked on ledger.Id equals payload.Id
-            join customer in mappings on payload.CustomerExternalId equals customer.ExternalId
-            join lease in leases on customer.LocalEntityId equals (int?)lease.TenantId
-            where ledger.PortfolioId == command.PortfolioId
-                && ledger.AccountingConnectionId == command.AccountingConnectionId
-                && ledger.Direction == LedgerDirection.Import
-                && ledger.ExternalType == ExternalKind.Payment
-                && (ledger.Status == LedgerStatus.NeedsReview || ledger.Status == LedgerStatus.Unmatched)
-                && ledger.LocalEntityId == null
-                && customer.PortfolioId == command.PortfolioId
-                && customer.AccountingConnectionId == command.AccountingConnectionId
-                && customer.ExternalType == ExternalKind.Customer
-                && customer.LocalEntityType == LocalEntityKind.Tenant
-                && customer.ConfirmedAt != null && customer.LocalEntityId != null
-                && lease.PortfolioId == command.PortfolioId && lease.DeletedAt == null
-                && LiveLeaseStatuses.Contains(lease.Status)
-                && !leases.Any(other => other.PortfolioId == command.PortfolioId
-                    && other.DeletedAt == null && other.TenantId == lease.TenantId
-                    && LiveLeaseStatuses.Contains(other.Status)
-                    && (other.StartDate > lease.StartDate
-                        || (other.StartDate == lease.StartDate && other.Id > lease.Id)))
-            select ledger.Id).AnyAsync(ct);
-        if (hasPayment) return true;
-
-        var vendors = attempt.Persistence.Query<Vendor>();
-        var properties = attempt.Persistence.Query<Property>();
-        return await (
-            from ledger in ledgers
-            join payload in parked on ledger.Id equals payload.Id
-            let vendorId = mappings.Where(mapping => mapping.PortfolioId == command.PortfolioId
-                    && mapping.AccountingConnectionId == command.AccountingConnectionId
-                    && mapping.ExternalType == ExternalKind.Vendor
-                    && mapping.ExternalId == payload.VendorExternalId
-                    && mapping.LocalEntityType == LocalEntityKind.Vendor
-                    && mapping.ConfirmedAt != null && mapping.LocalEntityId != null)
-                .Join(vendors.Where(vendor => vendor.PortfolioId == command.PortfolioId && vendor.DeletedAt == null),
-                    mapping => mapping.LocalEntityId, vendor => (int?)vendor.Id, (_, vendor) => (int?)vendor.Id)
-                .FirstOrDefault()
-            let propertyId = mappings.Where(mapping => mapping.PortfolioId == command.PortfolioId
-                    && mapping.AccountingConnectionId == command.AccountingConnectionId
-                    && mapping.ExternalType == ExternalKind.Class
-                    && mapping.ExternalId == payload.ClassExternalId
-                    && mapping.LocalEntityType == LocalEntityKind.Property
-                    && mapping.ConfirmedAt != null && mapping.LocalEntityId != null)
-                .Join(properties.Where(property => property.PortfolioId == command.PortfolioId && property.DeletedAt == null),
-                    mapping => mapping.LocalEntityId, property => (int?)property.Id, (_, property) => (int?)property.Id)
-                .FirstOrDefault()
-            let category = mappings.Where(mapping => mapping.PortfolioId == command.PortfolioId
-                    && mapping.AccountingConnectionId == command.AccountingConnectionId
-                    && mapping.ExternalType == ExternalKind.Account
-                    && mapping.ExternalId == payload.AccountExternalId
-                    && mapping.LocalEntityType == LocalEntityKind.ScheduleECategory
-                    && mapping.ConfirmedAt != null && mapping.LocalEnumValue != null)
-                .Select(mapping => mapping.LocalEnumValue).FirstOrDefault()
-            where ledger.PortfolioId == command.PortfolioId
-                && ledger.AccountingConnectionId == command.AccountingConnectionId
-                && ledger.Direction == LedgerDirection.Import
-                && (ledger.ExternalType == ExternalKind.Purchase || ledger.ExternalType == ExternalKind.Bill)
-                && (ledger.Status == LedgerStatus.NeedsReview || ledger.Status == LedgerStatus.Unmatched)
-                && ledger.LocalEntityId == null
-                && (category == null || category != nameof(ScheduleECategory.Depreciation))
-                && (vendorId != null || propertyId != null
-                    || (category != null && ImportableCategoryNames.Contains(category)
-                        && category != nameof(ScheduleECategory.Other)))
-            select ledger.Id).AnyAsync(ct);
+        return new AccountingPromotionBatchResult(pairs.Count, hasMore);
     }
 
     private static async Task StageConfirmationNoticeAsync(
@@ -599,9 +554,10 @@ public sealed class ContinueAccountingMappingPromotionHandler
             command.RequestedByUserId,
             command.ClientOperationId,
             command.AppliedAtUtc);
-        var promoted = await ConfirmAccountingMappingHandler.PromoteOneBatchAsync(context, attempt, ct);
+        var promotion = await ConfirmAccountingMappingHandler.PromoteOneBatchAsync(context, attempt, ct);
+        var promoted = promotion.PromotedCount;
         job.PromotedCount += promoted;
-        var hasMore = await ConfirmAccountingMappingHandler.HasPromotableAsync(context, attempt, ct);
+        var hasMore = promotion.HasMore;
         if (!hasMore) job.CompletedAtUtc = command.AppliedAtUtc;
         return Result(ContinueAccountingMappingPromotionOutcome.Applied, command, promoted, job.PromotedCount, hasMore);
     }

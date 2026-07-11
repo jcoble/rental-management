@@ -248,9 +248,10 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         var command = new ApplyPlaidConnectionCommand(_portfolioId, exchangeAttemptId, _now);
         Failures.FailAtomicAudit = true;
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, ConnectionCodec))
-            .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("injected atomic audit failure");
+        var failure = await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, ConnectionCodec))
+            .Should().ThrowAsync<DbUpdateException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("injected atomic audit failure");
         Failures.FailAtomicAudit = false;
 
         await using (var failed = NewContext())
@@ -353,7 +354,9 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:rollback");
 
         var act = () => Atomic.ExecuteAsync(identity, Import("rollback", 2), ImportCodec);
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("injected notification failure");
+        var failure = await act.Should().ThrowAsync<DbUpdateException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("injected notification failure");
         Failures.FailNotifications = false;
 
         await using var db = NewContext();
@@ -542,7 +545,9 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         null,
         nextCursor,
         [Transaction(identity, 25m)],
+        1,
         [],
+        0,
         [],
         identity,
         _now.AddMinutes(1));

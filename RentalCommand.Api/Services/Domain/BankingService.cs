@@ -308,8 +308,10 @@ public class BankingService : IBankingService
                     connectionId,
                     connection.SyncCursorCipherText,
                     ProtectNullable(synced.NextCursor),
-                    added,
-                    modified,
+                    added.Items,
+                    added.InputCount,
+                    modified.Items,
+                    modified.InputCount,
                     removed,
                     providerIdentity,
                     _timeProvider.UtcNow()),
@@ -694,25 +696,35 @@ public class BankingService : IBankingService
         Normalize(item.Category),
         item.RawData);
 
-    private static IReadOnlyList<BankTransactionInput> NormalizePlaidInputs(
+    private sealed record NormalizedPlaidInputs(
+        IReadOnlyList<BankTransactionInput> Items,
+        int InputCount);
+
+    private static NormalizedPlaidInputs NormalizePlaidInputs(
         IReadOnlyList<PlaidSyncedTransaction> source,
-        string? linkedAccountId) => source
-        .Where(item => linkedAccountId is null || item.AccountId == linkedAccountId)
-        .Select(item => new BankTransactionInput(
-            Normalize(item.TransactionId) ?? string.Empty,
-            item.PostedAt.ToUtc(),
-            item.AuthorizedAt.ToUtc(),
-            item.Description.Trim(),
-            Normalize(item.MerchantName),
-            -item.Amount,
-            Normalize(item.IsoCurrencyCode) ?? "USD",
-            Normalize(item.Category),
-            item.RawData))
-        .Where(item => item.ProviderTransactionId.Length > 0)
-        .GroupBy(item => item.ProviderTransactionId, StringComparer.Ordinal)
-        .Select(group => group.Last())
-        .Take(MaxImportBatch)
-        .ToArray();
+        string? linkedAccountId)
+    {
+        var eligible = source
+            .Where(item => linkedAccountId is null || item.AccountId == linkedAccountId)
+            .ToArray();
+        var items = eligible
+            .Select(item => new BankTransactionInput(
+                Normalize(item.TransactionId) ?? string.Empty,
+                item.PostedAt.ToUtc(),
+                item.AuthorizedAt.ToUtc(),
+                item.Description.Trim(),
+                Normalize(item.MerchantName),
+                -item.Amount,
+                Normalize(item.IsoCurrencyCode) ?? "USD",
+                Normalize(item.Category),
+                item.RawData))
+            .Where(item => item.ProviderTransactionId.Length > 0)
+            .GroupBy(item => item.ProviderTransactionId, StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .Take(MaxImportBatch)
+            .ToArray();
+        return new NormalizedPlaidInputs(items, eligible.Length);
+    }
 
     private async Task<BankTransactionResponse?> ReconcileAsync(
         int portfolioId,
