@@ -60,22 +60,26 @@ public sealed class ConfirmAccountingMappingHandler
             attempt.Persistence.Add(mapping);
         }
 
+        var confirmationTimestamp = created
+            ? command.ConfirmedAtUtc
+            : NextMutationTimestamp(command.ConfirmedAtUtc, mapping.UpdatedAt);
+
         mapping.ExternalDisplayName = command.ExternalDisplayName;
         mapping.LocalEntityType = command.LocalEntityType;
         mapping.LocalEntityId = command.LocalEntityId;
         mapping.LocalEnumValue = command.LocalEnumValue;
-        mapping.ConfirmedAt = command.ConfirmedAtUtc;
+        mapping.ConfirmedAt = confirmationTimestamp;
         mapping.ConfirmedByUserId = command.ConfirmedByUserId;
-        mapping.UpdatedAt = command.ConfirmedAtUtc;
+        mapping.UpdatedAt = confirmationTimestamp;
         if (!created)
         {
-            attempt.BindSemanticAudit(mapping, MappingAudit(command, mapping.Id));
+            attempt.BindSemanticAudit(mapping, MappingAudit(command, mapping.Id, confirmationTimestamp));
         }
 
         await attempt.FlushBusinessAsync(ct);
         if (created)
         {
-            attempt.StageSemanticEvent(MappingAudit(command, mapping.Id) with
+            attempt.StageSemanticEvent(MappingAudit(command, mapping.Id, confirmationTimestamp) with
             {
                 Operation = AuditLogOperation.Created,
             });
@@ -90,7 +94,7 @@ public sealed class ConfirmAccountingMappingHandler
         {
         }
 
-        connection.UpdatedAt = command.ConfirmedAtUtc;
+        connection.UpdatedAt = NextMutationTimestamp(command.ConfirmedAtUtc, connection.UpdatedAt);
         attempt.BindSemanticAudit(connection, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(AccountingConnection),
@@ -101,6 +105,8 @@ public sealed class ConfirmAccountingMappingHandler
             {
                 MappingId = mapping.Id,
                 PromotedCount = paymentIds.Count + expenseIds.Count,
+                ConfirmedAt = connection.UpdatedAt,
+                command.RequestIdentity,
             }),
             ChangeReason: "Accounting mapping confirmation and parked-transaction promotion committed."));
 
@@ -440,9 +446,28 @@ public sealed class ConfirmAccountingMappingHandler
         ledger.UpdatedAt = occurredAt;
     }
 
+    private static DateTime NextMutationTimestamp(DateTime requestedAt, DateTime persistedAt)
+    {
+        if (requestedAt > persistedAt)
+        {
+            return requestedAt;
+        }
+
+        if (persistedAt == DateTime.MaxValue)
+        {
+            throw new InvalidOperationException("A confirmation timestamp cannot advance beyond DateTime.MaxValue.");
+        }
+
+        // A different receipt is a distinct confirmation even when the client fields and wall-clock
+        // timestamp are unchanged. Advance the persisted fact so the exact-object audit describes a
+        // real mutation and concurrent/corrected requests retain a strict ordering.
+        return persistedAt.AddTicks(1);
+    }
+
     private static AtomicSemanticAudit MappingAudit(
         ConfirmAccountingMappingCommand command,
-        int mappingId) => new(
+        int mappingId,
+        DateTime confirmationTimestamp) => new(
             command.PortfolioId,
             nameof(AccountingEntityMapping),
             mappingId,
@@ -455,6 +480,8 @@ public sealed class ConfirmAccountingMappingHandler
                 command.LocalEntityType,
                 command.LocalEntityId,
                 command.LocalEnumValue,
+                ConfirmedAt = confirmationTimestamp,
+                command.RequestIdentity,
             }),
             ChangeReason: "External accounting entity mapping confirmed.");
 

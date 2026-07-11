@@ -148,7 +148,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             identity,
             Command("customer-rollback", _tenantId),
             Codec);
-        await act.Should().ThrowAsync<InjectedOutboxFailure>();
+        var failure = await act.Should().ThrowAsync<DbUpdateException>();
+        failure.Which.InnerException.Should().BeOfType<InjectedOutboxFailure>();
         Failure.FailOutboxInsert = false;
 
         await using var db = NewContext();
@@ -227,6 +228,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             Codec);
 
         first.Value.PromotedCount.Should().Be(2);
+        corrected.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         corrected.Value.PromotedCount.Should().Be(0);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().BeEquivalentTo(corrected.Value);
@@ -236,6 +238,24 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         (await db.AccountingSyncMaps.CountAsync(ledger =>
             ledger.AccountingConnectionId == _connectionId
             && ledger.Status == LedgerStatus.Imported)).Should().Be(2);
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == firstIdentity.CommandType
+            && (receipt.IdempotencyKey == firstIdentity.IdempotencyKey
+                || receipt.IdempotencyKey == secondIdentity.IdempotencyKey))).Should().Be(2);
+        (await db.AtomicAuditLogs.CountAsync(audit =>
+            audit.CommandType == firstIdentity.CommandType
+            && audit.CommandIdempotencyKey == firstIdentity.IdempotencyKey
+            && audit.EntityType == nameof(AccountingEntityMapping))).Should().Be(1);
+        var correctedAudit = await db.AtomicAuditLogs.SingleAsync(audit =>
+            audit.CommandType == secondIdentity.CommandType
+            && audit.CommandIdempotencyKey == secondIdentity.IdempotencyKey
+            && audit.EntityType == nameof(AccountingEntityMapping));
+        correctedAudit.NewValues.Should().Contain("\"RequestIdentity\":\"corrected\"");
+        var mapping = await db.AccountingEntityMappings.SingleAsync(row =>
+            row.AccountingConnectionId == _connectionId
+            && row.ExternalId == "customer-correction");
+        mapping.ConfirmedAt.Should().BeAfter(_now.AddMinutes(5));
+        mapping.UpdatedAt.Should().Be(mapping.ConfirmedAt);
     }
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();

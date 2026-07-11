@@ -532,6 +532,7 @@ class _SendButton extends StatelessWidget {
         color: colorScheme.primary,
         shape: const CircleBorder(),
         child: InkWell(
+          key: const Key('message-send-button'),
           customBorder: const CircleBorder(),
           onTap: sending ? null : onSend,
           child: Center(
