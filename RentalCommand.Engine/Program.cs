@@ -88,6 +88,10 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 // config-selected; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
 builder.Services.AddScoped<RentalCommand.Data.Outbox.IOutboxClaimStore, RentalCommand.Data.Outbox.OutboxClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Scanning.IScanProcessingClaimStore,
+    RentalCommand.Data.Scanning.ScanProcessingClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimStore,
+    RentalCommand.Data.Simulation.SimWorkerCommandClaimStore>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the
@@ -360,39 +364,6 @@ lifetime.ApplicationStopping.Register(() =>
     Program.AdvisoryLockConnection = null;
     Program.AdvisoryLockHeld = false;
 });
-
-// --- Crash-recovery: re-arm scans stranded mid-extraction by a previous crash ---
-// ScanProcessingWorker atomically claims a draft Pending → Processing before calling the
-// LLM. If a prior Engine crashed / was killed (incl. the advisory-lock takeover above) after
-// that claim but before reaching a terminal state, the draft is left in "Processing" — a state
-// the worker never polls, so it would be invisible and unconfirmable forever. We run this only
-// AFTER the advisory lock is held, so single-instance is guaranteed: no other Engine can
-// legitimately own a "Processing" row, making every such row a genuine crash victim safe to
-// reset to "Pending" for a fresh attempt. Only "Processing" is touched — "Confirming" is the
-// API's mid-confirm claim and must be left alone.
-try
-{
-    using var recoveryScope = host.Services.CreateScope();
-    var recoveryDb = recoveryScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-    var reset = await recoveryDb.Database.ExecuteSqlRawAsync(
-        "UPDATE \"ScanDrafts\" SET \"Status\" = 'Pending', \"ReviewedAt\" = NULL WHERE \"Status\" = 'Processing'");
-    if (reset > 0)
-    {
-        logger.LogWarning(
-            "Crash-recovery: reset {Count} scan draft(s) stranded in 'Processing' back to 'Pending' for reprocessing.",
-            reset);
-    }
-    else
-    {
-        logger.LogInformation("Crash-recovery: no scan drafts were stranded in 'Processing'.");
-    }
-}
-catch (Exception ex)
-{
-    // Non-fatal: the worker's in-process failure handling still drives live timeouts/exceptions
-    // to 'Failed'. Don't block startup if this one-shot sweep fails (e.g. transient DB hiccup).
-    logger.LogError(ex, "Crash-recovery sweep for stranded 'Processing' scan drafts failed; continuing startup.");
-}
 
 await host.RunAsync();
 

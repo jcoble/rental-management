@@ -34,6 +34,13 @@ public class ScanDraft : IAuditable, IPortfolioScoped
     public string TargetEntityType { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
 
+    /// <summary>Worker lease metadata. Completion is accepted only for the current claim token.</summary>
+    public string? ProcessingClaimOwner { get; set; }
+    public Guid? ProcessingClaimToken { get; set; }
+    public DateTime? ProcessingClaimExpiresAtUtc { get; set; }
+    public int ProcessingAttemptCount { get; set; }
+    public DateTime? ProcessingLastAttemptAtUtc { get; set; }
+
     /// <summary>JSON: per-field {value, confidence, sourceBox}.</summary>
     public string? ExtractedFields { get; set; }
 
