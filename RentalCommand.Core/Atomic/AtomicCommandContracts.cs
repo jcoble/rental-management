@@ -101,6 +101,7 @@ public enum AtomicLockResource
     AccountingConnection = 7,
     BankConnection = 8,
     BankTransaction = 9,
+    StoredFile = 10,
 }
 
 public enum AtomicScanDraftClaimOutcome

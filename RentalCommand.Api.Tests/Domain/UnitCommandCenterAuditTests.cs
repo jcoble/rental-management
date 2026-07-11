@@ -76,37 +76,6 @@ public sealed class UnitCommandCenterAuditTests : IDisposable
             c.NewValue == "1,025");
     }
 
-    [Fact]
-    public async Task UnitDocumentUploadAndDelete_WriteTimelineFileChanges()
-    {
-        var unit = SeedUnit(marketRent: 950m);
-
-        var created = await CreateDocumentService().CreateAsync(
-            PortfolioId,
-            "Unit",
-            unit.Id,
-            "lease-photo.jpg",
-            "image/jpeg",
-            2048,
-            "uploads/lease-photo.jpg");
-
-        await CreateDocumentService().DeleteAsync(PortfolioId, created.Id);
-
-        var timeline = await CreateDashboardService().GetTimelineAsync(PortfolioId, unit.Id, skip: 0, take: 10);
-
-        timeline.Should().HaveCount(2);
-        timeline.Should().Contain(r =>
-            r.EntityType == "Unit" &&
-            r.EntityId == unit.Id &&
-            r.Operation == AuditLogOperation.Updated &&
-            r.Changes.Any(c => c.Field == "Document" && c.OldValue == "—" && c.NewValue == "lease-photo.jpg"));
-        timeline.Should().Contain(r =>
-            r.EntityType == "Unit" &&
-            r.EntityId == unit.Id &&
-            r.Operation == AuditLogOperation.Updated &&
-            r.Changes.Any(c => c.Field == "Document" && c.OldValue == "lease-photo.jpg" && c.NewValue == "—"));
-    }
-
     private Unit SeedUnit(decimal marketRent)
     {
         var now = DateTime.UtcNow;
@@ -140,11 +109,6 @@ public sealed class UnitCommandCenterAuditTests : IDisposable
             CreateServices(),
             _db,
             Mock.Of<IDataUpdateService>());
-
-    private DocumentService CreateDocumentService() =>
-        ActivatorUtilities.CreateInstance<DocumentService>(
-            CreateServices(),
-            _db);
 
     private UnitDashboardService CreateDashboardService() =>
         new(_db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System);

@@ -38,6 +38,12 @@ describe('document file endpoints', () => {
 		assert.doesNotMatch(endpointSource, /Authorization/);
 	});
 
+	it('sends caller-generated operation identities for document mutations', () => {
+		assert.match(endpointSource, /form\.append\('clientOperationId', clientOperationId\)/);
+		assert.match(endpointSource, /clientOperationId: string = crypto\.randomUUID\(\)/);
+		assert.match(endpointSource, /clientOperationId=\$\{encodeURIComponent\(clientOperationId\)\}/);
+	});
+
 	it('forwards thumbnail requests through the stored-file proxy route', () => {
 		assert.match(proxySource, /async \(\{ params, locals, url \}\)/);
 		assert.match(proxySource, /url\.searchParams\.get\('thumb'\)/);

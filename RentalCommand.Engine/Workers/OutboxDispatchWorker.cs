@@ -34,6 +34,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
         var store = scopedProvider.GetRequiredService<IOutboxClaimStore>();
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
         var pushSender = scopedProvider.GetRequiredService<IPushSender>();
+        var fileStorage = scopedProvider.GetRequiredService<IFileStorage>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
         var now = DateTime.UtcNow;
         var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
@@ -46,7 +47,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
             try
             {
-                var receipt = await DispatchAsync(channel, pushSender, claim, cancellationToken);
+                var receipt = await DispatchAsync(channel, pushSender, fileStorage, claim, cancellationToken);
                 var changed = await store.MarkAcceptedAsync(
                     claim.Id,
                     claim.ClaimToken,
@@ -121,6 +122,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
     private static async Task<NotificationDeliveryReceipt> DispatchAsync(
         INotificationChannel channel,
         IPushSender pushSender,
+        IFileStorage fileStorage,
         OutboxClaim claim,
         CancellationToken ct)
     {
@@ -173,6 +175,13 @@ public class OutboxDispatchWorker : EngineWorkerBase
                     throw new NotificationDeliverySuppressedException(
                         "Push delivery is not configured. No external provider accepted this message.");
                 return new NotificationDeliveryReceipt("fcm", result.ProviderMessageId);
+            }
+
+            case "blob-delete":
+            {
+                var storagePath = Required(root, "storagePath");
+                await fileStorage.DeleteAsync(storagePath, ct);
+                return new NotificationDeliveryReceipt("file-storage", $"outbox-{claim.Id}");
             }
 
             default:
