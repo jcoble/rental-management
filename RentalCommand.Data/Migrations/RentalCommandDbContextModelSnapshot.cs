@@ -420,7 +420,65 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId", "AccountingConnectionId", "Direction", "ExternalType", "ExternalId")
                         .IsUnique();
 
+                    b.HasIndex("PortfolioId", "AccountingConnectionId", "ExternalType", "Id")
+                        .HasDatabaseName("IX_AccountingSyncMaps_ParkedPromotion")
+                        .HasFilter("\"LocalEntityId\" IS NULL AND \"Direction\" = 'Import' AND \"Status\" IN ('NeedsReview', 'Unmatched')");
+
                     b.ToTable("AccountingSyncMaps");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.AccountingParkedTransaction", b =>
+                {
+                    b.Property<int>("AccountingConnectionId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("AccountExternalId")
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("ClassExternalId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CustomerExternalId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DepositAccountExternalId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ExternalType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PaymentMethod")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ReferenceNumber")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceKind")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("TxnDateUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VendorExternalId")
+                        .HasColumnType("text");
+
+                    b.ToTable((string)null);
+
+                    b.ToView("vw_accounting_parked_transactions", (string)null);
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingTransactionView", b =>

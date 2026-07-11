@@ -1,7 +1,11 @@
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Accounting;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
@@ -56,6 +60,7 @@ public class AccountingConnectionService
     private readonly AccountingImportService _importService;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingConnectionService> _logger;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public AccountingConnectionService(
         RentalCommandDbContext db,
@@ -64,6 +69,7 @@ public class AccountingConnectionService
         AccountingAppSettingsResolver settingsResolver,
         AccountingImportService importService,
         TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic,
         ILogger<AccountingConnectionService> logger)
     {
         _db = db;
@@ -73,6 +79,7 @@ public class AccountingConnectionService
         _importService = importService;
         _timeProvider = timeProvider;
         _logger = logger;
+        _atomic = atomic;
     }
 
     /// <summary>
@@ -500,42 +507,73 @@ public class AccountingConnectionService
         int portfolioId, AccountingProvider provider, int userId,
         ConfirmAccountingMappingRequest request, CancellationToken ct)
     {
-        var conn = await _db.AccountingConnections
+        var conn = await _db.AccountingConnections.AsNoTracking()
             .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct)
             ?? throw new InvalidOperationException(
                 $"No {provider} connection. Connect the provider first.");
 
-        var mapping = await _db.AccountingEntityMappings
-            .FirstOrDefaultAsync(m => m.PortfolioId == portfolioId
-                && m.AccountingConnectionId == conn.Id
-                && m.ExternalType == request.ExternalType
-                && m.ExternalId == request.ExternalId, ct);
+        var externalType = RequireMappingValue(request.ExternalType, nameof(request.ExternalType));
+        var externalId = RequireMappingValue(request.ExternalId, nameof(request.ExternalId));
+        var localEntityType = RequireMappingValue(request.LocalEntityType, nameof(request.LocalEntityType));
+        var requestIdentity = MappingRequestIdentity(portfolioId, conn.Id, request);
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "accounting.mapping.confirm",
+                $"{portfolioId}:{conn.Id}:{requestIdentity}"),
+            new ConfirmAccountingMappingCommand(
+                portfolioId,
+                conn.Id,
+                provider,
+                userId,
+                externalType,
+                externalId,
+                Normalize(request.ExternalDisplayName),
+                localEntityType,
+                request.LocalEntityId,
+                Normalize(request.LocalEnumValue),
+                requestIdentity,
+                _timeProvider.UtcNow()),
+            new AtomicJsonResultCodec<ConfirmAccountingMappingResult>(
+                "accounting.mapping.confirm.result.v1"),
+            ct);
 
-        if (mapping == null)
+        return outcome.Value.Outcome switch
         {
-            mapping = new AccountingEntityMapping
-            {
-                PortfolioId = portfolioId,
-                AccountingConnectionId = conn.Id,
-                ExternalType = request.ExternalType,
-                ExternalId = request.ExternalId,
-                ExternalDisplayName = request.ExternalDisplayName,
-                CreatedAt = _timeProvider.UtcNow(),
-            };
-            _db.AccountingEntityMappings.Add(mapping);
-        }
-
-        mapping.LocalEntityType = request.LocalEntityType;
-        mapping.LocalEntityId = request.LocalEntityId;
-        mapping.LocalEnumValue = request.LocalEnumValue;
-        mapping.ConfirmedAt = _timeProvider.UtcNow();
-        mapping.ConfirmedByUserId = userId;
-        mapping.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        // Promote any parked (NeedsReview/Unmatched) transactions now resolvable by this confirmation.
-        return await _importService.RetryPendingForConnectionAsync(conn, ct);
+            ConfirmAccountingMappingOutcome.Applied => outcome.Value.PromotedCount,
+            ConfirmAccountingMappingOutcome.ConnectionNotFound => throw new InvalidOperationException(
+                $"No {provider} connection. Connect the provider first."),
+            ConfirmAccountingMappingOutcome.InvalidTarget => throw new InvalidOperationException(
+                "The requested accounting mapping target is invalid or belongs to another portfolio."),
+            _ => throw new InvalidOperationException("Accounting mapping confirmation returned an unknown outcome."),
+        };
     }
+
+    private static string MappingRequestIdentity(
+        int portfolioId,
+        int connectionId,
+        ConfirmAccountingMappingRequest request)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            PortfolioId = portfolioId,
+            AccountingConnectionId = connectionId,
+            ExternalType = request.ExternalType.Trim(),
+            ExternalId = request.ExternalId.Trim(),
+            ExternalDisplayName = Normalize(request.ExternalDisplayName),
+            LocalEntityType = request.LocalEntityType.Trim(),
+            request.LocalEntityId,
+            LocalEnumValue = Normalize(request.LocalEnumValue),
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string RequireMappingValue(string? value, string name) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new InvalidOperationException($"Accounting mapping {name} is required.")
+            : value.Trim();
 
     /// <summary>
     /// The review queue: imported transactions that could not be auto-created (unmatched / needs-review)

@@ -479,7 +479,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             db, _dataProtection, providerResolver, settingsResolver, import,
-            TimeProvider.System, NullLogger<AccountingConnectionService>.Instance);
+            TimeProvider.System, null!, NullLogger<AccountingConnectionService>.Instance);
     }
 
     private sealed class FailCompletionClaimStore(IAccountingConnectionClaimStore inner)
