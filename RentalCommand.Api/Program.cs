@@ -202,6 +202,22 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Accounting.ConfirmAccountingMappingCommand,
     RentalCommand.Core.Accounting.ConfirmAccountingMappingResult,
     RentalCommand.Data.Accounting.ConfirmAccountingMappingHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ApplyPlaidConnectionCommand,
+    RentalCommand.Core.Banking.ApplyPlaidConnectionResult,
+    RentalCommand.Data.Banking.ApplyPlaidConnectionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ApplyPlaidSyncCommand,
+    RentalCommand.Core.Banking.ApplyPlaidSyncResult,
+    RentalCommand.Data.Banking.ApplyPlaidSyncHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ImportBankTransactionsCommand,
+    RentalCommand.Core.Banking.ImportBankTransactionsResult,
+    RentalCommand.Data.Banking.ImportBankTransactionsHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ReconcileBankTransactionCommand,
+    RentalCommand.Core.Banking.ReconcileBankTransactionResult,
+    RentalCommand.Data.Banking.ReconcileBankTransactionHandler>();
 // The writer intentionally supports only the five completed non-lease targets. There is no API
 // call site yet; ScanService continues to own confirmation until the lease aggregate writer and the
 // post-commit notification adapter are ready, preventing a partial old/new production path.

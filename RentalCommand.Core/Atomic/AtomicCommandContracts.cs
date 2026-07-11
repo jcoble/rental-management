@@ -99,6 +99,8 @@ public enum AtomicLockResource
     ScanDraft = 5,
     VendorDispatch = 6,
     AccountingConnection = 7,
+    BankConnection = 8,
+    BankTransaction = 9,
 }
 
 public enum AtomicScanDraftClaimOutcome
