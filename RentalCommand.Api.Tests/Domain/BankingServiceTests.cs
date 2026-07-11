@@ -930,8 +930,13 @@ public class BankingServiceTests : IDisposable
         var syncResult = result!;
         syncResult.ImportedCount.Should().Be(1);
         syncResult.SkippedCount.Should().Be(1);
-        syncResult.Transactions.Should().ContainSingle(t => t.ProviderTransactionId == "txn-1")
-            .Which.Amount.Should().Be(1400m);
+        var imported = syncResult.Transactions.Should()
+            .ContainSingle(t => t.ProviderTransactionId == "txn-1")
+            .Which;
+        imported.Amount.Should().Be(1400m,
+            "Plaid reports credits as negative, while Rental Command stores deposits as positive");
+        imported.Description.Should().Be("ACH CREDIT RENT",
+            "a later duplicate provider id must not replace the first authoritative occurrence");
 
         var row = _ctx.Db.BankConnections.Single();
         row.LastSyncedAt.Should().NotBeNull();
