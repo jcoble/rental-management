@@ -8,6 +8,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -80,81 +81,42 @@ public sealed class AccountingImportService
 
     /// <summary>
     /// Run an import for one connection. <paramref name="since"/> is the delta cursor (null = full /
-    /// backfill). The reference entities are pulled and mapped first so the transaction pass can resolve
-    /// against them. Each resource is isolated — one failing does not abort the rest — mirroring the
-    /// pull worker's per-resource isolation.
+    /// backfill). Provider resources are fetched independently without a database transaction. Successful
+    /// fetches are then mapped and persisted together in one short local transaction; a worker-owned call
+    /// locks and validates its claim before any domain write.
     /// </summary>
     public async Task<ImportSummary> ImportAsync(
-        AccountingConnection connection, DateTime? since, CancellationToken ct)
+        AccountingConnection connection,
+        DateTime? since,
+        CancellationToken ct,
+        AccountingWorkerFence? workerFence = null)
     {
         var provider = _providerResolver.Resolve(connection.Provider);
-        // ctx is rebuilt (with a freshly-decrypted token) by PullWithRefreshAsync after a 401-driven
-        // refresh, so it is a mutable local the per-resource pulls read through that helper.
         var ctx = BuildCallContext(connection);
         var caps = provider.Capabilities;
-
         var cursors = ParseCursors(connection.LastPulledAtJson);
 
-        int customers = 0, vendors = 0, accounts = 0, payments = 0, expenses = 0, review = 0;
-
-        // --- Reference entities → AccountingEntityMapping (suggested or auto-confirmed) -------------
-        if (caps.CanPullCustomers)
-        {
-            (customers, var c) = await SafeAsync("customers", connection, async () =>
-            {
-                var pulled = await PullWithRefreshAsync(connection, c => provider.PullCustomersAsync(c, GetCursor(cursors, "customers", since), ct), ct);
-                var n = await MapCustomersAsync(connection, pulled.Items, ct);
-                SetCursor(cursors, "customers", pulled.MaxUpdatedAtUtc);
-                return n;
-            });
-        }
-
-        if (caps.CanPullVendors)
-        {
-            (vendors, _) = await SafeAsync("vendors", connection, async () =>
-            {
-                var pulled = await PullWithRefreshAsync(connection, c => provider.PullVendorsAsync(c, GetCursor(cursors, "vendors", since), ct), ct);
-                var n = await MapVendorsAsync(connection, pulled.Items, ct);
-                SetCursor(cursors, "vendors", pulled.MaxUpdatedAtUtc);
-                return n;
-            });
-        }
-
-        if (caps.CanPullAccounts)
-        {
-            (accounts, _) = await SafeAsync("accounts", connection, async () =>
-            {
-                var pulled = await PullWithRefreshAsync(connection, c => provider.PullAccountsAsync(c, GetCursor(cursors, "accounts", since), ct), ct);
-                var n = await MapAccountsAsync(connection, pulled.Items, ct);
-                SetCursor(cursors, "accounts", pulled.MaxUpdatedAtUtc);
-                return n;
-            });
-        }
-
-        // --- Transactions → real RC Payment / Expense rows (idempotent via the ledger) ------------
-        if (caps.CanPullPayments)
-        {
-            (payments, var rv) = await SafeAsync("payments", connection, async () =>
-            {
-                var pulled = await PullWithRefreshAsync(connection, c => provider.PullPaymentsAsync(c, GetCursor(cursors, "payments", since), ct), ct);
-                var r = await ImportPaymentsAsync(connection, pulled.Items, ct);
-                SetCursor(cursors, "payments", pulled.MaxUpdatedAtUtc);
-                return r;
-            });
-            review += rv;
-        }
-
-        if (caps.CanPullExpenses)
-        {
-            (expenses, var rv) = await SafeAsync("expenses", connection, async () =>
-            {
-                var pulled = await PullWithRefreshAsync(connection, c => provider.PullExpensesAsync(c, GetCursor(cursors, "expenses", since), ct), ct);
-                var r = await ImportExpensesAsync(connection, pulled.Items, ct);
-                SetCursor(cursors, "expenses", pulled.MaxUpdatedAtUtc);
-                return r;
-            });
-            review += rv;
-        }
+        // All provider I/O is completed before the short local persistence transaction begins.
+        var customerPull = caps.CanPullCustomers
+            ? await SafePullAsync("customers", () => PullWithRefreshAsync(
+                connection, c => provider.PullCustomersAsync(c, GetCursor(cursors, "customers", since), ct), ct))
+            : null;
+        var vendorPull = caps.CanPullVendors
+            ? await SafePullAsync("vendors", () => PullWithRefreshAsync(
+                connection, c => provider.PullVendorsAsync(c, GetCursor(cursors, "vendors", since), ct), ct))
+            : null;
+        var accountPull = caps.CanPullAccounts
+            ? await SafePullAsync("accounts", () => PullWithRefreshAsync(
+                connection, c => provider.PullAccountsAsync(c, GetCursor(cursors, "accounts", since), ct), ct))
+            : null;
+        var paymentPull = caps.CanPullPayments
+            ? await SafePullAsync("payments", () => PullWithRefreshAsync(
+                connection, c => provider.PullPaymentsAsync(c, GetCursor(cursors, "payments", since), ct), ct))
+            : null;
+        var expensePull = caps.CanPullExpenses
+            ? await SafePullAsync("expenses", () => PullWithRefreshAsync(
+                connection, c => provider.PullExpensesAsync(c, GetCursor(cursors, "expenses", since), ct), ct))
+            : null;
 
         // Local: run a provider pull; on a 401/unauthorized, refresh the token ONCE (provider-agnostic,
         // via the shared AccountingTokenService), rebuild ctx with the new token, and retry once. A dead
@@ -168,7 +130,7 @@ public sealed class AccountingImportService
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                var refresh = await _tokenService.RefreshAsync(_db, conn, token);
+                var refresh = await _tokenService.RefreshAsync(_db, conn, token, workerFence);
                 if (refresh.Outcome != AccountingTokenService.RefreshOutcome.Refreshed || refresh.AccessToken == null)
                 {
                     throw new InvalidOperationException(
@@ -181,16 +143,92 @@ public sealed class AccountingImportService
             }
         }
 
-        // Persist delta cursors + last-sync on the connection.
+        async Task<AccountingPullResult<T>?> SafePullAsync<T>(string resource, Func<Task<AccountingPullResult<T>>> pull)
+        {
+            try
+            {
+                return await pull();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Accounting provider pull {Resource} failed for connection {ConnectionId}; other resources continue",
+                    resource, connection.Id);
+                return null;
+            }
+        }
+
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        if (workerFence is not null)
+        {
+            if (workerFence.Operation != AccountingWorkerOperation.Pull)
+                throw new InvalidOperationException("Accounting import requires a pull claim fence.");
+
+            // Conditional UPDATE both validates ownership and holds the row lock until all local
+            // domain writes commit. An expired worker therefore rolls the entire local phase back.
+            var owned = await _db.AccountingConnections.IgnoreQueryFilters()
+                .Where(row => row.Id == connection.Id && row.PullClaimToken == workerFence.ClaimToken)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.PullClaimExpiresAtUtc, row => row.PullClaimExpiresAtUtc), ct);
+            if (owned == 0)
+                throw new DbUpdateConcurrencyException("The accounting pull claim is no longer owned.");
+        }
+
+        int customers = 0, vendors = 0, accounts = 0, payments = 0, expenses = 0, review = 0;
+        if (customerPull is not null)
+        {
+            customers = await MapCustomersAsync(connection, customerPull.Items, ct);
+            SetCursor(cursors, "customers", customerPull.MaxUpdatedAtUtc);
+        }
+        if (vendorPull is not null)
+        {
+            vendors = await MapVendorsAsync(connection, vendorPull.Items, ct);
+            SetCursor(cursors, "vendors", vendorPull.MaxUpdatedAtUtc);
+        }
+        if (accountPull is not null)
+        {
+            accounts = await MapAccountsAsync(connection, accountPull.Items, ct);
+            SetCursor(cursors, "accounts", accountPull.MaxUpdatedAtUtc);
+        }
+        if (paymentPull is not null)
+        {
+            (payments, var paymentReview) = await ImportPaymentsAsync(connection, paymentPull.Items, ct);
+            review += paymentReview;
+            SetCursor(cursors, "payments", paymentPull.MaxUpdatedAtUtc);
+        }
+        if (expensePull is not null)
+        {
+            (expenses, var expenseReview) = await ImportExpensesAsync(connection, expensePull.Items, ct);
+            review += expenseReview;
+            SetCursor(cursors, "expenses", expensePull.MaxUpdatedAtUtc);
+        }
+
+        var completedAt = _timeProvider.UtcNow();
         connection.LastPulledAtJson = JsonSerializer.Serialize(cursors);
-        connection.LastSyncedAt = _timeProvider.UtcNow();
-        connection.UpdatedAt = _timeProvider.UtcNow();
+        connection.LastSyncedAt = completedAt;
+        connection.NextPullAtUtc = completedAt.AddMinutes(15);
+        connection.UpdatedAt = completedAt;
         if (connection.Status == AccountingConnectionStatus.Error)
         {
             connection.Status = AccountingConnectionStatus.Connected;
             connection.LastError = null;
         }
+        else if (connection.Status == AccountingConnectionStatus.Connected)
+        {
+            connection.LastError = null;
+        }
+        if (workerFence is not null)
+        {
+            connection.PullClaimOwner = null;
+            connection.PullClaimToken = null;
+            connection.PullClaimExpiresAtUtc = null;
+        }
         await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         return new ImportSummary(customers, vendors, accounts, payments, expenses, review);
     }
@@ -956,46 +994,6 @@ public sealed class AccountingImportService
         catch (CryptographicException ex)
         {
             throw new InvalidOperationException("Stored access token could not be decrypted — reconnect required.", ex);
-        }
-    }
-
-    private async Task<(int Value, int Review)> SafeAsync(
-        string resource, AccountingConnection conn, Func<Task<int>> action)
-    {
-        try
-        {
-            return (await action(), 0);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Accounting import resource {Resource} failed for connection {ConnectionId} — continuing with other resources",
-                resource, conn.Id);
-            return (0, 0);
-        }
-    }
-
-    private async Task<(int Imported, int Review)> SafeAsync(
-        string resource, AccountingConnection conn, Func<Task<(int Imported, int Review)>> action)
-    {
-        try
-        {
-            return await action();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Accounting import resource {Resource} failed for connection {ConnectionId} — continuing with other resources",
-                resource, conn.Id);
-            return (0, 0);
         }
     }
 

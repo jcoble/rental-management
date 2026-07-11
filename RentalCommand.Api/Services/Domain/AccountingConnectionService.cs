@@ -190,6 +190,7 @@ public class AccountingConnectionService
                 PortfolioId = portfolioId,
                 Provider = provider,
                 Status = AccountingConnectionStatus.Pending,
+                NextPullAtUtc = _timeProvider.UtcNow(),
                 CreatedAt = _timeProvider.UtcNow(),
             };
             _db.AccountingConnections.Add(conn);
@@ -208,6 +209,7 @@ public class AccountingConnectionService
         conn.CompanyName = result.CompanyName;
         conn.Status = AccountingConnectionStatus.Connected;
         conn.LastError = null;
+        conn.NextPullAtUtc = _timeProvider.UtcNow().AddMinutes(15);
         conn.ConnectedAt ??= _timeProvider.UtcNow();
         conn.DisconnectedAt = null;
         conn.UpdatedAt = _timeProvider.UtcNow();

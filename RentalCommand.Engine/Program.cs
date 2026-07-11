@@ -92,6 +92,8 @@ builder.Services.AddScoped<RentalCommand.Data.Scanning.IScanProcessingClaimStore
     RentalCommand.Data.Scanning.ScanProcessingClaimStore>();
 builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimStore,
     RentalCommand.Data.Simulation.SimWorkerCommandClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Accounting.IAccountingConnectionClaimStore,
+    RentalCommand.Data.Accounting.AccountingConnectionClaimStore>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the
