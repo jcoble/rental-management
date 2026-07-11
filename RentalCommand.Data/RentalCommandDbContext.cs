@@ -556,7 +556,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.LastPulledAtJson).HasColumnType("jsonb");
             entity.Property(e => e.LastError).HasMaxLength(2000);
             entity.Property(e => e.PullClaimOwner).HasMaxLength(200);
-            entity.Property(e => e.RefreshClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.TokenRotationClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.TokenRotationState).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             // One row per portfolio per provider.
             entity.HasIndex(e => new { e.PortfolioId, e.Provider }).IsUnique();
@@ -570,9 +571,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => new { e.PullClaimExpiresAtUtc, e.Id })
                   .HasDatabaseName("IX_AccountingConnections_ExpiredPullClaim")
                   .HasFilter("\"PullClaimToken\" IS NOT NULL");
-            entity.HasIndex(e => new { e.RefreshClaimExpiresAtUtc, e.Id })
-                  .HasDatabaseName("IX_AccountingConnections_ExpiredRefreshClaim")
-                  .HasFilter("\"RefreshClaimToken\" IS NOT NULL");
+            entity.HasIndex(e => new { e.TokenRotationClaimExpiresAtUtc, e.Id })
+                  .HasDatabaseName("IX_AccountingConnections_ExpiredTokenRotationClaim")
+                  .HasFilter("\"TokenRotationClaimToken\" IS NOT NULL");
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)

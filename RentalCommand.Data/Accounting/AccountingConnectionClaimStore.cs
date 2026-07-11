@@ -7,9 +7,10 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Accounting;
 
-public enum AccountingWorkerOperation { Pull, Refresh }
+public enum AccountingWorkerOperation { Pull, TokenRotation }
 
-public sealed record AccountingWorkerFence(AccountingWorkerOperation Operation, Guid ClaimToken);
+public sealed record AccountingWorkerFence(
+    AccountingWorkerOperation Operation, Guid ClaimToken, Guid? ParentPullClaimToken = null);
 public sealed record AccountingConnectionClaim(AccountingConnection Connection, AccountingWorkerFence Fence);
 
 public interface IAccountingConnectionClaimStore
@@ -20,17 +21,25 @@ public interface IAccountingConnectionClaimStore
     Task<IReadOnlyList<AccountingConnectionClaim>> ClaimTokenRefreshAsync(
         string claimOwner, DateTime nowUtc, DateTime refreshBeforeUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
+    Task<AccountingConnectionClaim?> ClaimInlineTokenRotationAsync(
+        int connectionId, Guid? pullClaimToken, string claimOwner, DateTime nowUtc,
+        TimeSpan leaseDuration, CancellationToken ct = default);
     Task<int> MarkPullFailedAsync(
         int id, Guid claimToken, DateTime failedAtUtc, DateTime nextPullAtUtc, string error,
         CancellationToken ct = default);
-    Task<int> MarkRefreshFailedAsync(
+    Task<int> MarkTokenRotationRecoveryRequiredAsync(
         int id, Guid claimToken, DateTime failedAtUtc, string error, CancellationToken ct = default);
+    Task<int> CompleteTokenRotationAsync(
+        int id, Guid claimToken, Guid? parentPullClaimToken,
+        string accessTokenCipherText, string refreshTokenCipherText,
+        DateTime expiresAtUtc, DateTime completedAtUtc, CancellationToken ct = default);
+    Task<int> ReconcileAbandonedTokenRotationsAsync(DateTime nowUtc, CancellationToken ct = default);
 }
 
 /// <summary>
 /// PostgreSQL boundaries for fair, bounded accounting pull and token-refresh claims. Each claim is
 /// a single UPDATE over a DB-filtered/ordered <c>FOR UPDATE SKIP LOCKED</c> candidate CTE. Remote work
-/// starts only after the statement closes. Pull and refresh have independent ownership fences.
+/// starts only after the statement closes. All refresh-token callers share one durable rotation lane.
 /// </summary>
 public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimStore
 {
@@ -43,8 +52,9 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
         connection."NextPullAtUtc",
         connection."PullClaimOwner", connection."PullClaimToken", connection."PullClaimExpiresAtUtc",
         connection."PullAttemptCount", connection."PullLastAttemptAtUtc",
-        connection."RefreshClaimOwner", connection."RefreshClaimToken", connection."RefreshClaimExpiresAtUtc",
-        connection."RefreshAttemptCount", connection."RefreshLastAttemptAtUtc",
+        connection."TokenRotationState", connection."TokenGeneration",
+        connection."TokenRotationClaimOwner", connection."TokenRotationClaimToken", connection."TokenRotationClaimExpiresAtUtc",
+        connection."TokenRotationAttemptCount", connection."TokenRotationLastAttemptAtUtc",
         connection."CreatedAt", connection."UpdatedAt"
         """;
 
@@ -83,19 +93,48 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
               AND connection."RefreshTokenCipherText" IS NOT NULL
               AND connection."TokenExpiresAt" IS NOT NULL
               AND connection."TokenExpiresAt" < @refreshBefore
-              AND (connection."RefreshClaimToken" IS NULL OR connection."RefreshClaimExpiresAtUtc" <= @now)
+              AND connection."TokenRotationState" = @rotationIdle
+              AND connection."TokenRotationClaimToken" IS NULL
             ORDER BY connection."TokenExpiresAt", connection."Id"
             FOR UPDATE OF connection SKIP LOCKED
             LIMIT @batchSize
         )
         UPDATE "AccountingConnections" AS connection
-        SET "RefreshClaimOwner" = @claimOwner,
-            "RefreshClaimToken" = @claimToken,
-            "RefreshClaimExpiresAtUtc" = @claimExpiresAtUtc,
-            "RefreshAttemptCount" = connection."RefreshAttemptCount" + 1,
-            "RefreshLastAttemptAtUtc" = @now
+        SET "TokenRotationState" = @rotationInFlight,
+            "TokenRotationClaimOwner" = @claimOwner,
+            "TokenRotationClaimToken" = @claimToken,
+            "TokenRotationClaimExpiresAtUtc" = @claimExpiresAtUtc,
+            "TokenRotationAttemptCount" = connection."TokenRotationAttemptCount" + 1,
+            "TokenRotationLastAttemptAtUtc" = @now
         FROM candidates
         WHERE connection."Id" = candidates."Id"
+        RETURNING {{ReturnedColumns}};
+        """;
+
+    private static readonly string InlineRotationClaimSql = $$"""
+        WITH candidate AS (
+            SELECT connection."Id"
+            FROM "AccountingConnections" AS connection
+            INNER JOIN "Portfolios" AS portfolio ON portfolio."Id" = connection."PortfolioId"
+            WHERE connection."Id" = @connectionId
+              AND portfolio."DeletedAt" IS NULL
+              AND connection."Status" = @connected
+              AND connection."PullEnabled"
+              AND connection."RefreshTokenCipherText" IS NOT NULL
+              AND connection."TokenRotationState" = @rotationIdle
+              AND connection."TokenRotationClaimToken" IS NULL
+              AND (@pullClaimToken IS NULL OR connection."PullClaimToken" = @pullClaimToken)
+            FOR UPDATE OF connection SKIP LOCKED
+        )
+        UPDATE "AccountingConnections" AS connection
+        SET "TokenRotationState" = @rotationInFlight,
+            "TokenRotationClaimOwner" = @claimOwner,
+            "TokenRotationClaimToken" = @claimToken,
+            "TokenRotationClaimExpiresAtUtc" = @claimExpiresAtUtc,
+            "TokenRotationAttemptCount" = connection."TokenRotationAttemptCount" + 1,
+            "TokenRotationLastAttemptAtUtc" = @now
+        FROM candidate
+        WHERE connection."Id" = candidate."Id"
         RETURNING {{ReturnedColumns}};
         """;
 
@@ -110,7 +149,20 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
     public Task<IReadOnlyList<AccountingConnectionClaim>> ClaimTokenRefreshAsync(
         string claimOwner, DateTime nowUtc, DateTime refreshBeforeUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default) =>
-        ClaimAsync(RefreshClaimSql, AccountingWorkerOperation.Refresh, claimOwner, nowUtc, refreshBeforeUtc, leaseDuration, batchSize, ct);
+        ClaimRefreshAfterReconciliationAsync(claimOwner, nowUtc, refreshBeforeUtc, leaseDuration, batchSize, ct);
+
+    public async Task<AccountingConnectionClaim?> ClaimInlineTokenRotationAsync(
+        int connectionId, Guid? pullClaimToken, string claimOwner, DateTime nowUtc,
+        TimeSpan leaseDuration, CancellationToken ct = default)
+    {
+        await ReconcileAbandonedTokenRotationsAsync(nowUtc, ct);
+        var claimed = (await ClaimAsync(
+            InlineRotationClaimSql, AccountingWorkerOperation.TokenRotation, claimOwner, nowUtc,
+            null, leaseDuration, 1, ct, connectionId, pullClaimToken)).SingleOrDefault();
+        return claimed is null
+            ? null
+            : claimed with { Fence = claimed.Fence with { ParentPullClaimToken = pullClaimToken } };
+    }
 
     public Task<int> MarkPullFailedAsync(
         int id, Guid claimToken, DateTime failedAtUtc, DateTime nextPullAtUtc, string error,
@@ -123,18 +175,65 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
             .SetProperty(row => row.PullClaimToken, (Guid?)null)
             .SetProperty(row => row.PullClaimExpiresAtUtc, (DateTime?)null), ct);
 
-    public Task<int> MarkRefreshFailedAsync(
+    public Task<int> MarkTokenRotationRecoveryRequiredAsync(
         int id, Guid claimToken, DateTime failedAtUtc, string error, CancellationToken ct = default) =>
-        RefreshOwned(id, claimToken).ExecuteUpdateAsync(setters => setters
+        RotationOwned(id, claimToken).ExecuteUpdateAsync(setters => setters
+            .SetProperty(row => row.Status, AccountingConnectionStatus.NeedsReconnect)
+            .SetProperty(row => row.AccessTokenCipherText, (string?)null)
+            .SetProperty(row => row.RefreshTokenCipherText, (string?)null)
+            .SetProperty(row => row.TokenExpiresAt, (DateTime?)null)
+            .SetProperty(row => row.TokenRotationState, AccountingTokenRotationState.RecoveryRequired)
             .SetProperty(row => row.LastError, LimitError(error))
-            .SetProperty(row => row.UpdatedAt, AsUtc(failedAtUtc))
-            .SetProperty(row => row.RefreshClaimOwner, (string?)null)
-            .SetProperty(row => row.RefreshClaimToken, (Guid?)null)
-            .SetProperty(row => row.RefreshClaimExpiresAtUtc, (DateTime?)null), ct);
+            .SetProperty(row => row.UpdatedAt, AsUtc(failedAtUtc)), ct);
+
+    public Task<int> CompleteTokenRotationAsync(
+        int id, Guid claimToken, Guid? parentPullClaimToken,
+        string accessTokenCipherText, string refreshTokenCipherText,
+        DateTime expiresAtUtc, DateTime completedAtUtc, CancellationToken ct = default) =>
+        RotationOwned(id, claimToken)
+            .Where(row => row.Status == AccountingConnectionStatus.Connected)
+            .Where(row => !parentPullClaimToken.HasValue
+                || (row.PullEnabled && row.PullClaimToken == parentPullClaimToken))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.AccessTokenCipherText, accessTokenCipherText)
+                .SetProperty(row => row.RefreshTokenCipherText, refreshTokenCipherText)
+                .SetProperty(row => row.TokenExpiresAt, AsUtc(expiresAtUtc))
+                .SetProperty(row => row.TokenGeneration, row => row.TokenGeneration + 1)
+                .SetProperty(row => row.TokenRotationState, AccountingTokenRotationState.Idle)
+                .SetProperty(row => row.TokenRotationClaimOwner, (string?)null)
+                .SetProperty(row => row.TokenRotationClaimToken, (Guid?)null)
+                .SetProperty(row => row.TokenRotationClaimExpiresAtUtc, (DateTime?)null)
+                .SetProperty(row => row.LastError, (string?)null)
+                .SetProperty(row => row.UpdatedAt, AsUtc(completedAtUtc)), ct);
+
+    public Task<int> ReconcileAbandonedTokenRotationsAsync(DateTime nowUtc, CancellationToken ct = default) =>
+        _db.AccountingConnections.IgnoreQueryFilters()
+            .Where(row => row.Status == AccountingConnectionStatus.Connected
+                && row.TokenRotationState == AccountingTokenRotationState.InFlight
+                && row.TokenRotationClaimExpiresAtUtc <= AsUtc(nowUtc))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.Status, AccountingConnectionStatus.NeedsReconnect)
+                .SetProperty(row => row.AccessTokenCipherText, (string?)null)
+                .SetProperty(row => row.RefreshTokenCipherText, (string?)null)
+                .SetProperty(row => row.TokenExpiresAt, (DateTime?)null)
+                .SetProperty(row => row.TokenRotationState, AccountingTokenRotationState.RecoveryRequired)
+                .SetProperty(row => row.LastError,
+                    "Token rotation outcome could not be confirmed. Reconnect the accounting provider.")
+                .SetProperty(row => row.UpdatedAt, AsUtc(nowUtc)), ct);
+
+    private async Task<IReadOnlyList<AccountingConnectionClaim>> ClaimRefreshAfterReconciliationAsync(
+        string claimOwner, DateTime nowUtc, DateTime refreshBeforeUtc, TimeSpan leaseDuration,
+        int batchSize, CancellationToken ct)
+    {
+        await ReconcileAbandonedTokenRotationsAsync(nowUtc, ct);
+        return await ClaimAsync(RefreshClaimSql, AccountingWorkerOperation.TokenRotation, claimOwner,
+            nowUtc, refreshBeforeUtc, leaseDuration, batchSize, ct);
+    }
 
     private async Task<IReadOnlyList<AccountingConnectionClaim>> ClaimAsync(
         string sql, AccountingWorkerOperation operation, string claimOwner, DateTime nowUtc,
-        DateTime? refreshBeforeUtc, TimeSpan leaseDuration, int batchSize, CancellationToken ct)
+        DateTime? refreshBeforeUtc, TimeSpan leaseDuration, int batchSize, CancellationToken ct,
+        int? connectionId = null, Guid? pullClaimToken = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
         if (claimOwner.Length > 200) throw new ArgumentOutOfRangeException(nameof(claimOwner));
@@ -151,6 +250,10 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
             command.CommandText = sql;
             command.Parameters.Add(new NpgsqlParameter("connected", NpgsqlDbType.Integer)
                 { Value = (int)AccountingConnectionStatus.Connected });
+            command.Parameters.Add(new NpgsqlParameter("rotationIdle", NpgsqlDbType.Integer)
+                { Value = (int)AccountingTokenRotationState.Idle });
+            command.Parameters.Add(new NpgsqlParameter("rotationInFlight", NpgsqlDbType.Integer)
+                { Value = (int)AccountingTokenRotationState.InFlight });
             command.Parameters.Add(new NpgsqlParameter("now", NpgsqlDbType.TimestampTz) { Value = now });
             command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
             command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
@@ -160,6 +263,13 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
             if (refreshBeforeUtc is DateTime refreshBefore)
                 command.Parameters.Add(new NpgsqlParameter("refreshBefore", NpgsqlDbType.TimestampTz)
                     { Value = AsUtc(refreshBefore) });
+            if (connectionId.HasValue)
+            {
+                command.Parameters.Add(new NpgsqlParameter("connectionId", NpgsqlDbType.Integer)
+                    { Value = connectionId.Value });
+                command.Parameters.Add(new NpgsqlParameter("pullClaimToken", NpgsqlDbType.Uuid)
+                    { Value = pullClaimToken.HasValue ? pullClaimToken.Value : DBNull.Value });
+            }
 
             var claims = new List<AccountingConnectionClaim>();
             await using var reader = await command.ExecuteReaderAsync(ct);
@@ -168,7 +278,7 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
                 var claimed = ReadConnection(reader);
                 var token = operation == AccountingWorkerOperation.Pull
                     ? claimed.PullClaimToken!.Value
-                    : claimed.RefreshClaimToken!.Value;
+                    : claimed.TokenRotationClaimToken!.Value;
                 claims.Add(new AccountingConnectionClaim(claimed, new AccountingWorkerFence(operation, token)));
             }
             return claims;
@@ -181,8 +291,10 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
 
     private IQueryable<AccountingConnection> PullOwned(int id, Guid token) =>
         _db.AccountingConnections.IgnoreQueryFilters().Where(row => row.Id == id && row.PullClaimToken == token);
-    private IQueryable<AccountingConnection> RefreshOwned(int id, Guid token) =>
-        _db.AccountingConnections.IgnoreQueryFilters().Where(row => row.Id == id && row.RefreshClaimToken == token);
+    private IQueryable<AccountingConnection> RotationOwned(int id, Guid token) =>
+        _db.AccountingConnections.IgnoreQueryFilters().Where(row => row.Id == id
+            && row.TokenRotationState == AccountingTokenRotationState.InFlight
+            && row.TokenRotationClaimToken == token);
 
     private static AccountingConnection ReadConnection(System.Data.Common.DbDataReader reader) => new()
     {
@@ -195,9 +307,10 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
         NextPullAtUtc = reader.GetDateTime(16), PullClaimOwner = String(reader, 17),
         PullClaimToken = GuidValue(reader, 18), PullClaimExpiresAtUtc = Date(reader, 19),
         PullAttemptCount = reader.GetInt32(20), PullLastAttemptAtUtc = Date(reader, 21),
-        RefreshClaimOwner = String(reader, 22), RefreshClaimToken = GuidValue(reader, 23),
-        RefreshClaimExpiresAtUtc = Date(reader, 24), RefreshAttemptCount = reader.GetInt32(25),
-        RefreshLastAttemptAtUtc = Date(reader, 26), CreatedAt = reader.GetDateTime(27), UpdatedAt = reader.GetDateTime(28),
+        TokenRotationState = (AccountingTokenRotationState)reader.GetInt32(22), TokenGeneration = reader.GetInt64(23),
+        TokenRotationClaimOwner = String(reader, 24), TokenRotationClaimToken = GuidValue(reader, 25),
+        TokenRotationClaimExpiresAtUtc = Date(reader, 26), TokenRotationAttemptCount = reader.GetInt32(27),
+        TokenRotationLastAttemptAtUtc = Date(reader, 28), CreatedAt = reader.GetDateTime(29), UpdatedAt = reader.GetDateTime(30),
     };
 
     private static string? String(System.Data.Common.DbDataReader r, int i) => r.IsDBNull(i) ? null : r.GetString(i);

@@ -13,7 +13,9 @@ public partial class AddAccountingWorkerClaims : Migration
     {
         migrationBuilder.AddColumn<DateTime>("NextPullAtUtc", "AccountingConnections", "timestamp with time zone", nullable: false);
         AddClaimColumns(migrationBuilder, "Pull");
-        AddClaimColumns(migrationBuilder, "Refresh");
+        AddClaimColumns(migrationBuilder, "TokenRotation");
+        migrationBuilder.AddColumn<long>("TokenGeneration", "AccountingConnections", "bigint", nullable: false, defaultValue: 0L);
+        migrationBuilder.AddColumn<int>("TokenRotationState", "AccountingConnections", "integer", nullable: false, defaultValue: 0);
         migrationBuilder.CreateIndex(
             "IX_AccountingConnections_PullEligibility", "AccountingConnections",
             new[] { "Status", "PullEnabled", "NextPullAtUtc", "Id" });
@@ -21,17 +23,19 @@ public partial class AddAccountingWorkerClaims : Migration
             "IX_AccountingConnections_ExpiredPullClaim", "AccountingConnections",
             new[] { "PullClaimExpiresAtUtc", "Id" }, filter: "\"PullClaimToken\" IS NOT NULL");
         migrationBuilder.CreateIndex(
-            "IX_AccountingConnections_ExpiredRefreshClaim", "AccountingConnections",
-            new[] { "RefreshClaimExpiresAtUtc", "Id" }, filter: "\"RefreshClaimToken\" IS NOT NULL");
+            "IX_AccountingConnections_ExpiredTokenRotationClaim", "AccountingConnections",
+            new[] { "TokenRotationClaimExpiresAtUtc", "Id" }, filter: "\"TokenRotationClaimToken\" IS NOT NULL");
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
     {
         migrationBuilder.DropIndex("IX_AccountingConnections_PullEligibility", "AccountingConnections");
         migrationBuilder.DropIndex("IX_AccountingConnections_ExpiredPullClaim", "AccountingConnections");
-        migrationBuilder.DropIndex("IX_AccountingConnections_ExpiredRefreshClaim", "AccountingConnections");
+        migrationBuilder.DropIndex("IX_AccountingConnections_ExpiredTokenRotationClaim", "AccountingConnections");
         DropClaimColumns(migrationBuilder, "Pull");
-        DropClaimColumns(migrationBuilder, "Refresh");
+        DropClaimColumns(migrationBuilder, "TokenRotation");
+        migrationBuilder.DropColumn("TokenGeneration", "AccountingConnections");
+        migrationBuilder.DropColumn("TokenRotationState", "AccountingConnections");
         migrationBuilder.DropColumn("NextPullAtUtc", "AccountingConnections");
     }
 

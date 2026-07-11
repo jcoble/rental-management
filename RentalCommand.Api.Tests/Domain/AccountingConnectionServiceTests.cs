@@ -189,10 +189,12 @@ public class AccountingConnectionServiceTests : IDisposable
         });
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions.Value));
         var providerResolver = new AccountingProviderResolver(providers);
+        var claims = new RentalCommand.Data.Accounting.AccountingConnectionClaimStore(_ctx.Db);
         var tokenService = new AccountingTokenService(
-            _dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+            _dp, providerResolver, settingsResolver, claims,
+            TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
-            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
+            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService, claims,
             TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(

@@ -208,6 +208,14 @@ public class AccountingConnectionService
         conn.ExternalAccountId = result.ExternalAccountId;
         conn.CompanyName = result.CompanyName;
         conn.Status = AccountingConnectionStatus.Connected;
+        conn.TokenGeneration++;
+        conn.TokenRotationState = AccountingTokenRotationState.Idle;
+        conn.TokenRotationClaimOwner = null;
+        conn.TokenRotationClaimToken = null;
+        conn.TokenRotationClaimExpiresAtUtc = null;
+        conn.PullClaimOwner = null;
+        conn.PullClaimToken = null;
+        conn.PullClaimExpiresAtUtc = null;
         conn.LastError = null;
         conn.NextPullAtUtc = _timeProvider.UtcNow().AddMinutes(15);
         conn.ConnectedAt ??= _timeProvider.UtcNow();
@@ -257,7 +265,7 @@ public class AccountingConnectionService
     /// <summary>Best-effort revoke at the provider, then flip Disconnected and blank the tokens.</summary>
     public async Task DisconnectAsync(int portfolioId, AccountingProvider provider, CancellationToken ct)
     {
-        var conn = await _db.AccountingConnections
+        var conn = await _db.AccountingConnections.AsNoTracking()
             .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct);
         if (conn == null)
         {
@@ -282,13 +290,25 @@ public class AccountingConnectionService
             }
         }
 
-        conn.Status = AccountingConnectionStatus.Disconnected;
-        conn.AccessTokenCipherText = null;
-        conn.RefreshTokenCipherText = null;
-        conn.TokenExpiresAt = null;
-        conn.DisconnectedAt = _timeProvider.UtcNow();
-        conn.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
+        var disconnectedAt = _timeProvider.UtcNow();
+        await _db.AccountingConnections
+            .Where(c => c.Id == conn.Id
+                && c.PortfolioId == portfolioId
+                && c.Provider == provider)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(c => c.Status, AccountingConnectionStatus.Disconnected)
+                .SetProperty(c => c.AccessTokenCipherText, (string?)null)
+                .SetProperty(c => c.RefreshTokenCipherText, (string?)null)
+                .SetProperty(c => c.TokenExpiresAt, (DateTime?)null)
+                .SetProperty(c => c.PullClaimOwner, (string?)null)
+                .SetProperty(c => c.PullClaimToken, (Guid?)null)
+                .SetProperty(c => c.PullClaimExpiresAtUtc, (DateTime?)null)
+                .SetProperty(c => c.TokenRotationState, AccountingTokenRotationState.Idle)
+                .SetProperty(c => c.TokenRotationClaimOwner, (string?)null)
+                .SetProperty(c => c.TokenRotationClaimToken, (Guid?)null)
+                .SetProperty(c => c.TokenRotationClaimExpiresAtUtc, (DateTime?)null)
+                .SetProperty(c => c.DisconnectedAt, disconnectedAt)
+                .SetProperty(c => c.UpdatedAt, disconnectedAt), ct);
 
         _logger.LogInformation(
             "AccountingConnection {ConnectionId} disconnected for portfolio {PortfolioId} ({Provider})",
@@ -388,23 +408,22 @@ public class AccountingConnectionService
     public async Task SetDirectionAsync(
         int portfolioId, AccountingProvider provider, bool? pull, bool? push, CancellationToken ct)
     {
-        var conn = await _db.AccountingConnections
-            .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct)
-            ?? throw new InvalidOperationException(
+        var updatedAt = _timeProvider.UtcNow();
+        var updated = await _db.AccountingConnections
+            .Where(c => c.PortfolioId == portfolioId && c.Provider == provider)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(c => c.PullEnabled, c => pull.HasValue ? pull.Value : c.PullEnabled)
+                .SetProperty(c => c.PushEnabled, c => push.HasValue ? push.Value : c.PushEnabled)
+                .SetProperty(c => c.PullClaimOwner,
+                    c => pull == false ? null : c.PullClaimOwner)
+                .SetProperty(c => c.PullClaimToken,
+                    c => pull == false ? null : c.PullClaimToken)
+                .SetProperty(c => c.PullClaimExpiresAtUtc,
+                    c => pull == false ? null : c.PullClaimExpiresAtUtc)
+                .SetProperty(c => c.UpdatedAt, updatedAt), ct);
+        if (updated == 0)
+            throw new InvalidOperationException(
                 $"No {provider} connection to configure. Connect the provider first.");
-
-        if (pull.HasValue)
-        {
-            conn.PullEnabled = pull.Value;
-        }
-
-        if (push.HasValue)
-        {
-            conn.PushEnabled = push.Value;
-        }
-
-        conn.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
     }
 
     // --- Phase 2: import / mappings / confirm / review-queue ------------------------------
