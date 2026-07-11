@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data;
 
@@ -14,6 +15,8 @@ internal static class WorkspaceAccessModelConfiguration
         ConfigureAssignments(modelBuilder);
         ConfigureAuthSession(modelBuilder);
         ConfigureSessionRefreshCredentials(modelBuilder);
+        ConfigureLoginContextSelectionChallenges(modelBuilder);
+        ConfigureAccessEnvelopeProjection(modelBuilder);
     }
 
     private static void ConfigureAccessContext(ModelBuilder modelBuilder)
@@ -293,7 +296,9 @@ internal static class WorkspaceAccessModelConfiguration
                     "\"ExpiresAtUtc\" > \"IssuedAtUtc\"");
                 table.HasCheckConstraint(
                     "CK_AuthSessionRefreshCredentials_ConsumedFacts",
-                    "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"IssuedAtUtc\"");
+                    "(\"ConsumedAtUtc\" IS NULL AND \"ConsumedByOperationId\" IS NULL) OR " +
+                    "(\"ConsumedAtUtc\" IS NOT NULL AND \"ConsumedByOperationId\" IS NOT NULL AND " +
+                    "\"ConsumedAtUtc\" >= \"IssuedAtUtc\")");
                 table.HasCheckConstraint(
                     "CK_AuthSessionRefreshCredentials_ReplacementRequiresConsumption",
                     "\"ReplacedByCredentialId\" IS NULL OR " +
@@ -326,6 +331,42 @@ internal static class WorkspaceAccessModelConfiguration
                     replacement.RefreshTokenFamilyId,
                 })
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureLoginContextSelectionChallenges(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<LoginContextSelectionChallenge>(entity =>
+        {
+            entity.HasKey(challenge => challenge.Id);
+            entity.Property(challenge => challenge.Id).ValueGeneratedNever();
+            entity.Property(challenge => challenge.TokenHash).IsRequired().HasMaxLength(128);
+            entity.HasIndex(challenge => challenge.TokenHash).IsUnique();
+            entity.HasIndex(challenge => new { challenge.UserId, challenge.ExpiresAtUtc });
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_LoginContextSelectionChallenges_Expiry",
+                    "\"ExpiresAtUtc\" > \"CreatedAtUtc\"");
+                table.HasCheckConstraint(
+                    "CK_LoginContextSelectionChallenges_ConsumedFacts",
+                    "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"CreatedAtUtc\"");
+            });
+
+            entity.HasOne(challenge => challenge.User)
+                .WithMany(user => user.LoginContextSelectionChallenges)
+                .HasForeignKey(challenge => challenge.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    private static void ConfigureAccessEnvelopeProjection(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AccessEnvelopeProjectionRow>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_access_envelopes");
+            entity.Property(row => row.EnvelopeJson).HasColumnType("text");
         });
     }
 }

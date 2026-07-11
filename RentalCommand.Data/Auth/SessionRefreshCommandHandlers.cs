@@ -15,6 +15,13 @@ public sealed class IssueSessionRefreshCredentialHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        if (command.AuthSessionId == Guid.Empty ||
+            command.RefreshTokenFamilyId == Guid.Empty ||
+            command.CredentialId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
         ValidateHash(command.TokenHash, nameof(command.TokenHash));
         ValidateIssueTimes(command);
 
@@ -71,8 +78,7 @@ public sealed class IssueSessionRefreshCredentialHandler
             SessionRefreshMutationStatus.Issued,
             command.AuthSessionId,
             command.RefreshTokenFamilyId,
-            command.CredentialId,
-            CredentialTokenHash: command.TokenHash);
+            command.CredentialId);
     }
 
     private static void ValidateIssueTimes(IssueSessionRefreshCredentialCommand command)
@@ -140,6 +146,10 @@ public sealed class RotateSessionRefreshCredentialHandler
         IssueSessionRefreshCredentialHandler.ValidateHash(
             command.ReplacementTokenHash,
             nameof(command.ReplacementTokenHash));
+        if (command.OperationId == Guid.Empty || command.ReplacementCredentialId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
         if (command.ReplacementExpiresAtUtc <= command.PresentedAtUtc)
         {
             throw new ArgumentOutOfRangeException(
@@ -188,6 +198,18 @@ public sealed class RotateSessionRefreshCredentialHandler
 
         if (target.Credential.ConsumedAtUtc is not null)
         {
+            if (target.IsEligible &&
+                target.Credential.ConsumedByOperationId == command.OperationId &&
+                target.Credential.ReplacedByCredentialId is { } priorReplacementId)
+            {
+                return new SessionRefreshMutationResult(
+                    SessionRefreshMutationStatus.Recovered,
+                    target.Session.Id,
+                    target.Family.Id,
+                    target.Credential.Id,
+                    priorReplacementId);
+            }
+
             RevokeForReuse(target, command.PresentedAtUtc, attempt);
             return new SessionRefreshMutationResult(
                 SessionRefreshMutationStatus.ReuseDetected,
@@ -227,6 +249,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         };
 
         target.Credential.ConsumedAtUtc = command.PresentedAtUtc;
+        target.Credential.ConsumedByOperationId = command.OperationId;
         target.Credential.ReplacedByCredential = replacement;
         target.Session.LastSeenAtUtc = command.PresentedAtUtc;
         attempt.Persistence.Add(replacement);
@@ -242,6 +265,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 RefreshTokenFamilyId = target.Family.Id,
                 CredentialId = target.Credential.Id,
                 ReplacementCredentialId = replacement.Id,
+                command.OperationId,
             }));
 
         return new SessionRefreshMutationResult(
@@ -249,9 +273,7 @@ public sealed class RotateSessionRefreshCredentialHandler
             target.Session.Id,
             target.Family.Id,
             target.Credential.Id,
-            replacement.Id,
-            CredentialTokenHash: command.PresentedTokenHash,
-            ReplacementTokenHash: command.ReplacementTokenHash);
+            replacement.Id);
     }
 
     private static async Task<RefreshTarget?> LocateAsync(

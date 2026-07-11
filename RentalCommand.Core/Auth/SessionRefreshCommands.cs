@@ -4,6 +4,12 @@ namespace RentalCommand.Core.Auth;
 
 public static class SessionRefreshCommandIdentity
 {
+    public static AtomicCommandIdentity ForStart(Guid operationId) =>
+        Create("auth-session:start", operationId);
+
+    public static AtomicCommandIdentity ForContextSelectionChallenge(Guid operationId) =>
+        Create("auth-context-selection:issue", operationId);
+
     public static AtomicCommandIdentity ForIssue(Guid operationId) =>
         Create("session-refresh:issue", operationId);
 
@@ -23,6 +29,43 @@ public static class SessionRefreshCommandIdentity
     }
 }
 
+public sealed record IssueLoginContextSelectionChallengeCommand(
+    int UserId,
+    Guid ChallengeId,
+    string ChallengeTokenHash,
+    DateTime IssuedAtUtc,
+    DateTime ExpiresAtUtc) : IAtomicCommandData;
+
+public sealed record LoginContextSelectionChallengeResult(
+    bool Issued,
+    Guid ChallengeId,
+    int UserId,
+    DateTime ExpiresAtUtc) : IAtomicResultData;
+
+public sealed record StartAuthSessionCommand(
+    int UserId,
+    int SelectedAccessContextId,
+    Guid AuthSessionId,
+    Guid RefreshTokenFamilyId,
+    Guid CredentialId,
+    string CredentialTokenHash,
+    DateTime IssuedAtUtc,
+    DateTime SessionExpiresAtUtc,
+    DateTime CredentialExpiresAtUtc,
+    DateTime AbsoluteFamilyExpiresAtUtc,
+    Guid? ContextSelectionChallengeId = null,
+    string? ContextSelectionChallengeTokenHash = null) : IAtomicCommandData;
+
+public sealed record StartAuthSessionResult(
+    bool Started,
+    Guid AuthSessionId,
+    int UserId,
+    int AccessContextId,
+    int PortfolioId,
+    long AccessRevision,
+    Guid RefreshTokenFamilyId,
+    Guid CredentialId) : IAtomicResultData;
+
 public sealed record IssueSessionRefreshCredentialCommand(
     Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
@@ -33,6 +76,7 @@ public sealed record IssueSessionRefreshCredentialCommand(
     DateTime AbsoluteFamilyExpiresAtUtc) : IAtomicCommandData;
 
 public sealed record RotateSessionRefreshCredentialCommand(
+    Guid OperationId,
     string PresentedTokenHash,
     Guid ReplacementCredentialId,
     string ReplacementTokenHash,
@@ -43,6 +87,7 @@ public enum SessionRefreshMutationStatus
 {
     Issued,
     Rotated,
+    Recovered,
     ReuseDetected,
     Rejected,
 }
@@ -56,6 +101,4 @@ public sealed record SessionRefreshMutationResult(
     Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
     Guid CredentialId,
-    Guid? ReplacementCredentialId = null,
-    string? CredentialTokenHash = null,
-    string? ReplacementTokenHash = null) : IAtomicResultData;
+    Guid? ReplacementCredentialId = null) : IAtomicResultData;

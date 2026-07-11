@@ -23,4 +23,6 @@ public class ApplicationUser : IdentityUser<int>
     public ICollection<WorkspaceAccessContext> WorkspaceAccessContexts { get; set; } =
         new List<WorkspaceAccessContext>();
     public ICollection<AuthSession> AuthSessions { get; set; } = new List<AuthSession>();
+    public ICollection<LoginContextSelectionChallenge> LoginContextSelectionChallenges { get; set; } =
+        new List<LoginContextSelectionChallenge>();
 }

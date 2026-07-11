@@ -154,6 +154,21 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("RentalCommand.Data.Authorization.AccessEnvelopeProjectionRow", b =>
+                {
+                    b.Property<int>("AccessContextId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("EnvelopeJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.ToView("vw_access_envelopes", (string)null);
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingConnection", b =>
                 {
                     b.Property<int>("Id")
@@ -1018,6 +1033,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("ConsumedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ConsumedByOperationId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("ExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -1060,7 +1078,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.ToTable("AuthSessionRefreshCredentials", t =>
                         {
-                            t.HasCheckConstraint("CK_AuthSessionRefreshCredentials_ConsumedFacts", "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"IssuedAtUtc\"");
+                            t.HasCheckConstraint("CK_AuthSessionRefreshCredentials_ConsumedFacts", "(\"ConsumedAtUtc\" IS NULL AND \"ConsumedByOperationId\" IS NULL) OR (\"ConsumedAtUtc\" IS NOT NULL AND \"ConsumedByOperationId\" IS NOT NULL AND \"ConsumedAtUtc\" >= \"IssuedAtUtc\")");
 
                             t.HasCheckConstraint("CK_AuthSessionRefreshCredentials_Expiry", "\"ExpiresAtUtc\" > \"IssuedAtUtc\"");
 
@@ -2690,6 +2708,43 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("LeaseTenants");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.LoginContextSelectionChallenge", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ConsumedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "ExpiresAtUtc");
+
+                    b.ToTable("LoginContextSelectionChallenges", t =>
+                        {
+                            t.HasCheckConstraint("CK_LoginContextSelectionChallenges_ConsumedFacts", "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"CreatedAtUtc\"");
+
+                            t.HasCheckConstraint("CK_LoginContextSelectionChallenges_Expiry", "\"ExpiresAtUtc\" > \"CreatedAtUtc\"");
+                        });
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
@@ -7195,6 +7250,17 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.LoginContextSelectionChallenge", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "User")
+                        .WithMany("LoginContextSelectionChallenges")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
@@ -8094,6 +8160,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("AuditLogs");
 
                     b.Navigation("AuthSessions");
+
+                    b.Navigation("LoginContextSelectionChallenges");
 
                     b.Navigation("RefreshTokens");
 
