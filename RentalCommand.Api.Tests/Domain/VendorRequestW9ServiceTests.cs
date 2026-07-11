@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Vendors;
 using RentalCommand.Data;
+using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Vendors;
 using RentalCommand.TestCommon;
