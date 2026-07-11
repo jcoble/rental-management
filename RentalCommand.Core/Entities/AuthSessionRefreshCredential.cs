@@ -12,6 +12,7 @@ public sealed class AuthSessionRefreshCredential
     public DateTime IssuedAtUtc { get; set; }
     public DateTime ExpiresAtUtc { get; set; }
     public DateTime? ConsumedAtUtc { get; set; }
+    public Guid? ConsumedByOperationId { get; set; }
     public Guid? ReplacedByCredentialId { get; set; }
     public DateTime? ReuseDetectedAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }

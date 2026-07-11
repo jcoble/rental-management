@@ -118,3 +118,31 @@ public sealed record ScopedPropertySummary(int PropertyId, string Name);
 public sealed record NavigationCapabilitySummary(
     WorkspaceExperience Experience,
     IReadOnlyList<string> CapabilityKeys);
+
+/// <summary>
+/// One effective login option. TotalEffectiveContexts is projected by SQL so callers can auto-select
+/// exactly one context or require an opaque selection challenge without loading unfiltered rows.
+/// </summary>
+public sealed record EffectiveAccessContextOption(
+    int AccessContextId,
+    int PortfolioId,
+    string WorkspaceName,
+    long AccessRevision,
+    WorkspaceExperience DefaultExperience,
+    int TotalEffectiveContexts);
+
+public interface IEffectiveAccessContextSelectionQuery
+{
+    Task<IReadOnlyList<EffectiveAccessContextOption>> ListAsync(
+        int userId,
+        DateTime utcNow,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IAccessEnvelopeQuery
+{
+    Task<AccessEnvelope?> GetAsync(
+        int userId,
+        int accessContextId,
+        CancellationToken cancellationToken = default);
+}

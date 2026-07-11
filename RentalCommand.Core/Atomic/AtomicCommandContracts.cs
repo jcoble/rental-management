@@ -102,6 +102,8 @@ public enum AtomicLockResource
     BankConnection = 8,
     BankTransaction = 9,
     StoredFile = 10,
+    AuthSession = 11,
+    LoginContextSelectionChallenge = 12,
 }
 
 public enum AtomicScanDraftClaimOutcome

@@ -10,6 +10,33 @@ namespace RentalCommand.Data.Authorization;
 /// </summary>
 internal static class WorkspaceAccessEffectiveStateQuery
 {
+    /// <summary>
+    /// Limits login/session candidates to management-business contexts that still have an effective
+    /// membership and at least one effective assignment. All predicates remain composable SQL; a
+    /// membership label by itself never grants an authenticated workspace context.
+    /// </summary>
+    public static IQueryable<WorkspaceAccessContext> WhereEffectiveTeamAccess(
+        this IQueryable<WorkspaceAccessContext> contexts,
+        IQueryable<WorkspaceMembership> memberships,
+        IQueryable<MembershipRoleAssignment> assignments,
+        int userId,
+        DateTime utcNow)
+    {
+        var effectiveMemberships = memberships.WhereEffective(utcNow);
+        var effectiveAssignments = assignments.WhereEffective(utcNow);
+
+        return contexts
+            .WhereEffective()
+            .Where(context =>
+                context.UserId == userId &&
+                effectiveMemberships.Any(membership =>
+                    membership.AccessContextId == context.Id &&
+                    membership.PortfolioId == context.PortfolioId &&
+                    effectiveAssignments.Any(assignment =>
+                        assignment.WorkspaceMembershipId == membership.Id &&
+                        assignment.PortfolioId == membership.PortfolioId)));
+    }
+
     public static IQueryable<WorkspaceAccessContext> WhereEffective(
         this IQueryable<WorkspaceAccessContext> query) =>
         query.Where(context =>

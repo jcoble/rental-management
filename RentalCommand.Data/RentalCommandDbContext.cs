@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data;
 
@@ -80,6 +81,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         Set<AuthSessionRefreshTokenFamily>();
     public DbSet<AuthSessionRefreshCredential> AuthSessionRefreshCredentials =>
         Set<AuthSessionRefreshCredential>();
+    public DbSet<LoginContextSelectionChallenge> LoginContextSelectionChallenges =>
+        Set<LoginContextSelectionChallenge>();
+    public DbSet<AccessEnvelopeProjectionRow> AccessEnvelopeProjectionRows =>
+        Set<AccessEnvelopeProjectionRow>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();

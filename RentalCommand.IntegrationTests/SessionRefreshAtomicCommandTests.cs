@@ -108,7 +108,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().Be(first.Value);
-        replay.Value.CredentialTokenHash.Should().Be(command.TokenHash);
+        replay.Value.CredentialId.Should().Be(credentialId);
         await using var db = NewPlainContext();
         (await db.AuthSessionRefreshTokenFamilies.CountAsync(item => item.Id == familyId)).Should().Be(1);
         (await db.AuthSessionRefreshCredentials.CountAsync(item => item.Id == credentialId)).Should().Be(1);
@@ -123,12 +123,14 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var issued = await IssueCredentialAsync();
         var firstReplacement = Guid.NewGuid();
         var secondReplacement = Guid.NewGuid();
-        var first = Rotate(issued.TokenHash, firstReplacement, Hash("replacement-a"));
-        var second = Rotate(issued.TokenHash, secondReplacement, Hash("replacement-b"));
+        var firstOperation = Guid.NewGuid();
+        var secondOperation = Guid.NewGuid();
+        var first = Rotate(firstOperation, issued.TokenHash, firstReplacement, Hash("replacement-a"));
+        var second = Rotate(secondOperation, issued.TokenHash, secondReplacement, Hash("replacement-b"));
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(Identity("rotate", Guid.NewGuid()), first, Codec),
-            Atomic.ExecuteAsync(Identity("rotate", Guid.NewGuid()), second, Codec));
+            Atomic.ExecuteAsync(Identity("rotate", firstOperation), first, Codec),
+            Atomic.ExecuteAsync(Identity("rotate", secondOperation), second, Codec));
 
         outcomes.Select(item => item.Value.Status).Should().BeEquivalentTo(
             [SessionRefreshMutationStatus.Rotated, SessionRefreshMutationStatus.ReuseDetected]);
@@ -161,7 +163,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var operation = Guid.NewGuid();
         var replacementId = Guid.NewGuid();
         var replacementHash = Hash("stable-replacement");
-        var command = Rotate(issued.TokenHash, replacementId, replacementHash);
+        var command = Rotate(operation, issued.TokenHash, replacementId, replacementHash);
 
         var first = await Atomic.ExecuteAsync(Identity("rotate", operation), command, Codec);
         var retry = await Atomic.ExecuteAsync(Identity("rotate", operation), command, Codec);
@@ -170,7 +172,6 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         retry.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         retry.Value.Should().Be(first.Value);
         retry.Value.ReplacementCredentialId.Should().Be(replacementId);
-        retry.Value.ReplacementTokenHash.Should().Be(replacementHash);
 
         await using var db = NewPlainContext();
         (await db.AuthSessionRefreshCredentials.CountAsync(item =>
@@ -186,16 +187,17 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var issued = await IssueCredentialAsync();
+        var initialRotationOperation = Guid.NewGuid();
         await Atomic.ExecuteAsync(
-            Identity("rotate", Guid.NewGuid()),
-            Rotate(issued.TokenHash, Guid.NewGuid(), Hash("replacement")),
+            Identity("rotate", initialRotationOperation),
+            Rotate(initialRotationOperation, issued.TokenHash, Guid.NewGuid(), Hash("replacement")),
             Codec);
         var reuseOperation = Guid.NewGuid();
         _failureInterceptor!.FailNextReuse = true;
 
         var act = async () => await Atomic.ExecuteAsync(
             Identity("rotate", reuseOperation),
-            Rotate(issued.TokenHash, Guid.NewGuid(), Hash("discarded")),
+            Rotate(reuseOperation, issued.TokenHash, Guid.NewGuid(), Hash("discarded")),
             Codec);
         await act.Should().ThrowAsync<InjectedReuseFailureException>();
 
@@ -225,7 +227,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
 
         var act = async () => await Atomic.ExecuteAsync(
             Identity("rotate", operation),
-            Rotate(issued.TokenHash, Guid.NewGuid(), issued.TokenHash),
+            Rotate(operation, issued.TokenHash, Guid.NewGuid(), issued.TokenHash),
             Codec);
         await act.Should().ThrowAsync<DbUpdateException>();
 
@@ -264,10 +266,12 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             _now.AddDays(30));
 
     private RotateSessionRefreshCredentialCommand Rotate(
+        Guid operationId,
         string presentedHash,
         Guid replacementId,
         string replacementHash) =>
         new(
+            operationId,
             presentedHash,
             replacementId,
             replacementHash,

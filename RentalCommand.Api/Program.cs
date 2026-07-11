@@ -203,6 +203,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.SessionRefreshMutationResult,
     RentalCommand.Data.Auth.RotateSessionRefreshCredentialHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.IssueLoginContextSelectionChallengeCommand,
+    RentalCommand.Core.Auth.LoginContextSelectionChallengeResult,
+    RentalCommand.Data.Auth.IssueLoginContextSelectionChallengeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.StartAuthSessionCommand,
+    RentalCommand.Core.Auth.StartAuthSessionResult,
+    RentalCommand.Data.Auth.StartAuthSessionHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
     RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
     RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
@@ -358,6 +366,10 @@ builder.Services.AddScoped<RentalCommand.Core.Authorization.IActiveAccessContext
     ActiveAccessContextResolver>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAuthorizationEvaluator,
     WorkspaceAuthorizationEvaluator>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery,
+    EffectiveAccessContextSelectionQuery>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IAccessEnvelopeQuery,
+    AccessEnvelopeQuery>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IMembershipAssignmentScopeValidator,
     MembershipAssignmentScopeValidator>();
 builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
