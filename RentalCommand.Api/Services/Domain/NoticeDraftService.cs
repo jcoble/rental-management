@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
@@ -722,16 +723,16 @@ public class NoticeDraftService : INoticeDraftService
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
             $"- Current lease ends: {lease.EndDate:MMMM d, yyyy} ({daysToEnd} days away)\n" +
-            $"- Current rent: {lease.MonthlyRent:C0}/month\n" +
-            $"- Proposed new rent: {proposedRent:C0}/month (a {RenewalEscalationPercent:0.#}% increase)\n" +
+            $"- Current rent: {Usd(lease.MonthlyRent)}/month\n" +
+            $"- Proposed new rent: {Usd(proposedRent)}/month (a {RenewalEscalationPercent:0.#}% increase)\n" +
             $"- Proposed new term: {RenewalTermMonths} months, new end date {newEndDate:MMMM d, yyyy}\n" +
             "- Ask the tenant to reply to accept, decline, or ask questions.";
 
         var deterministicSubject = $"Lease renewal for {propertyName}{unit}";
         var deterministicBody =
             $"Hi {tenantName}, your current lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
-            + $"We would like to offer a {RenewalTermMonths}-month renewal at {proposedRent:C0} per month "
-            + $"(currently {lease.MonthlyRent:C0}), running through {newEndDate:MMMM d, yyyy}. "
+            + $"We would like to offer a {RenewalTermMonths}-month renewal at {Usd(proposedRent)} per month "
+            + $"(currently {Usd(lease.MonthlyRent)}), running through {newEndDate:MMMM d, yyyy}. "
             + "Please reply here to accept, decline, or ask any questions.";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
@@ -743,7 +744,7 @@ public class NoticeDraftService : INoticeDraftService
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
-            reason: $"Lease ends in {daysToEnd} days. Proposed {proposedRent:C0}/mo ({RenewalEscalationPercent:0.#}% increase) through {newEndDate:MMM d, yyyy}.",
+            reason: $"Lease ends in {daysToEnd} days. Proposed {Usd(proposedRent)}/mo ({RenewalEscalationPercent:0.#}% increase) through {newEndDate:MMM d, yyyy}.",
             triggerDate: lease.EndDate.Date,
             now: now,
             template: template,
@@ -811,7 +812,7 @@ public class NoticeDraftService : INoticeDraftService
         var totalDue = payment.PaymentType == PaymentType.Rent ? baseOutstanding + lateFeeAmount : baseOutstanding;
         var chargeLabel = payment.PaymentType == PaymentType.LateFee ? "late fee" : "rent";
         var lateFeeClause = lateFeeAmount > 0m && payment.PaymentType == PaymentType.Rent
-            ? $" This includes {lateFeeAmount:C0} in late fees."
+            ? $" This includes {Usd(lateFeeAmount)} in late fees."
             : "";
 
         // Escalation: tone hardens the longer rent stays unpaid.
@@ -821,8 +822,8 @@ public class NoticeDraftService : INoticeDraftService
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
             $"- Charge type: {chargeLabel}\n" +
-            $"- Amount due: {totalDue:C0}\n" +
-            (lateFeeAmount > 0m ? $"- Late fee amount: {lateFeeAmount:C0}\n" : "") +
+            $"- Amount due: {Usd(totalDue)}\n" +
+            (lateFeeAmount > 0m ? $"- Late fee amount: {Usd(lateFeeAmount)}\n" : "") +
             $"- Was due: {payment.DueDate:MMMM d, yyyy} ({daysLate} days ago)\n" +
             $"- This is the {levelLabel} reminder. {tone}\n" +
             "- Ask the tenant to reply with payment status or to arrange a plan.";
@@ -836,25 +837,25 @@ public class NoticeDraftService : INoticeDraftService
                 _ => $"Final notice: overdue rent for {propertyName}{unit}"
             };
         var deterministicBody = payment.PaymentType == PaymentType.LateFee
-            ? $"Hi {tenantName}, our records show a late fee of {totalDue:C0} due on {payment.DueDate:MMMM d, yyyy} "
+            ? $"Hi {tenantName}, our records show a late fee of {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
               + $"for {propertyName}{unit} remains unpaid. Please reply with your payment status or any questions."
             : level switch
         {
-            1 => $"Hi {tenantName}, our records show {totalDue:C0} due on {payment.DueDate:MMMM d, yyyy} "
+            1 => $"Hi {tenantName}, our records show {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
                  + $"for {propertyName}{unit} is now {daysLate} days past due.{lateFeeClause} If you've already paid, thank you - "
                  + "please disregard. Otherwise, please reply with your payment status or any questions.",
-            2 => $"Hi {tenantName}, this is a second reminder that {totalDue:C0} due on {payment.DueDate:MMMM d, yyyy} "
+            2 => $"Hi {tenantName}, this is a second reminder that {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
                  + $"for {propertyName}{unit} remains unpaid ({daysLate} days past due).{lateFeeClause} Please bring the balance current "
                  + "or reply so we can arrange a payment plan.",
-            _ => $"Hi {tenantName}, this is a final notice that {totalDue:C0} due on {payment.DueDate:MMMM d, yyyy} "
+            _ => $"Hi {tenantName}, this is a final notice that {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
                  + $"for {propertyName}{unit} remains unpaid and is now {daysLate} days past due.{lateFeeClause} Please pay in full "
                  + "immediately or contact us today to avoid further action under your lease."
         };
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
-            [(NoticeMergeFields.OverdueAmount, totalDue.ToString("C0")),
+            [(NoticeMergeFields.OverdueAmount, Usd(totalDue)),
              (NoticeMergeFields.RentDueDate, payment.DueDate.ToString("MMMM d, yyyy")),
-             (NoticeMergeFields.LateFeeAmount, lateFeeAmount > 0m ? lateFeeAmount.ToString("C0") : ""),
+             (NoticeMergeFields.LateFeeAmount, lateFeeAmount > 0m ? Usd(lateFeeAmount) : ""),
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
@@ -864,7 +865,7 @@ public class NoticeDraftService : INoticeDraftService
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
             reason: lateFeeAmount > 0m && payment.PaymentType == PaymentType.Rent
-                ? $"Payment is {daysLate} days past due ({levelLabel} notice), including {lateFeeAmount:C0} in late fees."
+                ? $"Payment is {daysLate} days past due ({levelLabel} notice), including {Usd(lateFeeAmount)} in late fees."
                 : $"{chargeLabel} payment is {daysLate} days past due ({levelLabel} notice).",
             triggerDate: payment.DueDate.Date,
             now: now,
@@ -896,14 +897,14 @@ public class NoticeDraftService : INoticeDraftService
         var facts =
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
-            $"- Monthly rent: {lease.MonthlyRent:C0}\n" +
+            $"- Monthly rent: {Usd(lease.MonthlyRent)}\n" +
             (dueOn.HasValue ? $"- Rent due date: {dueOn:MMMM d, yyyy}\n" : "") +
             "- This is a friendly heads-up that rent is coming due.\n" +
             "- Ask the tenant to reply with any questions.";
 
         var deterministicSubject = $"Rent reminder for {propertyName}{unit}";
         var deterministicBody =
-            $"Hi {tenantName}, this is a friendly reminder that your rent of {lease.MonthlyRent:C0} "
+            $"Hi {tenantName}, this is a friendly reminder that your rent of {Usd(lease.MonthlyRent)} "
             + $"for {propertyName}{unit} is coming due{dueClause}. Please reach out with any questions. Thank you!";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
@@ -937,14 +938,14 @@ public class NoticeDraftService : INoticeDraftService
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
             $"- Current lease ends: {lease.EndDate:MMMM d, yyyy}\n" +
-            $"- Current rent: {lease.MonthlyRent:C0}/month\n" +
+            $"- Current rent: {Usd(lease.MonthlyRent)}/month\n" +
             "- Offer to continue on a month-to-month basis at the current rent after the lease ends.\n" +
             "- Ask the tenant to reply to accept or ask questions.";
 
         var deterministicSubject = $"Month-to-month option for {propertyName}{unit}";
         var deterministicBody =
             $"Hi {tenantName}, your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
-            + $"We're happy to continue on a month-to-month basis at {lease.MonthlyRent:C0} per month. "
+            + $"We're happy to continue on a month-to-month basis at {Usd(lease.MonthlyRent)} per month. "
             + "Please reply to accept or with any questions.";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
@@ -1081,11 +1082,17 @@ public class NoticeDraftService : INoticeDraftService
             [NoticeMergeFields.UnitNumber] = unitNumber ?? "",
             [NoticeMergeFields.LeaseStartDate] = lease.StartDate.ToString("MMMM d, yyyy"),
             [NoticeMergeFields.LeaseEndDate] = lease.EndDate.ToString("MMMM d, yyyy"),
-            [NoticeMergeFields.RentAmount] = lease.MonthlyRent.ToString("C0"),
+            [NoticeMergeFields.RentAmount] = Usd(lease.MonthlyRent),
         };
         foreach (var (key, value) in extra) tokens[key] = value;
         return tokens;
     }
+
+    // Tenant notices currently describe U.S. leases and dollar-denominated charges. Their legal
+    // and payment copy must not change symbols with the API host's process culture (for example,
+    // Azure's invariant culture renders the generic currency sign for the "C" format).
+    private static string Usd(decimal amount) =>
+        amount.ToString("C0", CultureInfo.GetCultureInfo("en-US"));
 
     private async Task<string?> GenerateCopyAsync(
         string prompt,

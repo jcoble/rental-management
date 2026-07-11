@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Scanning;
 using RentalCommand.Engine.Workers;
 using RentalCommand.TestCommon;
 
@@ -44,6 +45,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         // Scoped so each DI scope (including the worker's child fail-path scope) gets a fresh
         // DbContext over the one shared in-memory connection — matching production scoping.
         services.AddScoped<RentalCommandDbContext>(_ => new ScanTestDbContext(options));
+        services.AddScoped<IScanProcessingClaimStore, TestScanProcessingClaimStore>();
         services.AddSingleton<ILlmProvider>(_llm);
         services.AddSingleton<IFileStorage, StubFileStorage>();
         services.AddSingleton<IDataUpdateService, StubDataUpdateService>();
@@ -451,6 +453,108 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// SQLite-compatible test boundary for the worker's PostgreSQL claim store. Candidate filtering,
+    /// ordering, and paging remain database-side; the fake only substitutes the PostgreSQL-specific
+    /// SKIP LOCKED statement that SQLite cannot execute. Completion remains fenced by claim token so
+    /// these tests exercise the worker's real ownership contract.
+    /// </summary>
+    private sealed class TestScanProcessingClaimStore : IScanProcessingClaimStore
+    {
+        private readonly RentalCommandDbContext _db;
+
+        public TestScanProcessingClaimStore(RentalCommandDbContext db) => _db = db;
+
+        public async Task<IReadOnlyList<ScanProcessingClaim>> ClaimAsync(
+            string claimOwner,
+            DateTime nowUtc,
+            TimeSpan leaseDuration,
+            int batchSize,
+            CancellationToken ct = default)
+        {
+            var candidates = await _db.ScanDrafts
+                .Where(d => d.Status == "Pending")
+                .OrderBy(d => d.CreatedAt)
+                .ThenBy(d => d.Id)
+                .Take(batchSize)
+                .ToListAsync(ct);
+
+            foreach (var draft in candidates)
+            {
+                draft.Status = "Processing";
+                draft.ProcessingClaimOwner = claimOwner;
+                draft.ProcessingClaimToken = Guid.NewGuid();
+                draft.ProcessingClaimExpiresAtUtc = nowUtc.Add(leaseDuration);
+                draft.ProcessingAttemptCount++;
+                draft.ProcessingLastAttemptAtUtc = nowUtc;
+                draft.FailureReason = null;
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            return candidates.Select(d => new ScanProcessingClaim(
+                d.Id,
+                d.PortfolioId,
+                d.FilePath,
+                d.SourceStoredFileId,
+                d.TargetEntityType,
+                d.ProcessingClaimToken!.Value)).ToList();
+        }
+
+        public async Task<int> MarkReviewingAsync(
+            int id,
+            Guid claimToken,
+            ScanProcessingResult result,
+            CancellationToken ct = default)
+        {
+            var draft = await Owned(id, claimToken).SingleOrDefaultAsync(ct);
+            if (draft is null) return 0;
+
+            draft.ExtractedFields = result.ExtractedFields;
+            draft.FailureReason = null;
+            draft.ModelId = result.ModelId;
+            draft.TokensUsed = result.TokensUsed;
+            draft.CostUsd = result.CostUsd;
+            draft.TargetEntityType = result.TargetEntityType;
+            draft.Status = "Reviewing";
+            draft.ReviewedAt = result.ReviewedAtUtc;
+            ClearClaim(draft);
+            await _db.SaveChangesAsync(ct);
+            return 1;
+        }
+
+        public async Task<int> MarkFailedAsync(
+            int id,
+            Guid claimToken,
+            DateTime reviewedAtUtc,
+            string? failureReason,
+            CancellationToken ct = default)
+        {
+            var draft = await Owned(id, claimToken).SingleOrDefaultAsync(ct);
+            if (draft is null) return 0;
+
+            draft.Status = "Failed";
+            draft.FailureReason = failureReason;
+            draft.ReviewedAt = reviewedAtUtc;
+            ClearClaim(draft);
+            await _db.SaveChangesAsync(ct);
+            return 1;
+        }
+
+        private IQueryable<ScanDraft> Owned(int id, Guid claimToken) =>
+            _db.ScanDrafts.Where(d =>
+                d.Id == id &&
+                d.Status == "Processing" &&
+                d.ProcessingClaimToken == claimToken);
+
+        private static void ClearClaim(ScanDraft draft)
+        {
+            draft.ProcessingClaimOwner = null;
+            draft.ProcessingClaimToken = null;
+            draft.ProcessingClaimExpiresAtUtc = null;
+        }
     }
 }
 

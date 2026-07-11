@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
@@ -402,7 +403,7 @@ public class NoticeDraftServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateAsync_PaymentScopedLateNotice_IncludesLateFeeForSamePeriod()
+    public async Task GenerateAsync_PaymentScopedLateNotice_UsesStableUsdCopyAcrossProcessCulture()
     {
         var lease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 2200m);
         var now = DateTime.UtcNow;
@@ -437,6 +438,7 @@ public class NoticeDraftServiceTests : IDisposable
         await _ctx.Db.SaveChangesAsync();
         _ctx.Db.ChangeTracker.Clear();
         var sut = CreateService();
+        using var culture = new CurrentCultureScope(CultureInfo.GetCultureInfo("fr-FR"));
 
         var result = await sut.GenerateAsync(
             1,
@@ -809,6 +811,15 @@ public class NoticeDraftServiceTests : IDisposable
         _ctx.Db.SaveChanges();
         _ctx.Db.ChangeTracker.Clear();
         return (nearLease, farLease);
+    }
+
+    private sealed class CurrentCultureScope : IDisposable
+    {
+        private readonly CultureInfo _originalCulture = CultureInfo.CurrentCulture;
+
+        public CurrentCultureScope(CultureInfo culture) => CultureInfo.CurrentCulture = culture;
+
+        public void Dispose() => CultureInfo.CurrentCulture = _originalCulture;
     }
 
     private sealed class NoopLlmProvider : ILlmProvider
