@@ -1,5 +1,9 @@
 # CI/CD + Deploy + Local-Hooks — Decision Record
 
+> **Superseded for deployment runners (2026-07-10):** the dedicated build box was deleted.
+> Production deploys remain version-tag/manual-only, but both deploy jobs now run on
+> GitHub-hosted runners. The historical self-hosted analysis below is retained only as context.
+
 ## DECISION (final, 2026-06-27)
 
 The owner chose the **free, no-spend** path. What was actually implemented:

@@ -3,14 +3,14 @@ name: Deploy
 # Production deploy for rentalcommand.net.
 #
 # Triggers (DEPLOY IS NO LONGER AUTOMATIC ON MAIN PUSH — that made every merge a slow build):
-#   • Push a version tag   ->  git tag v1.4 && git push --tags     (cut a release)
+#   • Push a version tag   ->  git tag v1.4 && git push origin v1.4  (cut a release)
 #   • Manual               ->  Actions ▸ Deploy ▸ Run workflow / `gh workflow run deploy.yml`
 #                              (optionally paste a SHA/ref; deploys the chosen commit)
-# Plain merges to main do nothing — deploy is a deliberate step run once per batch at the
-# verify stage. See the CI/CD-redo task; pairs with CI moving to GitHub-hosted so the
-# self-hosted box is deploy-only.
+# Plain merges to main do nothing — deploy is a deliberate release step run once per batch.
+# Both jobs use ephemeral GitHub-hosted runners; production remains a
+# pull-only box.
 #
-# Model: build api/engine/web on the self-hosted build box, push to GHCR, then the prod box
+# Model: build api/engine/web in GitHub Actions, push to GHCR, then the prod box
 # only PULLS and restarts (it never compiles — see deploy/docker-compose.prod.yml).
 # Migrations self-apply on boot under a shared Postgres advisory lock.
 
@@ -33,22 +33,11 @@ concurrency:
 env:
   IMAGE_PREFIX: ghcr.io/jcoble/rentalcommand
   DEPLOY_DOMAIN: rentalcommand.net
-  # Per-runner docker config. Both repos' runners on the build box run as the
-  # same user, so the default shared ~/.docker buildx store lets one repo's
-  # setup-buildx post-cleanup stop the OTHER repo's active builder mid-build
-  # (observed twice: "graceful_stop" buildkit deaths). This path lives under
-  # this runner's _work dir, so builders/registry logins never cross repos.
-  DOCKER_CONFIG: ${{ github.workspace }}/../.docker
-  # Self-hosted runner: the github service user can't mkdir under setup-dotnet's default
-  # (/usr/share/dotnet), so install to a runner-writable dir. The 10.0 SDK is pre-seeded
-  # there (shared with the EdiPlatform runner on the same box/user), so setup-dotnet detects
-  # it and skips the per-run download.
-  DOTNET_INSTALL_DIR: '/home/github/.dotnet'
 
 jobs:
   build-push:
     name: Build & push images (GHCR)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -64,29 +53,12 @@ jobs:
         id: meta
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      # Keep the shared build box off 100% disk, which silently drops the self-hosted runner
-      # offline mid-build (it can't even write a log line) -- happened 2026-06-21, 72/75G full.
-      # Dangling volumes are pure waste on a build box (no app runs here) and were the biggest
-      # creep, so ALWAYS clear them. Only sacrifice the warm image/layer cache when disk is
-      # genuinely low, so normal builds keep their fast incremental cache.
-      - name: Reclaim build-box disk
-        run: |
-          echo "before: $(df -h / | awk 'NR==2{print $4" free / "$2" ("$5" used)"}')"
-          docker volume prune -f >/dev/null 2>&1 || true
-          avail_kb=$(df -P / | awk 'NR==2{print $4}')
-          if [ "${avail_kb:-0}" -lt 15000000 ]; then
-            echo "low disk (<15G free) -- pruning old tagged images + build cache too"
-            docker image prune -af --filter 'until=24h' >/dev/null 2>&1 || true
-            docker builder prune -af >/dev/null 2>&1 || true
-          fi
-          echo "after:  $(df -h / | awk 'NR==2{print $4" free / "$2" ("$5" used)"}')"
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      # Compile the solution ONCE on the runner, then publish Api + Engine from that warm
+      # Compile the solution once on the runner, then publish Api + Engine from that warm
       # build (incremental, no recompile). This replaces the old per-image in-Docker compile
       # where Dockerfile.api and Dockerfile.engine each rebuilt Core/Data/Engine separately.
       # Published before the images are assembled; the images are runtime-only COPYs.
@@ -104,9 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Plain `docker build` on the persistent self-hosted daemon: its local layer cache
-      # survives between runs, so buildx + the network-round-tripping type=gha cache are gone.
-      # The .NET images are runtime-only and take a NARROW context (publish/<app>).
+      # The .NET images are runtime-only and take a narrow context (publish/<app>).
       - name: Build & push API
         run: |
           docker build -f Dockerfile.api \
@@ -144,7 +114,7 @@ jobs:
   deploy:
     name: Pull & restart on prod box
     needs: build-push
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
