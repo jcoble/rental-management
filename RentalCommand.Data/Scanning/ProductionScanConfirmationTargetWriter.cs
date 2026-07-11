@@ -1,0 +1,608 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Scanning;
+
+namespace RentalCommand.Data.Scanning;
+
+/// <summary>
+/// Persistence-only writers for the non-lease scan targets. This type deliberately has no injected
+/// services: every query and write goes through the transaction-owned persistence session supplied
+/// by the atomic kernel. Lease confirmation remains unsupported until its full aggregate writer is
+/// available, so registering this writer cannot accidentally activate a partial lease path.
+/// </summary>
+public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTargetWriter
+{
+    private static readonly JsonSerializerOptions ReceiptJsonOptions = new(JsonSerializerDefaults.Web);
+
+    public ProductionScanConfirmationTargetWriter() { }
+
+    public bool Supports(ScanConfirmationTargetKind kind) => kind is
+        ScanConfirmationTargetKind.Expense or
+        ScanConfirmationTargetKind.Payment or
+        ScanConfirmationTargetKind.WorkOrder or
+        ScanConfirmationTargetKind.Application or
+        ScanConfirmationTargetKind.Loan;
+
+    public Task<ScanConfirmationTargetWriteResult> WriteAsync(
+        ConfirmScanDraftCommand command,
+        string? extractedFieldsJson,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct) => command.Target.Kind switch
+        {
+            ScanConfirmationTargetKind.Expense => WriteExpenseAsync(
+                command, Required(command.Target.Expense), attempt, ct),
+            ScanConfirmationTargetKind.Payment => WritePaymentAsync(
+                command, Required(command.Target.Payment), extractedFieldsJson, attempt, ct),
+            ScanConfirmationTargetKind.WorkOrder => WriteWorkOrderAsync(
+                command, Required(command.Target.WorkOrder), extractedFieldsJson, attempt, ct),
+            ScanConfirmationTargetKind.Application => WriteApplicationAsync(
+                command, Required(command.Target.Application), extractedFieldsJson, attempt, ct),
+            ScanConfirmationTargetKind.Loan => WriteLoanAsync(
+                command, Required(command.Target.Loan), attempt, ct),
+            _ => throw new InvalidOperationException(
+                $"Scan confirmation target {command.Target.Kind} is not supported by this writer."),
+        };
+
+    private static async Task<ScanConfirmationTargetWriteResult> WriteExpenseAsync(
+        ConfirmScanDraftCommand command,
+        ScanExpenseTargetData target,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var receipt = Required(target.Receipt);
+        var amount = receipt.Total ?? receipt.Subtotal ?? 0m;
+        if (amount <= 0m)
+        {
+            throw new ScanConfirmationValidationException("Confirmed expense amount must be greater than zero.");
+        }
+
+        await ValidateExpenseLocationAsync(command.PortfolioId, target, attempt.Persistence, ct);
+        var vendorId = await ResolveOrCreateVendorAsync(
+            command.PortfolioId, receipt, ToUtc(command.ConfirmedAtUtc), attempt, ct);
+        var now = ToUtc(command.ConfirmedAtUtc);
+        var expense = new Expense
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = target.PropertyId,
+            UnitId = target.UnitId,
+            WorkOrderId = target.WorkOrderId,
+            VendorId = vendorId,
+            Category = receipt.Category ?? ScheduleECategory.Other,
+            Description = string.IsNullOrWhiteSpace(receipt.VendorName)
+                ? "Scanned receipt"
+                : receipt.VendorName.Trim(),
+            Amount = amount,
+            Subtotal = receipt.Subtotal,
+            TaxAmount = receipt.Tax,
+            IncurredAt = ToUtc(receipt.TransactionDate) ?? now,
+            DueDate = target.IsPaid ? null : ToUtc(receipt.DueDate),
+            PaidAt = target.IsPaid ? ToUtc(receipt.TransactionDate) ?? now : null,
+            Status = target.IsPaid ? ExpenseStatus.Paid : ExpenseStatus.Pending,
+            BillableToOwner = false,
+            Notes = receipt.Notes,
+            ReceiptData = SerializeReceipt(receipt),
+            PaymentMethod = receipt.PaymentMethod,
+            CardLast4 = receipt.CardLast4,
+            DocumentKind = receipt.DocumentKind,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        var lineNumber = 1;
+        foreach (var line in receipt.LineItems ?? [])
+        {
+            expense.LineItems.Add(new ExpenseLineItem
+            {
+                Description = line.Description ?? string.Empty,
+                Quantity = line.Quantity,
+                UnitPrice = line.UnitPrice,
+                Amount = line.Amount,
+                LineNumber = lineNumber++,
+            });
+        }
+
+        attempt.Persistence.Add(expense);
+        await attempt.FlushBusinessAsync(ct);
+        return new ScanConfirmationTargetWriteResult(expense.Id, expense.UnitId);
+    }
+
+    private static async Task<ScanConfirmationTargetWriteResult> WritePaymentAsync(
+        ConfirmScanDraftCommand command,
+        ScanPaymentTargetData target,
+        string? extractedFieldsJson,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var receipt = Required(target.Receipt);
+        var amount = receipt.Total ?? receipt.Subtotal ?? 0m;
+        if (amount <= 0m)
+        {
+            throw new ScanConfirmationValidationException("Confirmed payment amount must be greater than zero.");
+        }
+
+        var unitId = await attempt.Persistence.Query<Lease>()
+            .Where(lease => lease.Id == target.LeaseId && lease.PortfolioId == command.PortfolioId)
+            .Select(lease => (int?)lease.UnitId)
+            .SingleOrDefaultAsync(ct);
+        if (unitId is null)
+        {
+            throw new ScanConfirmationValidationException("Selected lease is not in this portfolio.");
+        }
+
+        var paymentDate = ToUtc(receipt.TransactionDate) ?? ToUtc(command.ConfirmedAtUtc);
+        var noteParts = new[] { receipt.PayerName, receipt.Notes }
+            .Where(value => !string.IsNullOrWhiteSpace(value));
+        var notes = string.Join(" — ", noteParts);
+        var payment = new Payment
+        {
+            PortfolioId = command.PortfolioId,
+            LeaseId = target.LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = amount,
+            DueDate = paymentDate,
+            PaidDate = paymentDate,
+            Method = "Check",
+            ExternalReference = receipt.CheckNumber,
+            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes,
+            PayerName = receipt.PayerName,
+            CheckNumber = receipt.CheckNumber,
+            BankName = receipt.BankName,
+            ExtractedData = NormalizeJson(extractedFieldsJson),
+            CreatedAt = ToUtc(command.ConfirmedAtUtc),
+            UpdatedAt = ToUtc(command.ConfirmedAtUtc),
+        };
+
+        attempt.Persistence.Add(payment);
+        await attempt.FlushBusinessAsync(ct);
+        return new ScanConfirmationTargetWriteResult(payment.Id, unitId);
+    }
+
+    private static async Task<ScanConfirmationTargetWriteResult> WriteWorkOrderAsync(
+        ConfirmScanDraftCommand command,
+        ScanWorkOrderTargetData target,
+        string? extractedFieldsJson,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var title = RequireText(target.Title, "Work order title");
+        var description = RequireText(target.Description, "Work order description");
+        await ValidateWorkOrderReferencesAsync(command.PortfolioId, target, attempt.Persistence, ct);
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = target.PropertyId,
+            UnitId = target.UnitId,
+            TenantId = target.TenantId,
+            LeaseId = target.LeaseId,
+            VendorId = target.VendorId,
+            Title = title,
+            Description = description,
+            Category = string.IsNullOrWhiteSpace(target.Category) ? "General" : target.Category.Trim(),
+            Priority = target.Priority,
+            Status = WorkOrderStatus.New,
+            RequestedAt = ToUtc(command.ConfirmedAtUtc),
+            EstimatedCost = target.EstimatedCost,
+            CreatedBy = command.ConfirmedByUserId.ToString(),
+            ExtractedData = NormalizeJson(extractedFieldsJson),
+            UpdatedAt = ToUtc(command.ConfirmedAtUtc),
+        };
+        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = command.PortfolioId,
+            FromStatus = null,
+            ToStatus = WorkOrderStatus.New,
+            ChangedByUserId = command.ConfirmedByUserId,
+            ChangedByLabel = "Staff",
+            CreatedAtUtc = ToUtc(command.ConfirmedAtUtc),
+        });
+
+        attempt.Persistence.Add(workOrder);
+        await attempt.FlushBusinessAsync(ct);
+        return new ScanConfirmationTargetWriteResult(workOrder.Id, workOrder.UnitId);
+    }
+
+    private static async Task<ScanConfirmationTargetWriteResult> WriteApplicationAsync(
+        ConfirmScanDraftCommand command,
+        ScanApplicationTargetData target,
+        string? extractedFieldsJson,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var firstName = RequireText(target.FirstName, "Applicant first name");
+        var lastName = RequireText(target.LastName, "Applicant last name");
+        await ValidateOptionalPropertyUnitAsync(
+            command.PortfolioId, target.PropertyId, target.UnitId, attempt.Persistence, ct);
+
+        var normalizedEmail = NormalizeEmail(target.Email);
+        if (normalizedEmail is not null)
+        {
+            var existingOpenApplicationId = await attempt.Persistence.Query<RentalApplication>()
+                .Where(application => application.PortfolioId == command.PortfolioId
+                    && application.Email != null
+                    && (application.Status == ApplicationStatus.Submitted
+                        || application.Status == ApplicationStatus.UnderReview
+                        || application.Status == ApplicationStatus.Approved)
+                    && application.Email.Trim().ToLower() == normalizedEmail)
+                .OrderBy(application => application.Id)
+                .Select(application => (int?)application.Id)
+                .FirstOrDefaultAsync(ct);
+            if (existingOpenApplicationId is not null)
+            {
+                throw new ScanConfirmationValidationException(
+                    $"An application for {normalizedEmail} already exists as application #{existingOpenApplicationId}.");
+            }
+        }
+
+        var application = new RentalApplication
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = target.PropertyId,
+            UnitId = target.UnitId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = string.IsNullOrWhiteSpace(target.Email) ? null : target.Email.Trim(),
+            Phone = target.Phone,
+            DateOfBirth = ToUtc(target.DateOfBirth),
+            CurrentAddress = string.IsNullOrWhiteSpace(target.CurrentAddress)
+                ? null
+                : target.CurrentAddress.Trim(),
+            Employer = target.Employer,
+            MonthlyIncome = target.MonthlyIncome,
+            DesiredMoveInDate = ToUtc(target.DesiredMoveInDate),
+            Notes = BuildApplicationNotes(target),
+            IdExtractedFields = NormalizeJson(extractedFieldsJson),
+            ConsentGiven = false,
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = ToUtc(command.ConfirmedAtUtc),
+            CreatedAt = ToUtc(command.ConfirmedAtUtc),
+            UpdatedAt = ToUtc(command.ConfirmedAtUtc),
+        };
+
+        attempt.Persistence.Add(application);
+        await attempt.FlushBusinessAsync(ct);
+        return new ScanConfirmationTargetWriteResult(application.Id, application.UnitId);
+    }
+
+    private static async Task<ScanConfirmationTargetWriteResult> WriteLoanAsync(
+        ConfirmScanDraftCommand command,
+        ScanLoanTargetData target,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        if (!await IsPropertyInPortfolioAsync(
+                command.PortfolioId, target.PropertyId, attempt.Persistence, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
+        }
+
+        var lender = RequireText(target.Lender, "Lender");
+        var originalAmount = NormalizeDecimal(target.OriginalAmount, "Original loan amount", 0m, 999_999_999m, 2) ?? 0m;
+        var currentBalance = NormalizeDecimal(target.CurrentBalance, "Current loan balance", 0m, 999_999_999m, 2);
+        var interestRate = NormalizeDecimal(target.AnnualInterestRatePct, "Annual interest rate", 0m, 30m, 4) ?? 0m;
+        var monthlyPrincipalInterest = NormalizeDecimal(
+            target.MonthlyPrincipalInterest, "Monthly principal and interest", 0m, 9_999_999m, 2) ?? 0m;
+        var monthlyEscrow = NormalizeDecimal(
+            target.MonthlyEscrow, "Monthly escrow", 0m, 9_999_999m, 2) ?? 0m;
+        var loan = new Loan
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = target.PropertyId,
+            Lender = lender,
+            OriginalAmount = originalAmount,
+            CurrentBalance = currentBalance ?? originalAmount,
+            AnnualInterestRatePct = interestRate,
+            TermMonths = target.TermMonths is >= 1 and <= 1200 ? target.TermMonths.Value : 360,
+            StartDate = ToUtc(target.StartDate) ?? ToUtc(command.ConfirmedAtUtc),
+            DayOfMonthDue = target.DayOfMonthDue is >= 1 and <= 31 ? target.DayOfMonthDue.Value : 1,
+            MonthlyPrincipalInterest = monthlyPrincipalInterest,
+            MonthlyEscrow = monthlyEscrow,
+            EscrowCoversTaxes = target.EscrowCoversTaxes ?? false,
+            EscrowCoversInsurance = target.EscrowCoversInsurance ?? false,
+            Status = LoanStatus.Active,
+            Notes = BuildLoanNotes(target.Notes),
+            CreatedAt = ToUtc(command.ConfirmedAtUtc),
+            UpdatedAt = ToUtc(command.ConfirmedAtUtc),
+        };
+
+        attempt.Persistence.Add(loan);
+        await attempt.FlushBusinessAsync(ct);
+        return new ScanConfirmationTargetWriteResult(loan.Id);
+    }
+
+    private static async Task ValidateExpenseLocationAsync(
+        int portfolioId,
+        ScanExpenseTargetData target,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (target.PropertyId is int propertyId &&
+            !await IsPropertyInPortfolioAsync(portfolioId, propertyId, persistence, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
+        }
+        if (target.UnitId is int unitId && !await persistence.Query<Unit>()
+                .AnyAsync(unit => unit.Id == unitId
+                    && unit.Property != null
+                    && unit.Property.PortfolioId == portfolioId
+                    && (target.PropertyId == null || unit.PropertyId == target.PropertyId), ct))
+        {
+            throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
+        }
+        if (target.WorkOrderId is int workOrderId && !await persistence.Query<WorkOrder>()
+                .AnyAsync(order => order.Id == workOrderId && order.PortfolioId == portfolioId, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected work order is not in this portfolio.");
+        }
+    }
+
+    private static async Task ValidateOptionalPropertyUnitAsync(
+        int portfolioId,
+        int? propertyId,
+        int? unitId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (propertyId is int selectedPropertyId &&
+            !await IsPropertyInPortfolioAsync(portfolioId, selectedPropertyId, persistence, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
+        }
+        if (unitId is int selectedUnitId && !await persistence.Query<Unit>()
+                .AnyAsync(unit => unit.Id == selectedUnitId
+                    && unit.Property != null
+                    && unit.Property.PortfolioId == portfolioId
+                    && (propertyId == null || unit.PropertyId == propertyId), ct))
+        {
+            throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
+        }
+    }
+
+    private static async Task ValidateWorkOrderReferencesAsync(
+        int portfolioId,
+        ScanWorkOrderTargetData target,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (!await IsPropertyInPortfolioAsync(portfolioId, target.PropertyId, persistence, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
+        }
+        if (target.UnitId is int unitId && !await persistence.Query<Unit>()
+                .AnyAsync(unit => unit.Id == unitId
+                    && unit.PropertyId == target.PropertyId
+                    && unit.Property != null
+                    && unit.Property.PortfolioId == portfolioId, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
+        }
+        if (target.VendorId is int vendorId && !await persistence.Query<Vendor>()
+                .AnyAsync(vendor => vendor.Id == vendorId && vendor.PortfolioId == portfolioId, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected vendor is not in this portfolio.");
+        }
+        if (target.LeaseId is int leaseId && !await persistence.Query<Lease>()
+                .AnyAsync(lease => lease.Id == leaseId
+                    && lease.PortfolioId == portfolioId
+                    && lease.PropertyId == target.PropertyId
+                    && (target.UnitId == null || lease.UnitId == target.UnitId), ct))
+        {
+            throw new ScanConfirmationValidationException("Selected lease is not in this portfolio or location.");
+        }
+        if (target.TenantId is int tenantId && !await TenantMatchesLocationAsync(
+                portfolioId, tenantId, target.PropertyId, target.UnitId, persistence, ct))
+        {
+            throw new ScanConfirmationValidationException("Selected tenant does not belong to this location.");
+        }
+    }
+
+    private static Task<bool> TenantMatchesLocationAsync(
+        int portfolioId,
+        int tenantId,
+        int propertyId,
+        int? unitId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var tenants = persistence.Query<Tenant>()
+            .Where(tenant => tenant.Id == tenantId && tenant.PortfolioId == portfolioId);
+        return unitId is int selectedUnitId
+            ? tenants.AnyAsync(tenant =>
+                tenant.Leases.Any(lease => lease.PortfolioId == portfolioId
+                    && lease.UnitId == selectedUnitId
+                    && (lease.Status == LeaseStatus.Active || lease.Status == LeaseStatus.NoticeGiven)) ||
+                tenant.LeaseTenants.Any(link => link.PortfolioId == portfolioId
+                    && link.Lease != null
+                    && link.Lease.PortfolioId == portfolioId
+                    && link.Lease.UnitId == selectedUnitId
+                    && (link.Lease.Status == LeaseStatus.Active || link.Lease.Status == LeaseStatus.NoticeGiven)), ct)
+            : tenants.AnyAsync(tenant =>
+                tenant.Leases.Any(lease => lease.PortfolioId == portfolioId
+                    && lease.PropertyId == propertyId
+                    && (lease.Status == LeaseStatus.Active || lease.Status == LeaseStatus.NoticeGiven)) ||
+                tenant.LeaseTenants.Any(link => link.PortfolioId == portfolioId
+                    && link.Lease != null
+                    && link.Lease.PortfolioId == portfolioId
+                    && link.Lease.PropertyId == propertyId
+                    && (link.Lease.Status == LeaseStatus.Active || link.Lease.Status == LeaseStatus.NoticeGiven)), ct);
+    }
+
+    private static async Task<int?> ResolveOrCreateVendorAsync(
+        int portfolioId,
+        ScanReceiptData receipt,
+        DateTime now,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var name = receipt.VendorName?.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var normalizedName = name.ToLowerInvariant();
+        var matchSummary = await attempt.Persistence.Query<Vendor>()
+            .Where(vendor => vendor.PortfolioId == portfolioId
+                && vendor.Name.Trim().ToLower() == normalizedName)
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Count = group.Count(),
+                Id = group.Min(vendor => vendor.Id),
+            })
+            .SingleOrDefaultAsync(ct);
+        if (matchSummary?.Count == 1)
+        {
+            return matchSummary.Id;
+        }
+        if (matchSummary?.Count > 1)
+        {
+            return null;
+        }
+
+        var vendor = new Vendor
+        {
+            PortfolioId = portfolioId,
+            Name = Truncate(name, 200)!,
+            ServiceType = "General",
+            Phone = Truncate(receipt.VendorPhone?.Trim(), 50),
+            Website = Truncate(receipt.VendorWebsite?.Trim(), 500),
+            TaxId = Truncate(receipt.VendorTaxId?.Trim(), 50),
+            Notes = "Created from scanned receipt.",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        attempt.Persistence.Add(vendor);
+        await attempt.FlushBusinessAsync(ct);
+        return vendor.Id;
+    }
+
+    private static Task<bool> IsPropertyInPortfolioAsync(
+        int portfolioId,
+        int propertyId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) => persistence.Query<Property>()
+            .AnyAsync(property => property.Id == propertyId && property.PortfolioId == portfolioId, ct);
+
+    private static string SerializeReceipt(ScanReceiptData receipt) => JsonSerializer.Serialize(new
+    {
+        documentKind = receipt.DocumentKind,
+        dueDate = receipt.DueDate,
+        vendor = new
+        {
+            address = receipt.VendorAddress,
+            phone = receipt.VendorPhone,
+            website = receipt.VendorWebsite,
+            taxId = receipt.VendorTaxId,
+        },
+        receiptNumber = receipt.ReceiptNumber,
+        paymentMethod = receipt.PaymentMethod,
+        cardLast4 = receipt.CardLast4,
+        taxRate = receipt.TaxRate,
+        tip = receipt.Tip,
+        discount = receipt.Discount,
+        shipping = receipt.Shipping,
+        lineItems = receipt.LineItems,
+        extra = ExtraFields(receipt.ExtraFields),
+    }, ReceiptJsonOptions);
+
+    private static string? NormalizeJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+        try
+        {
+            using var _ = JsonDocument.Parse(json);
+            return json;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static Dictionary<string, string> ExtraFields(IReadOnlyList<ScanExtraFieldData>? fields)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var field in fields ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(field.Name))
+            {
+                result[field.Name] = field.Value;
+            }
+        }
+        return result;
+    }
+
+    private static string? BuildApplicationNotes(ScanApplicationTargetData target)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(target.Notes)) parts.Add(target.Notes.Trim());
+        if (!string.IsNullOrWhiteSpace(target.ApplyingFor)) parts.Add($"Applying for: {target.ApplyingFor.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(target.IdLast4)) parts.Add($"ID last-4: {target.IdLast4.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(target.CoSignerName)) parts.Add($"Co-signer: {target.CoSignerName.Trim()}.");
+        return parts.Count == 0 ? null : Truncate(string.Join(" ", parts), 2000);
+    }
+
+    private static string BuildLoanNotes(string? notes)
+    {
+        const string provenance = "Imported from scanned mortgage document.";
+        var result = string.IsNullOrWhiteSpace(notes)
+            ? provenance
+            : $"{notes.Trim()} ({provenance})";
+        return Truncate(result, 2000)!;
+    }
+
+    private static decimal? NormalizeDecimal(
+        decimal? raw,
+        string label,
+        decimal min,
+        decimal max,
+        int scale)
+    {
+        if (raw is null)
+        {
+            return null;
+        }
+        if (raw < min || raw > max)
+        {
+            throw new ScanConfirmationValidationException($"{label} must be between {min} and {max}.");
+        }
+        return decimal.Round(raw.Value, scale, MidpointRounding.AwayFromZero);
+    }
+
+    private static string RequireText(string? value, string label)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ScanConfirmationValidationException($"{label} is required.");
+        }
+        return value.Trim();
+    }
+
+    private static string? NormalizeEmail(string? email) =>
+        string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
+
+    private static DateTime ToUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
+    };
+
+    private static DateTime? ToUtc(DateTime? value) => value is null ? null : ToUtc(value.Value);
+
+    private static T Required<T>(T? value) where T : class =>
+        value ?? throw new InvalidOperationException("The selected scan target payload is missing.");
+
+    private static string? Truncate(string? value, int maxLength) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Length <= maxLength ? value : value[..maxLength];
+}
