@@ -44,6 +44,8 @@ public static class AtomicPersistenceKernelExtensions
         services.AddScoped<AtomicTransactionLifecycleInterceptor>();
         services.AddScoped<AtomicSetBasedCommandGuardInterceptor>();
         services.AddScoped<WorkspaceAuthorityOwnershipInterceptor>();
+        services.AddScoped<WorkspaceAccessRevisionGuard>();
+        services.AddScoped<MembershipAssignmentScopeValidator>();
         services.TryAddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
         return services;
     }
