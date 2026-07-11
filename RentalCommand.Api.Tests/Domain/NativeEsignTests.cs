@@ -245,6 +245,8 @@ public sealed class NativeEsignTests : IDisposable
         receipt.ResultJson.Should().NotContain(token);
         (await _db.AtomicCommandReceipts.CountAsync(candidate => candidate.CommandType == "native-esign.view"))
             .Should().Be(1);
+        (await _db.AtomicAuditLogs.CountAsync(candidate => candidate.CommandType == "native-esign.view"))
+            .Should().Be(2);
     }
 
     [Fact]
@@ -318,6 +320,11 @@ public sealed class NativeEsignTests : IDisposable
         result.Value.RequestStatus.Should().Be(advancedStatus.ToString());
         (await _db.SignatureRequests.AsNoTracking().SingleAsync(candidate => candidate.Id == request.Id)).Status
             .Should().Be(advancedStatus);
+        (await _db.SignatureAuditEvents.CountAsync(candidate =>
+            candidate.SignatureRequestId == request.Id
+            && candidate.Type == SignatureAuditEventType.Viewed)).Should().Be(1);
+        (await _db.AtomicAuditLogs.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(2);
     }
 
     [Fact]
@@ -664,11 +671,25 @@ public sealed class NativeEsignTests : IDisposable
     }
 
     [Fact]
-    public async Task GetPackage_UnknownToken_ReturnsNotFound()
+    public async Task GetPackage_ManyUnknownTokens_ReturnNotFoundWithoutDurableReceiptsOrAudits()
     {
         var signing = CreateSigningService();
-        var res = await signing.GetPackageAsync("not-a-real-token", null, null, default);
-        res.Outcome.Should().Be(SignTokenOutcome.NotFound);
+        var unknownTokens = Enumerable.Range(0, 32)
+            .Select(index => $"not-a-real-token-{index}-{Guid.NewGuid():N}")
+            .ToArray();
+
+        foreach (var token in unknownTokens)
+        {
+            var result = await signing.GetPackageAsync(token, null, null, default);
+            result.Outcome.Should().Be(SignTokenOutcome.NotFound);
+        }
+
+        (await _db.AtomicCommandReceipts.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(0);
+        (await _db.AtomicAuditLogs.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(0);
+        (await _db.SignatureAuditEvents.CountAsync(candidate =>
+            candidate.Type == SignatureAuditEventType.Viewed)).Should().Be(0);
     }
 
     [Fact]

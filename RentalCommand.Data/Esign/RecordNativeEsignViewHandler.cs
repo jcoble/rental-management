@@ -98,18 +98,22 @@ public sealed class RecordNativeEsignViewHandler
             ChangeReason: "Signer opened the native electronic signing page.",
             IpAddress: signer.IpAddress));
 
-        if (requestAdvanced)
-        {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
-                request.PortfolioId,
-                nameof(SignatureRequest),
-                request.Id,
-                AuditLogOperation.Updated,
-                ActorLabel: "esign-signer",
-                NewValues: JsonSerializer.Serialize(new { Status = request.Status.ToString() }),
-                ChangeReason: "The native electronic signature request was first viewed.",
-                IpAddress: signer.IpAddress));
-        }
+        // SignatureSigner and SignatureRequest deliberately are not IAuditable/IPortfolioScoped.
+        // Stage both semantic facts directly instead of binding them to the tracked-mutation
+        // interceptor, which cannot infer the signer's portfolio and would reject the binding.
+        // Keeping the pair unconditional also gives every genuine first view one stable two-row
+        // command audit, even when another signer already advanced the request beyond Sent.
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            request.PortfolioId,
+            nameof(SignatureRequest),
+            request.Id,
+            AuditLogOperation.Updated,
+            ActorLabel: "esign-signer",
+            NewValues: JsonSerializer.Serialize(new { Status = request.Status.ToString() }),
+            ChangeReason: requestAdvanced
+                ? "The native electronic signature request was first viewed."
+                : "A signer first viewed the native electronic signature request.",
+            IpAddress: signer.IpAddress));
 
         return new RecordNativeEsignViewResult(
             NativeEsignViewOutcome.Available,
