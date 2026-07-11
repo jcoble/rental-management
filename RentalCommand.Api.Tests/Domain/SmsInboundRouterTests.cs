@@ -19,9 +19,8 @@ using RentalCommand.TestCommon;
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Covers the inbound SMS router: a vendor's DONE (sender is a vendor with an open dispatch) closes the
-/// work order via the vendor path, while a tenant's YES marks rent paid via the rent path — verifying
-/// the two handlers don't cross-fire.
+/// Covers the inbound SMS clean replacement: only one uniquely matched vendor DONE can mutate state.
+/// Tenant YES and ambiguous vendor events are acknowledged without touching rent or work orders.
 /// </summary>
 public class SmsInboundRouterTests : IDisposable
 {
@@ -59,16 +58,7 @@ public class SmsInboundRouterTests : IDisposable
             _services.GetRequiredService<IAtomicUnitOfWork>(),
             Mock.Of<ILogger<SmsInboundVendorDoneService>>());
 
-        var rent = new SmsInboundRentConfirmationService(
-            _ctx.Db,
-            Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>(),
-            Mock.Of<IMessagePublisher>(),
-            Mock.Of<ILlmProvider>(),
-            Mock.Of<ILogger<SmsInboundRentConfirmationService>>(),
-            TimeProvider.System);
-
-        return new SmsInboundRouter(vendorDone, rent);
+        return new SmsInboundRouter(vendorDone);
     }
 
     [Fact]
@@ -113,7 +103,7 @@ public class SmsInboundRouterTests : IDisposable
     }
 
     [Fact]
-    public async Task Route_TenantYes_MarksRentPaid_NotVendor()
+    public async Task Route_TenantYes_IsNoOpAndDoesNotMutateRent()
     {
         var property = SeedProperty();
         var tenant = SeedTenant("+16145550123");
@@ -124,11 +114,50 @@ public class SmsInboundRouterTests : IDisposable
         var reply = await CreateRouter().RouteAsync(
             "SM-router-tenant-yes", "+16145550123", "YES", DateTime.UtcNow);
 
-        reply.Should().Contain("recorded");
+        reply.Should().Contain("Reply DONE");
 
         var reloadedRent = await _ctx.Db.Payments.FindAsync(rent.Id);
-        reloadedRent!.Status.Should().Be(PaymentStatus.Paid);
+        reloadedRent!.Status.Should().Be(PaymentStatus.Scheduled);
+        reloadedRent.PaidDate.Should().BeNull();
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sms.vendor-done")).Should().Be(1);
     }
+
+    [Fact]
+    public async Task Route_DoneWithTwoSamePortfolioMatches_ReceiptsNoOpAndMutatesNeither()
+    {
+        var property = SeedProperty();
+        var firstVendor = SeedVendor("+16145550199");
+        var secondVendor = SeedVendor("(614) 555-0199");
+        var firstWorkOrder = SeedWorkOrder(property);
+        var secondWorkOrder = SeedWorkOrder(property);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.VendorDispatches.AddRange(
+            NewDispatch(firstWorkOrder.Id, firstVendor.Id),
+            NewDispatch(secondWorkOrder.Id, secondVendor.Id));
+        await _ctx.Db.SaveChangesAsync();
+
+        var reply = await CreateRouter().RouteAsync(
+            "SM-router-ambiguous", "+16145550199", "DONE", DateTime.UtcNow);
+
+        reply.Should().Contain("could not match");
+        (await _ctx.Db.VendorDispatches.CountAsync(row =>
+            row.Status == VendorDispatchStatus.Dispatched)).Should().Be(2);
+        (await _ctx.Db.WorkOrders.CountAsync(row =>
+            row.Status == WorkOrderStatus.Completed)).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sms.vendor-done")).Should().Be(1);
+    }
+
+    private static VendorDispatch NewDispatch(int workOrderId, int vendorId) => new()
+    {
+        PortfolioId = PortfolioId,
+        WorkOrderId = workOrderId,
+        VendorId = vendorId,
+        Status = VendorDispatchStatus.Dispatched,
+        DispatchedAtUtc = DateTime.UtcNow,
+        Message = "Reply DONE when complete.",
+    };
 
     private Property SeedProperty()
     {

@@ -11,6 +11,8 @@ class _FakeMessagesRepository extends MessagesRepository {
   _FakeMessagesRepository() : super(Dio(), tenantMode: false);
 
   final operationKeys = <String?>[];
+  final bodies = <String>[];
+  final channelSelections = <List<String>>[];
   bool failNextSend = false;
 
   @override
@@ -27,6 +29,8 @@ class _FakeMessagesRepository extends MessagesRepository {
     String? operationKey,
   }) async {
     operationKeys.add(operationKey);
+    bodies.add(body);
+    channelSelections.add(List.of(channels));
     if (failNextSend) {
       failNextSend = false;
       throw const ApiException(statusCode: 503, message: 'Retry send.');
@@ -78,22 +82,25 @@ void main() {
     expect(fieldRect.width, screenWidth - 16);
   });
 
-  testWidgets('message retry reuses one non-null operation key', (tester) async {
+  testWidgets('message retry reuses one non-null operation key', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final repository = _FakeMessagesRepository()..failNextSend = true;
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          messagesRepositoryProvider.overrideWithValue(repository),
-        ],
+        overrides: [messagesRepositoryProvider.overrideWithValue(repository)],
         child: const MaterialApp(home: MessageDetailScreen(conversationId: 42)),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byType(TextField), 'Please retry this message.');
+    await tester.enterText(
+      find.byType(TextField),
+      'Please retry this message.',
+    );
     final sendButton = find.byKey(const Key('message-send-button'));
     expect(sendButton, findsOneWidget);
     await tester.tap(sendButton);
@@ -112,5 +119,70 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.operationKeys, [firstOperationKey, firstOperationKey]);
+  });
+
+  testWidgets('editing failed message creates a new payload key', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _FakeMessagesRepository()..failNextSend = true;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [messagesRepositoryProvider.overrideWithValue(repository)],
+        child: const MaterialApp(home: MessageDetailScreen(conversationId: 42)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.byType(TextField);
+    final sendButton = find.byKey(const Key('message-send-button'));
+    await tester.enterText(field, 'Original payload');
+    await tester.tap(sendButton);
+    await tester.pumpAndSettle();
+    final failedKey = repository.operationKeys.single;
+
+    await tester.enterText(field, 'Corrected payload');
+    await tester.tap(sendButton);
+    await tester.pumpAndSettle();
+
+    expect(repository.bodies, ['Original payload', 'Corrected payload']);
+    expect(repository.operationKeys, hasLength(2));
+    expect(repository.operationKeys.last, isNot(equals(failedKey)));
+  });
+
+  testWidgets('changing failed send channels creates a new payload key', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _FakeMessagesRepository()..failNextSend = true;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [messagesRepositoryProvider.overrideWithValue(repository)],
+        child: const MaterialApp(home: MessageDetailScreen(conversationId: 42)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'Channel payload');
+    final sendButton = find.byKey(const Key('message-send-button'));
+    await tester.tap(sendButton);
+    await tester.pumpAndSettle();
+    final failedKey = repository.operationKeys.single;
+
+    await tester.tap(find.widgetWithText(FilterChip, 'Email'));
+    await tester.pump();
+    await tester.tap(sendButton);
+    await tester.pumpAndSettle();
+
+    expect(repository.channelSelections, [
+      ['Portal'],
+      ['Portal', 'Email'],
+    ]);
+    expect(repository.operationKeys, hasLength(2));
+    expect(repository.operationKeys.last, isNot(equals(failedKey)));
   });
 }

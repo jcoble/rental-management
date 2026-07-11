@@ -3,9 +3,11 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Conversations;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Conversations;
 
@@ -171,18 +173,16 @@ public sealed class SendConversationMessageHandler
         Tenant tenant,
         CancellationToken ct)
     {
-        var staffRoles = new[] { nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent) };
-        var userIds = await (
-                from user in attempt.Persistence.Query<ApplicationUser>()
-                join userRole in attempt.Persistence.Query<Microsoft.AspNetCore.Identity.IdentityUserRole<int>>()
-                    on user.Id equals userRole.UserId
-                join role in attempt.Persistence.Query<Microsoft.AspNetCore.Identity.IdentityRole<int>>()
-                    on userRole.RoleId equals role.Id
-                where user.PortfolioId == command.PortfolioId
-                    && role.Name != null
-                    && staffRoles.Contains(role.Name)
-                select user.Id)
-            .Distinct()
+        // A tenant message reaches only management users whose effective assignment has rentals.read
+        // on the property of an effective issued lease for this tenant. No legacy role-wide fanout,
+        // no Owner fanout, and no guessed recipient when an authoritative relationship is absent.
+        var userIds = await ScopedNotificationRecipientQuery
+            .ForTenantRelationship(
+                attempt,
+                command.PortfolioId,
+                tenant.Id,
+                CapabilityKeys.RentalsRead,
+                command.OccurredAtUtc)
             .OrderBy(userId => userId)
             .ToListAsync(ct);
 

@@ -56,7 +56,7 @@ public class ConversationNotificationTests : IDisposable
         _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
 
     [Fact]
-    public async Task TenantStartAsync_CreatesTenantMessageNotificationsForStaffOnly()
+    public async Task TenantStartAsync_NotifiesOnlyCapabilityAndLeasePropertyScopedStaff()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
         var sut = CreateSut();
@@ -70,6 +70,49 @@ public class ConversationNotificationTests : IDisposable
         notification.UserId.Should().Be(10);
         notification.Title.Should().Be("New message from Emily Chen");
         notification.ActionUrl.Should().Be($"/messages?conversationId={result!.Id}");
+        _ctx.Db.Notifications.Should().NotContain(item => item.UserId == 30);
+    }
+
+    [Fact]
+    public async Task TenantStartAsync_WithoutLeaseResponsibility_CommitsMessageButNoRecipientNotification()
+    {
+        var role = new IdentityRole<int>(nameof(UserRole.Admin))
+        {
+            Id = 11,
+            NormalizedName = nameof(UserRole.Admin).ToUpperInvariant(),
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = 1,
+            FirstName = "No",
+            LastName = "Relationship",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var legacyAdmin = new ApplicationUser
+        {
+            Id = 12,
+            PortfolioId = 1,
+            UserName = "legacy-admin@example.test",
+            NormalizedUserName = "LEGACY-ADMIN@EXAMPLE.TEST",
+            DisplayName = "Legacy admin",
+            CreatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Roles.Add(role);
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.Users.Add(legacyAdmin);
+        _ctx.Db.UserRoles.Add(new IdentityUserRole<int> { UserId = legacyAdmin.Id, RoleId = role.Id });
+        _ctx.Db.SaveChanges();
+
+        var result = await CreateSut().TenantStartAsync(
+            1, tenant.Id, "Question", "Who is responsible?", "tenant-no-responsibility");
+
+        result.Should().NotBeNull();
+        _ctx.Db.ConversationMessages.Should().ContainSingle();
+        _ctx.Db.Notifications.Should().BeEmpty();
+        _ctx.Db.AtomicCommandReceipts.Should().ContainSingle(receipt =>
+            receipt.CommandType == "conversation.tenant-start");
+        _ctx.Db.AtomicAuditLogs.Should().Contain(log => log.EntityType == nameof(ConversationMessage));
     }
 
     [Fact]
@@ -357,14 +400,140 @@ public class ConversationNotificationTests : IDisposable
                 Email = "emily@example.test",
                 NormalizedEmail = "EMILY@EXAMPLE.TEST",
                 DisplayName = "Emily Chen",
+            },
+            new ApplicationUser
+            {
+                Id = 30,
+                PortfolioId = 1,
+                UserName = "decoy@example.test",
+                NormalizedUserName = "DECOY@EXAMPLE.TEST",
+                Email = "decoy@example.test",
+                NormalizedEmail = "DECOY@EXAMPLE.TEST",
+                DisplayName = "Unrelated property manager",
             });
         _ctx.Db.UserRoles.AddRange(
             new IdentityUserRole<int> { UserId = 10, RoleId = 1 },
-            new IdentityUserRole<int> { UserId = 20, RoleId = 2 });
+            new IdentityUserRole<int> { UserId = 20, RoleId = 2 },
+            // A legacy Admin role is intentionally insufficient without an in-scope TSK-670 assignment.
+            new IdentityUserRole<int> { UserId = 30, RoleId = 1 });
+        var now = DateTime.UtcNow;
+        var tenantProperty = new Property
+        {
+            PortfolioId = 1,
+            Name = "Tenant home",
+            AddressLine1 = "1 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var decoyProperty = new Property
+        {
+            PortfolioId = 1,
+            Name = "Unrelated home",
+            AddressLine1 = "2 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = tenantProperty,
+            UnitNumber = "1A",
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1000,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.AddRange(tenantProperty, decoyProperty);
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = 1,
+            PropertyId = tenantProperty.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "ACTIVE-1",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1),
+            EndDate = now.AddMonths(11),
+            MonthlyRent = 1000,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        var authorizedContext = NewAccessContext(10, now);
+        var decoyContext = NewAccessContext(30, now);
+        _ctx.Db.WorkspaceAccessContexts.AddRange(authorizedContext, decoyContext);
+        _ctx.Db.SaveChanges();
+        var authorizedMembership = NewMembership(authorizedContext.Id, now);
+        var decoyMembership = NewMembership(decoyContext.Id, now);
+        _ctx.Db.WorkspaceMemberships.AddRange(authorizedMembership, decoyMembership);
+        _ctx.Db.SaveChanges();
+        var authorizedAssignment = NewAssignment(
+            authorizedMembership.Id,
+            1,
+            MembershipRoleAssignmentScopeKind.AllProperties,
+            now);
+        var decoyAssignment = NewAssignment(
+            decoyMembership.Id,
+            2,
+            MembershipRoleAssignmentScopeKind.SelectedProperties,
+            now);
+        _ctx.Db.MembershipRoleAssignments.AddRange(authorizedAssignment, decoyAssignment);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignmentId = decoyAssignment.Id,
+            PropertyId = decoyProperty.Id,
+            PortfolioId = 1,
+        });
         _ctx.Db.SaveChanges();
 
         return tenant;
     }
+
+    private static WorkspaceAccessContext NewAccessContext(int userId, DateTime now) => new()
+    {
+        UserId = userId,
+        PortfolioId = 1,
+        Status = WorkspaceAccessContextStatus.Active,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static WorkspaceMembership NewMembership(int accessContextId, DateTime now) => new()
+    {
+        AccessContextId = accessContextId,
+        PortfolioId = 1,
+        Status = WorkspaceMembershipStatus.Active,
+        DefaultExperience = WorkspaceExperience.Management,
+        EffectiveFromUtc = now.AddDays(-1),
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static MembershipRoleAssignment NewAssignment(
+        int membershipId,
+        int roleProfileId,
+        MembershipRoleAssignmentScopeKind scopeKind,
+        DateTime now) => new()
+    {
+        WorkspaceMembershipId = membershipId,
+        PortfolioId = 1,
+        RoleProfileId = roleProfileId,
+        Status = MembershipRoleAssignmentStatus.Active,
+        ScopeKind = scopeKind,
+        EffectiveFromUtc = now.AddDays(-1),
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
 
     private void SeedConversation(
         int tenantId,

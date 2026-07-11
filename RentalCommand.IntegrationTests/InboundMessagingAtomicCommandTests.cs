@@ -93,6 +93,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     public async Task TenantStartAndPost_ReplayOneMessageNotificationAuditAndReceipt()
     {
         SkipIfNoDocker();
+        _probe.Commands.Clear();
         var startIdentity = new AtomicCommandIdentity("conversation.tenant-start", "tenant:start:stable-1");
         var start = new SendConversationMessageCommand(
             _facts.PortfolioId,
@@ -127,17 +128,26 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             message.ConversationId == first.Value.ConversationId)).Should().Be(2);
         (await db.Notifications.CountAsync(notification => notification.Type == "TenantMessage"))
             .Should().Be(2);
+        (await db.Notifications
+            .Where(notification => notification.Type == "TenantMessage")
+            .Select(notification => notification.UserId)
+            .Distinct()
+            .ToListAsync()).Should().Equal((int?)_facts.AuthorizedUserId);
         (await db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "conversation.tenant-start"
             || receipt.CommandType == "conversation.tenant-post-message")).Should().Be(2);
         (await db.AtomicAuditLogs.CountAsync(log => log.EntityType == nameof(ConversationMessage)))
             .Should().Be(2);
+        _probe.Commands.Count(sql => sql.Contains(
+            "ScopedNotificationRecipients: tenant lease relationship and assignment scope",
+            StringComparison.Ordinal)).Should().Be(2);
     }
 
     [SkippableFact]
     public async Task SameProviderEventReplaysAndConcurrentDifferentEventsCompleteOnce()
     {
         SkipIfNoDocker();
+        _probe.Commands.Clear();
         var command = VendorDone("SM-provider-stable-1");
         var identity = VendorIdentity(command.ProviderEventId);
 
@@ -166,6 +176,165 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             status.WorkOrderId == _facts.WorkOrderId && status.ToStatus == WorkOrderStatus.Completed))
             .Should().Be(2); // one before reset, one after reset; never one per duplicate event
         (await verify.Vendors.SingleAsync(vendor => vendor.Id == _facts.VendorId)).JobsCompleted.Should().Be(2);
+        (await verify.Notifications
+            .Where(notification => notification.Type == "VendorJobCompleted")
+            .Select(notification => notification.UserId)
+            .Distinct()
+            .ToListAsync()).Should().Equal((int?)_facts.AuthorizedUserId);
+        _probe.Commands.Count(sql => sql.Contains(
+            "ScopedNotificationRecipients: property capability and assignment scope",
+            StringComparison.Ordinal)).Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task SamePortfolioDuplicatePhoneAndMultipleDispatchesFailClosedWithOneBoundedQuery()
+    {
+        SkipIfNoDocker();
+        await using (var db = NewContext())
+        {
+            var property = await db.Properties.SingleAsync(row => row.Id == _facts.PropertyId);
+            var duplicateVendor = NewVendor(_facts.PortfolioId, "Duplicate phone vendor", "+1 614 555 0199");
+            db.Vendors.Add(duplicateVendor);
+            await db.SaveChangesAsync();
+            var duplicateWork = NewWorkOrder(_facts.PortfolioId, property.Id, "Duplicate phone repair");
+            db.WorkOrders.Add(duplicateWork);
+            await db.SaveChangesAsync();
+            db.VendorDispatches.Add(NewDispatch(
+                _facts.PortfolioId,
+                duplicateWork.Id,
+                duplicateVendor.Id,
+                _now.AddMinutes(-1)));
+            await db.SaveChangesAsync();
+        }
+        _probe.Commands.Clear();
+
+        var identity = VendorIdentity("SM-same-portfolio-ambiguous");
+        var result = await Atomic.ExecuteAsync(
+            identity,
+            VendorDone("SM-same-portfolio-ambiguous"),
+            VendorDoneCodec);
+
+        result.Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch);
+        var matchingQueries = _probe.Commands.Where(sql =>
+            sql.Contains("InboundVendorPhoneMatch: bounded top-two", StringComparison.Ordinal)).ToArray();
+        matchingQueries.Should().ContainSingle();
+        matchingQueries[0].Should().Contain("LIMIT");
+
+        await using var verify = NewContext();
+        (await verify.VendorDispatches.CountAsync(row =>
+            row.PortfolioId == _facts.PortfolioId
+            && row.Status == VendorDispatchStatus.Dispatched)).Should().Be(2);
+        (await verify.WorkOrders.CountAsync(row =>
+            row.PortfolioId == _facts.PortfolioId
+            && row.Status == WorkOrderStatus.Completed)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task VerifiedNonDoneEventCommitsReceiptAsNoOpWithoutRunningDispatchMatch()
+    {
+        SkipIfNoDocker();
+        var identity = VendorIdentity("SM-not-done");
+        _probe.Commands.Clear();
+
+        var result = await Atomic.ExecuteAsync(
+            identity,
+            new CompleteVendorDispatchFromInboundCommand(
+                "SM-not-done", "+16145550199", false, _now),
+            VendorDoneCodec);
+
+        result.Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch);
+        _probe.Commands.Should().NotContain(sql =>
+            sql.Contains("InboundVendorPhoneMatch: bounded top-two", StringComparison.Ordinal));
+        await using var verify = NewContext();
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        (await verify.VendorDispatches.SingleAsync(row => row.Id == _facts.DispatchId)).Status
+            .Should().Be(VendorDispatchStatus.Dispatched);
+        (await verify.WorkOrders.SingleAsync(row => row.Id == _facts.WorkOrderId)).Status
+            .Should().Be(WorkOrderStatus.InProgress);
+    }
+
+    [SkippableFact]
+    public async Task SiblingDispatchAfterCompletedWorkOrderDoesNotInflateVendorJobsCompleted()
+    {
+        SkipIfNoDocker();
+        await Atomic.ExecuteAsync(
+            VendorIdentity("SM-first-completion"),
+            VendorDone("SM-first-completion"),
+            VendorDoneCodec);
+
+        await using (var db = NewContext())
+        {
+            db.VendorDispatches.Add(NewDispatch(
+                _facts.PortfolioId,
+                _facts.WorkOrderId,
+                _facts.VendorId,
+                _now.AddMinutes(1)));
+            await db.SaveChangesAsync();
+        }
+
+        (await Atomic.ExecuteAsync(
+            VendorIdentity("SM-sibling-completion"),
+            VendorDone("SM-sibling-completion", _now.AddMinutes(2)),
+            VendorDoneCodec)).Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.Applied);
+
+        await using var verify = NewContext();
+        (await verify.Vendors.SingleAsync(row => row.Id == _facts.VendorId)).JobsCompleted.Should().Be(1);
+        (await verify.WorkOrderStatusEvents.CountAsync(row =>
+            row.WorkOrderId == _facts.WorkOrderId
+            && row.ToStatus == WorkOrderStatus.Completed)).Should().Be(1);
+        (await verify.VendorDispatches.CountAsync(row =>
+            row.WorkOrderId == _facts.WorkOrderId
+            && row.Status == VendorDispatchStatus.Completed)).Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task ConcurrentDifferentPhoneSiblingDispatchesCreditOnlyFirstWorkOrderTransition()
+    {
+        SkipIfNoDocker();
+        int secondVendorId;
+        await using (var db = NewContext())
+        {
+            var secondVendor = NewVendor(
+                _facts.PortfolioId, "Second vendor", "+1 (614) 555-0200");
+            db.Vendors.Add(secondVendor);
+            await db.SaveChangesAsync();
+            secondVendorId = secondVendor.Id;
+            db.VendorDispatches.Add(NewDispatch(
+                _facts.PortfolioId,
+                _facts.WorkOrderId,
+                secondVendorId,
+                _now.AddMinutes(-30)));
+            await db.SaveChangesAsync();
+        }
+
+        var completions = await Task.WhenAll(
+            Atomic.ExecuteAsync(
+                VendorIdentity("SM-first-phone"),
+                VendorDone("SM-first-phone"),
+                VendorDoneCodec),
+            Atomic.ExecuteAsync(
+                VendorIdentity("SM-second-phone"),
+                new CompleteVendorDispatchFromInboundCommand(
+                    "SM-second-phone", "+16145550200", true, _now),
+                VendorDoneCodec));
+
+        completions.Should().OnlyContain(result =>
+            result.Value.Outcome == CompleteVendorDispatchFromInboundOutcome.Applied);
+        await using var verify = NewContext();
+        (await verify.Vendors
+            .Where(row => row.Id == _facts.VendorId || row.Id == secondVendorId)
+            .SumAsync(row => row.JobsCompleted)).Should().Be(1);
+        (await verify.WorkOrderStatusEvents.CountAsync(row =>
+            row.WorkOrderId == _facts.WorkOrderId
+            && row.ToStatus == WorkOrderStatus.Completed)).Should().Be(1);
+        (await verify.Notifications.CountAsync(row =>
+            row.Type == "VendorJobCompleted"
+            && row.RelatedEntityId == _facts.WorkOrderId)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -213,8 +382,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         result.Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch);
 
         var matchingQueries = _probe.Commands.Where(sql =>
-            sql.Contains("FROM \"VendorDispatches\"", StringComparison.Ordinal)
-            && sql.Contains("\"NormalizedPhone\"", StringComparison.Ordinal))
+            sql.Contains("InboundVendorPhoneMatch: bounded top-two", StringComparison.Ordinal))
             .ToArray();
         matchingQueries.Should().ContainSingle();
         matchingQueries[0].Should().Contain("ORDER BY").And.Contain("LIMIT");
@@ -258,7 +426,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
 
     private CompleteVendorDispatchFromInboundCommand VendorDone(string eventId, DateTime? receivedAt = null) =>
-        new(eventId, "+16145550199", receivedAt ?? _now);
+        new(eventId, "+16145550199", true, receivedAt ?? _now);
 
     private static AtomicCommandIdentity VendorIdentity(string eventId) =>
         new("sms.vendor-done", $"provider-event:{eventId}");
@@ -328,15 +496,82 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             DisplayName = "Admin",
             CreatedAt = _now,
         };
-        db.Users.Add(admin);
+        var decoyUser = new ApplicationUser
+        {
+            PortfolioId = firstPortfolio.Id,
+            UserName = "decoy-admin@example.test",
+            NormalizedUserName = "DECOY-ADMIN@EXAMPLE.TEST",
+            Email = "decoy-admin@example.test",
+            NormalizedEmail = "DECOY-ADMIN@EXAMPLE.TEST",
+            DisplayName = "Unrelated property legacy admin",
+            CreatedAt = _now,
+        };
+        db.Users.AddRange(admin, decoyUser);
         await db.SaveChangesAsync();
-        db.UserRoles.Add(new IdentityUserRole<int> { UserId = admin.Id, RoleId = adminRole.Id });
+        db.UserRoles.AddRange(
+            new IdentityUserRole<int> { UserId = admin.Id, RoleId = adminRole.Id },
+            new IdentityUserRole<int> { UserId = decoyUser.Id, RoleId = adminRole.Id });
 
         var property = NewProperty(firstPortfolio.Id, "Primary property");
+        var samePortfolioDecoyProperty = NewProperty(firstPortfolio.Id, "Unrelated same-portfolio property");
         var vendor = NewVendor(firstPortfolio.Id, "Primary vendor", "+1 (614) 555-0199");
-        db.Properties.Add(property);
+        db.Properties.AddRange(property, samePortfolioDecoyProperty);
         db.Vendors.Add(vendor);
         await db.SaveChangesAsync();
+
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "1A",
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1000,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        db.Units.Add(unit);
+        await db.SaveChangesAsync();
+        db.Leases.Add(new Lease
+        {
+            PortfolioId = firstPortfolio.Id,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "ACTIVE-PRIMARY",
+            Status = LeaseStatus.Active,
+            StartDate = _now.AddMonths(-1),
+            EndDate = _now.AddMonths(11),
+            MonthlyRent = 1000,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        });
+
+        var authorizedContext = NewAccessContext(admin.Id, firstPortfolio.Id);
+        var decoyContext = NewAccessContext(decoyUser.Id, firstPortfolio.Id);
+        db.WorkspaceAccessContexts.AddRange(authorizedContext, decoyContext);
+        await db.SaveChangesAsync();
+        var authorizedMembership = NewMembership(authorizedContext.Id, firstPortfolio.Id);
+        var decoyMembership = NewMembership(decoyContext.Id, firstPortfolio.Id);
+        db.WorkspaceMemberships.AddRange(authorizedMembership, decoyMembership);
+        await db.SaveChangesAsync();
+        var authorizedAssignment = NewAssignment(
+            authorizedMembership.Id,
+            firstPortfolio.Id,
+            1,
+            MembershipRoleAssignmentScopeKind.AllProperties);
+        var decoyAssignment = NewAssignment(
+            decoyMembership.Id,
+            firstPortfolio.Id,
+            2,
+            MembershipRoleAssignmentScopeKind.SelectedProperties);
+        db.MembershipRoleAssignments.AddRange(authorizedAssignment, decoyAssignment);
+        await db.SaveChangesAsync();
+        db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignmentId = decoyAssignment.Id,
+            PropertyId = samePortfolioDecoyProperty.Id,
+            PortfolioId = firstPortfolio.Id,
+        });
 
         var workOrder = NewWorkOrder(firstPortfolio.Id, property.Id, "Primary repair");
         db.WorkOrders.Add(workOrder);
@@ -372,10 +607,49 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             tenant.Id,
             otherTenant.Id,
             vendor.Id,
+            property.Id,
             workOrder.Id,
             dispatch.Id,
-            conversation.Id);
+            conversation.Id,
+            admin.Id,
+            decoyUser.Id);
     }
+
+    private WorkspaceAccessContext NewAccessContext(int userId, int portfolioId) => new()
+    {
+        UserId = userId,
+        PortfolioId = portfolioId,
+        Status = WorkspaceAccessContextStatus.Active,
+        CreatedAtUtc = _now,
+        UpdatedAtUtc = _now,
+    };
+
+    private WorkspaceMembership NewMembership(int accessContextId, int portfolioId) => new()
+    {
+        AccessContextId = accessContextId,
+        PortfolioId = portfolioId,
+        Status = WorkspaceMembershipStatus.Active,
+        DefaultExperience = WorkspaceExperience.Management,
+        EffectiveFromUtc = _now.AddDays(-1),
+        CreatedAtUtc = _now,
+        UpdatedAtUtc = _now,
+    };
+
+    private MembershipRoleAssignment NewAssignment(
+        int membershipId,
+        int portfolioId,
+        int roleProfileId,
+        MembershipRoleAssignmentScopeKind scopeKind) => new()
+    {
+        WorkspaceMembershipId = membershipId,
+        PortfolioId = portfolioId,
+        RoleProfileId = roleProfileId,
+        Status = MembershipRoleAssignmentStatus.Active,
+        ScopeKind = scopeKind,
+        EffectiveFromUtc = _now.AddDays(-1),
+        CreatedAtUtc = _now,
+        UpdatedAtUtc = _now,
+    };
 
     private async Task ResetOpenDispatchAsync(RentalCommandDbContext db)
     {
@@ -460,9 +734,12 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         int TenantId,
         int OtherTenantId,
         int VendorId,
+        int PropertyId,
         int WorkOrderId,
         int DispatchId,
-        int ConversationId);
+        int ConversationId,
+        int AuthorizedUserId,
+        int DecoyUserId);
 
     private sealed class TestActor : ICurrentActor
     {
