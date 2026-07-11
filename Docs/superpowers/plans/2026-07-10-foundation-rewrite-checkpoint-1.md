@@ -271,15 +271,18 @@ Obsolete lease-expiry markers, old notice delivery inheritance, legacy Team role
 
 ## Task 5 — Serialized verification and reviews
 
-For each task:
+For each coherent slice:
 
-1. implement with focused tests;
-2. run a spec-compliance review against this plan and the blueprint;
-3. resolve every spec issue;
-4. run a code-quality review;
-5. resolve every important issue;
-6. run focused tests without another heavy build in parallel;
-7. commit the coherent slice.
+1. implement with focused tests and self-review;
+2. run focused verification without another heavy build in parallel;
+3. commit the coherent slice.
+
+Independent review is intentionally batched so review effort stays proportional to risk:
+
+- run one code-quality review after roughly two or three related commits, or sooner when a slice is unusually risky;
+- run a spec-compliance review only at a major architectural boundary, destructive cutover, or when implementation may have diverged from the blueprint;
+- resolve important findings before crossing the next architectural boundary;
+- do not require duplicate spec and quality reviews for every small commit.
 
 Checkpoint verification is serialized:
 
