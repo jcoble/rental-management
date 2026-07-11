@@ -91,7 +91,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
 
     // Stripe payment groundwork
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
-    public DbSet<StripeWebhookEvent> StripeWebhookEvents => Set<StripeWebhookEvent>();
+    public DbSet<ProviderInboxEvent> ProviderInboxEvents => Set<ProviderInboxEvent>();
     public DbSet<AutopayEnrollment> AutopayEnrollments => Set<AutopayEnrollment>();
 
     // Mortgages / debt service + recurring costs (true cash-flow + year-end picture)
@@ -1923,12 +1923,22 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        modelBuilder.Entity<StripeWebhookEvent>(entity =>
+        modelBuilder.Entity<ProviderInboxEvent>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.EventId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ProviderEventId).IsRequired().HasMaxLength(200);
             entity.Property(e => e.EventType).IsRequired().HasMaxLength(200);
-            entity.HasIndex(e => e.EventId).IsUnique();
+            entity.Property(e => e.Payload).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.ProviderObjectId).HasMaxLength(200);
+            entity.Property(e => e.ClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.LastError).HasMaxLength(2000);
+            entity.HasIndex(e => new { e.Provider, e.ProviderEventId }).IsUnique();
+            entity.HasIndex(e => new { e.Provider, e.ProviderObjectId });
+            entity.HasIndex(e => new { e.NextAttemptAtUtc, e.ReceivedAtUtc, e.Id })
+                .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL AND \"ClaimToken\" IS NULL");
+            entity.HasIndex(e => new { e.ClaimExpiresAtUtc, e.Id })
+                .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL AND \"ClaimToken\" IS NOT NULL");
         });
 
         modelBuilder.Entity<AutopayEnrollment>(entity =>
@@ -1986,7 +1996,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // service change and no denormalized DeletedAt column on the leaf tables is required.
         //
         // Identity / global / infra tables (AspNet*, AuditLog, OutboxMessage, EngineWorkerHeartbeat,
-        // StripeWebhookEvent) are intentionally NOT filtered here — they are not soft-deletable and
+        // ProviderInboxEvent) are intentionally NOT filtered here — they are not soft-deletable and
         // several legitimately outlive any single business row.
         // ----------------------------------------------------------------------------------------
 

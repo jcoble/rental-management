@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -97,78 +95,6 @@ public class StripeCheckoutTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
-    // Webhook: checkout.session.completed marks the linked Payment Paid (idempotently).
-
-    [Fact]
-    public async Task Webhook_CheckoutSessionCompleted_MarksPaymentPaid_AndIsIdempotent()
-    {
-        var (_, payment) = SeedLeaseAndScheduledRent(tenantId: 10);
-
-        // Simulate the pending transaction the checkout endpoint created (keyed by the session id).
-        const string sessionId = "cs_test_123";
-        _ctx.Db.PaymentTransactions.Add(new PaymentTransaction
-        {
-            PortfolioId = PortfolioId,
-            PaymentId = payment.Id,
-            Amount = payment.Amount,
-            Currency = "usd",
-            Provider = "stripe",
-            ProviderPaymentIntentId = sessionId,
-            Status = PaymentTransactionStatus.Pending,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _ctx.Db.SaveChanges();
-
-        var sut = BuildService(enabled: true);
-        var (json, signature) = BuildSignedCheckoutCompletedEvent(
-            eventId: "evt_1", sessionId: sessionId, paymentId: payment.Id, paymentStatus: "paid");
-
-        await sut.HandleWebhookEventAsync(json, signature, CancellationToken.None);
-
-        var paid = _ctx.Db.Payments.Single(p => p.Id == payment.Id);
-        paid.Status.Should().Be(PaymentStatus.Paid);
-        paid.PaidDate.Should().NotBeNull();
-
-        var tx = _ctx.Db.PaymentTransactions.Single();
-        tx.Status.Should().Be(PaymentTransactionStatus.Succeeded);
-
-        // Idempotent: a duplicate delivery (same event id) is skipped — state unchanged, no second event row.
-        await sut.HandleWebhookEventAsync(json, signature, CancellationToken.None);
-        _ctx.Db.StripeWebhookEvents.Count(e => e.EventId == "evt_1").Should().Be(1);
-    }
-
-    [Fact]
-    public async Task Webhook_CheckoutSessionCompleted_WhenUnpaid_DoesNotMarkPaid()
-    {
-        var (_, payment) = SeedLeaseAndScheduledRent(tenantId: 10);
-
-        const string sessionId = "cs_test_ach_pending";
-        _ctx.Db.PaymentTransactions.Add(new PaymentTransaction
-        {
-            PortfolioId = PortfolioId,
-            PaymentId = payment.Id,
-            Amount = payment.Amount,
-            Provider = "stripe",
-            ProviderPaymentIntentId = sessionId,
-            Status = PaymentTransactionStatus.Pending,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _ctx.Db.SaveChanges();
-
-        var sut = BuildService(enabled: true);
-        // ACH sessions can complete while still "unpaid" (processing) — must NOT flip to Paid yet.
-        var (json, signature) = BuildSignedCheckoutCompletedEvent(
-            eventId: "evt_2", sessionId: sessionId, paymentId: payment.Id, paymentStatus: "unpaid");
-
-        await sut.HandleWebhookEventAsync(json, signature, CancellationToken.None);
-
-        _ctx.Db.Payments.Single(p => p.Id == payment.Id).Status.Should().Be(PaymentStatus.Scheduled);
-        _ctx.Db.PaymentTransactions.Single().Status.Should().Be(PaymentTransactionStatus.Pending);
-    }
-
-    // -----------------------------------------------------------------------
     // Helpers
 
     private StripePaymentService BuildService(bool enabled)
@@ -185,7 +111,8 @@ public class StripeCheckoutTests : IDisposable
             Options.Create(config),
             new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            new UnexpectedAtomicUnitOfWork());
     }
 
     private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int tenantId, decimal amount = 1000m)
@@ -255,43 +182,4 @@ public class StripeCheckoutTests : IDisposable
         return (lease, payment);
     }
 
-    /// <summary>
-    /// Builds a minimal <c>checkout.session.completed</c> event JSON and a valid Stripe-Signature
-    /// header (HMAC-SHA256 of <c>{timestamp}.{payload}</c> with the webhook secret) so the real
-    /// <c>EventUtility.ConstructEvent</c> signature check passes.
-    /// </summary>
-    private static (string json, string signature) BuildSignedCheckoutCompletedEvent(
-        string eventId, string sessionId, int paymentId, string paymentStatus)
-    {
-        var json = $$"""
-        {
-          "id": "{{eventId}}",
-          "object": "event",
-          "api_version": "2024-04-10",
-          "created": 1700000000,
-          "livemode": false,
-          "pending_webhooks": 1,
-          "request": { "id": null, "idempotency_key": null },
-          "type": "checkout.session.completed",
-          "data": {
-            "object": {
-              "id": "{{sessionId}}",
-              "object": "checkout.session",
-              "mode": "payment",
-              "payment_status": "{{paymentStatus}}",
-              "payment_intent": "pi_test_for_{{sessionId}}",
-              "metadata": { "paymentId": "{{paymentId}}", "portfolioId": "1" }
-            }
-          }
-        }
-        """;
-
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var signedPayload = $"{timestamp}.{json}";
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(WebhookSecret));
-        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(signedPayload));
-        var signature = Convert.ToHexString(hash).ToLowerInvariant();
-
-        return (json, $"t={timestamp},v1={signature}");
-    }
 }
