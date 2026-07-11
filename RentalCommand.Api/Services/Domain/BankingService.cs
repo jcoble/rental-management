@@ -720,7 +720,11 @@ public class BankingService : IBankingService
                 item.RawData))
             .Where(item => item.ProviderTransactionId.Length > 0)
             .GroupBy(item => item.ProviderTransactionId, StringComparer.Ordinal)
-            .Select(group => group.Last())
+            // Plaid transaction ids are immutable identities. If a malformed response repeats one,
+            // preserve the first authoritative occurrence rather than allowing a later duplicate to
+            // silently reverse its amount direction or replace its descriptive data. This also matches
+            // manual-import deduplication; legitimate changes arrive in Plaid's Modified collection.
+            .Select(group => group.First())
             .Take(MaxImportBatch)
             .ToArray();
         return new NormalizedPlaidInputs(items, eligible.Length);

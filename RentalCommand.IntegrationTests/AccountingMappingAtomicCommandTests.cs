@@ -255,7 +255,12 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             audit.CommandType == secondIdentity.CommandType
             && audit.CommandIdempotencyKey == secondIdentity.IdempotencyKey
             && audit.EntityType == nameof(AccountingEntityMapping));
-        correctedAudit.NewValues.Should().Contain("\"ClientOperationId\":\"corrected\"");
+        correctedAudit.NewValues.Should().NotBeNull();
+        using var correctedAuditValues = JsonDocument.Parse(correctedAudit.NewValues!);
+        correctedAuditValues.RootElement.GetProperty("ClientOperationId").GetString()
+            .Should().Be("corrected");
+        correctedAuditValues.RootElement.GetProperty("Revision").GetInt64()
+            .Should().Be(2);
         var mapping = await db.AccountingEntityMappings.SingleAsync(row =>
             row.AccountingConnectionId == _connectionId
             && row.ExternalId == "customer-correction");
