@@ -463,9 +463,12 @@ public sealed class ConfirmAccountingMappingHandler
     private static DateTime NextMutationTimestamp(DateTime requestedAt, DateTime persistedAt)
     {
         if (requestedAt > persistedAt) return requestedAt;
-        if (persistedAt == DateTime.MaxValue)
+        if (persistedAt > DateTime.MaxValue.AddTicks(-TimeSpan.TicksPerMicrosecond))
             throw new InvalidOperationException("A confirmation timestamp cannot advance beyond DateTime.MaxValue.");
-        return persistedAt.AddTicks(1);
+        // PostgreSQL timestamp values have microsecond precision. A single .NET tick is
+        // only 100 nanoseconds and is lost when the value is persisted, so advance by
+        // the smallest increment both stores can represent.
+        return persistedAt.AddTicks(TimeSpan.TicksPerMicrosecond);
     }
 
     private static AtomicSemanticAudit MappingAudit(
