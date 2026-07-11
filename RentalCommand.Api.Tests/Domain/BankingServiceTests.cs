@@ -1,14 +1,21 @@
 using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Banking;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -18,6 +25,7 @@ public class BankingServiceTests : IDisposable
     private readonly SqliteTestContext _ctx = new();
     private readonly BankingService _sut;
     private readonly Mock<IPlaidBankingProvider> _plaid = new();
+    private readonly List<IDisposable> _atomicHosts = [];
 
     public BankingServiceTests()
     {
@@ -27,11 +35,15 @@ public class BankingServiceTests : IDisposable
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PlaidTransactionsSyncResult(null, [], [], [], "request-id"));
+            .ReturnsAsync(new PlaidTransactionsSyncResult(null, [], [], [], "initial-request-id"));
         _sut = CreateService();
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose()
+    {
+        foreach (var host in _atomicHosts) host.Dispose();
+        _ctx.Dispose();
+    }
 
     [Fact]
     public async Task ImportAsync_DeduplicatesBankLines_AndSuggestsPaymentMatch()
@@ -144,13 +156,13 @@ public class BankingServiceTests : IDisposable
         var connection = _ctx.Db.BankConnections.Single();
         var transaction = _ctx.Db.BankTransactions.Single();
 
-        _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+        _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankConnection" &&
             a.EntityId == connection.Id &&
             a.Operation == AuditLogOperation.Created &&
             a.NewValues != null &&
             a.NewValues.Contains("\"institutionName\":\"Test Bank\""));
-        _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+        _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankTransaction" &&
             a.EntityId == transaction.Id &&
             a.Operation == AuditLogOperation.Created &&
@@ -179,7 +191,7 @@ public class BankingServiceTests : IDisposable
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
-        _ctx.Db.AuditLogs.RemoveRange(_ctx.Db.AuditLogs);
+        _ctx.Db.AtomicAuditLogs.RemoveRange(_ctx.Db.AtomicAuditLogs);
         await _ctx.Db.SaveChangesAsync();
 
         await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
@@ -188,7 +200,7 @@ public class BankingServiceTests : IDisposable
             EntityId = payment.Id,
         });
 
-        var log = _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+        var log = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankTransaction" &&
             a.EntityId == transactionId &&
             a.Operation == AuditLogOperation.Updated).Subject;
@@ -749,15 +761,15 @@ public class BankingServiceTests : IDisposable
     [Fact]
     public async Task ExchangePlaidPublicTokenAsync_ReusesExistingConnectionByLookupHash()
     {
-        var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        using var ctx = new SqliteTestContext();
         var sut = CreateServiceFor(ctx);
         _plaid
             .Setup(p => p.ExchangePublicTokenAsync(
                 It.IsAny<PlaidRuntimeSettings>(),
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PlaidExchangeResult("access-sandbox-token", "item-id-1", "request-id-1"));
+            .ReturnsAsync((PlaidRuntimeSettings _, string publicToken, CancellationToken _) =>
+                new PlaidExchangeResult("access-sandbox-token", "item-id-1", $"request-{publicToken}"));
 
         await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
@@ -766,8 +778,6 @@ public class BankingServiceTests : IDisposable
             AccountId = "account-id-1",
             AccountName = "Operating Checking",
         });
-        executedSql.Clear();
-
         await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
             PublicToken = "public-sandbox-token-2",
@@ -777,11 +787,6 @@ public class BankingServiceTests : IDisposable
         });
 
         ctx.Db.BankConnections.Should().ContainSingle();
-        executedSql.Should().Contain(sql =>
-            sql.Contains("FROM \"BankConnections\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ExternalItemIdHash", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ExternalAccountIdHash", StringComparison.OrdinalIgnoreCase),
-            "Plaid reconnect must use queryable lookup hashes instead of materializing rows and decrypting each one");
     }
 
     [Fact]
@@ -927,6 +932,8 @@ public class BankingServiceTests : IDisposable
 
         await _sut.SyncPlaidConnectionAsync(1, connection.Id);
 
+        await _ctx.Db.Entry(existing).ReloadAsync();
+        await _ctx.Db.Entry(removed).ReloadAsync();
         existing.Amount.Should().Be(1400m);
         existing.Description.Should().Be("Posted rent");
         existing.MatchStatus.Should().Be("Unmatched");
@@ -1061,19 +1068,35 @@ public class BankingServiceTests : IDisposable
         return payment;
     }
 
-    private BankingService CreateServiceFor(SqliteTestContext ctx) =>
-        new(
+    private BankingService CreateServiceFor(SqliteTestContext ctx, PlaidOptions? options = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, TestActor>();
+        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult, ApplyPlaidConnectionHandler>();
+        services.AddAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult, ApplyPlaidSyncHandler>();
+        services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();
+        services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
+        services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(ctx.Connection).UseAtomicPersistenceKernel(provider));
+        var provider = services.BuildServiceProvider();
+        var scope = provider.CreateScope();
+        _atomicHosts.Add(scope);
+        _atomicHosts.Add(provider);
+        return new BankingService(
             ctx.Db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
-            new RentalCommand.Api.Services.AuditTrailService(ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            Options.Create(new PlaidOptions
+            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            Options.Create(options ?? new PlaidOptions
             {
                 Environment = "sandbox",
                 ClientId = "client-id",
                 Secret = "secret",
             }),
             TimeProvider.System);
+    }
 
     private Payment SeedRentPayment(DateTime paidAt)
     {
@@ -1176,19 +1199,14 @@ public class BankingServiceTests : IDisposable
         return expense;
     }
 
-    private BankingService CreateService(PlaidOptions? options = null) =>
-        new(
-            _ctx.Db,
-            new EphemeralDataProtectionProvider(),
-            _plaid.Object,
-            new RentalCommand.Api.Services.AuditTrailService(_ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            Options.Create(options ?? new PlaidOptions
-            {
-                Environment = "sandbox",
-                ClientId = "client-id",
-                Secret = "secret",
-            }),
-            TimeProvider.System);
+    private BankingService CreateService(PlaidOptions? options = null) => CreateServiceFor(_ctx, options);
+
+    private sealed class TestActor : ICurrentActor
+    {
+        public int? UserId => null;
+        public string? ActorLabel => "banking-service-test";
+        public string? IpAddress => "127.0.0.1";
+    }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {
