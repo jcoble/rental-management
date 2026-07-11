@@ -39,7 +39,7 @@ jobs:
     env:
       PREVIEW_ROOT: /srv/dev-stacks/rental-command
       PREVIEW_WEB_PORT: "15667"
-      ARTIFACT_DIR: ${{ runner.temp }}/rental-command-preview-${{ github.run_id }}
+      ARTIFACT_DIR: ${{ github.workspace }}/.runner-artifacts/rental-command-preview-${{ github.run_id }}
     steps:
       - name: Validate inputs
         shell: bash

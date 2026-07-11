@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 120
     env:
       MSBUILDDISABLENODEREUSE: "1"
-      ARTIFACT_DIR: ${{ runner.temp }}/rental-command-results-${{ github.run_id }}
+      ARTIFACT_DIR: ${{ github.workspace }}/.runner-artifacts/rental-command-results-${{ github.run_id }}
     steps:
       - name: Validate requested ref
         shell: bash
