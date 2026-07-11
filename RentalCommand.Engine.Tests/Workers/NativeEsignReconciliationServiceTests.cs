@@ -3,10 +3,12 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Esign;
 using RentalCommand.Engine.Services;
 
 namespace RentalCommand.Engine.Tests.Workers;
@@ -16,6 +18,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
     private readonly SqliteConnection _connection;
     private readonly ServiceProvider _provider;
     private readonly StubExecutionService _execution = new();
+    private readonly StubClaimStore _claims = new();
 
     public NativeEsignReconciliationServiceTests()
     {
@@ -27,6 +30,8 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         var services = new ServiceCollection();
         services.AddScoped<RentalCommandDbContext>(_ => new ReconciliationTestDbContext(options));
         services.AddSingleton<INativeEsignExecutionService>(_execution);
+        services.AddSingleton<INativeEsignExecutionClaimStore>(_claims);
+        services.AddSingleton(TimeProvider.System);
         _provider = services.BuildServiceProvider();
 
         using var scope = _provider.CreateScope();
@@ -61,6 +66,20 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             await db.SaveChangesAsync();
         }
 
+        await using (var claimScope = _provider.CreateAsyncScope())
+        {
+            var claimDb = claimScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var ids = await claimDb.SignatureRequests.AsNoTracking()
+                .Where(request => request.Status == SignatureRequestStatus.ExecutionPending)
+                .OrderBy(request => request.CreatedAtUtc)
+                .ThenBy(request => request.Id)
+                .Select(request => request.Id)
+                .Take(NativeEsignReconciliationService.BatchSize)
+                .ToArrayAsync();
+            _claims.Claims = ids.Select(id => new NativeEsignExecutionClaim(
+                id, $"request-{id}", Guid.NewGuid())).ToArray();
+        }
+
         var service = new NativeEsignReconciliationService(
             _provider.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<NativeEsignReconciliationService>.Instance);
@@ -70,31 +89,25 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         completed.Should().Be(NativeEsignReconciliationService.BatchSize);
         _execution.RequestIds.Should().HaveCount(NativeEsignReconciliationService.BatchSize);
         _execution.RequestIds.Should().BeInAscendingOrder();
-        await using var assertionScope = _provider.CreateAsyncScope();
-        var assertionDb = assertionScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var expected = await assertionDb.SignatureRequests.AsNoTracking()
-            .Where(request => request.Status == SignatureRequestStatus.ExecutionPending)
-            .OrderBy(request => request.CreatedAtUtc)
-            .ThenBy(request => request.Id)
-            .Select(request => request.Id)
-            .Take(NativeEsignReconciliationService.BatchSize)
-            .ToArrayAsync();
-        _execution.RequestIds.Should().Equal(expected);
+        _execution.RequestIds.Should().Equal(_claims.Claims.Select(claim => claim.Id));
+        _claims.LastBatchSize.Should().Be(NativeEsignReconciliationService.BatchSize);
+        _claims.LastLeaseDuration.Should().Be(NativeEsignReconciliationService.ClaimLease);
     }
 
     [Fact]
-    public void PendingRequestIdsQuery_TranslatesFilteringOrderingAndPagingToOneSqlStatement()
+    public void ClaimSql_FiltersOrdersPagesLocksAndLeasesInOneStatement()
     {
-        using var scope = _provider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-
-        var sql = NativeEsignReconciliationService.PendingRequestIdsQuery(db).ToQueryString();
+        var sql = (string)typeof(NativeEsignExecutionClaimStore)
+            .GetField("BatchClaimSql", BindingFlags.Static | BindingFlags.NonPublic)!
+            .GetRawConstantValue()!;
 
         sql.Should().Contain("WHERE");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");
-        sql.Should().Contain(".param set");
-        sql.Should().Contain(NativeEsignReconciliationService.BatchSize.ToString());
+        sql.Should().Contain("FOR UPDATE OF request SKIP LOCKED");
+        sql.Should().Contain("pg_try_advisory_xact_lock");
+        sql.Should().Contain("UPDATE \"SignatureRequests\"");
+        sql.Should().Contain("RETURNING");
     }
 
     [Fact]
@@ -115,6 +128,11 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             secondId = second.Id;
         }
         _execution.ThrowForId = firstId;
+        _claims.Claims =
+        [
+            new NativeEsignExecutionClaim(firstId, "first", Guid.NewGuid()),
+            new NativeEsignExecutionClaim(secondId, "second", Guid.NewGuid()),
+        ];
         var service = new NativeEsignReconciliationService(
             _provider.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<NativeEsignReconciliationService>.Instance);
@@ -212,7 +230,11 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         public List<int> RequestIds { get; } = [];
         public int? ThrowForId { get; set; }
 
-        public Task<bool> FinalizePendingAsync(int signatureRequestId, CancellationToken ct = default)
+        public Task<bool> FinalizePendingAsync(int signatureRequestId, CancellationToken ct = default) =>
+            FinalizeClaimedAsync(signatureRequestId, Guid.Empty, ct);
+
+        public Task<bool> FinalizeClaimedAsync(
+            int signatureRequestId, Guid claimToken, CancellationToken ct = default)
         {
             RequestIds.Add(signatureRequestId);
             if (signatureRequestId == ThrowForId)
@@ -222,6 +244,30 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
 
             return Task.FromResult(true);
         }
+    }
+
+    private sealed class StubClaimStore : INativeEsignExecutionClaimStore
+    {
+        public IReadOnlyList<NativeEsignExecutionClaim> Claims { get; set; } = [];
+        public int LastBatchSize { get; private set; }
+        public TimeSpan LastLeaseDuration { get; private set; }
+
+        public Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
+            string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+            CancellationToken ct = default)
+        {
+            LastBatchSize = batchSize;
+            LastLeaseDuration = leaseDuration;
+            return Task.FromResult(Claims);
+        }
+
+        public Task<NativeEsignExecutionClaim?> TryClaimAsync(
+            int signatureRequestId, string claimOwner, DateTime nowUtc, TimeSpan leaseDuration,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<int> ReleaseForRetryAsync(
+            int signatureRequestId, Guid claimToken, string? error,
+            CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class ReconciliationTestDbContext(DbContextOptions<RentalCommandDbContext> options)

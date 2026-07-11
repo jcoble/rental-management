@@ -5375,6 +5375,26 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("ExecutionAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ExecutionClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ExecutionClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ExecutionClaimToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ExecutionLastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ExecutionLastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.Property<string>("DocumentName")
                         .IsRequired()
                         .HasMaxLength(260)
@@ -5419,6 +5439,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("DocumentTemplateId");
 
+                    b.HasIndex("ExecutionClaimExpiresAtUtc", "Id")
+                        .HasFilter("\"ExecutionClaimToken\" IS NOT NULL");
+
                     b.HasIndex("LeaseId");
 
                     b.HasIndex("OriginalStoredFileId");
@@ -5431,6 +5454,8 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("SignedStoredFileId");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("Status", "ExecutionClaimExpiresAtUtc", "CreatedAtUtc", "Id");
 
                     b.ToTable("SignatureRequests");
                 });

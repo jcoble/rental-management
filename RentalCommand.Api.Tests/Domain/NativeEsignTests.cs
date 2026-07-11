@@ -479,6 +479,54 @@ public sealed class NativeEsignTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecutionService_StaleClaimCannotFinalizeOrClearNewerClaim()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
+        var (token, envelopeId) = await SendAndGetTokenAsync(lease);
+        _atomicFailure.ArmForFinalization();
+        var signing = CreateSigningService();
+        await FluentActions.Awaiting(() => signing.SignAsync(token, new SubmitSignatureRequest
+        {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            Consent = true,
+            SignatureType = "Typed",
+            TypedName = "Marcus Williams",
+        }, "198.51.100.9", "UA/sign", default)).Should().ThrowAsync<InjectedEsignFailure>();
+
+        var requestId = await _db.SignatureRequests.AsNoTracking()
+            .Where(request => request.PublicId == envelopeId)
+            .Select(request => request.Id)
+            .SingleAsync();
+        var replacementToken = Guid.NewGuid();
+        var execution = new NativeEsignExecutionService(
+            _db,
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            new TestNativeEsignExecutionClaimStore(_db),
+            _storage,
+            new CallbackExecutedPdfGenerator(data =>
+            {
+                _db.ChangeTracker.Clear();
+                var request = _db.SignatureRequests.Single(candidate => candidate.Id == requestId);
+                request.ExecutionClaimOwner = "newer-worker";
+                request.ExecutionClaimToken = replacementToken;
+                request.ExecutionClaimExpiresAtUtc = DateTime.UtcNow.AddMinutes(10);
+                _db.SaveChanges();
+            }),
+            TimeProvider.System,
+            NullLogger<NativeEsignExecutionService>.Instance);
+
+        (await execution.FinalizePendingAsync(requestId)).Should().BeFalse();
+
+        var pending = await _db.SignatureRequests.AsNoTracking().SingleAsync(request => request.Id == requestId);
+        pending.Status.Should().Be(SignatureRequestStatus.ExecutionPending);
+        pending.SignedStoredFileId.Should().BeNull();
+        pending.ExecutionClaimToken.Should().Be(replacementToken);
+        pending.ExecutionClaimOwner.Should().Be("newer-worker");
+        (await _db.StoredFiles.CountAsync()).Should().Be(1);
+        _storage.FileCount.Should().Be(1, "the stale worker's upload is compensated");
+    }
+
+    [Fact]
     public async Task Sign_MultiSigner_OnlyCompletesAfterLastSigner()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
@@ -766,10 +814,65 @@ public sealed class NativeEsignTests : IDisposable
         new(
             _db,
             _services.GetRequiredService<IAtomicUnitOfWork>(),
+            new TestNativeEsignExecutionClaimStore(_db),
             _storage,
             new ExecutedLeasePdfGenerator(),
             TimeProvider.System,
             NullLogger<NativeEsignExecutionService>.Instance);
+
+    private sealed class TestNativeEsignExecutionClaimStore(RentalCommandDbContext db)
+        : INativeEsignExecutionClaimStore
+    {
+        public Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
+            string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public async Task<NativeEsignExecutionClaim?> TryClaimAsync(
+            int signatureRequestId, string claimOwner, DateTime nowUtc, TimeSpan leaseDuration,
+            CancellationToken ct = default)
+        {
+            var request = await db.SignatureRequests
+                .SingleOrDefaultAsync(candidate => candidate.Id == signatureRequestId
+                    && candidate.Status == SignatureRequestStatus.ExecutionPending
+                    && candidate.ExecutionClaimToken == null, ct);
+            if (request is null) return null;
+            var token = Guid.NewGuid();
+            request.ExecutionClaimOwner = claimOwner;
+            request.ExecutionClaimToken = token;
+            request.ExecutionClaimExpiresAtUtc = nowUtc.Add(leaseDuration);
+            request.ExecutionAttemptCount++;
+            request.ExecutionLastAttemptAtUtc = nowUtc;
+            await db.SaveChangesAsync(ct);
+            return new NativeEsignExecutionClaim(request.Id, request.PublicId, token);
+        }
+
+        public async Task<int> ReleaseForRetryAsync(
+            int signatureRequestId, Guid claimToken, string? error,
+            CancellationToken ct = default)
+        {
+            var request = await db.SignatureRequests.SingleOrDefaultAsync(candidate =>
+                candidate.Id == signatureRequestId && candidate.ExecutionClaimToken == claimToken, ct);
+            if (request is null) return 0;
+            request.ExecutionClaimOwner = null;
+            request.ExecutionClaimToken = null;
+            request.ExecutionClaimExpiresAtUtc = null;
+            request.ExecutionLastError = error;
+            await db.SaveChangesAsync(ct);
+            return 1;
+        }
+    }
+
+    private sealed class CallbackExecutedPdfGenerator(Action<ExecutedLeaseData> callback)
+        : IExecutedLeasePdfGenerator
+    {
+        private readonly ExecutedLeasePdfGenerator _inner = new();
+
+        public byte[] Generate(ExecutedLeaseData data, string contentSha256)
+        {
+            callback(data);
+            return _inner.Generate(data, contentSha256);
+        }
+    }
 
     private async Task<EsignResult> SendAsync(
         NativeEsignProvider provider,

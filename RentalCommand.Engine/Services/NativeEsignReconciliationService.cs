@@ -1,9 +1,8 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Esign;
-using RentalCommand.Core.Enums;
-using RentalCommand.Data;
+using RentalCommand.Core.Time;
+using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Engine.Services;
 
@@ -16,6 +15,10 @@ namespace RentalCommand.Engine.Services;
 public sealed class NativeEsignReconciliationService
 {
     internal const int BatchSize = 20;
+    internal static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(10);
+
+    private readonly string _claimOwner =
+        $"{Environment.MachineName}:{Environment.ProcessId}:native-esign:{Guid.NewGuid():N}";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<NativeEsignReconciliationService> _logger;
@@ -30,22 +33,24 @@ public sealed class NativeEsignReconciliationService
 
     public async Task<int> ReconcileAsync(CancellationToken ct = default)
     {
-        int[] requestIds;
+        IReadOnlyList<NativeEsignExecutionClaim> claims;
         await using (var queryScope = _scopeFactory.CreateAsyncScope())
         {
-            var db = queryScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            requestIds = await PendingRequestIdsQuery(db).ToArrayAsync(ct);
+            var store = queryScope.ServiceProvider.GetRequiredService<INativeEsignExecutionClaimStore>();
+            var timeProvider = queryScope.ServiceProvider.GetRequiredService<TimeProvider>();
+            claims = await store.ClaimBatchAsync(
+                _claimOwner, timeProvider.UtcNow(), ClaimLease, BatchSize, ct);
         }
 
         var completed = 0;
-        foreach (var requestId in requestIds)
+        foreach (var claim in claims)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
                 await using var itemScope = _scopeFactory.CreateAsyncScope();
                 var execution = itemScope.ServiceProvider.GetRequiredService<INativeEsignExecutionService>();
-                if (await execution.FinalizePendingAsync(requestId, ct))
+                if (await execution.FinalizeClaimedAsync(claim.Id, claim.ClaimToken, ct))
                 {
                     completed++;
                 }
@@ -59,18 +64,10 @@ public sealed class NativeEsignReconciliationService
                 _logger.LogError(
                     ex,
                     "Native e-sign reconciliation failed for request {SignatureRequestId}; it remains pending for retry.",
-                    requestId);
+                    claim.Id);
             }
         }
 
         return completed;
     }
-
-    internal static IQueryable<int> PendingRequestIdsQuery(RentalCommandDbContext db) =>
-        db.SignatureRequests.AsNoTracking()
-            .Where(request => request.Status == SignatureRequestStatus.ExecutionPending)
-            .OrderBy(request => request.CreatedAtUtc)
-            .ThenBy(request => request.Id)
-            .Select(request => request.Id)
-            .Take(BatchSize);
 }
