@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 
