@@ -226,7 +226,11 @@ public sealed class ApplyPlaidSyncHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
-        if (command.Added.Count > MaxBatch
+        if (command.AddedInputCount < command.Added.Count
+            || command.ModifiedInputCount < command.Modified.Count
+            || command.AddedInputCount > MaxBatch
+            || command.ModifiedInputCount > MaxBatch
+            || command.Added.Count > MaxBatch
             || command.Modified.Count > MaxBatch
             || command.RemovedProviderTransactionIds.Count > MaxBatch)
         {
@@ -263,7 +267,8 @@ public sealed class ApplyPlaidSyncHandler
         var created = new List<BankTransaction>();
         var changed = new List<(BankTransaction Row, string Before, string Reason)>();
         var modifiedIds = new List<int>();
-        var skipped = 0;
+        var skipped = command.AddedInputCount - command.Added.Count
+            + command.ModifiedInputCount - command.Modified.Count;
 
         foreach (var input in command.Added)
         {

@@ -296,8 +296,6 @@
 											}}
 										>
 											<input type="hidden" name="provider" value={s.provider} />
-											<input type="hidden" name="clientOperationId" value={m.confirmationOperationId} />
-											<input type="hidden" name="expectedRevision" value={m.revision} />
 											<Button
 												type="submit"
 												size="sm"
