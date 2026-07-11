@@ -216,6 +216,8 @@ public class VendorDispatchServiceTests : IDisposable
         // The vendor's completed-jobs counter incremented.
         var vendorReloaded = await _ctx.Db.Vendors.FindAsync(vendor.Id);
         vendorReloaded!.JobsCompleted.Should().Be(1);
+        _ctx.Db.Notifications.Should().BeEmpty(
+            "legacy portfolio roles are not a recipient fallback when scoped responsibility is absent");
     }
 
     [Fact]
@@ -228,6 +230,155 @@ public class VendorDispatchServiceTests : IDisposable
         (await CreateDoneSut().TryHandleAsync(
             "SM-vendor-no-dispatch", "+16145550199", "DONE", DateTime.UtcNow)).Handled.Should().BeFalse();
         vendor.Id.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task VendorDone_FailsClosed_WhenSameVendorHasMultipleOpenDispatches()
+    {
+        var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        var first = SeedWorkOrder(property);
+        var second = SeedWorkOrder(property);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.VendorDispatches.AddRange(
+            OpenDispatch(first.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-2)),
+            OpenDispatch(second.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-1)));
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await CreateDoneSut().TryHandleAsync(
+            "SM-same-vendor-ambiguous", "+16145550199", "DONE", DateTime.UtcNow);
+
+        result.Handled.Should().BeFalse();
+        (await _ctx.Db.VendorDispatches.CountAsync(row =>
+            row.Status == VendorDispatchStatus.Dispatched)).Should().Be(2);
+        (await _ctx.Db.WorkOrders.CountAsync(row =>
+            row.Status == WorkOrderStatus.Completed)).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sms.vendor-done")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task VendorDone_ClosingSiblingDispatch_DoesNotIncrementJobsCompletedAgain()
+    {
+        var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        vendor.JobsCompleted = 1;
+        var completedWorkOrder = SeedWorkOrder(property);
+        completedWorkOrder.Status = WorkOrderStatus.Completed;
+        completedWorkOrder.CompletedAt = DateTime.UtcNow.AddMinutes(-10);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.VendorDispatches.Add(OpenDispatch(
+            completedWorkOrder.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-20)));
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await CreateDoneSut().TryHandleAsync(
+            "SM-sibling-after-completion", "+16145550199", "DONE", DateTime.UtcNow);
+
+        result.Handled.Should().BeTrue();
+        (await _ctx.Db.VendorDispatches.SingleAsync()).Status.Should().Be(VendorDispatchStatus.Completed);
+        (await _ctx.Db.Vendors.SingleAsync(row => row.Id == vendor.Id)).JobsCompleted.Should().Be(1);
+        (await _ctx.Db.WorkOrderStatusEvents.CountAsync(row =>
+            row.WorkOrderId == completedWorkOrder.Id)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task VendorDone_NotifiesOnlyWorkCapabilityAndPropertyScopedRecipient()
+    {
+        var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        var decoyProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Unrelated property",
+            AddressLine1 = "9 Other St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Properties.Add(decoyProperty);
+        var workOrder = SeedWorkOrder(property);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.VendorDispatches.Add(OpenDispatch(workOrder.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-5)));
+        SeedScopedManager(userId: 100, property.Id);
+        SeedScopedManager(userId: 101, decoyProperty.Id);
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await CreateDoneSut().TryHandleAsync(
+            "SM-scoped-recipient", "+16145550199", "DONE", DateTime.UtcNow);
+
+        result.Handled.Should().BeTrue();
+        var notification = (await _ctx.Db.Notifications.ToListAsync()).Should().ContainSingle().Subject;
+        notification.UserId.Should().Be(100);
+        notification.RelatedEntityId.Should().Be(workOrder.Id);
+    }
+
+    private static VendorDispatch OpenDispatch(
+        int workOrderId,
+        int vendorId,
+        DateTime dispatchedAtUtc) => new()
+    {
+        PortfolioId = PortfolioId,
+        WorkOrderId = workOrderId,
+        VendorId = vendorId,
+        Status = VendorDispatchStatus.Dispatched,
+        DispatchedAtUtc = dispatchedAtUtc,
+        Message = "Reply DONE when complete.",
+    };
+
+    private void SeedScopedManager(int userId, int propertyId)
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            Id = userId,
+            PortfolioId = PortfolioId,
+            UserName = $"manager-{userId}@example.test",
+            NormalizedUserName = $"MANAGER-{userId}@EXAMPLE.TEST",
+            Email = $"manager-{userId}@example.test",
+            NormalizedEmail = $"MANAGER-{userId}@EXAMPLE.TEST",
+            DisplayName = $"Manager {userId}",
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = userId,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddDays(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = 2,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddDays(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            SelectedProperties =
+            [
+                new MembershipRoleAssignmentProperty
+                {
+                    PropertyId = propertyId,
+                    PortfolioId = PortfolioId,
+                },
+            ],
+        };
+        _ctx.Db.Users.Add(user);
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
+        _ctx.Db.WorkspaceMemberships.Add(membership);
+        _ctx.Db.MembershipRoleAssignments.Add(assignment);
     }
 
     [Fact]

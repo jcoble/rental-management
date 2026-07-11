@@ -5,6 +5,7 @@ namespace RentalCommand.Core.Operations;
 public sealed record CompleteVendorDispatchFromInboundCommand(
     string ProviderEventId,
     string NormalizedFromPhone,
+    bool IsCompletionRequest,
     DateTime ReceivedAtUtc) : IAtomicCommandData;
 
 public enum CompleteVendorDispatchFromInboundOutcome

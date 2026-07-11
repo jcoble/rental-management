@@ -4,9 +4,11 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Operations;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Operations;
 
@@ -22,7 +24,13 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderEventId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.NormalizedFromPhone);
+        if (!command.IsCompletionRequest || string.IsNullOrWhiteSpace(command.NormalizedFromPhone))
+        {
+            // The atomic receipt is still committed for every verified provider event. Non-DONE and
+            // unmatchable senders are durable no-ops and never enter phone matching or mutation.
+            return new CompleteVendorDispatchFromInboundResult(
+                CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch, 0, 0, 0, 0, []);
+        }
 
         // Different provider event ids from the same number must serialize before deciding which
         // open dispatch is eligible. A hash collision only over-serializes unrelated numbers.
@@ -33,30 +41,48 @@ public sealed class CompleteVendorDispatchFromInboundHandler
 
         // The complete match, portfolio integrity checks, ordering, and limiting stay in one SQL
         // query. No free-form phone rows are materialized for in-memory normalization.
-        var dispatch = await attempt.Persistence.Query<VendorDispatch>()
-            .Include(candidate => candidate.Vendor)
-            .Include(candidate => candidate.WorkOrder)
+        var matches = await attempt.Persistence.Query<VendorDispatch>()
+            .AsNoTracking()
+            .TagWith("InboundVendorPhoneMatch: bounded top-two")
             .Where(candidate => OpenStatuses.Contains(candidate.Status)
                 && candidate.Vendor != null
                 && candidate.Vendor.PortfolioId == candidate.PortfolioId
                 && candidate.Vendor.NormalizedPhone == command.NormalizedFromPhone
                 && candidate.WorkOrder != null
                 && candidate.WorkOrder.PortfolioId == candidate.PortfolioId
-                && candidate.WorkOrder.DeletedAt == null
-                && !attempt.Persistence.Query<VendorDispatch>().Any(other =>
-                    other.Id != candidate.Id
-                    && other.PortfolioId != candidate.PortfolioId
-                    && OpenStatuses.Contains(other.Status)
-                    && other.Vendor != null
-                    && other.Vendor.PortfolioId == other.PortfolioId
-                    && other.Vendor.NormalizedPhone == command.NormalizedFromPhone
-                    && other.WorkOrder != null
-                    && other.WorkOrder.PortfolioId == other.PortfolioId
-                    && other.WorkOrder.DeletedAt == null))
+                && candidate.WorkOrder.DeletedAt == null)
             .OrderByDescending(candidate => candidate.DispatchedAtUtc)
             .ThenByDescending(candidate => candidate.Id)
-            .FirstOrDefaultAsync(ct);
+            .Select(candidate => new { DispatchId = candidate.Id, candidate.WorkOrderId })
+            .Take(2)
+            .ToListAsync(ct);
 
+        // Phone identity is not portfolio-qualified. Exactly one eligible open dispatch across the
+        // entire system is required; two rows is enough to prove ambiguity without materializing all.
+        if (matches.Count != 1)
+        {
+            return new CompleteVendorDispatchFromInboundResult(
+                CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch, 0, 0, 0, 0, []);
+        }
+
+        // Phone locks serialize competing provider events for one sender; the work-order lock also
+        // serializes sibling dispatches from different vendor phones. Load tracked state only after
+        // that aggregate lock so the first real completion transition is decided from fresh rows.
+        var match = matches[0];
+        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, match.WorkOrderId, ct);
+        var dispatch = await attempt.Persistence.Query<VendorDispatch>()
+            .Include(candidate => candidate.Vendor)
+            .Include(candidate => candidate.WorkOrder)
+            .SingleOrDefaultAsync(candidate =>
+                candidate.Id == match.DispatchId
+                && candidate.WorkOrderId == match.WorkOrderId
+                && OpenStatuses.Contains(candidate.Status)
+                && candidate.Vendor != null
+                && candidate.Vendor.PortfolioId == candidate.PortfolioId
+                && candidate.WorkOrder != null
+                && candidate.WorkOrder.PortfolioId == candidate.PortfolioId
+                && candidate.WorkOrder.DeletedAt == null,
+                ct);
         if (dispatch?.Vendor is null || dispatch.WorkOrder is null)
         {
             return new CompleteVendorDispatchFromInboundResult(
@@ -106,18 +132,25 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             attempt.Persistence.Add(statusEvent);
         }
 
-        vendor.JobsCompleted += 1;
-        vendor.UpdatedAt = receivedAt;
-        attempt.BindSemanticAudit(vendor, new AtomicSemanticAudit(
-            portfolioId,
-            nameof(Vendor),
-            vendor.Id,
-            AuditLogOperation.Updated,
-            NewValues: JsonSerializer.Serialize(new { JobsCompleted = vendor.JobsCompleted }),
-            ChangeReason: "Vendor completed-jobs total advanced with the atomic dispatch completion."));
+        if (statusEvent is not null)
+        {
+            // A sibling dispatch can still be closed after another vendor completed the work order,
+            // but scorecard credit belongs only to the first actual WorkOrder -> Completed transition.
+            vendor.JobsCompleted += 1;
+            vendor.UpdatedAt = receivedAt;
+            attempt.BindSemanticAudit(vendor, new AtomicSemanticAudit(
+                portfolioId,
+                nameof(Vendor),
+                vendor.Id,
+                AuditLogOperation.Updated,
+                NewValues: JsonSerializer.Serialize(new { JobsCompleted = vendor.JobsCompleted }),
+                ChangeReason: "Vendor completed-jobs total advanced with the first work-order completion."));
+        }
 
-        var notifications = await CreateNotificationsAsync(
-            attempt, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct);
+        List<Notification> notifications = statusEvent is null
+            ? []
+            : await CreateNotificationsAsync(
+                attempt, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct);
         if (notifications.Count > 0)
         {
             attempt.Persistence.AddRange(notifications);
@@ -187,21 +220,16 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         DateTime now,
         CancellationToken ct)
     {
-        var staffRoles = new[]
-        {
-            nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent), nameof(UserRole.Owner),
-        };
-        var staffUserIds = await (
-                from user in attempt.Persistence.Query<ApplicationUser>()
-                join userRole in attempt.Persistence.Query<Microsoft.AspNetCore.Identity.IdentityUserRole<int>>()
-                    on user.Id equals userRole.UserId
-                join role in attempt.Persistence.Query<Microsoft.AspNetCore.Identity.IdentityRole<int>>()
-                    on userRole.RoleId equals role.Id
-                where user.PortfolioId == portfolioId
-                    && role.Name != null
-                    && staffRoles.Contains(role.Name)
-                select user.Id)
-            .Distinct()
+        // Exact work-order property + work.read capability on the same effective assignment. There
+        // is deliberately no legacy Admin/Manager/Agent/Owner fanout and no technician fallback:
+        // assigned-work responsibility has not landed yet, so a technician recipient would leak.
+        var staffUserIds = await ScopedNotificationRecipientQuery
+            .ForProperty(
+                attempt,
+                portfolioId,
+                workOrder.PropertyId,
+                CapabilityKeys.WorkRead,
+                now)
             .OrderBy(userId => userId)
             .ToListAsync(ct);
 

@@ -111,7 +111,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<INoticeTemplateService, NoticeTemplateService>();
         services.AddScoped<IEvictionCaseService, EvictionCaseService>();
-        services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();
         services.AddScoped<IApplicationService, ApplicationService>();

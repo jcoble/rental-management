@@ -44,16 +44,8 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerEventId);
-        if (!IsDone(body))
-        {
-            return new SmsInboundVendorDoneResult(false, null, "Reply DONE when the job is complete.");
-        }
-
-        var normalizedFrom = SmsPhone.Normalize(fromPhone);
-        if (string.IsNullOrWhiteSpace(normalizedFrom))
-        {
-            return new SmsInboundVendorDoneResult(false, null, "We could not match this number to an open job.");
-        }
+        var completionRequest = IsDone(body);
+        var normalizedFrom = SmsPhone.Normalize(fromPhone) ?? string.Empty;
 
         var identity = new AtomicCommandIdentity(
             "sms.vendor-done",
@@ -63,13 +55,19 @@ public sealed class SmsInboundVendorDoneService : ISmsInboundVendorDoneService
             new CompleteVendorDispatchFromInboundCommand(
                 providerEventId.Trim(),
                 normalizedFrom,
+                completionRequest,
                 DateTime.SpecifyKind(receivedAtUtc, DateTimeKind.Utc)),
             Codec,
             ct);
 
         if (outcome.Value.Outcome == CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch)
         {
-            return new SmsInboundVendorDoneResult(false, null, "We could not match this number to an open job.");
+            return new SmsInboundVendorDoneResult(
+                false,
+                null,
+                completionRequest
+                    ? "We could not match this number to an open job."
+                    : "Reply DONE when the job is complete.");
         }
 
         await BroadcastCommittedResultAsync(outcome.Value, ct);

@@ -43,10 +43,10 @@ public class SmsWebhookController : ControllerBase
         [FromForm(Name = "Body")] string? body,
         CancellationToken ct)
     {
-        // This endpoint mutates money (marks rent paid) and closes work orders, so verify the provider
+        // This endpoint can close work orders, so verify the provider
         // signature before trusting the form. Fail CLOSED outside Development: if no provider auth token is
         // configured we cannot prove the request came from the SMS provider, so reject it (403) rather than
-        // act on a potentially forged "From=<tenant>&Body=YES". Skip-with-warning is allowed ONLY in local dev.
+        // act on a potentially forged vendor completion. Skip-with-warning is allowed ONLY in local dev.
         if (!_signatureValidator.IsEnforced)
         {
             if (!_environment.IsDevelopment())
@@ -71,7 +71,7 @@ public class SmsWebhookController : ControllerBase
             return BadRequest(new { error = "The provider MessageSid is required." });
         }
 
-        // Route to vendor-DONE (job completion) or fall back to tenant rent-YES confirmation.
+        // Route only to vendor-DONE. Unmatched/ambiguous events are acknowledged without mutation.
         var responseMessage = await _router.RouteAsync(
             providerEventId, from, body, _timeProvider.UtcNow(), ct);
         return Content(ToMessageResponse(responseMessage), "application/xml", Encoding.UTF8);
