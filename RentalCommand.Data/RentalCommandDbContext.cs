@@ -150,7 +150,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Id).ValueGeneratedNever();
             entity.Property(e => e.WorkerKey).HasMaxLength(64);
             entity.Property(e => e.Status).HasMaxLength(16);
-            entity.HasIndex(e => e.Status);
+            entity.Property(e => e.ClaimOwner).HasMaxLength(200);
+            entity.HasIndex(e => new { e.Status, e.ClaimExpiresAtUtc, e.CreatedRealUtc, e.Id });
         });
 
         modelBuilder.Entity<ApplicationUser>(entity =>
@@ -375,10 +376,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ModelId).HasMaxLength(120);
             entity.Property(e => e.FailureReason).HasMaxLength(500);
             entity.Property(e => e.ReviewedBy).HasMaxLength(200);
+            entity.Property(e => e.ProcessingClaimOwner).HasMaxLength(200);
             entity.Property(e => e.CostUsd).HasPrecision(18, 4);
             entity.Property(e => e.ExtractedFields).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.Status, e.ProcessingClaimExpiresAtUtc, e.CreatedAt, e.Id });
             entity.HasIndex(e => e.BatchId);
             entity.HasIndex(e => e.SourceStoredFileId);
             // The owning batch is optional (single-file scans carry null). SetNull rather than Cascade

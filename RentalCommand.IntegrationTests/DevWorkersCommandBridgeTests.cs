@@ -6,6 +6,7 @@ using Moq;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 using Testcontainers.PostgreSql;
@@ -82,6 +83,7 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
         services.AddSingleton(rentCharge.Object);
         services.AddSingleton<SimWorkerRegistry>();
         await using var provider = services.BuildServiceProvider();
@@ -132,6 +134,7 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
         services.AddSingleton(lateFee.Object);
         services.AddSingleton<SimWorkerRegistry>();
         await using var provider = services.BuildServiceProvider();

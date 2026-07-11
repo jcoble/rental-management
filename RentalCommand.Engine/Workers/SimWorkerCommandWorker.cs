@@ -1,10 +1,8 @@
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
+using RentalCommand.Data.Simulation;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -17,12 +15,16 @@ namespace RentalCommand.Engine.Workers;
 /// </summary>
 public sealed class SimWorkerCommandWorker : EngineWorkerBase
 {
+    private static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(6);
+    private readonly string _claimOwner = $"{Environment.MachineName}:{Environment.ProcessId}:simulation:{Guid.NewGuid():N}";
+    private readonly ILogger<SimWorkerCommandWorker> _logger;
+
     protected override string WorkerName => "SimWorkerCommandWorker";
     protected override TimeSpan PollInterval => TimeSpan.FromMilliseconds(500);
     protected override TimeSpan StepTimeout => TimeSpan.FromMinutes(5);
 
     public SimWorkerCommandWorker(IServiceProvider serviceProvider, ILogger<SimWorkerCommandWorker> logger)
-        : base(serviceProvider, logger) { }
+        : base(serviceProvider, logger) => _logger = logger;
 
     protected override Task<int> ExecuteCycleAsync(IServiceProvider scopedProvider, CancellationToken cancellationToken)
         => ProcessOldestPendingAsync(scopedProvider, cancellationToken);
@@ -34,22 +36,10 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
     /// </summary>
     internal async Task<int> ProcessOldestPendingAsync(IServiceProvider scopedProvider, CancellationToken cancellationToken)
     {
-        var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
-
-        var command = await db.SimWorkerCommands
-            .Where(c => c.Status == SimWorkerCommandStatus.Pending)
-            .OrderBy(c => c.CreatedRealUtc)
-            .ThenBy(c => c.Id)
-            .FirstOrDefaultAsync(cancellationToken);
+        var claimStore = scopedProvider.GetRequiredService<ISimWorkerCommandClaimStore>();
+        var now = TimeProvider.System.GetUtcNow().UtcDateTime;
+        var command = await claimStore.ClaimOldestAsync(_claimOwner, now, ClaimLease, cancellationToken);
         if (command is null)
-            return 0;
-
-        // Optimistic claim (single Engine instance via the advisory lock, so no real race — this is
-        // belt-and-suspenders). A server-side UPDATE ... WHERE Status='Pending' is the atomic claim.
-        var claimed = await db.SimWorkerCommands
-            .Where(c => c.Id == command.Id && c.Status == SimWorkerCommandStatus.Pending)
-            .ExecuteUpdateAsync(s => s.SetProperty(c => c.Status, SimWorkerCommandStatus.Running), cancellationToken);
-        if (claimed == 0)
             return 0;
 
         // Ensure the automation services see the latest (driver-frozen) sim clock before running.
@@ -65,24 +55,30 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
             var resultJson = JsonSerializer.Serialize(new { created });
             var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime; // real stamp, hoisted for ExecuteUpdate
 
-            await db.SimWorkerCommands
-                .Where(c => c.Id == command.Id)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(c => c.Status, SimWorkerCommandStatus.Done)
-                    .SetProperty(c => c.ResultJson, resultJson)
-                    .SetProperty(c => c.CompletedRealUtc, (DateTime?)completedRealUtc), cancellationToken);
+            var finalized = await claimStore.MarkDoneAsync(
+                command.Id, command.ClaimToken, resultJson, completedRealUtc, cancellationToken);
+            if (finalized == 0)
+            {
+                _logger.LogWarning(
+                    "Discarded stale simulation success for command {CommandId}; its claim lease was lost",
+                    command.Id);
+                return 0;
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             var error = ex.Message;
             var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
 
-            await db.SimWorkerCommands
-                .Where(c => c.Id == command.Id)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(c => c.Status, SimWorkerCommandStatus.Error)
-                    .SetProperty(c => c.Error, error)
-                    .SetProperty(c => c.CompletedRealUtc, (DateTime?)completedRealUtc), cancellationToken);
+            var finalized = await claimStore.MarkErrorAsync(
+                command.Id, command.ClaimToken, error, completedRealUtc, cancellationToken);
+            if (finalized == 0)
+            {
+                _logger.LogWarning(
+                    "Discarded stale simulation failure for command {CommandId}; its claim lease was lost",
+                    command.Id);
+                return 0;
+            }
         }
 
         return 1;

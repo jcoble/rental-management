@@ -4925,6 +4925,22 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
+                    b.Property<int>("ProcessingAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ProcessingClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ProcessingClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ProcessingClaimToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ProcessingLastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("ReviewedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -4958,7 +4974,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PortfolioId");
 
-                    b.HasIndex("Status");
+                    b.HasIndex("Status", "ProcessingClaimExpiresAtUtc", "CreatedAt", "Id");
 
                     b.HasIndex("SourceStoredFileId");
 
@@ -5285,6 +5301,19 @@ namespace RentalCommand.Data.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ClaimToken")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("CompletedRealUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -5293,6 +5322,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<string>("Error")
                         .HasColumnType("text");
+
+                    b.Property<DateTime?>("LastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime>("RequestedSimUtc")
                         .HasColumnType("timestamp with time zone");
@@ -5312,7 +5344,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Status");
+                    b.HasIndex("Status", "ClaimExpiresAtUtc", "CreatedRealUtc", "Id");
 
                     b.ToTable("SimWorkerCommands");
                 });
