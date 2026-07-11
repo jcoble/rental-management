@@ -112,6 +112,38 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task NotReady_DoesNotPersistReceiptAndCanSucceedAfterStateChanges()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("not-ready-retry");
+        var identity = Identity(draftId);
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.ScanDrafts.Where(row => row.Id == draftId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.Status, "Processing"));
+        }
+
+        var firstAttempt = () => UnitOfWork.ExecuteAsync(
+            identity, Command(draftId, "not-ready-target"), Codec);
+
+        await firstAttempt.Should().ThrowAsync<ScanConfirmationValidationException>();
+        await using (var verifyNoReceipt = Scope())
+        {
+            (await verifyNoReceipt.Db.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+            await verifyNoReceipt.Db.ScanDrafts.Where(row => row.Id == draftId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.Status, "Reviewing"));
+        }
+
+        var retry = await UnitOfWork.ExecuteAsync(
+            identity, Command(draftId, "not-ready-target"), Codec);
+
+        retry.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        retry.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+    }
+
+    [SkippableFact]
     public async Task SimultaneousDifferentReceipts_SerializeOnDraftAndReturnCanonicalTarget()
     {
         SkipIfDockerUnavailable();

@@ -24,7 +24,8 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
         command.Target.Validate();
         if (!_targetWriter.Supports(command.Target.Kind))
         {
-            return Result(ConfirmScanDraftOutcome.UnsupportedTarget, command, error: "Target writer is not installed.");
+            throw new ScanConfirmationValidationException(
+                $"Confirmation for {command.Target.Kind} is not available yet.");
         }
 
         var claim = await attempt.ScanConfirmation.TryClaimAsync(
@@ -38,11 +39,12 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             case AtomicScanDraftClaimOutcome.NotFound:
                 return Result(ConfirmScanDraftOutcome.DraftNotFound, command, error: "Draft not found.");
             case AtomicScanDraftClaimOutcome.NotReady:
-                return Result(ConfirmScanDraftOutcome.DraftNotReady, command, error: "Draft is not ready to confirm.");
+                throw new ScanConfirmationValidationException("Draft is not ready to confirm.");
             case AtomicScanDraftClaimOutcome.Rejected:
                 return Result(ConfirmScanDraftOutcome.DraftRejected, command, error: "Draft is rejected.");
             case AtomicScanDraftClaimOutcome.TargetMismatch:
-                return Result(ConfirmScanDraftOutcome.TargetMismatch, command, error: "Draft target does not match command target.");
+                throw new ScanConfirmationValidationException(
+                    "Draft target does not match the reviewed confirmation target.");
             case AtomicScanDraftClaimOutcome.AlreadyConfirmed:
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.AlreadyConfirmed,
