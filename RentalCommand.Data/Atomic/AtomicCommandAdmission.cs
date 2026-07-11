@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Data.Common;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using RentalCommand.Core.Atomic;
@@ -370,7 +371,10 @@ internal static class AtomicCommandAdmission
         // (for example <>z__ReadOnlySingleElementList<T>) even when the declared command member is
         // IReadOnlyList<T>. Admit only framework-owned implementations of an already approved
         // collection interface; arbitrary application-defined enumerable objects remain rejected.
-        return type.Assembly == typeof(List<>).Assembly
+        var frameworkOwned = type.Assembly == typeof(List<>).Assembly;
+        var compilerGenerated = type.IsSealed
+            && type.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false);
+        return (frameworkOwned || compilerGenerated)
             && type.GetInterfaces().Any(IsAllowedCollection);
     }
 
