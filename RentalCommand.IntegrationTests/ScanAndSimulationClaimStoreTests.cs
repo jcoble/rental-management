@@ -1,9 +1,11 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
 using RentalCommand.Data.Simulation;
+using RentalCommand.Engine.Data;
 using Testcontainers.PostgreSql;
 
 namespace RentalCommand.IntegrationTests;
@@ -86,6 +88,33 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Scan_claim_opens_through_ef_so_engine_rls_session_is_applied()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now);
+        await SeedScansAsync(portfolioId, now, 1);
+
+        var apiRoleConnection = new NpgsqlConnectionStringBuilder(_connectionString)
+        {
+            Username = "rentalcommand_api",
+            Password = "rentalcommand_api_dev",
+        }.ConnectionString;
+
+        await using (var failClosed = NewContext(apiRoleConnection))
+        {
+            (await new ScanProcessingClaimStore(failClosed)
+                .ClaimAsync("no-engine-context", now, TimeSpan.FromMinutes(2), 1))
+                .Should().BeEmpty();
+        }
+
+        await using var engineContext = NewContext(apiRoleConnection, new EngineRlsInterceptor());
+        (await new ScanProcessingClaimStore(engineContext)
+            .ClaimAsync("engine-context", now, TimeSpan.FromMinutes(2), 1))
+            .Should().ContainSingle();
+    }
+
+    [SkippableFact]
     public async Task Simulation_claim_is_exclusive_reclaimable_and_fenced()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
@@ -158,8 +187,17 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         await db.SaveChangesAsync();
     }
 
-    private RentalCommandDbContext NewContext() =>
-        new(new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseNpgsql(_connectionString)
-            .Options);
+    private RentalCommandDbContext NewContext(
+        string? connectionString = null,
+        EngineRlsInterceptor? rlsInterceptor = null)
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(connectionString ?? _connectionString);
+        if (rlsInterceptor is not null)
+        {
+            options.AddInterceptors(rlsInterceptor);
+        }
+
+        return new RentalCommandDbContext(options.Options);
+    }
 }

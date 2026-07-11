@@ -85,7 +85,12 @@ public sealed class ScanProcessingClaimStore : IScanProcessingClaimStore
         var now = AsUtc(nowUtc);
         var connection = _db.Database.GetDbConnection();
         var closeWhenDone = connection.State != ConnectionState.Open;
-        if (closeWhenDone) await connection.OpenAsync(ct);
+        if (closeWhenDone)
+        {
+            // Open through EF so configured connection interceptors establish the Engine's RLS
+            // actor/session context before the raw one-statement claim executes.
+            await _db.Database.OpenConnectionAsync(ct);
+        }
 
         try
         {
@@ -117,7 +122,7 @@ public sealed class ScanProcessingClaimStore : IScanProcessingClaimStore
         }
         finally
         {
-            if (closeWhenDone) await connection.CloseAsync();
+            if (closeWhenDone) await _db.Database.CloseConnectionAsync();
         }
     }
 
