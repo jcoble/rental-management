@@ -177,20 +177,20 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         int decoyFileId;
         await using (var arrange = Scope())
         {
-            var draft = await arrange.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId);
-            var decoy = new StoredFile
+            var arrangedDraft = await arrange.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId);
+            var decoyFile = new StoredFile
             {
                 PortfolioId = _portfolioId,
                 FileName = "same-path-decoy.jpg",
-                FilePath = draft.FilePath,
+                FilePath = arrangedDraft.FilePath,
                 ContentType = "image/jpeg",
                 FileSize = 100,
                 EntityType = "Expense",
                 UploadedAt = CommandTime.AddMinutes(-4),
             };
-            arrange.Db.StoredFiles.Add(decoy);
+            arrange.Db.StoredFiles.Add(decoyFile);
             await arrange.Db.SaveChangesAsync();
-            decoyFileId = decoy.Id;
+            decoyFileId = decoyFile.Id;
         }
 
         var outcome = await UnitOfWork.ExecuteAsync(
