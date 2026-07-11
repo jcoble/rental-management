@@ -53,9 +53,9 @@ internal static class AtomicCommandAdmission
     private static void ValidateCommandValue(object value, HashSet<object> visited)
     {
         var type = value.GetType();
-        ValidateCommandType(type, "command input", []);
         if (IsScalar(type))
         {
+            ValidateCommandType(type, "command input", []);
             return;
         }
 
@@ -66,7 +66,8 @@ internal static class AtomicCommandAdmission
 
         if (value is IEnumerable sequence && value is not string)
         {
-            if (!IsAllowedCollection(type))
+            RejectForbiddenType(type, "command collection value");
+            if (!IsAllowedRuntimeCollection(type))
             {
                 throw new AtomicArchitectureException(
                     $"Atomic command collection type {type.FullName} is not an approved data-only shape.");
@@ -83,6 +84,7 @@ internal static class AtomicCommandAdmission
             return;
         }
 
+        ValidateCommandType(type, "command input", []);
         if (value is not IAtomicCommandData)
         {
             throw new AtomicArchitectureException(
@@ -158,9 +160,9 @@ internal static class AtomicCommandAdmission
     private static void ValidateResultValue(object value, HashSet<object> visited)
     {
         var type = value.GetType();
-        ValidateResultType(type, "result value", []);
         if (IsScalar(type))
         {
+            ValidateResultType(type, "result value", []);
             return;
         }
 
@@ -171,6 +173,13 @@ internal static class AtomicCommandAdmission
 
         if (value is IEnumerable sequence && value is not string)
         {
+            RejectForbiddenType(type, "result collection value");
+            if (!IsAllowedRuntimeCollection(type))
+            {
+                throw new AtomicArchitectureException(
+                    $"Atomic result collection type {type.FullName} is not an approved data-only shape.");
+            }
+
             foreach (var item in sequence)
             {
                 if (item is not null)
@@ -182,6 +191,7 @@ internal static class AtomicCommandAdmission
             return;
         }
 
+        ValidateResultType(type, "result value", []);
         foreach (var field in InstanceFields(type))
         {
             if (field.GetValue(value) is { } memberValue)
@@ -347,6 +357,21 @@ internal static class AtomicCommandAdmission
             || definition == typeof(IReadOnlyCollection<>)
             || definition == typeof(IEnumerable<>)
             || definition == typeof(HashSet<>);
+    }
+
+    private static bool IsAllowedRuntimeCollection(Type type)
+    {
+        if (IsAllowedCollection(type))
+        {
+            return true;
+        }
+
+        // C# collection expressions can materialize as internal CoreLib read-only list types
+        // (for example <>z__ReadOnlySingleElementList<T>) even when the declared command member is
+        // IReadOnlyList<T>. Admit only framework-owned implementations of an already approved
+        // collection interface; arbitrary application-defined enumerable objects remain rejected.
+        return type.Assembly == typeof(List<>).Assembly
+            && type.GetInterfaces().Any(IsAllowedCollection);
     }
 
     private static IEnumerable<FieldInfo> InstanceFields(Type type)
