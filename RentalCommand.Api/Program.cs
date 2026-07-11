@@ -182,6 +182,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.RotateSessionRefreshCredentialCommand,
     RentalCommand.Core.Auth.SessionRefreshMutationResult,
     RentalCommand.Data.Auth.RotateSessionRefreshCredentialHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventCommand,
+    RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventResult,
+    RentalCommand.Data.Payments.RecordVerifiedProviderPaymentEventHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so

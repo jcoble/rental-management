@@ -177,7 +177,8 @@ public class SandboxGuardAndSeederTests : IDisposable
             Options.Create(config),
             new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            new UnexpectedAtomicUnitOfWork());
     }
 
     private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int portfolioId, int tenantId, decimal amount = 1000m)
