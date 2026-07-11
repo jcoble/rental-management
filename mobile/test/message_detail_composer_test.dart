@@ -94,7 +94,9 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), 'Please retry this message.');
-    await tester.tap(find.byIcon(Icons.send));
+    final sendButton = find.byKey(const Key('message-send-button'));
+    expect(sendButton, findsOneWidget);
+    await tester.tap(sendButton);
     await tester.pumpAndSettle();
 
     expect(repository.operationKeys, hasLength(1));
@@ -102,7 +104,11 @@ void main() {
     expect(firstOperationKey, isNotNull);
     expect(firstOperationKey, isNotEmpty);
 
-    await tester.tap(find.byIcon(Icons.send));
+    ScaffoldMessenger.of(
+      tester.element(find.byType(Scaffold)),
+    ).hideCurrentSnackBar();
+    await tester.pumpAndSettle();
+    await tester.tap(sendButton);
     await tester.pumpAndSettle();
 
     expect(repository.operationKeys, [firstOperationKey, firstOperationKey]);
