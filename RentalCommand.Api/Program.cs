@@ -198,6 +198,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventCommand,
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventResult,
     RentalCommand.Data.Payments.RecordVerifiedProviderPaymentEventHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Accounting.ConfirmAccountingMappingCommand,
+    RentalCommand.Core.Accounting.ConfirmAccountingMappingResult,
+    RentalCommand.Data.Accounting.ConfirmAccountingMappingHandler>();
 // The writer intentionally supports only the five completed non-lease targets. There is no API
 // call site yet; ScanService continues to own confirmation until the lease aggregate writer and the
 // post-commit notification adapter are ready, preventing a partial old/new production path.

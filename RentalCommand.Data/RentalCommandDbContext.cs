@@ -116,6 +116,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<AccountingEntityMapping> AccountingEntityMappings => Set<AccountingEntityMapping>();
     public DbSet<AccountingSyncMap> AccountingSyncMaps => Set<AccountingSyncMap>();
+    public DbSet<AccountingParkedTransaction> AccountingParkedTransactions => Set<AccountingParkedTransaction>();
 
     /// <summary>Single-row (Id = 1) controllable simulation clock — non-prod only. Global (no RLS policy).</summary>
     public DbSet<SimulationClock> SimulationClocks => Set<SimulationClock>();
@@ -638,6 +639,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // The idempotency ledger key (AC-5): one row per external txn per direction.
             entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.Direction, e.ExternalType, e.ExternalId })
                 .IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.ExternalType, e.Id })
+                .HasDatabaseName("IX_AccountingSyncMaps_ParkedPromotion")
+                .HasFilter("\"LocalEntityId\" IS NULL AND \"Direction\" = 'Import' AND \"Status\" IN ('NeedsReview', 'Unmatched')");
             entity.HasOne(e => e.AccountingConnection)
                 .WithMany()
                 .HasForeignKey(e => e.AccountingConnectionId)
@@ -646,6 +650,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingParkedTransaction>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_accounting_parked_transactions");
         });
 
         modelBuilder.Entity<NoticeDraft>(entity =>

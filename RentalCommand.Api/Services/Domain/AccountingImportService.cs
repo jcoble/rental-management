@@ -254,50 +254,6 @@ public sealed class AccountingImportService
         return new ImportSummary(customers, vendors, accounts, payments, expenses, review);
     }
 
-    /// <summary>
-    /// Re-run the transaction import for the rows that were parked as <c>NeedsReview</c>/<c>Unmatched</c>
-    /// for a now-confirmed mapping. Called after the landlord confirms an entity mapping so the pending
-    /// money-in/out for that external entity flows into the domain without a full re-pull. DB-side:
-    /// each retry lane reloads only its relevant parked external type rows.
-    /// </summary>
-    public async Task<int> RetryPendingForConnectionAsync(AccountingConnection connection, CancellationToken ct)
-    {
-        var parkedQuery = _db.AccountingSyncMaps
-            .Where(m => m.PortfolioId == connection.PortfolioId
-                && m.AccountingConnectionId == connection.Id
-                && m.Direction == LedgerDirection.Import
-                && (m.Status == LedgerStatus.NeedsReview || m.Status == LedgerStatus.Unmatched)
-                && m.LocalEntityId == null);
-
-        // Rehydrate the minimal external shape from the stored metadata so we can re-resolve. We stored
-        // the raw QBO element in MetadataJson at first sight; re-decode it for the second attempt.
-        var paymentRows = await parkedQuery
-            .Where(m => m.ExternalType == ExternalKind.Payment)
-            .ToListAsync(ct);
-        var expenseRows = await parkedQuery
-            .Where(m => m.ExternalType == ExternalKind.Purchase || m.ExternalType == ExternalKind.Bill)
-            .ToListAsync(ct);
-
-        int promoted = 0;
-        if (paymentRows.Count > 0)
-        {
-            promoted += await PromoteParkedPaymentsAsync(connection, paymentRows, ct);
-        }
-
-        if (expenseRows.Count > 0)
-        {
-            promoted += await PromoteParkedExpensesAsync(connection, expenseRows, ct);
-        }
-
-        if (promoted > 0)
-        {
-            connection.UpdatedAt = _timeProvider.UtcNow();
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return promoted;
-    }
-
     // =====================================================================================
     // Reference-entity mapping (Customer→Tenant, Vendor→Vendor, Account/Class→Property/Category)
     // =====================================================================================
@@ -635,109 +591,6 @@ public sealed class AccountingImportService
     }
 
     // =====================================================================================
-    // Promote parked rows after a mapping is confirmed
-    // =====================================================================================
-
-    private async Task<int> PromoteParkedPaymentsAsync(
-        AccountingConnection conn, List<AccountingSyncMap> parked, CancellationToken ct)
-    {
-        var customerToTenant = await LoadConfirmedMapAsync(conn, ExternalKind.Customer, LocalEntityKind.Tenant, ct);
-        var tenantActiveLease = await LoadActiveLeaseByTenantAsync(conn.PortfolioId, ct);
-        var depositAccountIds = await LoadDepositAccountExternalIdsAsync(conn, ct);
-
-        int promoted = 0;
-        foreach (var row in parked)
-        {
-            var dto = DeserializePayment(row);
-            if (dto == null)
-            {
-                continue;
-            }
-
-            int? tenantId = dto.CustomerExternalId != null
-                && customerToTenant.TryGetValue(dto.CustomerExternalId, out var t) ? t : null;
-            int? leaseId = tenantId != null && tenantActiveLease.TryGetValue(tenantId.Value, out var l) ? l : null;
-            if (leaseId == null)
-            {
-                continue; // still unresolved — leave it parked
-            }
-
-            var payment = new Payment
-            {
-                PortfolioId = conn.PortfolioId,
-                LeaseId = leaseId.Value,
-                PaymentType = IsDepositPayment(dto, depositAccountIds) ? PaymentType.SecurityDeposit : PaymentType.Rent,
-                Status = PaymentStatus.Paid,
-                Amount = dto.Amount,
-                DueDate = dto.TxnDateUtc,
-                PaidDate = dto.TxnDateUtc,
-                Method = dto.PaymentMethod,
-                ExternalReference = dto.ReferenceNumber ?? dto.ExternalId,
-                CreatedAt = _timeProvider.UtcNow(),
-                UpdatedAt = _timeProvider.UtcNow(),
-            };
-            _db.Payments.Add(payment);
-            await _db.SaveChangesAsync(ct);
-
-            MarkImported(row, LocalEntityKind.Payment, payment.Id);
-            promoted++;
-        }
-
-        return promoted;
-    }
-
-    private async Task<int> PromoteParkedExpensesAsync(
-        AccountingConnection conn, List<AccountingSyncMap> parked, CancellationToken ct)
-    {
-        var vendorMap = await LoadConfirmedMapAsync(conn, ExternalKind.Vendor, LocalEntityKind.Vendor, ct);
-        var classToProperty = await LoadConfirmedMapAsync(conn, ExternalKind.Class, LocalEntityKind.Property, ct);
-        var accountToCategory = await LoadConfirmedEnumMapAsync(conn, ExternalKind.Account, LocalEntityKind.ScheduleECategory, ct);
-
-        int promoted = 0;
-        foreach (var row in parked)
-        {
-            var dto = DeserializeExpense(row);
-            if (dto == null)
-            {
-                continue;
-            }
-
-            int? vendorId = dto.VendorExternalId != null && vendorMap.TryGetValue(dto.VendorExternalId, out var v) ? v : null;
-            int? propertyId = dto.ClassExternalId != null && classToProperty.TryGetValue(dto.ClassExternalId, out var p) ? p : null;
-            ScheduleECategory category = dto.AccountExternalId != null
-                && accountToCategory.TryGetValue(dto.AccountExternalId, out var cat) ? cat : ScheduleECategory.Other;
-
-            if (category == ScheduleECategory.Depreciation
-                || (vendorId == null && propertyId == null && category == ScheduleECategory.Other))
-            {
-                continue; // still skipped / unresolved
-            }
-
-            var expense = new Expense
-            {
-                PortfolioId = conn.PortfolioId,
-                PropertyId = propertyId,
-                VendorId = vendorId,
-                Category = category,
-                Status = ExpenseStatus.Paid,
-                Amount = dto.Amount,
-                IncurredAt = dto.TxnDateUtc,
-                PaidAt = dto.TxnDateUtc,
-                Description = BuildExpenseDescription(dto),
-                CreatedAt = _timeProvider.UtcNow(),
-                UpdatedAt = _timeProvider.UtcNow(),
-            };
-            _db.Expenses.Add(expense);
-            await _db.SaveChangesAsync(ct);
-
-            MarkImported(row, LocalEntityKind.Expense, expense.Id);
-            promoted++;
-        }
-
-        return promoted;
-    }
-
-    // =====================================================================================
     // Mapping persistence helpers
     // =====================================================================================
 
@@ -976,17 +829,6 @@ public sealed class AccountingImportService
         });
     }
 
-    private void MarkImported(AccountingSyncMap row, string localType, int localId)
-    {
-        row.Status = LedgerStatus.Imported;
-        row.LocalEntityType = localType;
-        row.LocalEntityId = localId;
-        row.AttemptCount += 1;
-        row.LastError = null;
-        row.LastAttemptAt = _timeProvider.UtcNow();
-        row.UpdatedAt = _timeProvider.UtcNow();
-    }
-
     // =====================================================================================
     // Misc helpers
     // =====================================================================================
@@ -1045,29 +887,6 @@ public sealed class AccountingImportService
     // never re-parses provider-shaped JSON (which would silently mis-read a different provider's payload).
 
     private static string SerializeParked<T>(T dto) => JsonSerializer.Serialize(dto);
-
-    private static ExtPaymentDto? DeserializePayment(AccountingSyncMap row)
-        => DeserializeNeutral<ExtPaymentDto>(row.MetadataJson);
-
-    private static ExtExpenseDto? DeserializeExpense(AccountingSyncMap row)
-        => DeserializeNeutral<ExtExpenseDto>(row.MetadataJson);
-
-    private static T? DeserializeNeutral<T>(string? json) where T : class
-    {
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return null;
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<T>(json);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
 
     private static Dictionary<string, DateTime> ParseCursors(string? json)
     {

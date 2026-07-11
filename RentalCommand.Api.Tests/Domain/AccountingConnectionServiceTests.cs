@@ -200,6 +200,7 @@ public class AccountingConnectionServiceTests : IDisposable
         return new AccountingConnectionService(
             _ctx.Db, _dp, providerResolver, settingsResolver, importService,
             TimeProvider.System,
+            null!,
             NullLogger<AccountingConnectionService>.Instance);
     }
 

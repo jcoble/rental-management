@@ -98,6 +98,7 @@ public enum AtomicLockResource
     RefreshTokenFamily = 4,
     ScanDraft = 5,
     VendorDispatch = 6,
+    AccountingConnection = 7,
 }
 
 public enum AtomicScanDraftClaimOutcome
