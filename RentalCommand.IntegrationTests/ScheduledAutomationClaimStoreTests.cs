@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -115,6 +117,109 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
             "expense-replacement", now, now, TimeSpan.FromMinutes(2), 1)).Single();
         replacement.Id.Should().Be(first.Id);
         replacement.ClaimToken.Should().NotBe(first.ClaimToken);
+
+        var originalBatch = batches.Single(batch => batch.Any(claim => claim.Id == first.Id));
+        await using var fenced = NewContext();
+        await using var tx = await fenced.Database.BeginTransactionAsync();
+        var stillOwned = await new ScheduledAutomationClaimStore(fenced)
+            .LockOwnedRecurringExpensesAsync(originalBatch, now);
+        stillOwned.Should().HaveCount(originalBatch.Count - 1);
+        stillOwned.Should().NotContain(row => row.Id == first.Id);
+        await tx.RollbackAsync();
+    }
+
+    [SkippableFact]
+    public async Task Maintenance_master_switch_is_enforced_by_claim_and_lock_queries()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var (portfolioId, propertyId) = await SeedScopeAsync(now);
+
+        await using (var seed = NewContext())
+        {
+            seed.NotificationSettings.Add(new NotificationSettings
+            {
+                PortfolioId = portfolioId,
+                EnableRecurringMaintenance = false,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            seed.RecurringMaintenanceTasks.Add(Maintenance(portfolioId, propertyId, now.AddDays(-1), true));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = NewContext();
+        var store = new ScheduledAutomationClaimStore(db);
+        (await store.ClaimRecurringMaintenanceAsync(
+            "maintenance-disabled", now, now, TimeSpan.FromMinutes(2), 25)).Should().BeEmpty();
+
+        await db.NotificationSettings
+            .Where(row => row.PortfolioId == portfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.EnableRecurringMaintenance, true)
+                .SetProperty(row => row.UpdatedAt, now));
+
+        var claims = await store.ClaimRecurringMaintenanceAsync(
+            "maintenance-enabled", now, now, TimeSpan.FromMinutes(2), 25);
+        claims.Should().ContainSingle();
+
+        await db.NotificationSettings
+            .Where(row => row.PortfolioId == portfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.EnableRecurringMaintenance, false)
+                .SetProperty(row => row.UpdatedAt, now));
+
+        await using var tx = await db.Database.BeginTransactionAsync();
+        (await store.LockOwnedRecurringMaintenanceAsync(claims, now)).Should().BeEmpty();
+        await tx.RollbackAsync();
+    }
+
+    [SkippableFact]
+    public async Task Loan_batch_lock_and_tail_projection_use_two_reads_regardless_of_batch_size()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var (portfolioId, propertyId) = await SeedScopeAsync(now);
+
+        await using (var seed = NewContext())
+        {
+            var loans = Enumerable.Range(0, 3)
+                .Select(_ => Loan(portfolioId, propertyId, now.AddMonths(-2), LoanStatus.Active))
+                .ToArray();
+            seed.Loans.AddRange(loans);
+            await seed.SaveChangesAsync();
+
+            seed.LoanPayments.AddRange(loans.Select(loan => new LoanPayment
+            {
+                PortfolioId = portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = now.AddMonths(-2).ToString("yyyy-MM"),
+                DueDate = now.AddMonths(-2),
+                InterestAmount = 100m,
+                PrincipalAmount = 500m,
+                TotalAmount = 600m,
+                BalanceAfter = 99_500m,
+                CreatedAt = now,
+            }));
+            await seed.SaveChangesAsync();
+        }
+
+        var counter = new ReaderCommandCounter();
+        await using var db = NewContext(counter);
+        var store = new ScheduledAutomationClaimStore(db);
+        var claims = await store.ClaimDebtServiceAsync(
+            "debt-batch", now, now, TimeSpan.FromMinutes(2), 25);
+        claims.Should().HaveCount(3);
+
+        counter.Reset();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        var locked = await store.LockOwnedLoansAsync(claims, now);
+        var tails = await store.LoadLoanTailsAsync(locked.Select(loan => loan.Id).ToArray());
+
+        locked.Should().HaveCount(3);
+        tails.Should().HaveCount(3);
+        counter.ReaderCommands.Should().Be(2);
+        await tx.RollbackAsync();
     }
 
     private async Task<(int PortfolioId, int PropertyId)> SeedScopeAsync(DateTime now)
@@ -184,8 +289,38 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         UpdatedAt = due,
     };
 
-    private RentalCommandDbContext NewContext() => new(
-        new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseNpgsql(_connectionString)
-            .Options);
+    private RentalCommandDbContext NewContext(IInterceptor? interceptor = null)
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(_connectionString);
+        if (interceptor is not null)
+            options.AddInterceptors(interceptor);
+        return new RentalCommandDbContext(options.Options);
+    }
+
+    private sealed class ReaderCommandCounter : DbCommandInterceptor
+    {
+        private int _readerCommands;
+        public int ReaderCommands => Volatile.Read(ref _readerCommands);
+        public void Reset() => Interlocked.Exchange(ref _readerCommands, 0);
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            Interlocked.Increment(ref _readerCommands);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _readerCommands);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }

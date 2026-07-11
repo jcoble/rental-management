@@ -459,6 +459,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.DailyBriefingSmsRecipientsCipherText).HasMaxLength(4000);
             entity.Property(e => e.DailyBriefingEmailRecipientsCipherText).HasMaxLength(4000);
             entity.Property(e => e.EnableLeaseExpiryReminders).HasDefaultValue(true);
+            entity.Property(e => e.EnableRecurringMaintenance).HasDefaultValue(true);
             entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
             entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
             entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);

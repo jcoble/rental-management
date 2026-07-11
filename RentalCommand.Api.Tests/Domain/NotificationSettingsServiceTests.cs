@@ -33,6 +33,7 @@ public class NotificationSettingsServiceTests : IDisposable
             LateFeeGraceDays = 3,
             LeaseExpiryReminderDays = 45,
             EnableDailyBriefingMessages = true,
+            EnableRecurringMaintenance = false,
             DailyBriefingSendHourLocal = 8,
             DailyBriefingIncludeEmpty = false,
             DailyBriefingSmsRecipients = ["+13303966191"],
@@ -61,6 +62,7 @@ public class NotificationSettingsServiceTests : IDisposable
 
         var admin = await sut.GetAdminAsync(portfolioId);
         admin.EnableRentCharges.Should().BeTrue();
+        admin.EnableRecurringMaintenance.Should().BeFalse();
         admin.SmsProvider.Should().Be("SignalWire");
         admin.SmsFromNumber.Should().Be("+13302933081");
         admin.SmsCredentialASet.Should().BeTrue();
@@ -82,6 +84,7 @@ public class NotificationSettingsServiceTests : IDisposable
 
         var runtime = await sut.GetRuntimeAsync(portfolioId);
         runtime.RentChargeLeadDays.Should().Be(7);
+        runtime.EnableRecurringMaintenance.Should().BeFalse();
         runtime.DailyBriefing.SmsRecipients.Should().ContainSingle().Which.Should().Be("+13303966191");
     }
 

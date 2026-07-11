@@ -56,6 +56,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row.LateFeeGraceDays = Math.Clamp(request.LateFeeGraceDays, 0, 60);
         row.LeaseExpiryReminderDays = Math.Clamp(request.LeaseExpiryReminderDays, 1, 365);
         row.EnableDailyBriefingMessages = request.EnableDailyBriefingMessages;
+        row.EnableRecurringMaintenance = request.EnableRecurringMaintenance;
         row.DailyBriefingSendHourLocal = Math.Clamp(request.DailyBriefingSendHourLocal, 0, 23);
         row.DailyBriefingIncludeEmpty = request.DailyBriefingIncludeEmpty;
         row.AutoSendRentReminder = request.AutoSendRentReminder;
@@ -97,6 +98,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
             LateFeeGraceDays = row.LateFeeGraceDays,
             LeaseExpiryReminderDays = row.LeaseExpiryReminderDays,
             EnableDailyBriefingMessages = row.EnableDailyBriefingMessages,
+            EnableRecurringMaintenance = row.EnableRecurringMaintenance,
             DailyBriefing = new DailyBriefingOptions
             {
                 SendHourLocal = row.DailyBriefingSendHourLocal,
@@ -225,6 +227,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                     "LateFeeGraceDays",
                     "LeaseExpiryReminderDays",
                     "EnableDailyBriefingMessages",
+                    "EnableRecurringMaintenance",
                     "DailyBriefingSendHourLocal",
                     "DailyBriefingIncludeEmpty",
                     "CreatedAt",
@@ -239,6 +242,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                     {5},
                     {60},
                     {false},
+                    {true},
                     {8},
                     {false},
                     {now},
@@ -254,6 +258,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         {
             PortfolioId = portfolioId,
             EnableLeaseExpiryReminders = true,
+            EnableRecurringMaintenance = true,
             RentChargeLeadDays = 5,
             LateFeeGraceDays = 5,
             LeaseExpiryReminderDays = 60,
@@ -374,6 +379,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         LateFeeGraceDays = row.LateFeeGraceDays,
         LeaseExpiryReminderDays = row.LeaseExpiryReminderDays,
         EnableDailyBriefingMessages = row.EnableDailyBriefingMessages,
+        EnableRecurringMaintenance = row.EnableRecurringMaintenance,
         DailyBriefingSendHourLocal = row.DailyBriefingSendHourLocal,
         DailyBriefingIncludeEmpty = row.DailyBriefingIncludeEmpty,
         DailyBriefingSmsRecipients = UnprotectArray(row.DailyBriefingSmsRecipientsCipherText),

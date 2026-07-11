@@ -3,7 +3,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Simulation;
-using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -120,6 +119,21 @@ public class RecurringMaintenanceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task MasterFlagDisabled_GeneratesNothing()
+    {
+        var today = DateTime.UtcNow.Date;
+        var property = SeedProperty();
+        SeedTask(property.Id, RecurrenceInterval.Monthly, today, isActive: true);
+
+        var sut = BuildService(enable: false);
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(0);
+        _ctx.Db.WorkOrders.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BackloggedTask_GeneratesOnlyOne_AndCatchesUpPastToday()
     {
         // A task that fell several weeks behind (Engine was down) should produce exactly ONE work
@@ -148,6 +162,25 @@ public class RecurringMaintenanceServiceTests : IDisposable
 
     private RecurringMaintenanceService BuildService(bool enable)
     {
+        var now = DateTime.UtcNow;
+        var settings = _ctx.Db.NotificationSettings.SingleOrDefault(row => row.PortfolioId == PortfolioId);
+        if (settings is null)
+        {
+            _ctx.Db.NotificationSettings.Add(new NotificationSettings
+            {
+                PortfolioId = PortfolioId,
+                EnableRecurringMaintenance = enable,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        else
+        {
+            settings.EnableRecurringMaintenance = enable;
+            settings.UpdatedAt = now;
+        }
+        _ctx.Db.SaveChanges();
+
         return new RecurringMaintenanceService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
