@@ -71,7 +71,7 @@
 
 	// --- Text W-9 request ---
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: () => vendors.requestW9(id),
+		mutationFn: (clientOperationId: string) => vendors.requestW9(id, clientOperationId),
 		onSuccess: (res) => {
 			showSuccess(`W-9 request texted to ${res.sentTo}.`);
 		},
@@ -181,7 +181,7 @@
 					variant="outline"
 					size="sm"
 					data-testid="vendor-request-w9-button"
-					onclick={() => requestW9Mutation.mutate()}
+					onclick={() => requestW9Mutation.mutate(crypto.randomUUID())}
 					disabled={requestW9Mutation.isPending}
 				>
 					<MessageSquare class="h-4 w-4" />

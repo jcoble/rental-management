@@ -20,7 +20,12 @@ public interface IVendorService
     /// Sending the text is the action — nothing is persisted on the vendor. Returns an outcome that drives
     /// the HTTP mapping (not found / no phone on file / queued).
     /// </summary>
-    Task<RequestW9Result> RequestW9Async(int portfolioId, int id, int? changedByUserId, CancellationToken ct = default);
+    Task<RequestW9Result> RequestW9Async(
+        int portfolioId,
+        int id,
+        string clientOperationId,
+        int? changedByUserId,
+        CancellationToken ct = default);
 }
 
 /// <summary>Outcome of a W-9 request attempt; <see cref="RequestW9Outcome"/> drives the HTTP mapping.</summary>

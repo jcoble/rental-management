@@ -72,6 +72,15 @@ public class VendorListResponse
     public int Take { get; set; }
 }
 
+/// <summary>Retry-stable identity for one deliberate W-9 text request.</summary>
+public sealed class RequestVendorW9Request
+{
+    [Required]
+    [StringLength(160, MinimumLength = 1)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
+}
+
 /// <summary>Body for <c>POST /api/v1/vendors/{id}/ratings</c>: a 1–5 star rating of a vendor.</summary>
 public class CreateVendorRatingRequest
 {

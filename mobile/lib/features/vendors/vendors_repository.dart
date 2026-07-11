@@ -157,10 +157,14 @@ class VendorsRepository {
 
   /// Texts the vendor a request to send back their W-9. Throws [ApiException]
   /// (400) when the vendor has no phone number on file.
-  Future<W9RequestResult> requestW9(int vendorId) async {
+  Future<W9RequestResult> requestW9(
+    int vendorId, {
+    required String clientOperationId,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/vendors/$vendorId/request-w9',
+        data: {'clientOperationId': clientOperationId},
       );
       return W9RequestResult.fromJson(response.data ?? const {});
     } on DioException catch (e) {

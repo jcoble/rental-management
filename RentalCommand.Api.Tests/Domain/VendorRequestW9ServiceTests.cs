@@ -1,32 +1,52 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Vendors;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Vendors;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-/// <summary>
-/// Covers the W-9 text request: enqueues an SMS for a vendor with a phone on file, and refuses (no SMS)
-/// when the vendor has no phone or does not exist.
-/// </summary>
-public class VendorRequestW9ServiceTests : IDisposable
+public sealed class VendorRequestW9ServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
-
     private readonly SqliteTestContext _ctx = new();
+    private readonly ServiceProvider _services;
 
-    public void Dispose() => _ctx.Dispose();
+    public VendorRequestW9ServiceTests()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            RequestVendorW9Command,
+            RequestVendorW9Result,
+            RequestVendorW9Handler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+    }
 
-    private VendorService CreateSut(Mock<IMessagePublisher>? publisher = null) => new(
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
+
+    private VendorService CreateSut() => new(
         _ctx.Db,
         Mock.Of<IDataUpdateService>(),
-        (publisher ?? new Mock<IMessagePublisher>()).Object,
-        Mock.Of<IAuditTrailService>(),
-        Mock.Of<ILogger<VendorService>>(),
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
         TimeProvider.System);
 
     private Vendor SeedVendor(string? phone)
@@ -48,67 +68,67 @@ public class VendorRequestW9ServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task RequestW9_EnqueuesSms_WhenVendorHasPhone()
+    public async Task RequestW9_AtomicallyQueuesOneSmsAuditAndReceipt_AndReplays()
     {
         var vendor = SeedVendor("(614) 555-0142");
-        var publisher = new Mock<IMessagePublisher>();
-        var sut = CreateSut(publisher);
+        var sut = CreateSut();
 
-        var result = await sut.RequestW9Async(PortfolioId, vendor.Id, changedByUserId: 7);
+        var first = await sut.RequestW9Async(PortfolioId, vendor.Id, "stable-op", 7);
+        var replay = await sut.RequestW9Async(PortfolioId, vendor.Id, "stable-op", 7);
 
-        result.Outcome.Should().Be(RequestW9Outcome.Queued);
-        result.Phone.Should().Be("+16145550142"); // normalized E.164
-
-        publisher.Verify(p => p.PublishAsync(
-            PortfolioId,
-            "sms",
-            It.IsAny<string>(),
-            It.IsAny<object>(),
-            It.IsAny<CancellationToken>()), Times.Once);
+        first.Should().BeEquivalentTo(RequestW9Result.Queued("+16145550142"));
+        replay.Should().BeEquivalentTo(first);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(1);
+        var outbox = await _ctx.Db.OutboxMessages.SingleAsync();
+        outbox.MessageType.Should().Be("sms");
+        using var payload = JsonDocument.Parse(outbox.Payload);
+        payload.RootElement.GetProperty("to").GetString().Should().Be("+16145550142");
     }
 
     [Fact]
-    public async Task RequestW9_ReturnsNoPhone_AndDoesNotSend_WhenVendorHasNoPhone()
+    public async Task RequestW9_DifferentOperationIds_AreDeliberateSeparateRequests()
     {
-        var vendor = SeedVendor(phone: null);
-        var publisher = new Mock<IMessagePublisher>();
-        var sut = CreateSut(publisher);
+        var vendor = SeedVendor("+16145550142");
+        var sut = CreateSut();
 
-        var result = await sut.RequestW9Async(PortfolioId, vendor.Id, changedByUserId: 7);
+        await sut.RequestW9Async(PortfolioId, vendor.Id, "first-action", 7);
+        await sut.RequestW9Async(PortfolioId, vendor.Id, "second-action", 7);
+
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(2);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync()).Should().Be(2);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RequestW9_ReturnsNoPhoneWithReceipt_AndNoIntentOrAudit()
+    {
+        var vendor = SeedVendor(null);
+
+        var result = await CreateSut().RequestW9Async(PortfolioId, vendor.Id, "no-phone", 7);
 
         result.Outcome.Should().Be(RequestW9Outcome.VendorHasNoPhone);
-        publisher.Verify(p => p.PublishAsync(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync()).Should().Be(0);
     }
 
-    [Fact]
-    public async Task RequestW9_ReturnsNotFound_ForUnknownVendor()
+    [Theory]
+    [InlineData(1, 9999)]
+    [InlineData(999, 1)]
+    public async Task RequestW9_ReturnsNotFoundWithoutCrossPortfolioSideEffects(
+        int portfolioId,
+        int vendorSelector)
     {
-        var publisher = new Mock<IMessagePublisher>();
-        var sut = CreateSut(publisher);
+        var vendor = SeedVendor("+16145550142");
+        var vendorId = vendorSelector == 1 ? vendor.Id : vendorSelector;
 
-        var result = await sut.RequestW9Async(PortfolioId, id: 9999, changedByUserId: 7);
+        var result = await CreateSut().RequestW9Async(
+            portfolioId, vendorId, $"not-found-{portfolioId}", 7);
 
         result.Outcome.Should().Be(RequestW9Outcome.NotFound);
-        publisher.Verify(p => p.PublishAsync(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Fact]
-    public async Task RequestW9_DoesNotCrossPortfolios()
-    {
-        var vendor = SeedVendor("(614) 555-0142");
-        var publisher = new Mock<IMessagePublisher>();
-        var sut = CreateSut(publisher);
-
-        // Same vendor id, but a different portfolio scope → not found, no SMS.
-        var result = await sut.RequestW9Async(portfolioId: 999, vendor.Id, changedByUserId: 7);
-
-        result.Outcome.Should().Be(RequestW9Outcome.NotFound);
-        publisher.Verify(p => p.PublishAsync(
-            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync()).Should().Be(0);
     }
 }

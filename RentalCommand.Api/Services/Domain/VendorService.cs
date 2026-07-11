@@ -1,12 +1,14 @@
-using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
+using RentalCommand.Core.Vendors;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -15,27 +17,23 @@ namespace RentalCommand.Api.Services.Domain;
 public class VendorService : IVendorService
 {
     private const string EntityType = "Vendor";
+    private static readonly AtomicJsonResultCodec<RequestVendorW9Result> RequestW9Codec =
+        new("vendor-w9.request.result.v1");
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IMessagePublisher _publisher;
-    private readonly IAuditTrailService _audit;
-    private readonly ILogger<VendorService> _logger;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
 
     public VendorService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IMessagePublisher publisher,
-        IAuditTrailService audit,
-        ILogger<VendorService> logger,
+        IAtomicUnitOfWork atomic,
         TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _publisher = publisher;
-        _audit = audit;
-        _logger = logger;
+        _atomic = atomic;
         _timeProvider = timeProvider;
     }
 
@@ -191,79 +189,43 @@ public class VendorService : IVendorService
         return true;
     }
 
-    public async Task<RequestW9Result> RequestW9Async(int portfolioId, int id, int? changedByUserId, CancellationToken ct = default)
+    public async Task<RequestW9Result> RequestW9Async(
+        int portfolioId,
+        int id,
+        string clientOperationId,
+        int? changedByUserId,
+        CancellationToken ct = default)
     {
-        var vendor = await _db.Vendors
-            .AsNoTracking()
-            .FirstOrDefaultAsync(v => v.Id == id && v.PortfolioId == portfolioId, ct);
-        if (vendor is null)
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOperationId);
+        var normalizedOperationId = clientOperationId.Trim();
+        if (normalizedOperationId.Length > 160)
         {
-            return RequestW9Result.NotFound();
+            throw new ArgumentOutOfRangeException(
+                nameof(clientOperationId),
+                "W-9 request ClientOperationId cannot exceed 160 characters.");
         }
 
-        var phone = SmsPhone.Normalize(vendor.Phone);
-        if (string.IsNullOrWhiteSpace(phone))
+        var operationDigest = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(normalizedOperationId)))
+            .ToLowerInvariant();
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "vendor-w9.request",
+                $"{portfolioId}:{id}:{operationDigest}"),
+            new RequestVendorW9Command(
+                portfolioId,
+                id,
+                normalizedOperationId,
+                changedByUserId,
+                _timeProvider.UtcNow()),
+            RequestW9Codec,
+            ct);
+
+        return outcome.Value.Outcome switch
         {
-            return RequestW9Result.NoPhone();
-        }
-
-        // Management company name personalises the ask so the vendor knows who is texting them.
-        var companyName = await _db.Portfolios
-            .AsNoTracking()
-            .Where(p => p.Id == portfolioId)
-            .Select(p => p.ManagementCompanyName)
-            .FirstOrDefaultAsync(ct);
-
-        var message = BuildW9RequestSms(vendor.Name, companyName);
-
-        // Enqueue the outbound SMS via the outbox (Engine delivers it).
-        await _publisher.PublishAsync(
-            portfolioId,
-            "sms",
-            RentalCommand.Core.Outbox.OutboxIdempotency.Create("vendor-w9", portfolioId, vendor.Id, phone, message),
-            new
-        {
-            to = phone,
-            message,
-        }, ct);
-        await _db.SaveChangesAsync(ct);
-
-        await SafeAsync("request-w9 audit", () => _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            vendor.Id,
-            AuditLogOperation.Updated,
-            userId: changedByUserId,
-            actorLabel: changedByUserId.HasValue ? null : "staff",
-            newValues: JsonSerializer.Serialize(new { w9Requested = true, to = phone }),
-            changeReason: $"Texted a W-9 request to vendor {vendor.Name} for 1099 tax reporting.",
-            ct: ct));
-
-        return RequestW9Result.Queued(phone);
-    }
-
-    /// <summary>
-    /// Plain-language SMS asking a vendor to send their W-9. Names the management company so the
-    /// recipient recognises the sender, and explains why (1099 tax reporting).
-    /// </summary>
-    private static string BuildW9RequestSms(string vendorName, string? companyName)
-    {
-        var company = string.IsNullOrWhiteSpace(companyName) ? "our office" : companyName.Trim();
-        var greeting = string.IsNullOrWhiteSpace(vendorName) ? "Hi," : $"Hi {vendorName.Trim()},";
-        return $"{greeting} this is {company}. For our 1099 tax filing, could you please send us a " +
-               "completed W-9 form (it has your business name and tax ID)? You can reply to this text " +
-               "with a photo of it or email it over. Thanks so much!";
-    }
-
-    private async Task SafeAsync(string label, Func<Task> action)
-    {
-        try
-        {
-            await action();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Vendor side effect '{Label}' failed (continuing).", label);
-        }
+            RequestVendorW9Outcome.Queued => RequestW9Result.Queued(outcome.Value.Phone!),
+            RequestVendorW9Outcome.VendorHasNoPhone => RequestW9Result.NoPhone(),
+            _ => RequestW9Result.NotFound(),
+        };
     }
 }

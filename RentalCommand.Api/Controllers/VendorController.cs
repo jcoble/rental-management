@@ -93,9 +93,13 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> RequestW9(int id, CancellationToken ct)
+    public async Task<IActionResult> RequestW9(
+        int id,
+        [FromBody] RequestVendorW9Request request,
+        CancellationToken ct)
     {
-        var result = await _service.RequestW9Async(GetPortfolioId(), id, GetUserId(), ct);
+        var result = await _service.RequestW9Async(
+            GetPortfolioId(), id, request.ClientOperationId, GetUserId(), ct);
         return result.Outcome switch
         {
             RequestW9Outcome.Queued => Ok(new { queued = true, sentTo = result.Phone }),

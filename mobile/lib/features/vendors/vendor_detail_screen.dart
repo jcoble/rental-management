@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../activity/activity_history_screen.dart';
@@ -44,7 +45,7 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
     try {
       final result = await ref
           .read(vendorsRepositoryProvider)
-          .requestW9(_vendor.id);
+          .requestW9(_vendor.id, clientOperationId: const Uuid().v4());
       if (!mounted) return;
       final to = result.sentTo;
       messenger
