@@ -67,4 +67,11 @@ public static class WorkerHealthThresholds
     /// case-sensitive IN match is correct.
     /// </summary>
     public static readonly IReadOnlyList<string> KnownWorkerNames = Thresholds.Keys.ToList();
+
+    /// <summary>
+    /// The bounded set monitored for automatic restart. This is intentionally separate from the
+    /// broader health-check set: adding a worker to health reporting must not silently opt it into
+    /// watchdog restart behavior without a stuck threshold.
+    /// </summary>
+    public static readonly IReadOnlyList<string> WatchdogWorkerNames = WatchdogStuckSeconds.Keys.ToList();
 }
