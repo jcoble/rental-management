@@ -22,6 +22,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         new("finalize-provider-payment-create-result.v1");
     private static readonly AtomicJsonResultCodec<RecordVerifiedProviderPaymentEventResult> EventCodec =
         new("record-verified-provider-payment-event-result.v1");
+    private static readonly AtomicJsonResultCodec<ReconcileClaimedProviderPaymentEventResult> ReconcileCodec =
+        new("reconcile-claimed-provider-payment-event-result.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -61,6 +63,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         services.AddAtomicCommandHandler<PrepareProviderPaymentCreateCommand, PrepareProviderPaymentCreateResult, PrepareProviderPaymentCreateHandler>();
         services.AddAtomicCommandHandler<FinalizeProviderPaymentCreateCommand, FinalizeProviderPaymentCreateResult, FinalizeProviderPaymentCreateHandler>();
         services.AddAtomicCommandHandler<RecordVerifiedProviderPaymentEventCommand, RecordVerifiedProviderPaymentEventResult, RecordVerifiedProviderPaymentEventHandler>();
+        services.AddAtomicCommandHandler<ReconcileClaimedProviderPaymentEventCommand, ReconcileClaimedProviderPaymentEventResult, ReconcileClaimedProviderPaymentEventHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString()).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider(new ServiceProviderOptions
@@ -136,9 +139,208 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         inbox.ProcessedAtUtc.Should().BeNull();
         inbox.FailureKind.Should().Be(ProviderInboxFailureKind.Unmatched);
         inbox.ProviderObjectId.Should().Be("pi_missing");
+        inbox.EventKind.Should().Be(ProviderPaymentEventKind.Succeeded);
+        inbox.Amount.Should().Be(1000m);
+        inbox.Currency.Should().Be("usd");
+    }
+
+    [SkippableFact]
+    public async Task SimultaneousClaims_AssignEligibleRowOnce()
+    {
+        SkipIfNoDocker();
+        await SeedInboxAsync("evt_claim_once", "pi_claim_once");
+        await using var firstDb = NewContext();
+        await using var secondDb = NewContext();
+        var firstStore = new ProviderInboxClaimStore(firstDb);
+        var secondStore = new ProviderInboxClaimStore(secondDb);
+
+        var claims = await Task.WhenAll(
+            firstStore.ClaimAsync("worker-a", _now, TimeSpan.FromMinutes(1), 1),
+            secondStore.ClaimAsync("worker-b", _now, TimeSpan.FromMinutes(1), 1));
+
+        claims.Sum(batch => batch.Count).Should().Be(1);
+        claims.SelectMany(batch => batch).Select(claim => claim.Id).Should().OnlyHaveUniqueItems();
+    }
+
+    [SkippableFact]
+    public async Task ActiveLease_CannotBeStolen_ButExpiredLeaseIsReclaimed()
+    {
+        SkipIfNoDocker();
+        await SeedInboxAsync("evt_lease", "pi_lease");
+        ProviderInboxClaim first;
+        await using (var db = NewContext())
+        {
+            first = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("worker-a", _now, TimeSpan.FromMinutes(1), 1)).Single();
+        }
+
+        await using (var db = NewContext())
+        {
+            (await new ProviderInboxClaimStore(db)
+                    .ClaimAsync("worker-b", _now.AddSeconds(59), TimeSpan.FromMinutes(1), 1))
+                .Should().BeEmpty();
+        }
+
+        await using (var db = NewContext())
+        {
+            var reclaimed = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("worker-b", _now.AddMinutes(1), TimeSpan.FromMinutes(1), 1)).Single();
+            reclaimed.ClaimToken.Should().NotBe(first.ClaimToken);
+            reclaimed.AttemptCount.Should().Be(2);
+        }
+    }
+
+    [SkippableFact]
+    public async Task ExpiredClaim_RejectsStaleCompletionToken()
+    {
+        SkipIfNoDocker();
+        await SeedInboxAsync("evt_stale", "pi_stale");
+        ProviderInboxClaim stale;
+        ProviderInboxClaim current;
+        await using (var db = NewContext())
+        {
+            stale = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("worker-a", _now, TimeSpan.FromMinutes(1), 1)).Single();
+        }
+        await using (var db = NewContext())
+        {
+            current = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("worker-b", _now.AddMinutes(1), TimeSpan.FromMinutes(1), 1)).Single();
+        }
+
+        var act = () => Atomic.ExecuteAsync(
+            ReconcileIdentity(stale),
+            new ReconcileClaimedProviderPaymentEventCommand(stale.Id, stale.ClaimToken, _now.AddMinutes(1)),
+            ReconcileCodec);
+
+        await act.Should().ThrowAsync<AtomicReceiptInvariantException>();
+        await using var verify = NewContext();
+        (await verify.ProviderInboxEvents.SingleAsync()).ClaimToken.Should().Be(current.ClaimToken);
+    }
+
+    [SkippableFact]
+    public async Task WebhookBeforeFinalize_EventuallyReconcilesFromNormalizedFacts()
+    {
+        SkipIfNoDocker();
+        await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-event", "stripe:evt_race"),
+            Event("evt_race", "pi_race", ProviderPaymentEventKind.Succeeded),
+            EventCodec);
+        ProviderInboxClaim claim;
+        await using (var db = NewContext())
+        {
+            claim = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("engine", _now, TimeSpan.FromMinutes(1), 1)).Single();
+        }
+        await SeedProviderAttemptAsync("pi_race");
+
+        var outcome = await Atomic.ExecuteAsync(
+            ReconcileIdentity(claim),
+            new ReconcileClaimedProviderPaymentEventCommand(claim.Id, claim.ClaimToken, _now.AddSeconds(1)),
+            ReconcileCodec);
+
+        outcome.Value.Outcome.Should().Be(ReconcileProviderPaymentEventOutcome.Applied);
+        await using var verify = NewContext();
+        (await verify.ProviderInboxEvents.SingleAsync()).ProcessedAtUtc.Should().NotBeNull();
+        (await verify.PaymentTransactions.SingleAsync()).Status.Should().Be(PaymentTransactionStatus.Succeeded);
+        (await verify.Payments.SingleAsync(payment => payment.Id == _paymentId)).Status.Should().Be(PaymentStatus.Paid);
+    }
+
+    [SkippableFact]
+    public async Task ClaimedEvent_ReplayIsDuplicateSafe()
+    {
+        SkipIfNoDocker();
+        await SeedProviderAttemptAsync("pi_replay");
+        await SeedInboxAsync("evt_replay", "pi_replay");
+        ProviderInboxClaim claim;
+        await using (var db = NewContext())
+        {
+            claim = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("engine", _now, TimeSpan.FromMinutes(1), 1)).Single();
+        }
+        var command = new ReconcileClaimedProviderPaymentEventCommand(claim.Id, claim.ClaimToken, _now);
+
+        var first = await Atomic.ExecuteAsync(ReconcileIdentity(claim), command, ReconcileCodec);
+        var replay = await Atomic.ExecuteAsync(ReconcileIdentity(claim), command, ReconcileCodec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        await using var verify = NewContext();
+        (await verify.ProviderInboxEvents.CountAsync()).Should().Be(1);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "payments.provider-inbox.reconcile")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task UnmatchedEvent_DeadLettersAtDeliberateMaximumAttempt()
+    {
+        SkipIfNoDocker();
+        await SeedInboxAsync("evt_dead_letter", "pi_never_finalized");
+        await using (var db = NewContext())
+        {
+            var inbox = await db.ProviderInboxEvents.SingleAsync();
+            inbox.AttemptCount = 7; // The claim below increments to the deliberate maximum of eight.
+            await db.SaveChangesAsync();
+        }
+        ProviderInboxClaim claim;
+        await using (var db = NewContext())
+        {
+            claim = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("engine", _now, TimeSpan.FromMinutes(1), 1)).Single();
+        }
+
+        var outcome = await Atomic.ExecuteAsync(
+            ReconcileIdentity(claim),
+            new ReconcileClaimedProviderPaymentEventCommand(claim.Id, claim.ClaimToken, _now),
+            ReconcileCodec);
+
+        outcome.Value.Outcome.Should().Be(ReconcileProviderPaymentEventOutcome.DeadLettered);
+        await using var verify = NewContext();
+        var deadLetter = await verify.ProviderInboxEvents.SingleAsync();
+        deadLetter.DeadLetteredAtUtc.Should().Be(_now);
+        deadLetter.FailureKind.Should().Be(ProviderInboxFailureKind.Unmatched);
+        deadLetter.ClaimToken.Should().BeNull();
+    }
+
+    [SkippableTheory]
+    [InlineData(ProviderPaymentEventKind.Pending)]
+    [InlineData(ProviderPaymentEventKind.Failed)]
+    [InlineData(ProviderPaymentEventKind.Canceled)]
+    public async Task StaleNonSuccessEvent_DoesNotDowngradeTerminalSuccess(ProviderPaymentEventKind staleKind)
+    {
+        SkipIfNoDocker();
+        var providerObjectId = $"pi_terminal_{staleKind}";
+        await SeedProviderAttemptAsync(providerObjectId);
+        await using (var db = NewContext())
+        {
+            var transaction = await db.PaymentTransactions.SingleAsync();
+            transaction.Status = PaymentTransactionStatus.Succeeded;
+            var payment = await db.Payments.SingleAsync(candidate => candidate.Id == _paymentId);
+            payment.Status = PaymentStatus.Paid;
+            await db.SaveChangesAsync();
+        }
+        await SeedInboxAsync($"evt_terminal_{staleKind}", providerObjectId, staleKind);
+        ProviderInboxClaim claim;
+        await using (var db = NewContext())
+        {
+            claim = (await new ProviderInboxClaimStore(db)
+                .ClaimAsync("engine", _now, TimeSpan.FromMinutes(1), 1)).Single();
+        }
+
+        await Atomic.ExecuteAsync(
+            ReconcileIdentity(claim),
+            new ReconcileClaimedProviderPaymentEventCommand(claim.Id, claim.ClaimToken, _now),
+            ReconcileCodec);
+
+        await using var verify = NewContext();
+        (await verify.PaymentTransactions.SingleAsync()).Status.Should().Be(PaymentTransactionStatus.Succeeded);
+        (await verify.Payments.SingleAsync(candidate => candidate.Id == _paymentId)).Status.Should().Be(PaymentStatus.Paid);
     }
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+
+    private static AtomicCommandIdentity ReconcileIdentity(ProviderInboxClaim claim) =>
+        new("payments.provider-inbox.reconcile", $"{claim.Id}:{claim.ClaimToken:N}");
 
     private RecordVerifiedProviderPaymentEventCommand Event(
         string eventId,
@@ -162,6 +364,30 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             Status = PaymentTransactionStatus.Pending,
             CreatedAt = _now,
             UpdatedAt = _now,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedInboxAsync(
+        string providerEventId,
+        string providerObjectId,
+        ProviderPaymentEventKind kind = ProviderPaymentEventKind.Succeeded)
+    {
+        await using var db = NewContext();
+        db.ProviderInboxEvents.Add(new ProviderInboxEvent
+        {
+            Provider = "stripe",
+            ProviderEventId = providerEventId,
+            EventType = $"payment_intent.{kind.ToString().ToLowerInvariant()}",
+            Payload = "{}",
+            ProviderObjectId = providerObjectId,
+            EventKind = kind,
+            Amount = 1000m,
+            Currency = "usd",
+            OccurredAtUtc = _now,
+            ReceivedAtUtc = _now,
+            NextAttemptAtUtc = _now,
+            FailureKind = ProviderInboxFailureKind.Unmatched,
         });
         await db.SaveChangesAsync();
     }

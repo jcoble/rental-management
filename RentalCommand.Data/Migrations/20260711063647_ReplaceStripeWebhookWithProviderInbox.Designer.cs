@@ -3979,6 +3979,10 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("AttemptCount")
                         .HasColumnType("integer");
 
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
                     b.Property<DateTime?>("ClaimExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -3997,8 +4001,15 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<int>("EventKind")
+                        .HasColumnType("integer");
+
                     b.Property<int?>("FailureKind")
                         .HasColumnType("integer");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
 
                     b.Property<DateTime?>("LastAttemptAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -4008,6 +4019,9 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("character varying(2000)");
 
                     b.Property<DateTime>("NextAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("OccurredAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Payload")
@@ -4034,6 +4048,10 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("Currency")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
                     b.Property<DateTime>("ReceivedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -4048,7 +4066,7 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("Provider", "ProviderObjectId");
 
                     b.HasIndex("NextAttemptAtUtc", "ReceivedAtUtc", "Id")
-                        .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL AND \"ClaimToken\" IS NULL");
+                        .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL");
 
                     b.ToTable("ProviderInboxEvents");
                 });
