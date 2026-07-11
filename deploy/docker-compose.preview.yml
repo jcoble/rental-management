@@ -7,7 +7,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: rentalcommand
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # The host path lives outside the disposable stack source/state directory.
+      # Container replacement, stop, and TTL cleanup therefore preserve preview data.
+      - ${PREVIEW_POSTGRES_DATA}:/var/lib/postgresql/data
     networks: [internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U preview -d rentalcommand"]
@@ -113,6 +115,5 @@ networks:
     internal: true
 
 volumes:
-  postgres_data:
   uploads:
   dataprotection_keys:
