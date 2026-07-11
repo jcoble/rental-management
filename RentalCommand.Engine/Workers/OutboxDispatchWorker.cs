@@ -1,10 +1,12 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Data.Outbox;
+using RentalCommand.Data;
 using RentalCommand.Engine.Services;
 
 namespace RentalCommand.Engine.Workers;
@@ -35,6 +37,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
         var pushSender = scopedProvider.GetRequiredService<IPushSender>();
         var fileStorage = scopedProvider.GetRequiredService<IFileStorage>();
+        var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
         var now = DateTime.UtcNow;
         var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
@@ -47,7 +50,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
             try
             {
-                var receipt = await DispatchAsync(channel, pushSender, fileStorage, claim, cancellationToken);
+                var receipt = await DispatchAsync(channel, pushSender, fileStorage, db, claim, cancellationToken);
                 var changed = await store.MarkAcceptedAsync(
                     claim.Id,
                     claim.ClaimToken,
@@ -123,6 +126,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
         INotificationChannel channel,
         IPushSender pushSender,
         IFileStorage fileStorage,
+        RentalCommandDbContext db,
         OutboxClaim claim,
         CancellationToken ct)
     {
@@ -180,6 +184,18 @@ public class OutboxDispatchWorker : EngineWorkerBase
             case "blob-delete":
             {
                 var storagePath = Required(root, "storagePath");
+                var storedFileId = RequiredInt(root, "storedFileId");
+                var hasLiveReference = await db.StoredFiles
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .AnyAsync(file => file.Id != storedFileId
+                        && file.FilePath == storagePath
+                        && file.DeletedAt == null, ct);
+                if (hasLiveReference)
+                {
+                    return new NotificationDeliveryReceipt(
+                        "file-storage-reference-preserved", $"outbox-{claim.Id}");
+                }
                 await fileStorage.DeleteAsync(storagePath, ct);
                 return new NotificationDeliveryReceipt("file-storage", $"outbox-{claim.Id}");
             }
@@ -227,6 +243,20 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 return value.GetString();
         }
         return null;
+    }
+
+    private static int RequiredInt(JsonElement root, string name)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty(name, out var value)
+            && value.TryGetInt32(out var result)
+            && result > 0)
+        {
+            return result;
+        }
+
+        throw new OutboxPermanentDeliveryException(
+            $"Outbox payload is missing required integer field '{name}'.");
     }
 
     private sealed class OutboxPermanentDeliveryException : Exception

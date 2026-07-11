@@ -45,7 +45,7 @@
 			// Best-effort photo upload; don't fail the whole request if only the photo fails.
 			if (photoFile && wo?.id) {
 				try {
-					await documents.upload('WorkOrder', wo.id, photoFile);
+					await documents.upload('WorkOrder', wo.id, photoFile, undefined, crypto.randomUUID());
 				} catch (err) {
 					showError(apiErrorMessage(err, 'Request saved, but the photo failed to upload.'));
 				}

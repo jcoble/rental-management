@@ -84,6 +84,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
+    public DbSet<PendingFileUpload> PendingFileUploads => Set<PendingFileUpload>();
     public DbSet<ScanDraft> ScanDrafts => Set<ScanDraft>();
     public DbSet<ScanBatch> ScanBatches => Set<ScanBatch>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
@@ -304,6 +305,26 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // ~2s; the column was unindexed → sequential scan of an ever-growing table each poll.
             entity.HasIndex(e => e.FilePath).HasDatabaseName("IX_StoredFiles_FilePath");
             entity.HasQueryFilter(e => e.DeletedAt == null);
+        });
+
+        modelBuilder.Entity<PendingFileUpload>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedNever();
+            entity.Property(e => e.Purpose).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.OperationKeyHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.RequestFingerprint).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.StoragePath).IsRequired().HasMaxLength(1024);
+            entity.Property(e => e.FileName).IsRequired().HasMaxLength(260);
+            entity.Property(e => e.ContentType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.State).HasConversion<int>();
+            entity.HasIndex(e => new { e.PortfolioId, e.ActorScopeId, e.Purpose, e.OperationKeyHash }).IsUnique();
+            entity.HasIndex(e => new { e.State, e.CreatedAtUtc, e.CleanupClaimExpiresAtUtc });
+            entity.HasIndex(e => e.StoredFileId);
+            entity.HasOne(e => e.StoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.StoredFileId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<DocumentTemplate>(entity =>

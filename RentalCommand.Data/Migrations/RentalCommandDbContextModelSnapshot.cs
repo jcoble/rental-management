@@ -5614,6 +5614,41 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("SimulationClocks");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.PendingFileUpload", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uuid");
+                    b.Property<int>("ActorScopeId").HasColumnType("integer");
+                    b.Property<DateTime?>("CleanupClaimExpiresAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<Guid?>("CleanupClaimToken").HasColumnType("uuid");
+                    b.Property<string>("ContentType").IsRequired().HasMaxLength(120).HasColumnType("character varying(120)");
+                    b.Property<DateTime>("CreatedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("FileName").IsRequired().HasMaxLength(260).HasColumnType("character varying(260)");
+                    b.Property<string>("OperationKeyHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<int>("PortfolioId").HasColumnType("integer");
+                    b.Property<string>("Purpose").IsRequired().HasMaxLength(80).HasColumnType("character varying(80)");
+                    b.Property<string>("RequestFingerprint").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<long>("SizeBytes").HasColumnType("bigint");
+                    b.Property<int>("State").HasColumnType("integer");
+                    b.Property<int?>("StoredFileId").HasColumnType("integer");
+                    b.Property<string>("StoragePath").IsRequired().HasMaxLength(1024).HasColumnType("character varying(1024)");
+                    b.Property<DateTime>("UpdatedAtUtc").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("StoredFileId");
+                    b.HasIndex("State", "CreatedAtUtc", "CleanupClaimExpiresAtUtc");
+                    b.HasIndex("PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash").IsUnique();
+                    b.ToTable("PendingFileUploads");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.PendingFileUpload", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.StoredFile", "StoredFile")
+                        .WithMany()
+                        .HasForeignKey("StoredFileId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("StoredFile");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.StoredFile", b =>
                 {
                     b.Property<int>("Id")

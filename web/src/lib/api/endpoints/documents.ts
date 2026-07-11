@@ -18,8 +18,8 @@ export const documents = {
 		entityType: string,
 		entityId: number,
 		file: File,
-		category?: string,
-		clientOperationId: string = crypto.randomUUID()
+		category: string | undefined,
+		clientOperationId: string
 	): Promise<DocumentItem> => {
 		const form = new FormData();
 		form.append('file', file);
@@ -34,7 +34,7 @@ export const documents = {
 	 * Delete a document.
 	 * DELETE /api/v1/documents/{id}
 	 */
-	delete: (id: number, clientOperationId: string = crypto.randomUUID()): Promise<void> =>
+	delete: (id: number, clientOperationId: string): Promise<void> =>
 		api.delete(`/documents/${id}?clientOperationId=${encodeURIComponent(clientOperationId)}`),
 };
 

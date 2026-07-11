@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart' hide Vendor;
@@ -80,6 +81,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   Uint8List? _photoBytes;
   String? _photoName;
   String? _photoContentType;
+  String? _photoUploadOperationId;
 
   bool _saving = false;
   String? _error;
@@ -198,6 +200,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       _photoBytes = bytes;
       _photoName = picked.name;
       _photoContentType = _mimeFromExtension(picked.name);
+      _photoUploadOperationId = const Uuid().v4();
     });
   }
 
@@ -301,6 +304,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
           bytes: photoBytes,
           fileName: photoName,
           contentType: photoContentType,
+          clientOperationId: _photoUploadOperationId ??= const Uuid().v4(),
         );
       }
 

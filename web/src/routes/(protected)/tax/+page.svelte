@@ -14,6 +14,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { FileText, Receipt, MessageSquare, AlertTriangle } from '@lucide/svelte';
+	import { ApiError } from '$lib/api/client';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
@@ -45,12 +46,20 @@
 	const vendors1099 = $derived(vendor1099Query.data?.rows ?? []);
 	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
 
+	let w9OperationIds = $state<Record<number, string>>({});
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: ({ vendorId, clientOperationId }: { vendorId: number; clientOperationId: string }) =>
-			vendors.requestW9(vendorId, clientOperationId),
-		onSuccess: (res) => showSuccess(`W-9 request texted to ${res.sentTo}.`),
+		mutationFn: ({ vendorId }: { vendorId: number }) =>
+			vendors.requestW9(vendorId, (w9OperationIds[vendorId] ??= crypto.randomUUID())),
+		onSuccess: (res, { vendorId }) => {
+			delete w9OperationIds[vendorId];
+			showSuccess(`W-9 request texted to ${res.sentTo}.`);
+		},
 		// 400 { error } when the vendor has no phone on file — surface it plainly.
-		onError: (err) => showError(apiErrorMessage(err))
+		onError: (err, { vendorId }) => {
+			if (err instanceof ApiError && err.status >= 400 && err.status < 500
+				&& err.status !== 408 && err.status !== 429) delete w9OperationIds[vendorId];
+			showError(apiErrorMessage(err));
+		}
 	}));
 
 	function money(value: number) {
@@ -252,10 +261,7 @@
 												variant="outline"
 												size="sm"
 												onclick={() =>
-													requestW9Mutation.mutate({
-														vendorId: v.vendorId,
-														clientOperationId: crypto.randomUUID()
-													})}
+												requestW9Mutation.mutate({ vendorId: v.vendorId })}
 												disabled={requestW9Mutation.isPending}
 												data-testid="vendor-1099-request-w9-{v.vendorId}"
 											>

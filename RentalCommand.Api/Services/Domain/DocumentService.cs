@@ -8,6 +8,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -22,6 +23,7 @@ public sealed class DocumentService : IDocumentService
     private readonly RentalCommandDbContext _db;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IFileStorage _storage;
+    private readonly IPendingFileUploadStore _pendingUploads;
     private readonly ILogger<DocumentService> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -29,14 +31,55 @@ public sealed class DocumentService : IDocumentService
         RentalCommandDbContext db,
         IAtomicUnitOfWork atomic,
         IFileStorage storage,
+        IPendingFileUploadStore pendingUploads,
         ILogger<DocumentService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _atomic = atomic;
         _storage = storage;
+        _pendingUploads = pendingUploads;
         _logger = logger;
         _timeProvider = timeProvider;
+    }
+
+    public Task<PendingFileUploadAdmission> PrepareUploadAsync(
+        int portfolioId,
+        int actorUserId,
+        string clientOperationId,
+        string requestFingerprint,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        CancellationToken ct = default) =>
+        _pendingUploads.PrepareAsync(
+            portfolioId,
+            actorUserId,
+            "stored-document",
+            NormalizeOperationId(clientOperationId),
+            requestFingerprint,
+            fileName,
+            contentType,
+            sizeBytes,
+            _timeProvider.UtcNow(),
+            ct);
+
+    public async Task<DocumentDto?> GetFinalizedUploadAsync(
+        int portfolioId,
+        PendingFileUploadAdmission admission,
+        CancellationToken ct = default)
+    {
+        if (admission.State != Core.Enums.PendingFileUploadState.Finalized
+            || !admission.StoredFileId.HasValue)
+        {
+            return null;
+        }
+
+        var row = await _db.StoredFiles.AsNoTracking()
+            .SingleOrDefaultAsync(file => file.Id == admission.StoredFileId.Value
+                && file.PortfolioId == portfolioId
+                && file.DeletedAt == null, ct);
+        return row is null ? null : ToDto(row);
     }
 
     public async Task<IReadOnlyList<DocumentDto>> ListAsync(
@@ -59,6 +102,7 @@ public sealed class DocumentService : IDocumentService
     }
 
     public async Task<DocumentDto?> CreateAsync(
+        Guid pendingUploadId,
         int portfolioId,
         StoredDocumentTarget target,
         int entityId,
@@ -66,6 +110,7 @@ public sealed class DocumentService : IDocumentService
         int? tenantId,
         bool isStaff,
         string clientOperationId,
+        string requestFingerprint,
         string contentSha256,
         string fileName,
         string contentType,
@@ -80,14 +125,12 @@ public sealed class DocumentService : IDocumentService
             throw new ArgumentException("Document contentSha256 must be a 64-character SHA-256 hex digest.", nameof(contentSha256));
         }
 
-        AtomicCommandOutcome<CreateStoredDocumentResult> outcome;
-        try
-        {
-            outcome = await _atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity(
                     "stored-document.create",
-                    $"{portfolioId}:{target}:{entityId}:{Digest(normalizedOperationId)}:{normalizedHash}"),
+                    $"{portfolioId}:{userId}:{Digest(normalizedOperationId)}"),
                 new CreateStoredDocumentCommand(
+                    pendingUploadId,
                     portfolioId,
                     target,
                     entityId,
@@ -95,6 +138,7 @@ public sealed class DocumentService : IDocumentService
                     tenantId,
                     isStaff,
                     normalizedOperationId,
+                    requestFingerprint,
                     normalizedHash,
                     fileName,
                     storagePath,
@@ -103,23 +147,10 @@ public sealed class DocumentService : IDocumentService
                     _timeProvider.UtcNow()),
                 CreateCodec,
                 ct);
-        }
-        catch
-        {
-            await DeleteUploadedBlobIfUnreferencedAsync(storagePath);
-            throw;
-        }
 
         if (outcome.Value.Outcome != StoredDocumentMutationOutcome.Created)
         {
-            await DeleteUploadedBlobIfUnreferencedAsync(storagePath);
             return null;
-        }
-
-        if (!string.Equals(outcome.Value.StoragePath, storagePath, StringComparison.Ordinal))
-        {
-            // A retry uploaded a fresh blob before the receipt replayed the first committed row.
-            await DeleteUploadedBlobIfUnreferencedAsync(storagePath);
         }
 
         return ToDto(outcome.Value);
@@ -160,28 +191,6 @@ public sealed class DocumentService : IDocumentService
             DeleteCodec,
             ct);
         return outcome.Value.Outcome == StoredDocumentMutationOutcome.Deleted;
-    }
-
-    private async Task DeleteUploadedBlobIfUnreferencedAsync(string storagePath)
-    {
-        try
-        {
-            // Unknown commit outcomes are resolved DB-side before touching storage. IgnoreQueryFilters
-            // includes soft-deleted rows: an uploaded key referenced anywhere is never compensation-safe.
-            var referenced = await _db.StoredFiles
-                .IgnoreQueryFilters()
-                .AsNoTracking()
-                .AnyAsync(file => file.FilePath == storagePath, CancellationToken.None);
-            if (!referenced)
-            {
-                await _storage.DeleteAsync(storagePath, CancellationToken.None);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Fail closed: uncertainty preserves the blob instead of deleting a committed reference.
-            _logger.LogWarning(ex, "Could not prove document upload {StoragePath} unreferenced; preserving it.", storagePath);
-        }
     }
 
     private static string NormalizeOperationId(string clientOperationId)

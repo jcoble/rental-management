@@ -62,6 +62,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             DeleteStoredDocumentCommand,
             DeleteStoredDocumentResult,
             DeleteStoredDocumentHandler>();
+        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -92,14 +93,13 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         Storage.Add("blob-first");
-        Storage.Add("blob-retry");
 
         var first = await CreateAsync("upload-one", "blob-first");
-        var replay = await CreateAsync("upload-one", "blob-retry");
+        var replay = await CreateAsync("upload-one", "blob-first");
 
         replay.Should().BeEquivalentTo(first);
         first!.Id.Should().BePositive();
-        Storage.Deleted.Should().Equal("blob-retry");
+        Storage.Deleted.Should().BeEmpty();
         Storage.Contains("blob-first").Should().BeTrue();
         await using var db = NewContext();
         (await db.StoredFiles.CountAsync(file => file.Id == first.Id)).Should().Be(1);
@@ -128,7 +128,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 
         second.Should().NotBeNull();
         crossScope.Should().BeNull();
-        Storage.Deleted.Should().Contain("blob-cross-scope");
+        Storage.Deleted.Should().NotContain("blob-cross-scope", "durable pending ownership is scavenged after retention");
         await using var db = NewContext();
         (await db.StoredFiles.CountAsync(file => file.PortfolioId == _portfolioId)).Should().Be(1);
         (await db.AtomicCommandReceipts.CountAsync(receipt => receipt.CommandType == "stored-document.create"))
@@ -155,7 +155,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         await act.Should().ThrowAsync<DbUpdateException>();
         Failure.FailAtomicAudit = false;
 
-        Storage.Deleted.Should().Contain("blob-rollback");
+        Storage.Deleted.Should().NotContain("blob-rollback", "durable pending ownership survives a crash for retry/scavenging");
         await using var db = NewContext();
         (await db.StoredFiles.CountAsync(file => file.FilePath == "blob-rollback")).Should().Be(0);
         (await db.AtomicCommandReceipts.CountAsync(receipt => receipt.CommandType == "stored-document.create"))
@@ -203,10 +203,13 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 
         await CreateAsync("upload-sql-proof", "blob-sql-proof");
 
-        Probe.Commands.Should().Contain(sql =>
-            sql.Contains("FROM \"Units\"", StringComparison.Ordinal)
-            && sql.Contains("JOIN \"Properties\"", StringComparison.Ordinal)
-            && sql.Contains("\"PortfolioId\"", StringComparison.Ordinal));
+        Probe.Commands.Count(sql =>
+            sql.Contains("SELECT EXISTS", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("FROM \"Units\"", StringComparison.Ordinal)
+            && sql.Contains("\"Properties\"", StringComparison.Ordinal)
+            && sql.Contains("\"PortfolioId\"", StringComparison.Ordinal)
+            && sql.Contains("@", StringComparison.Ordinal))
+            .Should().Be(1, "target eligibility is one parameterized DB-side statement even when EF wraps filtered tables");
         typeof(CreateStoredDocumentHandler).GetConstructors().Single().GetParameters().Should().BeEmpty();
         typeof(DeleteStoredDocumentHandler).GetConstructors().Single().GetParameters().Should().BeEmpty();
     }
@@ -220,8 +223,46 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         string storagePath,
         int? entityId = null)
     {
+        var pendingUploadId = Guid.NewGuid();
+        var fingerprint = ContentHash;
+        await using (var db = NewContext())
+        {
+            var operationHash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(operationId))).ToLowerInvariant();
+            var existing = await db.PendingFileUploads.AsNoTracking()
+                .SingleOrDefaultAsync(upload => upload.PortfolioId == _portfolioId
+                    && upload.ActorScopeId == 73
+                    && upload.Purpose == "stored-document"
+                    && upload.OperationKeyHash == operationHash);
+            if (existing is not null)
+            {
+                pendingUploadId = existing.Id;
+            }
+            else
+            {
+                db.PendingFileUploads.Add(new PendingFileUpload
+                {
+                    Id = pendingUploadId,
+                    PortfolioId = _portfolioId,
+                    ActorScopeId = 73,
+                    Purpose = "stored-document",
+                    OperationKeyHash = operationHash,
+                    RequestFingerprint = fingerprint,
+                    StoragePath = storagePath,
+                    FileName = "lease.pdf",
+                    ContentType = "application/pdf",
+                    SizeBytes = 42,
+                    State = PendingFileUploadState.Prepared,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow,
+                });
+                await db.SaveChangesAsync();
+            }
+        }
         await using var scope = _services!.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IDocumentService>().CreateAsync(
+            pendingUploadId,
             _portfolioId,
             StoredDocumentTarget.Unit,
             entityId ?? _unitId,
@@ -229,6 +270,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             null,
             true,
             operationId,
+            fingerprint,
             ContentHash,
             "lease.pdf",
             "application/pdf",

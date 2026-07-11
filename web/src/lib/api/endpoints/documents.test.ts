@@ -40,7 +40,8 @@ describe('document file endpoints', () => {
 
 	it('sends caller-generated operation identities for document mutations', () => {
 		assert.match(endpointSource, /form\.append\('clientOperationId', clientOperationId\)/);
-		assert.match(endpointSource, /clientOperationId: string = crypto\.randomUUID\(\)/);
+		assert.match(endpointSource, /clientOperationId: string/);
+		assert.doesNotMatch(endpointSource, /clientOperationId: string = crypto\.randomUUID\(\)/);
 		assert.match(endpointSource, /clientOperationId=\$\{encodeURIComponent\(clientOperationId\)\}/);
 	});
 

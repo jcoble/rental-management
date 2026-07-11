@@ -9,6 +9,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -26,6 +27,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     private readonly IExecutedLeasePdfGenerator _executedPdf;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeEsignExecutionService> _logger;
+    private readonly IPendingFileUploadStore _pendingUploads;
 
     public NativeEsignExecutionService(
         RentalCommandDbContext db,
@@ -34,6 +36,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         IFileStorage storage,
         IExecutedLeasePdfGenerator executedPdf,
         TimeProvider timeProvider,
+        IPendingFileUploadStore pendingUploads,
         ILogger<NativeEsignExecutionService> logger)
     {
         _db = db;
@@ -42,6 +45,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         _storage = storage;
         _executedPdf = executedPdf;
         _timeProvider = timeProvider;
+        _pendingUploads = pendingUploads;
         _logger = logger;
     }
 
@@ -86,7 +90,10 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         string? storageKey = null;
         try
         {
-            var now = _timeProvider.UtcNow();
+            var now = await _db.SignatureSigners.AsNoTracking()
+                .Where(signer => signer.SignatureRequestId == sigRequest.Id)
+                .MaxAsync(signer => signer.SignedAtUtc, ct)
+                ?? throw new InvalidOperationException("The executed document has no signed timestamp.");
             var data = await BuildExecutedDataAsync(sigRequest, now, ct);
             if (data is null)
             {
@@ -101,14 +108,28 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             var executedBytes = _executedPdf.Generate(data, contentSha256: string.Empty);
             var sha256 = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
             var fileName = $"lease-{sigRequest.LeaseId}-executed.pdf";
+            var admission = await _pendingUploads.PrepareAsync(
+                sigRequest.PortfolioId,
+                actorScopeId: 0,
+                purpose: "native-esign-executed",
+                clientOperationId: sigRequest.PublicId,
+                requestFingerprint: sha256,
+                fileName,
+                contentType: "application/pdf",
+                sizeBytes: executedBytes.LongLength,
+                nowUtc: _timeProvider.UtcNow(),
+                ct);
+            storageKey = admission.StoragePath;
             await using (var stream = new MemoryStream(executedBytes))
             {
-                storageKey = await _storage.UploadAsync(stream, fileName, "application/pdf", ct);
+                await _storage.UploadAtAsync(stream, storageKey, fileName, "application/pdf", ct);
             }
 
-            var outcome = await _atomic.ExecuteAsync(
+            await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("native-esign.finalize", TokenIdentity(sigRequest.PublicId)),
                 new FinalizeNativeEsignRequestCommand(
+                    admission.Id,
+                    sha256,
                     sigRequest.Id,
                     sigRequest.PublicId,
                     claimToken,
@@ -121,27 +142,14 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                 new AtomicJsonResultCodec<FinalizeNativeEsignRequestResult>("native-esign.finalize.v1"),
                 ct);
 
-            if (outcome.Disposition == AtomicCommandDisposition.Replayed)
-            {
-                await DeleteReplayExecutionUploadIfUnreferencedAsync(outcome.Value.StoredFileId, storageKey!);
-            }
-
             return true;
         }
         catch (NativeEsignExecutionClaimLostException)
         {
-            if (storageKey is not null)
-            {
-                await DeleteFailedExecutionUploadIfUnreferencedAsync(sigRequest.PublicId, storageKey);
-            }
             return false;
         }
         catch (Exception ex)
         {
-            if (storageKey is not null)
-            {
-                await DeleteFailedExecutionUploadIfUnreferencedAsync(sigRequest.PublicId, storageKey);
-            }
             try
             {
                 await _claims.ReleaseForRetryAsync(
@@ -330,53 +338,4 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     private static string TokenIdentity(string token) =>
         Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
-    private async Task DeleteReplayExecutionUploadIfUnreferencedAsync(int storedFileId, string storageKey)
-    {
-        try
-        {
-            var committedKey = await _db.StoredFiles.AsNoTracking()
-                .Where(file => file.Id == storedFileId)
-                .Select(file => file.FilePath)
-                .SingleOrDefaultAsync(CancellationToken.None);
-            if (committedKey is not null && !string.Equals(committedKey, storageKey, StringComparison.Ordinal))
-            {
-                await DeleteExecutionUploadAsync(storageKey);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not verify replayed executed-document upload {StorageKey}; preserving it.", storageKey);
-        }
-    }
-
-    private async Task DeleteFailedExecutionUploadIfUnreferencedAsync(string publicId, string storageKey)
-    {
-        try
-        {
-            var committedKey = await _db.SignatureRequests.AsNoTracking()
-                .Where(request => request.PublicId == publicId && request.SignedStoredFileId != null)
-                .Select(request => request.SignedStoredFile!.FilePath)
-                .SingleOrDefaultAsync(CancellationToken.None);
-            if (committedKey is null || !string.Equals(committedKey, storageKey, StringComparison.Ordinal))
-            {
-                await DeleteExecutionUploadAsync(storageKey);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not verify failed executed-document upload {StorageKey}; preserving it.", storageKey);
-        }
-    }
-
-    private async Task DeleteExecutionUploadAsync(string storageKey)
-    {
-        try
-        {
-            await _storage.DeleteAsync(storageKey, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not remove unreferenced executed-document upload {StorageKey}.", storageKey);
-        }
-    }
 }

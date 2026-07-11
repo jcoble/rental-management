@@ -23,6 +23,19 @@ public sealed class CreateNativeEsignRequestHandler
             throw new InvalidOperationException("At least one signer is required.");
         }
 
+        var pendingUpload = await attempt.Persistence.Query<PendingFileUpload>()
+            .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
+                && upload.PortfolioId == command.PortfolioId
+                && upload.State == PendingFileUploadState.Prepared
+                && upload.CleanupClaimToken == null
+                && upload.RequestFingerprint == command.RequestFingerprint,
+                ct)
+            ?? throw new InvalidOperationException("The native e-sign source upload admission is missing or does not match.");
+        if (!string.Equals(pendingUpload.StoragePath, command.StorageKey, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The native e-sign source blob path does not match its admission.");
+        }
+
         var lease = await attempt.Persistence.Query<Lease>()
             .SingleOrDefaultAsync(
                 candidate => candidate.Id == command.LeaseId && candidate.PortfolioId == command.PortfolioId,
@@ -107,6 +120,10 @@ public sealed class CreateNativeEsignRequestHandler
 
         attempt.Persistence.Add(signatureRequest);
         await attempt.FlushBusinessAsync(ct);
+
+        pendingUpload.State = PendingFileUploadState.Finalized;
+        pendingUpload.StoredFileId = storedFile.Id;
+        pendingUpload.UpdatedAtUtc = command.CreatedAtUtc;
 
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,

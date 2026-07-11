@@ -48,6 +48,19 @@ public sealed class FinalizeNativeEsignRequestHandler
             throw new InvalidOperationException("The executed document cannot be finalized before every signer signs.");
         }
 
+        var pendingUpload = await attempt.Persistence.Query<PendingFileUpload>()
+            .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
+                && upload.PortfolioId == request.PortfolioId
+                && upload.State == PendingFileUploadState.Prepared
+                && upload.CleanupClaimToken == null
+                && upload.RequestFingerprint == command.RequestFingerprint,
+                ct)
+            ?? throw new InvalidOperationException("The executed-document upload admission is missing or does not match.");
+        if (!string.Equals(pendingUpload.StoragePath, command.StorageKey, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The executed-document blob path does not match its admission.");
+        }
+
         var lease = await attempt.Persistence.Query<Lease>()
             .SingleAsync(
                 candidate => candidate.Id == request.LeaseId && candidate.PortfolioId == request.PortfolioId,
@@ -65,6 +78,10 @@ public sealed class FinalizeNativeEsignRequestHandler
         };
         attempt.Persistence.Add(storedFile);
         await attempt.FlushBusinessAsync(ct);
+
+        pendingUpload.State = PendingFileUploadState.Finalized;
+        pendingUpload.StoredFileId = storedFile.Id;
+        pendingUpload.UpdatedAtUtc = command.CompletedAtUtc;
 
         request.SignedStoredFileId = storedFile.Id;
         request.ContentSha256 = command.ContentSha256;

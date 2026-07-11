@@ -20,6 +20,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Esign;
+using RentalCommand.Data.Documents;
 using RentalCommand.Core.Esign;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -188,7 +189,7 @@ public sealed class NativeEsignTests : IDisposable
     }
 
     [Fact]
-    public async Task Send_FinalCompanionFailure_RollsBackPackage_AndDeletesUploadedBlob()
+    public async Task Send_FinalCompanionFailure_RollsBackPackage_AndPreservesDurablyAdmittedBlob()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
         var provider = CreateProvider();
@@ -202,7 +203,9 @@ public sealed class NativeEsignTests : IDisposable
         (await _db.OutboxMessages.CountAsync()).Should().Be(0);
         (await _db.AtomicCommandReceipts.CountAsync()).Should().Be(0);
         (await _db.AtomicAuditLogs.CountAsync()).Should().Be(0);
-        _storage.FileCount.Should().Be(0);
+        _storage.FileCount.Should().Be(1, "the prepared admission owns the blob until retry or scavenging");
+        (await _db.PendingFileUploads.CountAsync(upload => upload.State == PendingFileUploadState.Prepared))
+            .Should().Be(1);
 
         await _db.Entry(lease).ReloadAsync();
         lease.EsignEnvelopeId.Should().BeNull();
@@ -425,7 +428,7 @@ public sealed class NativeEsignTests : IDisposable
         (await _db.Leases.AsNoTracking().SingleAsync(l => l.Id == lease.Id)).EsignStatus
             .Should().Be(EsignStatus.Sent);
         (await _db.StoredFiles.CountAsync()).Should().Be(1, "only the original document is committed");
-        _storage.FileCount.Should().Be(1, "the uncommitted executed PDF upload is compensated");
+        _storage.FileCount.Should().Be(2, "the prepared executed PDF remains available for durable retry");
 
         var replay = await signing.SignAsync(token, body, "198.51.100.9", "UA/sign", default);
 
@@ -513,6 +516,7 @@ public sealed class NativeEsignTests : IDisposable
                 _db.SaveChanges();
             }),
             TimeProvider.System,
+            new PendingFileUploadStore(_db),
             NullLogger<NativeEsignExecutionService>.Instance);
 
         (await execution.FinalizePendingAsync(requestId)).Should().BeFalse();
@@ -523,7 +527,7 @@ public sealed class NativeEsignTests : IDisposable
         pending.ExecutionClaimToken.Should().Be(replacementToken);
         pending.ExecutionClaimOwner.Should().Be("newer-worker");
         (await _db.StoredFiles.CountAsync()).Should().Be(1);
-        _storage.FileCount.Should().Be(1, "the stale worker's upload is compensated");
+        _storage.FileCount.Should().Be(2, "the admission owns the deterministic executed PDF until retry or scavenging");
     }
 
     [Fact]
@@ -797,6 +801,7 @@ public sealed class NativeEsignTests : IDisposable
             _storage,
             _config,
             TimeProvider.System,
+            new PendingFileUploadStore(_db),
             NullLogger<NativeEsignProvider>.Instance);
 
     private NativeSigningService CreateSigningService()
@@ -818,6 +823,7 @@ public sealed class NativeEsignTests : IDisposable
             _storage,
             new ExecutedLeasePdfGenerator(),
             TimeProvider.System,
+            new PendingFileUploadStore(_db),
             NullLogger<NativeEsignExecutionService>.Instance);
 
     private sealed class TestNativeEsignExecutionClaimStore(RentalCommandDbContext db)
@@ -1089,6 +1095,19 @@ public sealed class NativeEsignTests : IDisposable
             _files[key] = ms.ToArray();
             LastUploadedKey = key;
             return key;
+        }
+
+        public async Task UploadAtAsync(
+            Stream content,
+            string storagePath,
+            string fileName,
+            string contentType,
+            CancellationToken ct = default)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            _files[storagePath] = ms.ToArray();
+            LastUploadedKey = storagePath;
         }
 
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)

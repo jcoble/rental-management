@@ -142,6 +142,9 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
+builder.Services.AddScoped<RentalCommand.Data.Documents.IPendingFileUploadStore,
+    RentalCommand.Data.Documents.PendingFileUploadStore>();
+builder.Services.AddScoped<PendingFileUploadCleanupService>();
 // Native e-sign execution is shared with the API. Signatures are committed before PDF/blob work;
 // this service lets the Engine finish any durable ExecutionPending request after a transient failure.
 builder.Services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
@@ -221,6 +224,7 @@ builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
 builder.Services.AddHostedService<NativeEsignReconciliationWorker>();
 builder.Services.AddHostedService<ProviderInboxReconciliationWorker>();
+builder.Services.AddHostedService<PendingFileUploadCleanupWorker>();
 
 // Dev-only (Simulation:Enabled, non-prod): the command-bridge worker that runs automation jobs on demand
 // at sim-time when the API enqueues a SimWorkerCommand. Never registered in production.

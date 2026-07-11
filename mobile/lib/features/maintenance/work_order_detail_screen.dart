@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart' hide Vendor;
@@ -203,6 +204,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
             bytes: bytes,
             fileName: picked.name,
             contentType: _mimeFromExtension(picked.name),
+            clientOperationId: const Uuid().v4(),
           );
       if (!mounted) return;
       ref.invalidate(workOrderDocumentsProvider(widget.workOrderId));

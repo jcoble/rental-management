@@ -8,6 +8,7 @@ using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -37,6 +38,7 @@ public sealed class NativeEsignProvider : IEsignProvider
     private readonly string _webBaseUrl;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeEsignProvider> _logger;
+    private readonly IPendingFileUploadStore _pendingUploads;
 
     public NativeEsignProvider(
         RentalCommandDbContext db,
@@ -44,6 +46,7 @@ public sealed class NativeEsignProvider : IEsignProvider
         IFileStorage storage,
         IConfiguration configuration,
         TimeProvider timeProvider,
+        IPendingFileUploadStore pendingUploads,
         ILogger<NativeEsignProvider> logger)
     {
         _db = db;
@@ -51,6 +54,7 @@ public sealed class NativeEsignProvider : IEsignProvider
         _storage = storage;
         _webBaseUrl = NormalizeWebBaseUrl(configuration["App:WebBaseUrl"]);
         _timeProvider = timeProvider;
+        _pendingUploads = pendingUploads;
         _logger = logger;
     }
 
@@ -88,16 +92,49 @@ public sealed class NativeEsignProvider : IEsignProvider
         // time-travelling dev session can't wrongly expire — or revive — a real tenant's signing link.
         var linkExpiresAtUtc = DateTime.UtcNow.Add(TokenLifetime);
 
+        var requestFingerprint = RequestFingerprint(lease.PortfolioId, lease.Id, request);
+        PendingFileUploadAdmission admission;
+        try
+        {
+            admission = await _pendingUploads.PrepareAsync(
+                lease.PortfolioId,
+                actorScopeId: 0,
+                purpose: "native-esign-source",
+                clientOperationId: $"{lease.Id}:{request.IdempotencyKey}",
+                requestFingerprint,
+                request.DocumentName,
+                "application/pdf",
+                request.DocumentBytes.LongLength,
+                now,
+                ct);
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return new EsignResult { Status = "Error", Error = ex.Message };
+        }
+
+        if (admission.State == PendingFileUploadState.Finalized && admission.StoredFileId.HasValue)
+        {
+            var replayPublicId = await _db.SignatureRequests.AsNoTracking()
+                .Where(candidate => candidate.OriginalStoredFileId == admission.StoredFileId.Value)
+                .Select(candidate => candidate.PublicId)
+                .SingleOrDefaultAsync(ct);
+            if (replayPublicId is not null)
+            {
+                return EsignResult.Sent(replayPublicId, "Sent", leaseStateCommitted: true);
+            }
+        }
+
         var publicId = Guid.NewGuid().ToString("N");
         var signers = request.Signers.Select(signer => new NativeEsignSignerCommand(
             signer.Name,
             signer.Email,
             GenerateToken())).ToArray();
-        string storageKey;
         await using (var stream = new MemoryStream(request.DocumentBytes))
         {
-            storageKey = await _storage.UploadAsync(
+            await _storage.UploadAtAsync(
                 stream,
+                admission.StoragePath,
                 request.DocumentName,
                 "application/pdf",
                 ct);
@@ -111,12 +148,14 @@ public sealed class NativeEsignProvider : IEsignProvider
                     "native-esign.send",
                     ScopedIdempotencyKey(lease.PortfolioId, lease.Id, request.IdempotencyKey)),
                 new CreateNativeEsignRequestCommand(
+                    admission.Id,
+                    requestFingerprint,
                     lease.PortfolioId,
                     lease.Id,
                     publicId,
                     request.DocumentName,
                     request.Subject,
-                    storageKey,
+                    admission.StoragePath,
                     request.DocumentBytes.LongLength,
                     request.DocumentTemplateId,
                     request.DocumentTemplateVersion,
@@ -130,16 +169,9 @@ public sealed class NativeEsignProvider : IEsignProvider
         }
         catch
         {
-            await DeleteFailedUploadIfUnreferencedAsync(publicId, storageKey);
+            // The admission owns the deterministic blob key. A later retry can finish the same
+            // operation and the stale-upload scavenger can remove it if the caller never returns.
             throw;
-        }
-
-        if (outcome.Disposition == AtomicCommandDisposition.Replayed)
-        {
-            // A later HTTP retry uploads a duplicate blob and must remove it. An execution-strategy
-            // retry after an unknown commit reuses this invocation's original key, which is already
-            // referenced by the committed StoredFile and must be preserved.
-            await DeleteReplayUploadIfUnreferencedAsync(outcome.Value.OriginalStoredFileId, storageKey);
         }
 
         _logger.LogInformation(
@@ -200,80 +232,6 @@ public sealed class NativeEsignProvider : IEsignProvider
         _ => "Sent",
     };
 
-    private async Task DeleteUploadedBlobAsync(string storageKey)
-    {
-        try
-        {
-            await _storage.DeleteAsync(storageKey, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not remove uncommitted native e-sign blob {StorageKey}.", storageKey);
-        }
-    }
-
-    private async Task DeleteReplayUploadIfUnreferencedAsync(int storedFileId, string currentStorageKey)
-    {
-        try
-        {
-            var committedStorageKey = await _db.StoredFiles
-                .AsNoTracking()
-                .Where(file => file.Id == storedFileId)
-                .Select(file => file.FilePath)
-                .SingleOrDefaultAsync(CancellationToken.None);
-            if (committedStorageKey is null)
-            {
-                _logger.LogWarning(
-                    "Could not verify the committed stored file {StoredFileId}; preserving replay upload {StorageKey}.",
-                    storedFileId,
-                    currentStorageKey);
-                return;
-            }
-
-            if (!string.Equals(committedStorageKey, currentStorageKey, StringComparison.Ordinal))
-            {
-                await DeleteUploadedBlobAsync(currentStorageKey);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Data preservation wins if the receipt's file reference cannot be verified.
-            _logger.LogWarning(
-                ex,
-                "Could not verify whether replay upload {StorageKey} is referenced; preserving it.",
-                currentStorageKey);
-        }
-    }
-
-    private async Task DeleteFailedUploadIfUnreferencedAsync(string publicId, string currentStorageKey)
-    {
-        try
-        {
-            var committedStorageKey = await _db.SignatureRequests
-                .AsNoTracking()
-                .Where(request => request.PublicId == publicId)
-                .Select(request => request.OriginalStoredFile!.FilePath)
-                .SingleOrDefaultAsync(CancellationToken.None);
-            if (committedStorageKey is null)
-            {
-                await DeleteUploadedBlobAsync(currentStorageKey);
-            }
-            else if (!string.Equals(committedStorageKey, currentStorageKey, StringComparison.Ordinal))
-            {
-                await DeleteUploadedBlobAsync(currentStorageKey);
-            }
-        }
-        catch (Exception ex)
-        {
-            // A database outage makes commit state unknowable. Preserve the blob rather than risk
-            // deleting the immutable document referenced by a transaction that actually committed.
-            _logger.LogWarning(
-                ex,
-                "Could not verify failed native e-sign upload {StorageKey}; preserving it for reconciliation.",
-                currentStorageKey);
-        }
-    }
-
     private static int? TryParseLeaseId(string documentName)
     {
         // "lease-{id}-agreement.pdf" or "lease-{id}-signed.pdf"
@@ -306,5 +264,26 @@ public sealed class NativeEsignProvider : IEsignProvider
     {
         var bytes = Encoding.UTF8.GetBytes($"{portfolioId}:{leaseId}:{callerKey}");
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private static string RequestFingerprint(int portfolioId, int leaseId, EsignRequest request)
+    {
+        var signerFingerprint = string.Join("\n", request.Signers.Select(signer =>
+            $"{signer.Name.Trim()}\u001f{signer.Email.Trim().ToLowerInvariant()}"));
+        var contentHash = Convert.ToHexString(SHA256.HashData(request.DocumentBytes)).ToLowerInvariant();
+        var canonical = string.Join("\u001e", new[]
+        {
+            portfolioId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            leaseId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.DocumentName,
+            request.Subject ?? string.Empty,
+            contentHash,
+            request.DocumentBytes.LongLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.DocumentTemplateId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            request.DocumentTemplateVersion?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            request.TemplateFieldSnapshotJson ?? string.Empty,
+            signerFingerprint,
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 }
