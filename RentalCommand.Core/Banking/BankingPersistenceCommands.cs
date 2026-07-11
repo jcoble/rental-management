@@ -4,22 +4,76 @@ namespace RentalCommand.Core.Banking;
 
 public sealed record ApplyPlaidConnectionCommand(
     int PortfolioId,
-    string InstitutionName,
-    string AccountName,
-    string? AccountMask,
-    string? AccountType,
-    string? AccountSubtype,
-    string ExternalItemIdCipherText,
-    string ExternalAccountIdCipherText,
-    string ExternalItemIdHash,
-    string ExternalAccountIdHash,
-    string ExternalAccessTokenCipherText,
-    string ProviderRequestIdentity,
+    Guid ExchangeAttemptId,
     DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public sealed record ApplyPlaidConnectionResult(
     int ConnectionId,
     bool Created) : IAtomicResultData;
+
+public sealed record PreparePlaidTokenExchangeCommand(
+    int PortfolioId,
+    string ClientOperationId,
+    string RequestHash,
+    string PublicTokenHash,
+    string InstitutionName,
+    string AccountName,
+    string? AccountMask,
+    string? AccountType,
+    string? AccountSubtype,
+    string ExternalAccountIdCipherText,
+    string ExternalAccountIdHash,
+    DateTime PreparedAtUtc) : IAtomicCommandData;
+
+public enum PreparePlaidTokenExchangeOutcome
+{
+    Prepared,
+    Existing,
+    Conflict,
+}
+
+public sealed record PreparePlaidTokenExchangeResult(
+    PreparePlaidTokenExchangeOutcome Outcome,
+    Guid ExchangeAttemptId) : IAtomicResultData;
+
+public sealed record AdmitPlaidTokenExchangeCommand(
+    int PortfolioId,
+    Guid ExchangeAttemptId,
+    DateTime AdmittedAtUtc) : IAtomicCommandData;
+
+public enum AdmitPlaidTokenExchangeOutcome
+{
+    Admitted,
+    NotFound,
+    AlreadyAdmitted,
+    ReceiptRecorded,
+    Completed,
+}
+
+public sealed record AdmitPlaidTokenExchangeResult(
+    AdmitPlaidTokenExchangeOutcome Outcome,
+    Guid ExchangeAttemptId) : IAtomicResultData;
+
+public sealed record RecordPlaidTokenExchangeReceiptCommand(
+    int PortfolioId,
+    Guid ExchangeAttemptId,
+    string ProviderRequestIdentity,
+    string ExternalItemIdCipherText,
+    string ExternalItemIdHash,
+    string ExternalAccessTokenCipherText,
+    DateTime RecordedAtUtc) : IAtomicCommandData;
+
+public enum RecordPlaidTokenExchangeReceiptOutcome
+{
+    Recorded,
+    NotFound,
+    NotAdmitted,
+    AlreadyRecorded,
+}
+
+public sealed record RecordPlaidTokenExchangeReceiptResult(
+    RecordPlaidTokenExchangeReceiptOutcome Outcome,
+    Guid ExchangeAttemptId) : IAtomicResultData;
 
 public sealed record BankTransactionInput(
     string ProviderTransactionId,

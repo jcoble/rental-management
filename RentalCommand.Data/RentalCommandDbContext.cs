@@ -51,6 +51,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
     public DbSet<BankConnection> BankConnections => Set<BankConnection>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
+    public DbSet<PlaidTokenExchangeAttempt> PlaidTokenExchangeAttempts => Set<PlaidTokenExchangeAttempt>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
     public DbSet<NoticeTemplate> NoticeTemplates => Set<NoticeTemplate>();
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
@@ -115,6 +116,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<AccountingConnection> AccountingConnections => Set<AccountingConnection>();
     public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<AccountingEntityMapping> AccountingEntityMappings => Set<AccountingEntityMapping>();
+    public DbSet<AccountingMappingPromotionJob> AccountingMappingPromotionJobs => Set<AccountingMappingPromotionJob>();
     public DbSet<AccountingSyncMap> AccountingSyncMaps => Set<AccountingSyncMap>();
     public DbSet<AccountingParkedTransaction> AccountingParkedTransactions => Set<AccountingParkedTransaction>();
 
@@ -508,6 +510,36 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<PlaidTokenExchangeAttempt>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ClientOperationId).IsRequired().HasMaxLength(160);
+            entity.Property(e => e.RequestHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.PublicTokenHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.InstitutionName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.AccountName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.AccountMask).HasMaxLength(20);
+            entity.Property(e => e.AccountType).HasMaxLength(80);
+            entity.Property(e => e.AccountSubtype).HasMaxLength(80);
+            entity.Property(e => e.ExternalAccountIdCipherText).IsRequired().HasMaxLength(4000);
+            entity.Property(e => e.ExternalAccountIdHash).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.ProviderRequestIdentity).HasMaxLength(200);
+            entity.Property(e => e.ExternalItemIdCipherText).HasMaxLength(4000);
+            entity.Property(e => e.ExternalItemIdHash).HasMaxLength(64);
+            entity.Property(e => e.ExternalAccessTokenCipherText).HasMaxLength(4000);
+            entity.HasIndex(e => new { e.PortfolioId, e.ClientOperationId }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.Status, e.PreparedAtUtc });
+            entity.HasOne<Portfolio>()
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<BankConnection>()
+                .WithMany()
+                .HasForeignKey(e => e.BankConnectionId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
         modelBuilder.Entity<BankTransaction>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -618,6 +650,25 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .HasForeignKey(e => e.AccountingConnectionId)
                 .OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingMappingPromotionJob>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.AccountingEntityMappingId, e.MappingRevision }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.CompletedAtUtc, e.Id });
+            entity.HasOne<AccountingEntityMapping>()
+                .WithMany()
+                .HasForeignKey(e => e.AccountingEntityMappingId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AccountingConnection>()
+                .WithMany()
+                .HasForeignKey(e => e.AccountingConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Portfolio>()
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);

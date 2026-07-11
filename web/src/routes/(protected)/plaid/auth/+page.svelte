@@ -48,7 +48,10 @@
 					const accounts = (metadata.accounts as Array<Record<string, string | undefined>> | undefined) ?? [];
 					const account = accounts[0] ?? {};
 					const institution = metadata.institution as Record<string, string | undefined> | undefined;
+					const operationId = sessionStorage.getItem('plaid:exchangeOperationId') ?? crypto.randomUUID();
+					sessionStorage.setItem('plaid:exchangeOperationId', operationId);
 					await banking.exchangePlaidPublicToken({
+						clientOperationId: operationId,
 						publicToken: public_token,
 						institutionName: institution?.name ?? 'Plaid bank',
 						accountId: account.id ?? '',
@@ -58,6 +61,7 @@
 						accountSubtype: account.subtype
 					});
 					sessionStorage.removeItem('plaid:linkToken');
+					sessionStorage.removeItem('plaid:exchangeOperationId');
 					showSuccess('Bank account connected.');
 					await goto('/banking');
 				},

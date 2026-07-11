@@ -18,6 +18,12 @@ namespace RentalCommand.IntegrationTests;
 
 public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
 {
+    private static readonly AtomicJsonResultCodec<PreparePlaidTokenExchangeResult> ExchangePrepareCodec =
+        new("banking.plaid.exchange.prepare.result.v1");
+    private static readonly AtomicJsonResultCodec<AdmitPlaidTokenExchangeResult> ExchangeAdmitCodec =
+        new("banking.plaid.exchange.admit.result.v1");
+    private static readonly AtomicJsonResultCodec<RecordPlaidTokenExchangeReceiptResult> ExchangeReceiptCodec =
+        new("banking.plaid.exchange.receipt.result.v1");
     private static readonly AtomicJsonResultCodec<ApplyPlaidConnectionResult> ConnectionCodec =
         new("banking.plaid.connection.result.v1");
     private static readonly AtomicJsonResultCodec<ImportBankTransactionsResult> ImportCodec =
@@ -56,6 +62,9 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         services.AddSingleton<NotificationFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
+        services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
+        services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
         services.AddAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult, ApplyPlaidConnectionHandler>();
         services.AddAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult, ApplyPlaidSyncHandler>();
         services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();
@@ -97,20 +106,35 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     public async Task PlaidConnection_ConcurrentProviderReplay_ReturnsOneCanonicalConnection()
     {
         SkipIfNoDocker();
-        var command = new ApplyPlaidConnectionCommand(
-            _portfolioId,
-            "Replay bank",
-            "Operating checking",
-            "4321",
-            "depository",
-            "checking",
-            "protected-item",
-            "protected-account",
-            "item-hash",
-            "account-hash",
-            "protected-access-token",
-            "plaid-request-replay",
-            _now);
+        var exchangeAttemptId = Guid.NewGuid();
+        await using (var seed = NewContext())
+        {
+            seed.PlaidTokenExchangeAttempts.Add(new PlaidTokenExchangeAttempt
+            {
+                Id = exchangeAttemptId,
+                PortfolioId = _portfolioId,
+                ClientOperationId = "plaid-request-replay",
+                RequestHash = "request-hash",
+                PublicTokenHash = "public-token-hash",
+                InstitutionName = "Replay bank",
+                AccountName = "Operating checking",
+                AccountMask = "4321",
+                AccountType = "depository",
+                AccountSubtype = "checking",
+                ExternalAccountIdCipherText = "protected-account",
+                ExternalAccountIdHash = "account-hash",
+                Status = "RemoteReceiptRecorded",
+                PreparedAtUtc = _now,
+                RemoteAdmittedAtUtc = _now,
+                RemoteReceiptRecordedAtUtc = _now,
+                ProviderRequestIdentity = "plaid-request-replay",
+                ExternalItemIdCipherText = "protected-item",
+                ExternalItemIdHash = "item-hash",
+                ExternalAccessTokenCipherText = "protected-access-token",
+            });
+            await seed.SaveChangesAsync();
+        }
+        var command = new ApplyPlaidConnectionCommand(_portfolioId, exchangeAttemptId, _now);
         var identity = new AtomicCommandIdentity(
             "banking.plaid.connection.apply",
             $"{_portfolioId}:plaid-request-replay");
@@ -126,6 +150,124 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         (await db.BankConnections.CountAsync(row => row.ExternalItemIdHash == "item-hash")).Should().Be(1);
         (await db.AtomicAuditLogs.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(1);
         (await db.AtomicCommandReceipts.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task PlaidExchange_PrepareAdmitAndRemoteReceipt_AreDurableAndReplayCanonicalState()
+    {
+        SkipIfNoDocker();
+        var prepareIdentity = new AtomicCommandIdentity(
+            "banking.plaid.exchange.prepare",
+            $"{_portfolioId}:durable-exchange");
+        var prepare = new PreparePlaidTokenExchangeCommand(
+            _portfolioId,
+            "durable-exchange",
+            new string('1', 64),
+            new string('2', 64),
+            "Durable bank",
+            "Operating",
+            "4321",
+            "depository",
+            "checking",
+            "protected-account",
+            new string('3', 64),
+            _now);
+
+        var prepared = await Task.WhenAll(
+            Atomic.ExecuteAsync(prepareIdentity, prepare, ExchangePrepareCodec),
+            Atomic.ExecuteAsync(prepareIdentity, prepare, ExchangePrepareCodec));
+
+        prepared.Select(row => row.Disposition).Should()
+            .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
+        prepared[0].Value.Should().BeEquivalentTo(prepared[1].Value);
+        var exchangeAttemptId = prepared[0].Value.ExchangeAttemptId;
+        await using (var afterPrepare = NewContext())
+        {
+            var attempt = await afterPrepare.PlaidTokenExchangeAttempts
+                .SingleAsync(row => row.Id == exchangeAttemptId);
+            attempt.Status.Should().Be("Prepared");
+            attempt.RemoteAdmittedAtUtc.Should().BeNull();
+            attempt.RemoteReceiptRecordedAtUtc.Should().BeNull();
+        }
+
+        var admitted = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("banking.plaid.exchange.admit", $"{_portfolioId}:{exchangeAttemptId:N}"),
+            new AdmitPlaidTokenExchangeCommand(_portfolioId, exchangeAttemptId, _now.AddSeconds(1)),
+            ExchangeAdmitCodec);
+        admitted.Value.Outcome.Should().Be(AdmitPlaidTokenExchangeOutcome.Admitted);
+        await using (var afterAdmission = NewContext())
+        {
+            var attempt = await afterAdmission.PlaidTokenExchangeAttempts
+                .SingleAsync(row => row.Id == exchangeAttemptId);
+            attempt.Status.Should().Be("RemoteAdmitted");
+            attempt.RemoteAdmittedAtUtc.Should().NotBeNull();
+            attempt.RemoteReceiptRecordedAtUtc.Should().BeNull();
+        }
+
+        var receiptIdentity = new AtomicCommandIdentity(
+            "banking.plaid.exchange.receipt",
+            $"{_portfolioId}:{exchangeAttemptId:N}");
+        var receipt = new RecordPlaidTokenExchangeReceiptCommand(
+            _portfolioId,
+            exchangeAttemptId,
+            "provider-request-exact",
+            "protected-item",
+            new string('4', 64),
+            "protected-access",
+            _now.AddSeconds(2));
+        var receipts = await Task.WhenAll(
+            Atomic.ExecuteAsync(receiptIdentity, receipt, ExchangeReceiptCodec),
+            Atomic.ExecuteAsync(receiptIdentity, receipt, ExchangeReceiptCodec));
+
+        receipts.Select(row => row.Disposition).Should()
+            .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
+        await using var verify = NewContext();
+        var durable = await verify.PlaidTokenExchangeAttempts.SingleAsync(row => row.Id == exchangeAttemptId);
+        durable.Status.Should().Be("RemoteReceiptRecorded");
+        durable.ProviderRequestIdentity.Should().Be("provider-request-exact");
+        durable.ExternalItemIdCipherText.Should().Be("protected-item");
+        durable.ExternalAccessTokenCipherText.Should().Be("protected-access");
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == prepareIdentity.CommandType || row.CommandType == receiptIdentity.CommandType))
+            .Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task PlaidConnection_FinalizeFailureRollsBackConnectionAndLeavesDurableRemoteReceiptForRecovery()
+    {
+        SkipIfNoDocker();
+        var exchangeAttemptId = Guid.NewGuid();
+        await using (var seed = NewContext())
+        {
+            seed.PlaidTokenExchangeAttempts.Add(RemoteReceipt(exchangeAttemptId, "finalize-recovery"));
+            await seed.SaveChangesAsync();
+        }
+        var identity = new AtomicCommandIdentity(
+            "banking.plaid.connection.apply",
+            $"{_portfolioId}:{exchangeAttemptId:N}");
+        var command = new ApplyPlaidConnectionCommand(_portfolioId, exchangeAttemptId, _now);
+        Failures.FailAtomicAudit = true;
+
+        await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, ConnectionCodec))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("injected atomic audit failure");
+        Failures.FailAtomicAudit = false;
+
+        await using (var failed = NewContext())
+        {
+            (await failed.BankConnections.CountAsync()).Should().Be(0);
+            var durable = await failed.PlaidTokenExchangeAttempts.SingleAsync(row => row.Id == exchangeAttemptId);
+            durable.Status.Should().Be("RemoteReceiptRecorded");
+            durable.CompletedAtUtc.Should().BeNull();
+            (await failed.AtomicCommandReceipts.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(0);
+        }
+
+        var recovered = await Atomic.ExecuteAsync(identity, command, ConnectionCodec);
+        recovered.Value.ConnectionId.Should().BePositive();
+        await using var verify = NewContext();
+        (await verify.BankConnections.CountAsync()).Should().Be(1);
+        (await verify.PlaidTokenExchangeAttempts.SingleAsync(row => row.Id == exchangeAttemptId))
+            .Status.Should().Be("Completed");
     }
 
     [SkippableFact]
@@ -173,6 +315,34 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         result.Value.SkippedCount.Should().Be(2);
         await using var db = NewContext();
         (await db.BankTransactions.CountAsync(row => row.ProviderTransactionId == input.ProviderTransactionId)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Import_PostgreSqlTreatsCaseDistinctOpaqueProviderIdsAsDistinct()
+    {
+        SkipIfNoDocker();
+        var command = new ImportBankTransactionsCommand(
+            _portfolioId,
+            "Manual",
+            "Ordinal bank",
+            "Checking",
+            null,
+            null,
+            null,
+            [Transaction("Opaque-AbC", 1m), Transaction("opaque-aBc", 2m)],
+            2,
+            "ordinal-provider-ids",
+            _now);
+
+        var result = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:ordinal-provider-ids"),
+            command,
+            ImportCodec);
+
+        result.Value.ImportedCount.Should().Be(2);
+        await using var db = NewContext();
+        (await db.BankTransactions.CountAsync(row => row.BankConnection!.InstitutionName == "Ordinal bank"))
+            .Should().Be(2);
     }
 
     [SkippableFact]
@@ -251,7 +421,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             db.BankConnections.Add(connection);
             await db.SaveChangesAsync();
             connectionId = connection.Id;
-            var transaction = new BankTransaction
+            var seededTransaction = new BankTransaction
             {
                 PortfolioId = _portfolioId,
                 BankConnectionId = connectionId,
@@ -263,9 +433,9 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
                 CreatedAt = _now,
                 UpdatedAt = _now,
             };
-            db.BankTransactions.Add(transaction);
+            db.BankTransactions.Add(seededTransaction);
             await db.SaveChangesAsync();
-            transactionId = transaction.Id;
+            transactionId = seededTransaction.Id;
         }
         var command = new ReconcileBankTransactionCommand(
             _portfolioId, transactionId, BankReconciliationAction.Ignore, null, _now, _now.AddSeconds(1));
@@ -400,6 +570,27 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL banking atomic tests.");
 
+    private PlaidTokenExchangeAttempt RemoteReceipt(Guid id, string operationId) => new()
+    {
+        Id = id,
+        PortfolioId = _portfolioId,
+        ClientOperationId = operationId,
+        RequestHash = new string('1', 64),
+        PublicTokenHash = new string('2', 64),
+        InstitutionName = "Recovery bank",
+        AccountName = "Operating",
+        ExternalAccountIdCipherText = "protected-account",
+        ExternalAccountIdHash = new string('3', 64),
+        Status = "RemoteReceiptRecorded",
+        PreparedAtUtc = _now,
+        RemoteAdmittedAtUtc = _now,
+        RemoteReceiptRecordedAtUtc = _now,
+        ProviderRequestIdentity = operationId,
+        ExternalItemIdCipherText = "protected-item",
+        ExternalItemIdHash = new string('4', 64),
+        ExternalAccessTokenCipherText = "protected-access",
+    };
+
     private sealed class TestActor : ICurrentActor
     {
         public int? UserId => 801;
@@ -430,6 +621,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     private sealed class NotificationFailureInterceptor : DbCommandInterceptor
     {
         public bool FailNotifications { get; set; }
+        public bool FailAtomicAudit { get; set; }
 
         public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
             DbCommand command,
@@ -441,6 +633,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             {
                 throw new InvalidOperationException("injected notification failure");
             }
+            if (FailAtomicAudit && command.CommandText.Contains("INSERT INTO \"AtomicAuditLogs\"", StringComparison.Ordinal))
+                throw new InvalidOperationException("injected atomic audit failure");
             return ValueTask.FromResult(result);
         }
 
@@ -454,6 +648,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             {
                 throw new InvalidOperationException("injected notification failure");
             }
+            if (FailAtomicAudit && command.CommandText.Contains("INSERT INTO \"AtomicAuditLogs\"", StringComparison.Ordinal))
+                throw new InvalidOperationException("injected atomic audit failure");
             return ValueTask.FromResult(result);
         }
     }

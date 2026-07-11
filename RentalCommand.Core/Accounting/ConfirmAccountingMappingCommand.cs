@@ -14,7 +14,8 @@ public sealed record ConfirmAccountingMappingCommand(
     string LocalEntityType,
     int? LocalEntityId,
     string? LocalEnumValue,
-    string RequestIdentity,
+    string ClientOperationId,
+    long ExpectedRevision,
     DateTime ConfirmedAtUtc) : IAtomicCommandData;
 
 public enum ConfirmAccountingMappingOutcome
@@ -22,11 +23,36 @@ public enum ConfirmAccountingMappingOutcome
     Applied,
     ConnectionNotFound,
     InvalidTarget,
+    StaleRevision,
 }
 
 public sealed record ConfirmAccountingMappingResult(
     ConfirmAccountingMappingOutcome Outcome,
     int MappingId,
+    long MappingRevision,
     int PromotedCount,
-    IReadOnlyList<int> PaymentIds,
-    IReadOnlyList<int> ExpenseIds) : IAtomicResultData;
+    Guid? ContinuationId,
+    bool HasMore) : IAtomicResultData;
+
+public sealed record ContinueAccountingMappingPromotionCommand(
+    int PortfolioId,
+    int AccountingConnectionId,
+    Guid ContinuationId,
+    int RequestedByUserId,
+    string ClientOperationId,
+    DateTime AppliedAtUtc) : IAtomicCommandData;
+
+public enum ContinueAccountingMappingPromotionOutcome
+{
+    Applied,
+    Completed,
+    NotFound,
+    Superseded,
+}
+
+public sealed record ContinueAccountingMappingPromotionResult(
+    ContinueAccountingMappingPromotionOutcome Outcome,
+    Guid ContinuationId,
+    int PromotedCount,
+    int TotalPromotedCount,
+    bool HasMore) : IAtomicResultData;

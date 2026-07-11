@@ -13,6 +13,7 @@
  */
 
 import { fail } from '@sveltejs/kit';
+import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
 import { serverGet, serverPost } from '$lib/api/server-fetch';
 
@@ -58,6 +59,8 @@ export interface AccountingMapping {
 	confidence: number | null;
 	confirmed: boolean;
 	confirmedAt: string | null;
+	revision: number;
+	confirmationOperationId: string;
 }
 
 /** One imported transaction parked in the review queue (unmatched / needs-review). */
@@ -129,8 +132,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 				)
 			]);
 
-			const unconfirmed = unconfirmedResult.data ?? [];
-			const confirmed = confirmedResult.data ?? [];
+			const withOperation = (mapping: Omit<AccountingMapping, 'confirmationOperationId'>): AccountingMapping => ({
+				...mapping,
+				confirmationOperationId: randomUUID()
+			});
+			const unconfirmed = (unconfirmedResult.data ?? []).map(withOperation);
+			const confirmed = (confirmedResult.data ?? []).map(withOperation);
 			const reviewQueue = reviewResult.data ?? [];
 			return {
 				status,
@@ -250,11 +257,18 @@ export const actions: Actions = {
 		const localEntityIdRaw = form.get('localEntityId')?.toString();
 		const localEnumValue = form.get('localEnumValue')?.toString() || null;
 		const externalDisplayName = form.get('externalDisplayName')?.toString() || null;
+		const clientOperationId = form.get('clientOperationId')?.toString();
+		const expectedRevisionRaw = form.get('expectedRevision')?.toString();
+		if (!clientOperationId || expectedRevisionRaw == null) {
+			return fail(400, { error: 'Missing mapping operation identity or revision.' });
+		}
 
-		const result = await serverPost<{ promoted: number }>(
+		const result = await serverPost<{ promoted: number; hasMore: boolean; continuationId: string | null }>(
 			`${BASE}/${provider}/mappings/confirm`,
 			locals.accessToken,
 			{
+				clientOperationId,
+				expectedRevision: Number(expectedRevisionRaw),
 				externalType,
 				externalId,
 				externalDisplayName,
@@ -266,6 +280,10 @@ export const actions: Actions = {
 		if (result.error) {
 			return fail(result.status || 400, { error: result.error });
 		}
-		return { mappingConfirmed: true, promoted: result.data?.promoted ?? 0 };
+		return {
+			mappingConfirmed: true,
+			promoted: result.data?.promoted ?? 0,
+			promotionContinues: result.data?.hasMore ?? false
+		};
 	}
 };

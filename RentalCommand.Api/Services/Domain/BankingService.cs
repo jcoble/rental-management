@@ -24,6 +24,12 @@ public class BankingService : IBankingService
     private const int MaxSyncRetries = 3;
     private static readonly AtomicJsonResultCodec<ApplyPlaidConnectionResult> PlaidConnectionCodec =
         new("banking.plaid.connection.result.v1");
+    private static readonly AtomicJsonResultCodec<PreparePlaidTokenExchangeResult> PlaidExchangePrepareCodec =
+        new("banking.plaid.exchange.prepare.result.v1");
+    private static readonly AtomicJsonResultCodec<AdmitPlaidTokenExchangeResult> PlaidExchangeAdmitCodec =
+        new("banking.plaid.exchange.admit.result.v1");
+    private static readonly AtomicJsonResultCodec<RecordPlaidTokenExchangeReceiptResult> PlaidExchangeReceiptCodec =
+        new("banking.plaid.exchange.receipt.result.v1");
     private static readonly AtomicJsonResultCodec<ApplyPlaidSyncResult> PlaidSyncCodec =
         new("banking.plaid.sync.result.v1");
     private static readonly AtomicJsonResultCodec<ImportBankTransactionsResult> ImportCodec =
@@ -144,6 +150,10 @@ public class BankingService : IBankingService
     {
         var publicToken = Normalize(request.PublicToken)
             ?? throw new InvalidOperationException("A Plaid public token is required.");
+        var clientOperationId = Normalize(request.ClientOperationId)
+            ?? throw new InvalidOperationException("A stable client operation id is required for Plaid token exchange.");
+        if (clientOperationId.Length > 160)
+            throw new InvalidOperationException("Plaid ClientOperationId cannot exceed 160 characters.");
         var accountId = Normalize(request.AccountId)
             ?? throw new InvalidOperationException("A Plaid account id is required.");
 
@@ -153,36 +163,101 @@ public class BankingService : IBankingService
             throw new InvalidOperationException("Plaid settings are not configured.");
         }
 
-        var exchange = await _plaid.ExchangePublicTokenAsync(settings, publicToken, ct);
-        var itemId = Normalize(exchange.ItemId)
-            ?? throw new InvalidOperationException("Plaid returned an empty item id.");
-        var accessToken = Normalize(exchange.AccessToken)
-            ?? throw new InvalidOperationException("Plaid returned an empty access token.");
-        var itemIdHash = ExternalLookupHash(itemId)!;
         var accountIdHash = ExternalLookupHash(accountId)!;
-        var providerIdentity = Normalize(exchange.RequestId)
-            ?? $"fallback-{Digest(itemId, accountId, accessToken)}";
         var now = _timeProvider.UtcNow();
-        var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("banking.plaid.connection.apply", $"{portfolioId}:{Digest(providerIdentity)}"),
-            new ApplyPlaidConnectionCommand(
+        var publicTokenHash = ExternalLookupHash(publicToken)!;
+        var requestHash = Digest(
+            portfolioId,
+            publicTokenHash,
+            accountIdHash,
+            Normalize(request.InstitutionName),
+            Normalize(request.AccountName),
+            Normalize(request.AccountMask),
+            Normalize(request.AccountType),
+            Normalize(request.AccountSubtype));
+        var prepared = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "banking.plaid.exchange.prepare",
+                $"{portfolioId}:{Digest(clientOperationId)}"),
+            new PreparePlaidTokenExchangeCommand(
                 portfolioId,
+                clientOperationId,
+                requestHash,
+                publicTokenHash,
                 Normalize(request.InstitutionName) ?? "Plaid bank",
                 Normalize(request.AccountName) ?? "Linked account",
                 Normalize(request.AccountMask),
                 Normalize(request.AccountType),
                 Normalize(request.AccountSubtype),
-                ProtectNullable(itemId)!,
                 ProtectNullable(accountId)!,
-                itemIdHash,
                 accountIdHash,
-                ProtectNullable(accessToken)!,
-                providerIdentity,
                 now),
+            PlaidExchangePrepareCodec,
+            ct);
+        var exchangeAttempt = await _db.PlaidTokenExchangeAttempts.AsNoTracking()
+            .SingleAsync(row => row.Id == prepared.Value.ExchangeAttemptId
+                && row.PortfolioId == portfolioId, ct);
+        if (!string.Equals(exchangeAttempt.RequestHash, requestHash, StringComparison.Ordinal))
+            throw new InvalidOperationException("This Plaid operation id is already bound to a different request.");
+
+        if (exchangeAttempt.CompletedAtUtc is null && exchangeAttempt.RemoteReceiptRecordedAtUtc is null)
+        {
+            if (exchangeAttempt.RemoteAdmittedAtUtc is not null)
+            {
+                throw new InvalidOperationException(
+                    "Plaid token exchange was admitted previously but no local receipt is available. " +
+                    "The single-use public token will not be exchanged again; support must reconcile this attempt.");
+            }
+            var admitted = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "banking.plaid.exchange.admit",
+                    $"{portfolioId}:{exchangeAttempt.Id:N}"),
+                new AdmitPlaidTokenExchangeCommand(portfolioId, exchangeAttempt.Id, _timeProvider.UtcNow()),
+                PlaidExchangeAdmitCodec,
+                ct);
+            if (admitted.Value.Outcome != AdmitPlaidTokenExchangeOutcome.Admitted
+                || admitted.Disposition != AtomicCommandDisposition.Executed)
+            {
+                throw new InvalidOperationException(
+                    "Plaid token exchange is already owned by an admitted request. " +
+                    "The single-use public token will not be exchanged concurrently.");
+            }
+
+            // Plaid I/O is deliberately outside every local database transaction. The durable
+            // admission above makes an unknown remote outcome visible and prevents blind reuse.
+            var remote = await _plaid.ExchangePublicTokenAsync(settings, publicToken, ct);
+            var itemId = Normalize(remote.ItemId)
+                ?? throw new InvalidOperationException("Plaid returned an empty item id.");
+            var accessToken = Normalize(remote.AccessToken)
+                ?? throw new InvalidOperationException("Plaid returned an empty access token.");
+            var providerIdentity = Normalize(remote.RequestId)
+                ?? $"fallback-{Digest(itemId, accountId, accessToken)}";
+            await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "banking.plaid.exchange.receipt",
+                    $"{portfolioId}:{exchangeAttempt.Id:N}"),
+                new RecordPlaidTokenExchangeReceiptCommand(
+                    portfolioId,
+                    exchangeAttempt.Id,
+                    providerIdentity,
+                    ProtectNullable(itemId)!,
+                    ExternalLookupHash(itemId)!,
+                    ProtectNullable(accessToken)!,
+                    _timeProvider.UtcNow()),
+                PlaidExchangeReceiptCodec,
+                ct);
+        }
+
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "banking.plaid.connection.apply",
+                $"{portfolioId}:{exchangeAttempt.Id:N}"),
+            new ApplyPlaidConnectionCommand(portfolioId, exchangeAttempt.Id, _timeProvider.UtcNow()),
             PlaidConnectionCodec,
             ct);
 
-        await SyncPlaidConnectionAsync(portfolioId, outcome.Value.ConnectionId, ct);
+        if (exchangeAttempt.CompletedAtUtc is null)
+            await SyncPlaidConnectionAsync(portfolioId, outcome.Value.ConnectionId, ct);
         return await _db.BankConnections.AsNoTracking()
             .Where(row => row.PortfolioId == portfolioId && row.Id == outcome.Value.ConnectionId)
             .Select(row => MapConnection(row))
@@ -316,7 +391,7 @@ public class BankingService : IBankingService
         var inputs = request.Transactions
             .Select(ToInput)
             .Where(input => input.ProviderTransactionId.Length > 0)
-            .GroupBy(input => input.ProviderTransactionId, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(input => input.ProviderTransactionId, StringComparer.Ordinal)
             .Select(group => group.First())
             .ToArray();
         var requestIdentity = Digest(
@@ -634,7 +709,7 @@ public class BankingService : IBankingService
             Normalize(item.Category),
             item.RawData))
         .Where(item => item.ProviderTransactionId.Length > 0)
-        .GroupBy(item => item.ProviderTransactionId, StringComparer.OrdinalIgnoreCase)
+        .GroupBy(item => item.ProviderTransactionId, StringComparer.Ordinal)
         .Select(group => group.Last())
         .Take(MaxImportBatch)
         .ToArray();

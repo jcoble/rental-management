@@ -817,6 +817,7 @@ export interface BankConnection {
 }
 
 export interface ExchangePlaidPublicTokenRequest {
+	clientOperationId: string;
 	publicToken: string;
 	institutionName: string;
 	accountId: string;
