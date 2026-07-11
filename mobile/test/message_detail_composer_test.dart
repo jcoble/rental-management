@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/api/api_exception.dart';
 import 'package:rental_command/features/messages/message_detail_screen.dart';
 import 'package:rental_command/features/messages/message_models.dart';
 import 'package:rental_command/features/messages/messages_repository.dart';
@@ -9,8 +10,14 @@ import 'package:rental_command/features/messages/messages_repository.dart';
 class _FakeMessagesRepository extends MessagesRepository {
   _FakeMessagesRepository() : super(Dio(), tenantMode: false);
 
+  final operationKeys = <String?>[];
+  bool failNextSend = false;
+
   @override
   Future<Conversation> getConversation(int id) async => _conversation;
+
+  @override
+  Future<List<Conversation>> listConversations() async => [_conversation];
 
   @override
   Future<Conversation> sendMessage(
@@ -18,7 +25,14 @@ class _FakeMessagesRepository extends MessagesRepository {
     required String body,
     required List<String> channels,
     String? operationKey,
-  }) async => _conversation;
+  }) async {
+    operationKeys.add(operationKey);
+    if (failNextSend) {
+      failNextSend = false;
+      throw const ApiException(statusCode: 503, message: 'Retry send.');
+    }
+    return _conversation;
+  }
 
   static final _conversation = Conversation(
     id: 42,
@@ -62,5 +76,35 @@ void main() {
     expect(fieldRect.left, 8);
     expect(screenWidth - fieldRect.right, 8);
     expect(fieldRect.width, screenWidth - 16);
+  });
+
+  testWidgets('message retry reuses one non-null operation key', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _FakeMessagesRepository()..failNextSend = true;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          messagesRepositoryProvider.overrideWithValue(repository),
+        ],
+        child: const MaterialApp(home: MessageDetailScreen(conversationId: 42)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'Please retry this message.');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+
+    expect(repository.operationKeys, hasLength(1));
+    final firstOperationKey = repository.operationKeys.single;
+    expect(firstOperationKey, isNotNull);
+    expect(firstOperationKey, isNotEmpty);
+
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+
+    expect(repository.operationKeys, [firstOperationKey, firstOperationKey]);
   });
 }

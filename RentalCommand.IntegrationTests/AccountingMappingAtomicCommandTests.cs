@@ -73,8 +73,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             ValidateScopes = true,
         });
 
-        await using var scope = _services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await using var db = NewContext();
         await db.Database.MigrateAsync();
         await SeedAsync(db);
     }
