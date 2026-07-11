@@ -177,7 +177,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         _probe.FailOnAtomicAuditInsert = true;
 
         var attempt = async () => await Atomic.ExecuteAsync(identity, command, VendorDoneCodec);
-        await attempt.Should().ThrowAsync<InjectedCompanionFailure>();
+        var failure = await attempt.Should().ThrowAsync<DbUpdateException>();
+        failure.Which.InnerException.Should().BeOfType<InjectedCompanionFailure>();
         _probe.FailOnAtomicAuditInsert = false;
 
         await using (var rolledBack = NewContext())
