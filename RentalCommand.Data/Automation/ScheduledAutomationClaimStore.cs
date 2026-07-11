@@ -3,10 +3,12 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Data.Automation;
 
 public sealed record ScheduledAutomationClaim(int Id, int PortfolioId, Guid ClaimToken);
+public sealed record LoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);
 
 public interface IScheduledAutomationClaimStore
 {
@@ -19,6 +21,14 @@ public interface IScheduledAutomationClaimStore
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
         string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
+    Task<IReadOnlyList<Loan>> LockOwnedLoansAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
+    Task<IReadOnlyDictionary<int, LoanPaymentTail>> LoadLoanTailsAsync(
+        IReadOnlyList<int> loanIds, CancellationToken ct = default);
+    Task<IReadOnlyList<RecurringExpense>> LockOwnedRecurringExpensesAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
+    Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -87,9 +97,11 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         WITH candidates AS (
             SELECT task."Id"
             FROM "RecurringMaintenanceTasks" AS task
+            LEFT JOIN "NotificationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
             WHERE task."DeletedAt" IS NULL
               AND task."IsActive"
               AND task."NextDueDate" <= @today
+              AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
               AND (task."WorkerClaimToken" IS NULL OR task."WorkerClaimExpiresAtUtc" <= @now)
             ORDER BY task."NextDueDate", task."Id"
             FOR UPDATE OF task SKIP LOCKED
@@ -123,6 +135,79 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default) =>
         ClaimAsync(MaintenanceSql, owner, todayUtc, nowUtc, leaseDuration, batchSize, false, ct);
+
+    public async Task<IReadOnlyList<Loan>> LockOwnedLoansAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
+    {
+        var (ids, token) = BatchIdentity(claims);
+        if (ids.Length == 0) return [];
+        return await _db.Loans.FromSqlInterpolated($"""
+            SELECT loan.*
+            FROM "Loans" AS loan
+            WHERE loan."Id" = ANY({ids})
+              AND loan."DeletedAt" IS NULL
+              AND loan."WorkerClaimToken" = {token}
+              AND loan."Status" = {(int)LoanStatus.Active}
+              AND loan."TermMonths" > 0
+              AND date_trunc('month', loan."StartDate") <= date_trunc('month', {AsUtc(todayUtc)})
+            ORDER BY loan."Id"
+            FOR UPDATE OF loan
+            """).IgnoreQueryFilters().ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyDictionary<int, LoanPaymentTail>> LoadLoanTailsAsync(
+        IReadOnlyList<int> loanIds, CancellationToken ct = default)
+    {
+        if (loanIds.Count == 0) return new Dictionary<int, LoanPaymentTail>();
+        var ids = loanIds.ToArray();
+        var tails = await _db.LoanPayments.AsNoTracking()
+            .Where(payment => ids.Contains(payment.LoanId))
+            .GroupBy(payment => payment.LoanId)
+            .Select(group => group.OrderByDescending(payment => payment.PeriodKey)
+                .Select(payment => new LoanPaymentTail(
+                    payment.LoanId, payment.PeriodKey, payment.BalanceAfter))
+                .First())
+            .ToListAsync(ct);
+        return tails.ToDictionary(tail => tail.LoanId);
+    }
+
+    public async Task<IReadOnlyList<RecurringExpense>> LockOwnedRecurringExpensesAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
+    {
+        var (ids, token) = BatchIdentity(claims);
+        if (ids.Length == 0) return [];
+        return await _db.RecurringExpenses.FromSqlInterpolated($"""
+            SELECT template.*
+            FROM "RecurringExpenses" AS template
+            WHERE template."Id" = ANY({ids})
+              AND template."DeletedAt" IS NULL
+              AND template."WorkerClaimToken" = {token}
+              AND template."Active"
+              AND template."NextRunDate" <= {AsUtc(todayUtc)}
+            ORDER BY template."Id"
+            FOR UPDATE OF template
+            """).IgnoreQueryFilters().ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
+    {
+        var (ids, token) = BatchIdentity(claims);
+        if (ids.Length == 0) return [];
+        return await _db.RecurringMaintenanceTasks.FromSqlInterpolated($"""
+            SELECT task.*
+            FROM "RecurringMaintenanceTasks" AS task
+            LEFT JOIN "NotificationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
+            WHERE task."Id" = ANY({ids})
+              AND task."DeletedAt" IS NULL
+              AND task."WorkerClaimToken" = {token}
+              AND task."IsActive"
+              AND task."NextDueDate" <= {AsUtc(todayUtc)}
+              AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
+            ORDER BY task."Id"
+            FOR UPDATE OF task
+            """).IgnoreQueryFilters().ToListAsync(ct);
+    }
 
     private async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimAsync(
         string sql, string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration,
@@ -174,4 +259,13 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         DateTimeKind.Local => value.ToUniversalTime(),
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
+
+    private static (int[] Ids, Guid Token) BatchIdentity(IReadOnlyList<ScheduledAutomationClaim> claims)
+    {
+        if (claims.Count == 0) return ([], Guid.Empty);
+        var token = claims[0].ClaimToken;
+        if (claims.Any(claim => claim.ClaimToken != token))
+            throw new InvalidOperationException("A scheduled automation batch must share one claim token.");
+        return (claims.Select(claim => claim.Id).ToArray(), token);
+    }
 }

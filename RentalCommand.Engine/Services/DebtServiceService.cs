@@ -51,13 +51,7 @@ public sealed class DebtServiceService : IDebtServiceService
         var claims = await _claims.ClaimDebtServiceAsync(
             $"{Environment.MachineName}:debt-service", today, _timeProvider.UtcNow(),
             TimeSpan.FromMinutes(3), 25, ct);
-        var created = 0;
-
-        foreach (var claim in claims)
-        {
-            ct.ThrowIfCancellationRequested();
-            created += await ProcessClaimAsync(claim, today, ct);
-        }
+        var created = await ProcessClaimsAsync(claims, today, ct);
 
         if (created > 0)
             _logger.LogInformation("DebtServiceService created {Count} loan payment(s)", created);
@@ -65,130 +59,103 @@ public sealed class DebtServiceService : IDebtServiceService
         return created;
     }
 
-    private async Task<int> ProcessClaimAsync(
-        ScheduledAutomationClaim claim, DateTime today, CancellationToken ct)
+    private async Task<int> ProcessClaimsAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime today, CancellationToken ct)
     {
+        if (claims.Count == 0) return 0;
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         try
         {
-            // Lock and re-check ownership before creating any child rows. If the lease expired and
-            // another worker reclaimed it, this transaction performs no business write.
-            var ownedLoan = _db.Database.IsNpgsql()
-                ? _db.Loans.FromSqlInterpolated($"""
-                    SELECT * FROM "Loans"
-                    WHERE "Id" = {claim.Id} AND "WorkerClaimToken" = {claim.ClaimToken}
-                    FOR UPDATE
-                    """)
-                : _db.Loans.Where(row => row.Id == claim.Id && row.WorkerClaimToken == claim.ClaimToken);
-            var loan = await ownedLoan.SingleOrDefaultAsync(ct);
-            if (loan is null)
+            // Two reads for the whole bounded batch: one ownership-fenced row lock and one grouped
+            // tail projection. No per-loan query is issued inside the processing loop.
+            var loans = await _claims.LockOwnedLoansAsync(claims, today, ct);
+            var tails = await _claims.LoadLoanTailsAsync(loans.Select(loan => loan.Id).ToArray(), ct);
+            var created = 0;
+
+            foreach (var loan in loans)
             {
-                await tx.RollbackAsync(ct);
-                return 0;
-            }
+                ct.ThrowIfCancellationRequested();
 
-            // Nothing to amortize for a non-positive term or balance.
-            if (loan.Status != LoanStatus.Active || loan.TermMonths <= 0)
-            {
-                ClearClaim(loan);
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return 0;
-            }
+                var startMonth = new DateTime(loan.StartDate.Year, loan.StartDate.Month, 1);
+                var currentMonth = new DateTime(today.Year, today.Month, 1);
 
-            var startMonth = new DateTime(loan.StartDate.Year, loan.StartDate.Month, 1);
-            var currentMonth = new DateTime(today.Year, today.Month, 1);
+                // Period 1 = the loan's start month. The current period index is how many months
+                // have elapsed (inclusive). The batch lock excludes loans that have not started.
+                var currentPeriodIndex = MonthsBetween(startMonth, currentMonth) + 1;
 
-            // Period 1 = the loan's start month. The current period index is how many months have
-            // elapsed (inclusive). Before the loan starts there is nothing to generate.
-            var currentPeriodIndex = MonthsBetween(startMonth, currentMonth) + 1;
-            if (currentPeriodIndex < 1)
-            {
-                ClearClaim(loan);
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return 0;
-            }
+                // Never generate past the loan term (maturity stop, §18).
+                var lastPeriodToGenerate = Math.Min(currentPeriodIndex, loan.TermMonths);
+                tails.TryGetValue(loan.Id, out var lastRow);
 
-            // Never generate past the loan term (maturity stop, §18).
-            var lastPeriodToGenerate = Math.Min(currentPeriodIndex, loan.TermMonths);
+                var nextPeriodIndex = lastRow is null
+                    ? 1
+                    : PeriodIndexFromKey(lastRow.PeriodKey, startMonth) + 1;
 
-            var lastRow = await _db.LoanPayments
-                .AsNoTracking()
-                .Where(p => p.LoanId == loan.Id)
-                .OrderByDescending(p => p.PeriodKey)
-                .Select(p => new LoanPaymentTail(p.LoanId, p.PeriodKey, p.BalanceAfter))
-                .FirstOrDefaultAsync(ct);
+                // Opening balance for the next period is the prior row's BalanceAfter (or, for the
+                // first period, the original principal) — NEVER the live CurrentBalance cache.
+                var openingBalance = lastRow?.BalanceAfter ?? loan.OriginalAmount;
 
-            var nextPeriodIndex = lastRow is null
-                ? 1
-                : PeriodIndexFromKey(lastRow.PeriodKey, startMonth) + 1;
+                var loanCreated = 0;
+                var lastBalanceAfter = openingBalance;
+                var paidOff = false;
 
-            // Opening balance for the next period is the prior row's BalanceAfter (or, for the very
-            // first period, the original principal) — NEVER the live, user-editable CurrentBalance.
-            var openingBalance = lastRow?.BalanceAfter ?? loan.OriginalAmount;
-
-            var loanCreated = 0;
-            var lastBalanceAfter = openingBalance;
-            var paidOff = false;
-
-            for (var period = nextPeriodIndex; period <= lastPeriodToGenerate; period++)
-            {
-                var periodMonth = startMonth.AddMonths(period - 1);
-                var periodKey = $"{periodMonth.Year:D4}-{periodMonth.Month:D2}";
-
-                var split = AmortizationCalculator.Split(
-                    openingBalance, loan.AnnualInterestRatePct, loan.MonthlyPrincipalInterest, loan.MonthlyEscrow);
-
-                var dueDay = Math.Min(loan.DayOfMonthDue <= 0 ? 1 : loan.DayOfMonthDue,
-                    DateTime.DaysInMonth(periodMonth.Year, periodMonth.Month));
-                var dueDate = new DateTime(periodMonth.Year, periodMonth.Month, dueDay, 0, 0, 0, DateTimeKind.Utc);
-
-                _db.LoanPayments.Add(new LoanPayment
+                for (var period = nextPeriodIndex; period <= lastPeriodToGenerate; period++)
                 {
-                    PortfolioId = loan.PortfolioId,
-                    LoanId = loan.Id,
-                    PeriodKey = periodKey,
-                    DueDate = dueDate,
-                    InterestAmount = split.Interest,
-                    PrincipalAmount = split.Principal,
-                    EscrowAmount = split.Escrow,
-                    TotalAmount = split.Total,
-                    BalanceAfter = split.BalanceAfter,
-                    Status = LoanPaymentStatus.Scheduled,
-                    PaymentDoesNotCoverInterest = split.DoesNotCoverInterest,
-                    CreatedAt = _timeProvider.UtcNow(),
-                });
+                    var periodMonth = startMonth.AddMonths(period - 1);
+                    var periodKey = $"{periodMonth.Year:D4}-{periodMonth.Month:D2}";
 
-                loanCreated++;
-                lastBalanceAfter = split.BalanceAfter;
-                openingBalance = split.BalanceAfter;
+                    var split = AmortizationCalculator.Split(
+                        openingBalance,
+                        loan.AnnualInterestRatePct,
+                        loan.MonthlyPrincipalInterest,
+                        loan.MonthlyEscrow);
 
-                if (split.PaidOff)
-                {
-                    paidOff = true;
-                    break; // loan closed — stop generating further periods
+                    var dueDay = Math.Min(
+                        loan.DayOfMonthDue <= 0 ? 1 : loan.DayOfMonthDue,
+                        DateTime.DaysInMonth(periodMonth.Year, periodMonth.Month));
+                    var dueDate = new DateTime(
+                        periodMonth.Year, periodMonth.Month, dueDay, 0, 0, 0, DateTimeKind.Utc);
+
+                    _db.LoanPayments.Add(new LoanPayment
+                    {
+                        PortfolioId = loan.PortfolioId,
+                        LoanId = loan.Id,
+                        PeriodKey = periodKey,
+                        DueDate = dueDate,
+                        InterestAmount = split.Interest,
+                        PrincipalAmount = split.Principal,
+                        EscrowAmount = split.Escrow,
+                        TotalAmount = split.Total,
+                        BalanceAfter = split.BalanceAfter,
+                        Status = LoanPaymentStatus.Scheduled,
+                        PaymentDoesNotCoverInterest = split.DoesNotCoverInterest,
+                        CreatedAt = _timeProvider.UtcNow(),
+                    });
+
+                    loanCreated++;
+                    lastBalanceAfter = split.BalanceAfter;
+                    openingBalance = split.BalanceAfter;
+
+                    if (split.PaidOff)
+                    {
+                        paidOff = true;
+                        break; // loan closed — stop generating further periods
+                    }
                 }
-            }
 
-            if (loanCreated == 0)
-            {
                 ClearClaim(loan);
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return 0;
+                if (loanCreated == 0) continue;
+
+                // Update the derived cache. The authoritative figures live in LoanPayment rows.
+                loan.CurrentBalance = lastBalanceAfter;
+                loan.UpdatedAt = _timeProvider.UtcNow();
+                if (paidOff) loan.Status = LoanStatus.PaidOff;
+                created += loanCreated;
             }
 
-            // Update the derived cache (CurrentBalance/Status). This is a convenience mirror; the
-            // authoritative figures live in the LoanPayment rows.
-            loan.CurrentBalance = lastBalanceAfter;
-            loan.UpdatedAt = _timeProvider.UtcNow();
-            if (paidOff)
-                loan.Status = LoanStatus.PaidOff;
-            ClearClaim(loan);
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            return loanCreated;
+            return created;
         }
         catch (OperationCanceledException)
         {
@@ -200,7 +167,7 @@ public sealed class DebtServiceService : IDebtServiceService
         {
             await tx.RollbackAsync(CancellationToken.None);
             _db.ChangeTracker.Clear();
-            _logger.LogWarning(ex, "Failed debt-service claim for loan {LoanId}; lease will expire for retry", claim.Id);
+            _logger.LogWarning(ex, "Failed debt-service batch; leases will expire for retry");
             return 0;
         }
     }
@@ -229,6 +196,4 @@ public sealed class DebtServiceService : IDebtServiceService
         }
         return 0;
     }
-
-    private sealed record LoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);
 }

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Automation;
@@ -21,6 +22,47 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         }))), ct);
     }
 
+    public async Task<IReadOnlyList<Loan>> LockOwnedLoansAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
+    {
+        var (ids, token) = BatchIdentity(claims);
+        return await db.Loans.Where(row => ids.Contains(row.Id) && row.WorkerClaimToken == token &&
+            row.Status == LoanStatus.Active && row.TermMonths > 0 && row.StartDate <= todayUtc).ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyDictionary<int, LoanPaymentTail>> LoadLoanTailsAsync(
+        IReadOnlyList<int> loanIds, CancellationToken ct = default)
+    {
+        var tails = await db.LoanPayments.AsNoTracking()
+            .Where(payment => loanIds.Contains(payment.LoanId))
+            .GroupBy(payment => payment.LoanId)
+            .Select(group => group.OrderByDescending(payment => payment.PeriodKey)
+                .Select(payment => new LoanPaymentTail(payment.LoanId, payment.PeriodKey, payment.BalanceAfter))
+                .First())
+            .ToListAsync(ct);
+        return tails.ToDictionary(tail => tail.LoanId);
+    }
+
+    public async Task<IReadOnlyList<RecurringExpense>> LockOwnedRecurringExpensesAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
+    {
+        var (ids, token) = BatchIdentity(claims);
+        return await db.RecurringExpenses.Where(row => ids.Contains(row.Id) && row.WorkerClaimToken == token &&
+            row.Active && row.NextRunDate <= todayUtc).ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
+    {
+        var (ids, token) = BatchIdentity(claims);
+        return await db.RecurringMaintenanceTasks.Where(row => ids.Contains(row.Id) &&
+            row.WorkerClaimToken == token && row.IsActive && row.NextDueDate <= todayUtc &&
+            (!db.NotificationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
+             db.NotificationSettings.Any(settings =>
+                 settings.PortfolioId == row.PortfolioId && settings.EnableRecurringMaintenance)))
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringExpensesAsync(
         string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default)
@@ -39,7 +81,10 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         CancellationToken ct = default)
     {
         var rows = await db.RecurringMaintenanceTasks.Where(row => row.IsActive && row.NextDueDate <= todayUtc &&
-                (row.WorkerClaimToken == null || row.WorkerClaimExpiresAtUtc <= nowUtc))
+                (row.WorkerClaimToken == null || row.WorkerClaimExpiresAtUtc <= nowUtc) &&
+                (!db.NotificationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
+                 db.NotificationSettings.Any(settings =>
+                     settings.PortfolioId == row.PortfolioId && settings.EnableRecurringMaintenance)))
             .OrderBy(row => row.NextDueDate).ThenBy(row => row.Id).Take(batchSize).ToListAsync(ct);
         return await AssignAsync(rows.Select(row => (row.Id, row.PortfolioId, (Action<Guid>)(token =>
         {
@@ -58,5 +103,11 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         }).ToArray();
         await db.SaveChangesAsync(ct);
         return claims;
+    }
+
+    private static (int[] Ids, Guid Token) BatchIdentity(IReadOnlyList<ScheduledAutomationClaim> claims)
+    {
+        if (claims.Count == 0) return ([], Guid.Empty);
+        return (claims.Select(claim => claim.Id).ToArray(), claims[0].ClaimToken);
     }
 }

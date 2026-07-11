@@ -15,6 +15,13 @@ public partial class AddScheduledAutomationClaims : Migration
         AddClaimColumns(migrationBuilder, "RecurringExpenses");
         AddClaimColumns(migrationBuilder, "RecurringMaintenanceTasks");
 
+        migrationBuilder.AddColumn<bool>(
+            name: "EnableRecurringMaintenance",
+            table: "NotificationSettings",
+            type: "boolean",
+            nullable: false,
+            defaultValue: true);
+
         migrationBuilder.CreateIndex(
             name: "IX_Loans_DebtServiceClaim",
             table: "Loans",
@@ -34,6 +41,8 @@ public partial class AddScheduledAutomationClaims : Migration
         migrationBuilder.DropIndex(name: "IX_Loans_DebtServiceClaim", table: "Loans");
         migrationBuilder.DropIndex(name: "IX_RecurringExpenses_GenerationClaim", table: "RecurringExpenses");
         migrationBuilder.DropIndex(name: "IX_RecurringMaintenanceTasks_GenerationClaim", table: "RecurringMaintenanceTasks");
+
+        migrationBuilder.DropColumn(name: "EnableRecurringMaintenance", table: "NotificationSettings");
 
         DropClaimColumns(migrationBuilder, "Loans");
         DropClaimColumns(migrationBuilder, "RecurringExpenses");

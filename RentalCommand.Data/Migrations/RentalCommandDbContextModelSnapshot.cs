@@ -3130,6 +3130,11 @@ namespace RentalCommand.Data.Migrations
                     b.Property<bool>("EnableRentCharges")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("EnableRecurringMaintenance")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
                     b.Property<int>("LateFeeGraceDays")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")

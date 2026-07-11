@@ -56,13 +56,7 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
         var claims = await _claims.ClaimRecurringExpensesAsync(
             $"{Environment.MachineName}:recurring-expense", today, _timeProvider.UtcNow(),
             TimeSpan.FromMinutes(3), 25, ct);
-        var created = 0;
-
-        foreach (var claim in claims)
-        {
-            ct.ThrowIfCancellationRequested();
-            created += await ProcessClaimAsync(claim, today, ct);
-        }
+        var created = await ProcessClaimsAsync(claims, today, ct);
 
         if (created > 0)
             _logger.LogInformation(
@@ -71,85 +65,65 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
         return created;
     }
 
-    private async Task<int> ProcessClaimAsync(
-        ScheduledAutomationClaim claim, DateTime today, CancellationToken ct)
+    private async Task<int> ProcessClaimsAsync(
+        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime today, CancellationToken ct)
     {
+        if (claims.Count == 0) return 0;
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         try
         {
-            var ownedTemplate = _db.Database.IsNpgsql()
-                ? _db.RecurringExpenses.FromSqlInterpolated($"""
-                    SELECT * FROM "RecurringExpenses"
-                    WHERE "Id" = {claim.Id} AND "WorkerClaimToken" = {claim.ClaimToken}
-                    FOR UPDATE
-                    """)
-                : _db.RecurringExpenses.Where(row => row.Id == claim.Id && row.WorkerClaimToken == claim.ClaimToken);
-            var template = await ownedTemplate.SingleOrDefaultAsync(ct);
-            if (template is null)
-            {
-                await tx.RollbackAsync(ct);
-                return 0;
-            }
+            var templates = await _claims.LockOwnedRecurringExpensesAsync(claims, today, ct);
+            var created = 0;
 
-            if (!template.Active || template.NextRunDate > today)
+            foreach (var template in templates)
             {
-                ClearClaim(template);
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return 0;
-            }
+                ct.ThrowIfCancellationRequested();
 
-            var now = _timeProvider.UtcNow();
-            var newExpenses = new List<Expense>();
+                var now = _timeProvider.UtcNow();
+                var newExpenses = new List<Expense>();
 
-            // Materialize one expense per due period, advancing the run date each time. Cap the catch-up
-            // so a template that has been dormant for years can't flood the ledger in one cycle.
-            var runDate = template.NextRunDate;
-            var periods = 0;
-            while (runDate <= today && periods < MaxCatchUpPeriods)
-            {
-                newExpenses.Add(new Expense
+                // Materialize one expense per due period. Cap catch-up so a long-dormant template
+                // cannot flood the ledger in one cycle.
+                var runDate = template.NextRunDate;
+                var periods = 0;
+                while (runDate <= today && periods < MaxCatchUpPeriods)
                 {
-                    PortfolioId = template.PortfolioId,
-                    PropertyId = template.PropertyId,
-                    Category = template.Category,
-                    Description = template.Description,
-                    Status = ExpenseStatus.Pending,
-                    Amount = template.Amount,
-                    IncurredAt = runDate,
-                    Notes = template.Notes,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                });
+                    newExpenses.Add(new Expense
+                    {
+                        PortfolioId = template.PortfolioId,
+                        PropertyId = template.PropertyId,
+                        Category = template.Category,
+                        Description = template.Description,
+                        Status = ExpenseStatus.Pending,
+                        Amount = template.Amount,
+                        IncurredAt = runDate,
+                        Notes = template.Notes,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    });
 
-                runDate = Advance(runDate, template.Frequency);
-                periods++;
-            }
+                    runDate = Advance(runDate, template.Frequency);
+                    periods++;
+                }
 
-            // If still behind after the cap, jump the schedule forward to the next not-yet-due period so
-            // we don't re-process the same backlog every cycle.
-            while (runDate <= today)
-                runDate = Advance(runDate, template.Frequency);
+                // If still behind after the cap, jump to the next not-yet-due period so this same
+                // backlog is not reprocessed every cycle.
+                while (runDate <= today)
+                    runDate = Advance(runDate, template.Frequency);
 
-            if (newExpenses.Count == 0)
-            {
                 ClearClaim(template);
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-                return 0;
-            }
+                if (newExpenses.Count == 0) continue;
 
-            // The expense inserts and the NextRunDate advance must commit atomically: a crash between
-            // separate saves could create expenses without advancing the schedule, double-billing the
-            // cost next cycle. One transaction; the (active, due) re-scan retries the whole unit.
-            _db.Expenses.AddRange(newExpenses);
-            template.NextRunDate = runDate;
-            template.UpdatedAt = now;
-            ClearClaim(template);
+                // Inserts and NextRunDate advances commit atomically for the entire claimed batch.
+                _db.Expenses.AddRange(newExpenses);
+                template.NextRunDate = runDate;
+                template.UpdatedAt = now;
+                created += newExpenses.Count;
+            }
 
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-            return newExpenses.Count;
+            return created;
         }
         catch (OperationCanceledException)
         {
@@ -163,8 +137,7 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
             _db.ChangeTracker.Clear();
             _logger.LogWarning(
                 ex,
-                "Failed recurring-expense claim for template {TemplateId}; lease will expire for retry",
-                claim.Id);
+                "Failed recurring-expense batch; leases will expire for retry");
             return 0;
         }
     }
