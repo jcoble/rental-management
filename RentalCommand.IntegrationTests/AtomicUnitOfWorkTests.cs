@@ -400,13 +400,16 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         receipt.IdempotencyKey.Should().HaveLength(64);
         receipt.IdempotencyKey.Should().NotContain(token);
         receipt.ResultJson.Should().NotContain(token);
-        (await verify.Db.AtomicAuditLogs.AsNoTracking().CountAsync(audit =>
-            audit.CommandType == identity.CommandType
-            && audit.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2);
-        (await verify.Db.AtomicAuditLogs.AsNoTracking().AnyAsync(audit =>
-            audit.CommandType == identity.CommandType
-            && ((audit.OldValues != null && audit.OldValues.Contains(token))
-                || (audit.NewValues != null && audit.NewValues.Contains(token))))).Should().BeFalse();
+        var auditPayloads = await verify.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(audit => audit.CommandType == identity.CommandType
+                && audit.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(audit => new { audit.OldValues, audit.NewValues })
+            .ToListAsync();
+        auditPayloads.Should().HaveCount(2);
+        auditPayloads.Should().OnlyContain(audit =>
+            !(audit.OldValues?.Contains(token, StringComparison.Ordinal) ?? false)
+            && !(audit.NewValues?.Contains(token, StringComparison.Ordinal) ?? false),
+            "the two command-scoped audit payloads must never retain the raw signer token");
     }
 
     [SkippableFact]

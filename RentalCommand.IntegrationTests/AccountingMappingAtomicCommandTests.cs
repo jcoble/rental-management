@@ -264,7 +264,9 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         var mapping = await db.AccountingEntityMappings.SingleAsync(row =>
             row.AccountingConnectionId == _connectionId
             && row.ExternalId == "customer-correction");
-        mapping.ConfirmedAt.Should().BeAfter(_now.AddMinutes(5));
+        mapping.ConfirmedAt.Should().Be(
+            _now.AddMinutes(5).AddTicks(TimeSpan.TicksPerMicrosecond),
+            "a correction at the same requested instant must still receive the next PostgreSQL-representable mutation timestamp");
         mapping.UpdatedAt.Should().Be(mapping.ConfirmedAt);
     }
 
