@@ -20,6 +20,7 @@ void main() {
         bytes: Uint8List.fromList([1, 2, 3]),
         fileName: 'rent-receipt.jpg',
         contentType: 'image/jpeg',
+        clientOperationId: 'receipt-upload-17',
       );
 
       expect(adapter.method, 'POST');
@@ -29,6 +30,7 @@ void main() {
       expect(_field(formData, 'entityType'), 'Payment');
       expect(_field(formData, 'entityId'), '17');
       expect(_field(formData, 'category'), 'Receipt');
+      expect(_field(formData, 'clientOperationId'), 'receipt-upload-17');
       expect(formData.files.single.key, 'file');
       expect(formData.files.single.value.filename, 'rent-receipt.jpg');
       expect(document.id, 33);

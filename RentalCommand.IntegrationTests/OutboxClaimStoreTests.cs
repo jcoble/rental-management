@@ -226,6 +226,44 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         row.ProviderMessageId.Should().Be("push-provider-id");
     }
 
+    [SkippableFact]
+    public async Task Worker_retries_durable_blob_cleanup_until_storage_accepts_it()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var now = DateTime.UtcNow;
+        await SeedAsync(new OutboxMessage
+        {
+            MessageType = "blob-delete",
+            Payload = """{"storagePath":"stored/document.pdf"}""",
+            IdempotencyKey = "stored-file-delete:41",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        var storage = new CapturingFileStorage { RemainingDeleteFailures = 1 };
+
+        await RunWorkerAsync(new CapturingChannel(), new CapturingPushSender(), storage);
+
+        await using (var retryDb = NewContext())
+        {
+            var failed = await retryDb.OutboxMessages.SingleAsync(message => message.IdempotencyKey == "stored-file-delete:41");
+            failed.AcceptedAtUtc.Should().BeNull();
+            failed.DeadLetteredAtUtc.Should().BeNull();
+            failed.AttemptCount.Should().Be(1);
+            failed.NextAttemptAtUtc = DateTime.UtcNow.AddSeconds(-1);
+            await retryDb.SaveChangesAsync();
+        }
+
+        await RunWorkerAsync(new CapturingChannel(), new CapturingPushSender(), storage);
+
+        storage.DeleteAttempts.Should().Equal("stored/document.pdf", "stored/document.pdf");
+        await using var verify = NewContext();
+        var accepted = await verify.OutboxMessages.SingleAsync(message => message.IdempotencyKey == "stored-file-delete:41");
+        accepted.AcceptedAtUtc.Should().NotBeNull();
+        accepted.Provider.Should().Be("file-storage");
+        accepted.ProviderMessageId.Should().Be($"outbox-{accepted.Id}");
+    }
+
     private async Task SeedAsync(params OutboxMessage[] messages)
     {
         await using var db = NewContext();
@@ -239,7 +277,10 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         await db.OutboxMessages.ExecuteDeleteAsync();
     }
 
-    private async Task RunWorkerAsync(INotificationChannel channel, IPushSender pushSender)
+    private async Task RunWorkerAsync(
+        INotificationChannel channel,
+        IPushSender pushSender,
+        IFileStorage? fileStorage = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -249,6 +290,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         services.AddScoped<INotificationChannel>(_ => channel);
         services.AddSingleton(pushSender);
         services.AddSingleton<IPushSender>(pushSender);
+        services.AddSingleton<IFileStorage>(fileStorage ?? new CapturingFileStorage());
         await using var provider = services.BuildServiceProvider();
         await using var scope = provider.CreateAsyncScope();
         var worker = new TestableOutboxWorker(provider);
@@ -363,6 +405,32 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         {
             Tokens.Add(deviceToken);
             return Task.FromResult(PushSendResult.Ok("push-provider-id"));
+        }
+    }
+
+    private sealed class CapturingFileStorage : IFileStorage
+    {
+        public int RemainingDeleteFailures { get; set; }
+        public List<string> DeleteAttempts { get; } = [];
+
+        public Task<string> UploadAsync(
+            Stream content,
+            string fileName,
+            string contentType,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<Stream> DownloadAsync(string path, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DeleteAsync(string path, CancellationToken ct = default)
+        {
+            DeleteAttempts.Add(path);
+            if (RemainingDeleteFailures-- > 0)
+            {
+                throw new IOException("Simulated transient storage failure.");
+            }
+
+            return Task.CompletedTask;
         }
     }
 }

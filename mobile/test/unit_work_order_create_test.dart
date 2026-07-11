@@ -179,6 +179,7 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
+    String? clientOperationId,
   }) async {}
 }
 

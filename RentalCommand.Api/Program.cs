@@ -183,6 +183,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Screening.CreateAdverseActionNoticeResult,
     RentalCommand.Data.Screening.CreateAdverseActionNoticeHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.CreateStoredDocumentCommand,
+    RentalCommand.Core.Documents.CreateStoredDocumentResult,
+    RentalCommand.Data.Documents.CreateStoredDocumentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.DeleteStoredDocumentCommand,
+    RentalCommand.Core.Documents.DeleteStoredDocumentResult,
+    RentalCommand.Data.Documents.DeleteStoredDocumentHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Conversations.SendConversationMessageCommand,
     RentalCommand.Core.Conversations.SendConversationMessageResult,
     RentalCommand.Data.Conversations.SendConversationMessageHandler>();

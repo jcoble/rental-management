@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -6,6 +7,7 @@ using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -102,6 +104,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         [FromForm] string entityType,
         [FromForm] int entityId,
         [FromForm] string? category,
+        [FromForm] string clientOperationId,
         CancellationToken ct)
     {
         if (file is null || file.Length == 0)
@@ -116,30 +119,32 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         if (string.IsNullOrWhiteSpace(entityType))
             return BadRequest(new { error = "entityType is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
-
-        // Cross-tenant attach guard: the referenced entity must exist inside the caller's portfolio.
-        // Without this, a caller could attach a document to another tenant's record by id.
-        var (entityKnown, entityInPortfolio) =
-            await EntityBelongsToPortfolioAsync(normalizedEntityType, entityId, portfolioId, ct);
-        if (!entityKnown)
+        if (int.TryParse(normalizedEntityType, out _)
+            || !Enum.TryParse<StoredDocumentTarget>(normalizedEntityType, ignoreCase: true, out var target)
+            || !Enum.IsDefined(target))
             return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
-        if (!entityInPortfolio)
+        var tenantId = GetTenantIdOrNull();
+        var isStaff = GetRoles().Any(role => StaffDocumentRoles.Contains(role));
+        if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
-        // Tenant guard: a tenant principal may only attach to a WorkOrder they own (their sole document
-        // surface). Portfolio scope above is shared by every tenant in the portfolio, so without this a
-        // tenant could attach to another tenant's lease/payment/work-order record by id.
-        if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
-            return NotFound(new { error = "The referenced record was not found in your portfolio." });
+        string contentSha256;
+        await using (var hashStream = file.OpenReadStream())
+        {
+            contentSha256 = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, ct)).ToLowerInvariant();
+        }
 
         // Store the blob.
         string storageKey;
         try
         {
-            storageKey = await _storage.UploadAsync(file.OpenReadStream(), fileName, contentType, ct);
+            await using var uploadStream = file.OpenReadStream();
+            storageKey = await _storage.UploadAsync(uploadStream, fileName, contentType, ct);
         }
         catch (Exception ex)
         {
@@ -147,26 +152,22 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "File storage failed." });
         }
 
-        // Persist the StoredFile row; clean up the blob on DB failure.
-        DocumentDto dto;
-        try
-        {
-            dto = await _documents.CreateAsync(
-                portfolioId,
-                normalizedEntityType,
-                entityId,
-                DiskFileStorage.SanitizeFileName(fileName),
-                contentType,
-                file.Length,
-                storageKey,
-                ct);
-        }
-        catch
-        {
-            // Best-effort orphan blob cleanup.
-            try { await _storage.DeleteAsync(storageKey, ct); } catch { /* swallow */ }
-            throw;
-        }
+        var dto = await _documents.CreateAsync(
+            portfolioId,
+            target,
+            entityId,
+            GetUserId(),
+            tenantId,
+            isStaff,
+            clientOperationId,
+            contentSha256,
+            DiskFileStorage.SanitizeFileName(fileName),
+            contentType,
+            file.Length,
+            storageKey,
+            ct);
+        if (dto is null)
+            return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
         dto.Category = category;
         return CreatedAtAction(nameof(GetFile), new { id = dto.Id }, dto);
@@ -271,25 +272,32 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     }
 
     // -------------------------------------------------------------------------
-    // DELETE /api/v1/documents/{id}  — soft-delete
+    // DELETE /api/v1/documents/{id}  — soft-delete + durable post-commit blob cleanup
     // -------------------------------------------------------------------------
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromQuery] string clientOperationId,
+        CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+
         var portfolioId = GetPortfolioId();
-
-        // Tenant guard: resolve the row first so a tenant can only delete a document on a WorkOrder they
-        // own; a tenant must never soft-delete another tenant's (or the owner's) portfolio documents.
-        var row = await _documents.FindAsync(portfolioId, id, ct);
-        if (row is null)
-            return NotFound(new { error = "Document not found." });
-        if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
-            return NotFound(new { error = "Document not found." });
-
-        var deleted = await _documents.DeleteAsync(portfolioId, id, ct);
+        var tenantId = GetTenantIdOrNull();
+        var isStaff = GetRoles().Any(role => StaffDocumentRoles.Contains(role));
+        var deleted = await _documents.DeleteAsync(
+            portfolioId,
+            id,
+            GetUserId(),
+            tenantId,
+            isStaff,
+            clientOperationId,
+            ct);
         return deleted ? NoContent() : NotFound(new { error = "Document not found." });
     }
 
@@ -329,67 +337,6 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         return await _db.WorkOrders.AnyAsync(
             w => w.Id == entityId.Value && w.PortfolioId == portfolioId && w.TenantId == tenantId.Value, ct);
-    }
-
-    // -------------------------------------------------------------------------
-    // Cross-tenant attach guard
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Verifies that <paramref name="entityType"/>/<paramref name="entityId"/> references a row that
-    /// lives in <paramref name="portfolioId"/>. Matching is case-insensitive on the entity type name.
-    /// </summary>
-    /// <returns>
-    /// <c>Known</c> = whether the entity type is a recognised document target;
-    /// <c>InPortfolio</c> = whether the referenced row exists within the caller's portfolio.
-    /// </returns>
-    private async Task<(bool Known, bool InPortfolio)> EntityBelongsToPortfolioAsync(
-        string entityType, int entityId, int portfolioId, CancellationToken ct)
-    {
-        // A non-positive entityId can never match a real row, so the AnyAsync checks below
-        // naturally report "not in portfolio" (→ 404) for a recognised type.
-        switch (entityType.ToLowerInvariant())
-        {
-            case "property":
-                return (true, await _db.Properties.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "unit":
-                // Unit has no direct PortfolioId; scope through its parent Property.
-                return (true, await _db.Units.AnyAsync(
-                    e => e.Id == entityId && e.Property != null && e.Property.PortfolioId == portfolioId, ct));
-            case "tenant":
-                return (true, await _db.Tenants.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "lease":
-                return (true, await _db.Leases.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "payment":
-                return (true, await _db.Payments.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "expense":
-                return (true, await _db.Expenses.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "vendor":
-                return (true, await _db.Vendors.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "workorder":
-                return (true, await _db.WorkOrders.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "appointment":
-                return (true, await _db.Appointments.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "inspection":
-                return (true, await _db.Inspections.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "securitydeposit":
-                return (true, await _db.SecurityDepositHoldings.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "ownerentity":
-                return (true, await _db.OwnerEntities.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            default:
-                return (false, false);
-        }
     }
 
     // -------------------------------------------------------------------------

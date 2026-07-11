@@ -1,12 +1,13 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
 /// Portfolio-scoped CRUD for <see cref="StoredFile"/> rows surfaced via the Documents hub.
-/// Blob storage is handled directly by <see cref="Core.Interfaces.IFileStorage"/>; this service
-/// manages the DB rows and validation.
+/// Upload is completed before this boundary. This service owns receipt-backed database mutation
+/// plus safe compensation of only a newly uploaded, unreferenced blob.
 /// </summary>
 public interface IDocumentService
 {
@@ -23,10 +24,15 @@ public interface IDocumentService
     /// <summary>
     /// Persist a <see cref="StoredFile"/> row for an already-stored blob. Returns the DTO.
     /// </summary>
-    Task<DocumentDto> CreateAsync(
+    Task<DocumentDto?> CreateAsync(
         int portfolioId,
-        string entityType,
+        StoredDocumentTarget target,
         int entityId,
+        int userId,
+        int? tenantId,
+        bool isStaff,
+        string clientOperationId,
+        string contentSha256,
         string fileName,
         string contentType,
         long sizeBytes,
@@ -43,5 +49,12 @@ public interface IDocumentService
     /// Soft-delete a <see cref="StoredFile"/> row (set <c>DeletedAt</c>).
     /// Returns false when not found or already deleted.
     /// </summary>
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<bool> DeleteAsync(
+        int portfolioId,
+        int id,
+        int userId,
+        int? tenantId,
+        bool isStaff,
+        string clientOperationId,
+        CancellationToken ct = default);
 }

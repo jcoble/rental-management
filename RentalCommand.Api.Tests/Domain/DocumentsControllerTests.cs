@@ -9,6 +9,7 @@ using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -83,8 +84,13 @@ public sealed class DocumentsControllerTests : IDisposable
         documents
             .Setup(d => d.CreateAsync(
                 PortfolioId,
-                entityType,
+                Enum.Parse<StoredDocumentTarget>(entityType),
                 entityId,
+                7,
+                6,
+                true,
+                "upload-operation",
+                It.IsAny<string>(),
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<long>(),
@@ -117,7 +123,8 @@ public sealed class DocumentsControllerTests : IDisposable
             new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
-        var result = await controller.Upload(file, entityType, entityId, category: null, CancellationToken.None);
+        var result = await controller.Upload(
+            file, entityType, entityId, category: null, clientOperationId: "upload-operation", ct: CancellationToken.None);
 
         var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
         created.Value.Should().BeOfType<DocumentDto>()
@@ -129,8 +136,13 @@ public sealed class DocumentsControllerTests : IDisposable
             It.IsAny<CancellationToken>()), Times.Once);
         documents.Verify(d => d.CreateAsync(
             PortfolioId,
-            entityType,
+            Enum.Parse<StoredDocumentTarget>(entityType),
             entityId,
+            7,
+            6,
+            true,
+            "upload-operation",
+            It.IsAny<string>(),
             "test-upload.txt",
             "text/plain",
             It.IsAny<long>(),
@@ -149,8 +161,13 @@ public sealed class DocumentsControllerTests : IDisposable
         documents
             .Setup(d => d.CreateAsync(
                 PortfolioId,
-                entityType,
+                StoredDocumentTarget.WorkOrder,
                 entityId,
+                7,
+                tenantId,
+                false,
+                "tenant-upload-operation",
+                It.IsAny<string>(),
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<long>(),
@@ -183,7 +200,8 @@ public sealed class DocumentsControllerTests : IDisposable
             new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
-        var result = await controller.Upload(file, entityType, entityId, category: null, CancellationToken.None);
+        var result = await controller.Upload(
+            file, entityType, entityId, category: null, clientOperationId: "tenant-upload-operation", ct: CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
         storage.Verify(s => s.UploadAsync(
@@ -193,8 +211,13 @@ public sealed class DocumentsControllerTests : IDisposable
             It.IsAny<CancellationToken>()), Times.Once);
         documents.Verify(d => d.CreateAsync(
             PortfolioId,
-            entityType,
+            StoredDocumentTarget.WorkOrder,
             entityId,
+            7,
+            tenantId,
+            false,
+            "tenant-upload-operation",
+            It.IsAny<string>(),
             "test-upload.txt",
             "text/plain",
             It.IsAny<long>(),
@@ -203,7 +226,7 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Upload_WithTenantOnlyRole_RejectsNonWorkOrderTarget()
+    public async Task Upload_WithTenantOnlyRole_RejectsKnownInvalidTargetBeforeBlobIo()
     {
         const string entityType = "Unit";
         var entityId = SeedDocumentTarget(entityType);
@@ -217,7 +240,8 @@ public sealed class DocumentsControllerTests : IDisposable
             new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
-        var result = await controller.Upload(file, entityType, entityId, category: null, CancellationToken.None);
+        var result = await controller.Upload(
+            file, entityType, entityId, category: null, clientOperationId: "denied-upload-operation", ct: CancellationToken.None);
 
         result.Result.Should().BeOfType<NotFoundObjectResult>();
         storage.Verify(s => s.UploadAsync(
@@ -227,8 +251,13 @@ public sealed class DocumentsControllerTests : IDisposable
             It.IsAny<CancellationToken>()), Times.Never);
         documents.Verify(d => d.CreateAsync(
             It.IsAny<int>(),
-            It.IsAny<string>(),
+            It.IsAny<StoredDocumentTarget>(),
             It.IsAny<int>(),
+            It.IsAny<int>(),
+            It.IsAny<int?>(),
+            It.IsAny<bool>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<long>(),
