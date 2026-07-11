@@ -33,6 +33,7 @@ public class PlaidLinkTokenRequest
 
 public class ExchangePlaidPublicTokenRequest
 {
+    public string ClientOperationId { get; set; } = string.Empty;
     public string PublicToken { get; set; } = string.Empty;
     public string InstitutionName { get; set; } = string.Empty;
     public string AccountId { get; set; } = string.Empty;

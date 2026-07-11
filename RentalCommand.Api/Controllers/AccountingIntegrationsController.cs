@@ -219,8 +219,29 @@ public class AccountingIntegrationsController : ManagementControllerBase
 
         try
         {
-            var promoted = await _service.ConfirmMappingAsync(GetPortfolioId(), parsed, GetUserId(), request, ct);
-            return Ok(new { promoted });
+            return Ok(await _service.ConfirmMappingAsync(GetPortfolioId(), parsed, GetUserId(), request, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("{provider}/mappings/promotions/{continuationId:guid}/continue")]
+    [ProducesResponseType(typeof(ContinueAccountingMappingPromotionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ContinueMappingPromotion(
+        string provider,
+        Guid continuationId,
+        [FromBody] ContinueAccountingMappingPromotionRequest request,
+        CancellationToken ct)
+    {
+        if (!TryParseProvider(provider, out var parsed))
+            return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
+        try
+        {
+            return Ok(await _service.ContinueMappingPromotionAsync(
+                GetPortfolioId(), parsed, GetUserId(), continuationId, request, ct));
         }
         catch (InvalidOperationException ex)
         {

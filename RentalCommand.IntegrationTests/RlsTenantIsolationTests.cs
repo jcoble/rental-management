@@ -80,6 +80,21 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         {
             _portfolioA = await SeedPortfolioWithOverduePaymentAsync(ctx, "Portfolio A", "PO-A");
             _portfolioB = await SeedPortfolioWithOverduePaymentAsync(ctx, "Portfolio B", "PO-B");
+            ctx.PlaidTokenExchangeAttempts.AddRange(
+                PlaidAttempt(_portfolioA, "operation-a"),
+                PlaidAttempt(_portfolioB, "operation-b"));
+            var connectionA = NewAccountingConnection(_portfolioA);
+            var connectionB = NewAccountingConnection(_portfolioB);
+            ctx.AccountingConnections.AddRange(connectionA, connectionB);
+            await ctx.SaveChangesAsync();
+            var mappingA = AccountingMapping(_portfolioA, connectionA.Id, "customer-a");
+            var mappingB = AccountingMapping(_portfolioB, connectionB.Id, "customer-b");
+            ctx.AccountingEntityMappings.AddRange(mappingA, mappingB);
+            await ctx.SaveChangesAsync();
+            ctx.AccountingMappingPromotionJobs.AddRange(
+                PromotionJob(_portfolioA, connectionA.Id, mappingA.Id),
+                PromotionJob(_portfolioB, connectionB.Id, mappingB.Id));
+            await ctx.SaveChangesAsync();
         }
     }
 
@@ -148,6 +163,45 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         var act = async () => await ctx.SaveChangesAsync();
         await act.Should().ThrowAsync<DbUpdateException>(
             "the WITH CHECK clause must block writing a row for a different portfolio");
+    }
+
+    [SkippableFact]
+    public async Task Rls_PlaidExchangeAdmission_SeesOwnAttempt_AndRejectsCrossPortfolioWrite()
+    {
+        SkipIfNoDocker();
+        await using var conn = await OpenAsApiRoleAsync(_portfolioA);
+        await using (var roleCommand = conn.CreateCommand())
+        {
+            roleCommand.CommandText = "SELECT current_user";
+            (await roleCommand.ExecuteScalarAsync()).Should().Be(ApiRole);
+        }
+        await using (var forceCommand = conn.CreateCommand())
+        {
+            forceCommand.CommandText = """
+                SELECT count(*)
+                FROM pg_class
+                WHERE relname IN ('AccountingMappingPromotionJobs', 'PlaidTokenExchangeAttempts')
+                  AND relrowsecurity
+                  AND relforcerowsecurity
+                """;
+            Convert.ToInt32(await forceCommand.ExecuteScalarAsync()).Should().Be(2,
+                "both durable recovery tables must run with ENABLE and FORCE ROW LEVEL SECURITY");
+        }
+        await using var ctx = NewContext(conn);
+
+        var operations = await ctx.PlaidTokenExchangeAttempts
+            .OrderBy(row => row.ClientOperationId)
+            .Select(row => row.ClientOperationId)
+            .ToListAsync();
+        operations.Should().Equal("operation-a");
+        var jobs = await ctx.AccountingMappingPromotionJobs
+            .Select(row => row.PortfolioId)
+            .ToListAsync();
+        jobs.Should().Equal(_portfolioA);
+
+        ctx.PlaidTokenExchangeAttempts.Add(PlaidAttempt(_portfolioB, "cross-write"));
+        var act = async () => await ctx.SaveChangesAsync();
+        await act.Should().ThrowAsync<DbUpdateException>();
     }
 
     [SkippableFact]
@@ -268,4 +322,50 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
 
         return portfolio.Id;
     }
+
+    private static PlaidTokenExchangeAttempt PlaidAttempt(int portfolioId, string operationId) => new()
+    {
+        Id = Guid.NewGuid(),
+        PortfolioId = portfolioId,
+        ClientOperationId = operationId,
+        RequestHash = new string('a', 64),
+        PublicTokenHash = new string('b', 64),
+        InstitutionName = "RLS bank",
+        AccountName = "Operating",
+        ExternalAccountIdCipherText = "protected",
+        ExternalAccountIdHash = new string('c', 64),
+        Status = "Prepared",
+        PreparedAtUtc = DateTime.UtcNow,
+    };
+
+    private static AccountingConnection NewAccountingConnection(int portfolioId) => new()
+    {
+        PortfolioId = portfolioId,
+        Provider = AccountingProvider.QuickBooks,
+        Status = AccountingConnectionStatus.Connected,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow,
+    };
+
+    private static AccountingEntityMapping AccountingMapping(int portfolioId, int connectionId, string externalId) => new()
+    {
+        PortfolioId = portfolioId,
+        AccountingConnectionId = connectionId,
+        ExternalType = "Customer",
+        ExternalId = externalId,
+        LocalEntityType = "Tenant",
+        Revision = 1,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow,
+    };
+
+    private static AccountingMappingPromotionJob PromotionJob(int portfolioId, int connectionId, int mappingId) => new()
+    {
+        Id = Guid.NewGuid(),
+        PortfolioId = portfolioId,
+        AccountingConnectionId = connectionId,
+        AccountingEntityMappingId = mappingId,
+        MappingRevision = 1,
+        CreatedAtUtc = DateTime.UtcNow,
+    };
 }

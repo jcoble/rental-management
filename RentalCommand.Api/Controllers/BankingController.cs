@@ -59,9 +59,11 @@ public class BankingController : ManagementControllerBase
         [FromBody] ExchangePlaidPublicTokenRequest request,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(request.PublicToken) || string.IsNullOrWhiteSpace(request.AccountId))
+        if (string.IsNullOrWhiteSpace(request.ClientOperationId)
+            || string.IsNullOrWhiteSpace(request.PublicToken)
+            || string.IsNullOrWhiteSpace(request.AccountId))
         {
-            return BadRequest(new { error = "Plaid public token and account id are required." });
+            return BadRequest(new { error = "Plaid operation id, public token, and account id are required." });
         }
 
         return Ok(await _service.ExchangePlaidPublicTokenAsync(GetPortfolioId(), request, ct));

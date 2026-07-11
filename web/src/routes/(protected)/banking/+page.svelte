@@ -53,6 +53,7 @@
 	let exchangeAccountId = $state('');
 	let exchangeAccountName = $state('Operating checking');
 	let exchangeAccountMask = $state('');
+	let manualExchangeOperationId = $state('');
 	let importJson = $state(`{
   "provider": "Manual",
   "institutionName": "Sample Bank",
@@ -156,6 +157,7 @@
 		onSuccess: (connection) => {
 			showSuccess(`Connected ${connection.institutionName} ${connection.accountName}.`);
 			exchangePublicToken = '';
+			manualExchangeOperationId = '';
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err))
@@ -288,6 +290,7 @@
 			const result = await linkTokenMutation.mutateAsync();
 			if (!result.configured || !result.linkToken) return;
 			sessionStorage.setItem('plaid:linkToken', result.linkToken);
+			sessionStorage.removeItem('plaid:exchangeOperationId');
 			await loadPlaidScript();
 			const handler = (window as PlaidWindow).Plaid?.create({
 				token: result.linkToken,
@@ -295,7 +298,10 @@
 					const accounts = (metadata.accounts as Array<Record<string, string | undefined>> | undefined) ?? [];
 					const account = accounts[0] ?? {};
 					const institution = metadata.institution as Record<string, string | undefined> | undefined;
+					const operationId = sessionStorage.getItem('plaid:exchangeOperationId') ?? crypto.randomUUID();
+					sessionStorage.setItem('plaid:exchangeOperationId', operationId);
 					await exchangeMutation.mutateAsync({
+						clientOperationId: operationId,
 						publicToken: public_token,
 						institutionName: institution?.name ?? 'Plaid bank',
 						accountId: account.id ?? '',
@@ -305,6 +311,7 @@
 						accountSubtype: account.subtype
 					});
 					sessionStorage.removeItem('plaid:linkToken');
+					sessionStorage.removeItem('plaid:exchangeOperationId');
 				},
 				onExit: () => {
 					sessionStorage.removeItem('plaid:linkToken');
@@ -322,6 +329,7 @@
 			return;
 		}
 		exchangeMutation.mutate({
+			clientOperationId: (manualExchangeOperationId ||= crypto.randomUUID()),
 			publicToken: exchangePublicToken,
 			institutionName: exchangeInstitutionName,
 			accountId: exchangeAccountId,
@@ -700,11 +708,11 @@
 						<Card.Description>Development-only Plaid sandbox/debug path when Link is not available.</Card.Description>
 					</Card.Header>
 					<Card.Content class="space-y-3 p-4">
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="public-sandbox-token" bind:value={exchangePublicToken} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account id" bind:value={exchangeAccountId} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" bind:value={exchangeInstitutionName} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" bind:value={exchangeAccountName} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Mask" bind:value={exchangeAccountMask} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="public-sandbox-token" bind:value={exchangePublicToken} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account id" bind:value={exchangeAccountId} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" bind:value={exchangeInstitutionName} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" bind:value={exchangeAccountName} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Mask" bind:value={exchangeAccountMask} oninput={() => (manualExchangeOperationId = '')} />
 						<Button class="w-full" variant="outline" onclick={exchangeManualPublicToken} disabled={exchangeMutation.isPending}>
 							Exchange public token
 						</Button>

@@ -336,6 +336,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -349,6 +352,23 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("AccountingEntityMappings");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.AccountingMappingPromotionJob", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uuid");
+                    b.Property<int>("AccountingConnectionId").HasColumnType("integer");
+                    b.Property<int>("AccountingEntityMappingId").HasColumnType("integer");
+                    b.Property<DateTime?>("CompletedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("CreatedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<long>("MappingRevision").HasColumnType("bigint");
+                    b.Property<int>("PortfolioId").HasColumnType("integer");
+                    b.Property<int>("PromotedCount").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("AccountingConnectionId");
+                    b.HasIndex("AccountingEntityMappingId", "MappingRevision").IsUnique();
+                    b.HasIndex("PortfolioId", "CompletedAtUtc", "Id");
+                    b.ToTable("AccountingMappingPromotionJobs");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingSyncMap", b =>
@@ -1319,6 +1339,37 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("BankTransactions");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.PlaidTokenExchangeAttempt", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uuid");
+                    b.Property<string>("AccountMask").HasMaxLength(20).HasColumnType("character varying(20)");
+                    b.Property<string>("AccountName").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)");
+                    b.Property<string>("AccountSubtype").HasMaxLength(80).HasColumnType("character varying(80)");
+                    b.Property<string>("AccountType").HasMaxLength(80).HasColumnType("character varying(80)");
+                    b.Property<int?>("BankConnectionId").HasColumnType("integer");
+                    b.Property<string>("ClientOperationId").IsRequired().HasMaxLength(160).HasColumnType("character varying(160)");
+                    b.Property<DateTime?>("CompletedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("ExternalAccessTokenCipherText").HasMaxLength(4000).HasColumnType("character varying(4000)");
+                    b.Property<string>("ExternalAccountIdCipherText").IsRequired().HasMaxLength(4000).HasColumnType("character varying(4000)");
+                    b.Property<string>("ExternalAccountIdHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("ExternalItemIdCipherText").HasMaxLength(4000).HasColumnType("character varying(4000)");
+                    b.Property<string>("ExternalItemIdHash").HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("InstitutionName").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)");
+                    b.Property<int>("PortfolioId").HasColumnType("integer");
+                    b.Property<DateTime>("PreparedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("ProviderRequestIdentity").HasMaxLength(200).HasColumnType("character varying(200)");
+                    b.Property<string>("PublicTokenHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<DateTime?>("RemoteAdmittedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("RemoteReceiptRecordedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("RequestHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("Status").IsRequired().HasMaxLength(40).HasColumnType("character varying(40)");
+                    b.HasKey("Id");
+                    b.HasIndex("BankConnectionId");
+                    b.HasIndex("PortfolioId", "ClientOperationId").IsUnique();
+                    b.HasIndex("PortfolioId", "Status", "PreparedAtUtc");
+                    b.ToTable("PlaidTokenExchangeAttempts");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.CapabilityDefinition", b =>
@@ -6419,6 +6470,27 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.AccountingMappingPromotionJob", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.AccountingConnection", null)
+                        .WithMany()
+                        .HasForeignKey("AccountingConnectionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.AccountingEntityMapping", null)
+                        .WithMany()
+                        .HasForeignKey("AccountingEntityMappingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", null)
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingSyncMap", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.AccountingConnection", "AccountingConnection")
@@ -6656,6 +6728,20 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("MatchedPayment");
 
                     b.Navigation("Portfolio");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.PlaidTokenExchangeAttempt", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.BankConnection", null)
+                        .WithMany()
+                        .HasForeignKey("BankConnectionId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", null)
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.CapitalAsset", b =>

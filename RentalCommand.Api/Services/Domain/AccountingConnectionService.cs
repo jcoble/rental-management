@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -495,6 +494,7 @@ public class AccountingConnectionService
                 Confidence = m.Confidence,
                 Confirmed = m.ConfirmedAt != null,
                 ConfirmedAt = m.ConfirmedAt,
+                Revision = m.Revision,
             })
             .ToListAsync(ct);
     }
@@ -503,7 +503,7 @@ public class AccountingConnectionService
     /// Confirm (or create) a landlord-chosen mapping between an external entity and a local one, then
     /// promote any transactions that were parked waiting on it (D-3). Stamps the confirming user for audit.
     /// </summary>
-    public async Task<int> ConfirmMappingAsync(
+    public async Task<ConfirmAccountingMappingResponse> ConfirmMappingAsync(
         int portfolioId, AccountingProvider provider, int userId,
         ConfirmAccountingMappingRequest request, CancellationToken ct)
     {
@@ -515,11 +515,15 @@ public class AccountingConnectionService
         var externalType = RequireMappingValue(request.ExternalType, nameof(request.ExternalType));
         var externalId = RequireMappingValue(request.ExternalId, nameof(request.ExternalId));
         var localEntityType = RequireMappingValue(request.LocalEntityType, nameof(request.LocalEntityType));
-        var requestIdentity = MappingRequestIdentity(portfolioId, conn.Id, request);
+        var clientOperationId = RequireMappingValue(request.ClientOperationId, nameof(request.ClientOperationId));
+        if (clientOperationId.Length > 160)
+            throw new InvalidOperationException("Accounting mapping ClientOperationId cannot exceed 160 characters.");
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 "accounting.mapping.confirm",
-                $"{portfolioId}:{conn.Id}:{requestIdentity}"),
+                $"{portfolioId}:{conn.Id}:{userId}:" +
+                $"{OperationDigest($"{externalType}\u001f{externalId}")}:" +
+                OperationDigest(clientOperationId)),
             new ConfirmAccountingMappingCommand(
                 portfolioId,
                 conn.Id,
@@ -531,40 +535,97 @@ public class AccountingConnectionService
                 localEntityType,
                 request.LocalEntityId,
                 Normalize(request.LocalEnumValue),
-                requestIdentity,
+                clientOperationId,
+                request.ExpectedRevision,
                 _timeProvider.UtcNow()),
             new AtomicJsonResultCodec<ConfirmAccountingMappingResult>(
-                "accounting.mapping.confirm.result.v1"),
+                "accounting.mapping.confirm.result.v2"),
             ct);
+
+        if (outcome.Value.Outcome == ConfirmAccountingMappingOutcome.Applied)
+        {
+            var promoted = outcome.Value.PromotedCount;
+            var hasMore = outcome.Value.HasMore;
+            var batchOrdinal = 0;
+            while (hasMore && outcome.Value.ContinuationId is Guid continuationId)
+            {
+                var continued = await ContinueMappingPromotionAsync(
+                    portfolioId,
+                    provider,
+                    userId,
+                    continuationId,
+                    new ContinueAccountingMappingPromotionRequest
+                    {
+                        // Deterministic from the caller's stable operation key. Retrying an HTTP
+                        // request replays each already-committed batch receipt in order.
+                        ClientOperationId = $"batch:{++batchOrdinal}:{OperationDigest(clientOperationId)}",
+                    },
+                    ct);
+                promoted += continued.Promoted;
+                hasMore = continued.HasMore;
+            }
+            return new ConfirmAccountingMappingResponse
+            {
+                MappingId = outcome.Value.MappingId,
+                MappingRevision = outcome.Value.MappingRevision,
+                Promoted = promoted,
+                ContinuationId = hasMore ? outcome.Value.ContinuationId : null,
+                HasMore = hasMore,
+            };
+        }
 
         return outcome.Value.Outcome switch
         {
-            ConfirmAccountingMappingOutcome.Applied => outcome.Value.PromotedCount,
             ConfirmAccountingMappingOutcome.ConnectionNotFound => throw new InvalidOperationException(
                 $"No {provider} connection. Connect the provider first."),
             ConfirmAccountingMappingOutcome.InvalidTarget => throw new InvalidOperationException(
                 "The requested accounting mapping target is invalid or belongs to another portfolio."),
+            ConfirmAccountingMappingOutcome.StaleRevision => throw new InvalidOperationException(
+                $"The accounting mapping changed. Refresh and retry from revision {outcome.Value.MappingRevision}."),
             _ => throw new InvalidOperationException("Accounting mapping confirmation returned an unknown outcome."),
         };
     }
 
-    private static string MappingRequestIdentity(
+    public async Task<ContinueAccountingMappingPromotionResponse> ContinueMappingPromotionAsync(
         int portfolioId,
-        int connectionId,
-        ConfirmAccountingMappingRequest request)
+        AccountingProvider provider,
+        int userId,
+        Guid continuationId,
+        ContinueAccountingMappingPromotionRequest request,
+        CancellationToken ct)
     {
-        var canonical = JsonSerializer.Serialize(new
+        var connectionId = await _db.AccountingConnections.AsNoTracking()
+            .Where(row => row.PortfolioId == portfolioId && row.Provider == provider)
+            .Select(row => (int?)row.Id)
+            .SingleOrDefaultAsync(ct)
+            ?? throw new InvalidOperationException($"No {provider} connection. Connect the provider first.");
+        var clientOperationId = RequireMappingValue(request.ClientOperationId, nameof(request.ClientOperationId));
+        if (clientOperationId.Length > 160)
+            throw new InvalidOperationException("Accounting continuation ClientOperationId cannot exceed 160 characters.");
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "accounting.mapping.promote.continue",
+                $"{portfolioId}:{connectionId}:{continuationId:N}:{userId}:{OperationDigest(clientOperationId)}"),
+            new ContinueAccountingMappingPromotionCommand(
+                portfolioId,
+                connectionId,
+                continuationId,
+                userId,
+                clientOperationId,
+                _timeProvider.UtcNow()),
+            new AtomicJsonResultCodec<ContinueAccountingMappingPromotionResult>(
+                "accounting.mapping.promote.continue.result.v1"),
+            ct);
+        if (outcome.Value.Outcome == ContinueAccountingMappingPromotionOutcome.NotFound)
+            throw new InvalidOperationException("Accounting mapping promotion continuation was not found.");
+        if (outcome.Value.Outcome == ContinueAccountingMappingPromotionOutcome.Superseded)
+            throw new InvalidOperationException("Accounting mapping promotion was superseded by a newer correction.");
+        return new ContinueAccountingMappingPromotionResponse
         {
-            PortfolioId = portfolioId,
-            AccountingConnectionId = connectionId,
-            ExternalType = request.ExternalType.Trim(),
-            ExternalId = request.ExternalId.Trim(),
-            ExternalDisplayName = Normalize(request.ExternalDisplayName),
-            LocalEntityType = request.LocalEntityType.Trim(),
-            request.LocalEntityId,
-            LocalEnumValue = Normalize(request.LocalEnumValue),
-        });
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+            Promoted = outcome.Value.PromotedCount,
+            TotalPromoted = outcome.Value.TotalPromotedCount,
+            HasMore = outcome.Value.HasMore,
+        };
     }
 
     private static string? Normalize(string? value) =>
@@ -574,6 +635,9 @@ public class AccountingConnectionService
         string.IsNullOrWhiteSpace(value)
             ? throw new InvalidOperationException($"Accounting mapping {name} is required.")
             : value.Trim();
+
+    private static string OperationDigest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     /// <summary>
     /// The review queue: imported transactions that could not be auto-created (unmatched / needs-review)

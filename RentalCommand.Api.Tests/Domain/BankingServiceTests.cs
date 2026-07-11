@@ -736,6 +736,7 @@ public class BankingServiceTests : IDisposable
 
         var result = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-store-encrypted",
             PublicToken = "public-sandbox-token",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id-1",
@@ -773,6 +774,7 @@ public class BankingServiceTests : IDisposable
 
         await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-relink-1",
             PublicToken = "public-sandbox-token-1",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id-1",
@@ -780,6 +782,7 @@ public class BankingServiceTests : IDisposable
         });
         await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-relink-2",
             PublicToken = "public-sandbox-token-2",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id-1",
@@ -790,6 +793,77 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExchangePlaidPublicTokenAsync_SameOperationReplaysWithoutReexchangingSingleUseToken()
+    {
+        _plaid.Setup(p => p.ExchangePublicTokenAsync(
+                It.IsAny<PlaidRuntimeSettings>(), "single-use-token", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlaidExchangeResult("access", "item", "provider-request"));
+        var request = new ExchangePlaidPublicTokenRequest
+        {
+            ClientOperationId = "stable-exchange-operation",
+            PublicToken = "single-use-token",
+            InstitutionName = "Replay bank",
+            AccountId = "account",
+            AccountName = "Operating",
+        };
+
+        var first = await _sut.ExchangePlaidPublicTokenAsync(1, request);
+        var replay = await _sut.ExchangePlaidPublicTokenAsync(1, request);
+
+        replay.Id.Should().Be(first.Id);
+        _plaid.Verify(p => p.ExchangePublicTokenAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "single-use-token", It.IsAny<CancellationToken>()), Times.Once);
+        _ctx.Db.PlaidTokenExchangeAttempts.Single().Status.Should().Be("Completed");
+    }
+
+    [Fact]
+    public async Task ExchangePlaidPublicTokenAsync_UnknownRemoteOutcomeNeverBlindlyReexchanges()
+    {
+        _plaid.Setup(p => p.ExchangePublicTokenAsync(
+                It.IsAny<PlaidRuntimeSettings>(), "unknown-outcome-token", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("connection dropped"));
+        var request = new ExchangePlaidPublicTokenRequest
+        {
+            ClientOperationId = "unknown-outcome-operation",
+            PublicToken = "unknown-outcome-token",
+            InstitutionName = "Recovery bank",
+            AccountId = "account",
+            AccountName = "Operating",
+        };
+
+        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(1, request))
+            .Should().ThrowAsync<HttpRequestException>();
+        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(1, request))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*will not be exchanged again*");
+        _plaid.Verify(p => p.ExchangePublicTokenAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "unknown-outcome-token", It.IsAny<CancellationToken>()), Times.Once);
+        _ctx.Db.PlaidTokenExchangeAttempts.Single().Status.Should().Be("RemoteAdmitted");
+    }
+
+    [Fact]
+    public async Task ImportAsync_TreatsCaseDistinctOpaqueProviderIdsAsDifferentTransactions()
+    {
+        var request = new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Ordinal bank",
+            AccountName = "Operating",
+            Transactions =
+            [
+                new() { ProviderTransactionId = "Txn-AbC", PostedAt = DateTime.UtcNow, Description = "Upper", Amount = 1m },
+                new() { ProviderTransactionId = "txn-aBc", PostedAt = DateTime.UtcNow, Description = "Lower", Amount = 2m },
+            ],
+        };
+
+        var result = await _sut.ImportAsync(1, request);
+
+        result.ImportedCount.Should().Be(2);
+        result.Transactions.Select(row => row.ProviderTransactionId)
+            .Should().BeEquivalentTo(["Txn-AbC", "txn-aBc"]);
+    }
+
+    [Fact]
     public async Task SyncPlaidConnectionAsync_ImportsNewTransactions_UpdatesCursor_AndDeduplicates()
     {
         _plaid
@@ -797,6 +871,7 @@ public class BankingServiceTests : IDisposable
             .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "request-id"));
         var connection = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-sync-import",
             PublicToken = "public-token",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id",
@@ -872,6 +947,7 @@ public class BankingServiceTests : IDisposable
             .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "request-id"));
         var connection = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-sync-modify",
             PublicToken = "public-token",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id",
@@ -1074,6 +1150,9 @@ public class BankingServiceTests : IDisposable
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
+        services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
+        services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
         services.AddAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult, ApplyPlaidConnectionHandler>();
         services.AddAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult, ApplyPlaidSyncHandler>();
         services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();

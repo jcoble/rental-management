@@ -9,6 +9,119 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Banking;
 
+public sealed class PreparePlaidTokenExchangeHandler
+    : IAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult>
+{
+    public async Task<PreparePlaidTokenExchangeResult> HandleAsync(
+        PreparePlaidTokenExchangeCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.BankConnection,
+            ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "plaid-exchange", command.ClientOperationId),
+            ct);
+        var existing = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+            .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
+                && row.ClientOperationId == command.ClientOperationId, ct);
+        if (existing is not null)
+        {
+            return new PreparePlaidTokenExchangeResult(
+                existing.RequestHash == command.RequestHash
+                    ? PreparePlaidTokenExchangeOutcome.Existing
+                    : PreparePlaidTokenExchangeOutcome.Conflict,
+                existing.Id);
+        }
+
+        var exchange = new PlaidTokenExchangeAttempt
+        {
+            Id = Guid.NewGuid(),
+            PortfolioId = command.PortfolioId,
+            ClientOperationId = command.ClientOperationId,
+            RequestHash = command.RequestHash,
+            PublicTokenHash = command.PublicTokenHash,
+            InstitutionName = command.InstitutionName,
+            AccountName = command.AccountName,
+            AccountMask = command.AccountMask,
+            AccountType = command.AccountType,
+            AccountSubtype = command.AccountSubtype,
+            ExternalAccountIdCipherText = command.ExternalAccountIdCipherText,
+            ExternalAccountIdHash = command.ExternalAccountIdHash,
+            Status = "Prepared",
+            PreparedAtUtc = command.PreparedAtUtc,
+        };
+        attempt.Persistence.Add(exchange);
+        return new PreparePlaidTokenExchangeResult(PreparePlaidTokenExchangeOutcome.Prepared, exchange.Id);
+    }
+}
+
+public sealed class AdmitPlaidTokenExchangeHandler
+    : IAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult>
+{
+    public async Task<AdmitPlaidTokenExchangeResult> HandleAsync(
+        AdmitPlaidTokenExchangeCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ExchangeAttemptId, ct);
+        var exchange = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+            .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
+                && row.PortfolioId == command.PortfolioId, ct);
+        if (exchange is null) return Result(AdmitPlaidTokenExchangeOutcome.NotFound, command);
+        if (exchange.CompletedAtUtc is not null) return Result(AdmitPlaidTokenExchangeOutcome.Completed, command);
+        if (exchange.RemoteReceiptRecordedAtUtc is not null)
+            return Result(AdmitPlaidTokenExchangeOutcome.ReceiptRecorded, command);
+        if (exchange.RemoteAdmittedAtUtc is not null)
+            return Result(AdmitPlaidTokenExchangeOutcome.AlreadyAdmitted, command);
+        exchange.RemoteAdmittedAtUtc = command.AdmittedAtUtc;
+        exchange.Status = "RemoteAdmitted";
+        return Result(AdmitPlaidTokenExchangeOutcome.Admitted, command);
+    }
+
+    private static AdmitPlaidTokenExchangeResult Result(
+        AdmitPlaidTokenExchangeOutcome outcome,
+        AdmitPlaidTokenExchangeCommand command) => new(outcome, command.ExchangeAttemptId);
+}
+
+public sealed class RecordPlaidTokenExchangeReceiptHandler
+    : IAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult>
+{
+    public async Task<RecordPlaidTokenExchangeReceiptResult> HandleAsync(
+        RecordPlaidTokenExchangeReceiptCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ExchangeAttemptId, ct);
+        var exchange = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+            .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
+                && row.PortfolioId == command.PortfolioId, ct);
+        if (exchange is null) return Result(RecordPlaidTokenExchangeReceiptOutcome.NotFound, command);
+        if (exchange.RemoteAdmittedAtUtc is null)
+            return Result(RecordPlaidTokenExchangeReceiptOutcome.NotAdmitted, command);
+        if (exchange.RemoteReceiptRecordedAtUtc is not null)
+        {
+            if (exchange.ProviderRequestIdentity != command.ProviderRequestIdentity
+                || exchange.ExternalItemIdHash != command.ExternalItemIdHash)
+            {
+                throw new AtomicReceiptInvariantException(
+                    $"Plaid exchange attempt {exchange.Id} is already bound to a different provider receipt.");
+            }
+            return Result(RecordPlaidTokenExchangeReceiptOutcome.AlreadyRecorded, command);
+        }
+        exchange.ProviderRequestIdentity = command.ProviderRequestIdentity;
+        exchange.ExternalItemIdCipherText = command.ExternalItemIdCipherText;
+        exchange.ExternalItemIdHash = command.ExternalItemIdHash;
+        exchange.ExternalAccessTokenCipherText = command.ExternalAccessTokenCipherText;
+        exchange.RemoteReceiptRecordedAtUtc = command.RecordedAtUtc;
+        exchange.Status = "RemoteReceiptRecorded";
+        return Result(RecordPlaidTokenExchangeReceiptOutcome.Recorded, command);
+    }
+
+    private static RecordPlaidTokenExchangeReceiptResult Result(
+        RecordPlaidTokenExchangeReceiptOutcome outcome,
+        RecordPlaidTokenExchangeReceiptCommand command) => new(outcome, command.ExchangeAttemptId);
+}
+
 public sealed class ApplyPlaidConnectionHandler
     : IAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult>
 {
@@ -17,16 +130,33 @@ public sealed class ApplyPlaidConnectionHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ExchangeAttemptId, ct);
+        var exchange = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+            .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
+                && row.PortfolioId == command.PortfolioId, ct)
+            ?? throw new AtomicReceiptInvariantException(
+                $"Plaid exchange attempt {command.ExchangeAttemptId} was not found.");
+        if (exchange.RemoteReceiptRecordedAtUtc is null
+            || exchange.ExternalItemIdCipherText is null
+            || exchange.ExternalItemIdHash is null
+            || exchange.ExternalAccessTokenCipherText is null
+            || exchange.ProviderRequestIdentity is null)
+        {
+            throw new AtomicReceiptInvariantException(
+                $"Plaid exchange attempt {exchange.Id} has no durable remote receipt.");
+        }
+        if (exchange.CompletedAtUtc is not null && exchange.BankConnectionId is int completedConnectionId)
+            return new ApplyPlaidConnectionResult(completedConnectionId, false);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.BankConnection,
-            StableGuid(command.PortfolioId, "Plaid", command.ExternalItemIdHash, command.ExternalAccountIdHash),
+            StableGuid(command.PortfolioId, "Plaid", exchange.ExternalItemIdHash, exchange.ExternalAccountIdHash),
             ct);
 
         var connection = await attempt.Persistence.Query<BankConnection>()
             .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
                 && row.Provider == "Plaid"
-                && row.ExternalItemIdHash == command.ExternalItemIdHash
-                && row.ExternalAccountIdHash == command.ExternalAccountIdHash, ct);
+                && row.ExternalItemIdHash == exchange.ExternalItemIdHash
+                && row.ExternalAccountIdHash == exchange.ExternalAccountIdHash, ct);
         var created = connection is null;
         var before = connection is null ? null : Snapshot(connection);
         connection ??= new BankConnection
@@ -37,20 +167,23 @@ public sealed class ApplyPlaidConnectionHandler
         };
         if (created) attempt.Persistence.Add(connection);
 
-        connection.InstitutionName = command.InstitutionName;
-        connection.AccountName = command.AccountName;
-        connection.AccountMask = command.AccountMask;
-        connection.AccountType = command.AccountType;
-        connection.AccountSubtype = command.AccountSubtype;
-        connection.ExternalItemIdCipherText = command.ExternalItemIdCipherText;
-        connection.ExternalAccountIdCipherText = command.ExternalAccountIdCipherText;
-        connection.ExternalItemIdHash = command.ExternalItemIdHash;
-        connection.ExternalAccountIdHash = command.ExternalAccountIdHash;
-        connection.ExternalAccessTokenCipherText = command.ExternalAccessTokenCipherText;
+        connection.InstitutionName = exchange.InstitutionName;
+        connection.AccountName = exchange.AccountName;
+        connection.AccountMask = exchange.AccountMask;
+        connection.AccountType = exchange.AccountType;
+        connection.AccountSubtype = exchange.AccountSubtype;
+        connection.ExternalItemIdCipherText = exchange.ExternalItemIdCipherText;
+        connection.ExternalAccountIdCipherText = exchange.ExternalAccountIdCipherText;
+        connection.ExternalItemIdHash = exchange.ExternalItemIdHash;
+        connection.ExternalAccountIdHash = exchange.ExternalAccountIdHash;
+        connection.ExternalAccessTokenCipherText = exchange.ExternalAccessTokenCipherText;
         connection.Status = "Active";
         connection.UpdatedAt = command.AppliedAtUtc;
 
         await attempt.FlushBusinessAsync(ct);
+        exchange.BankConnectionId = connection.Id;
+        exchange.CompletedAtUtc = command.AppliedAtUtc;
+        exchange.Status = "Completed";
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(BankConnection),
@@ -59,8 +192,8 @@ public sealed class ApplyPlaidConnectionHandler
             OldValues: before,
             NewValues: Snapshot(connection),
             ChangeReason: created
-                ? $"Bank connection created from Plaid request {command.ProviderRequestIdentity}."
-                : $"Bank connection relinked from Plaid request {command.ProviderRequestIdentity}."));
+                ? $"Bank connection created from Plaid request {exchange.ProviderRequestIdentity}."
+                : $"Bank connection relinked from Plaid request {exchange.ProviderRequestIdentity}."));
         return new ApplyPlaidConnectionResult(connection.Id, created);
     }
 
@@ -115,9 +248,8 @@ public sealed class ApplyPlaidSyncHandler
         }
 
         var beforeConnection = ApplyPlaidConnectionHandler.Snapshot(connection);
-        var incomingIds = command.Added.Select(row => row.ProviderTransactionId.ToLower())
+        var incomingIds = command.Added.Select(row => row.ProviderTransactionId)
             .Concat(command.Modified.Select(row => row.ProviderTransactionId))
-            .Select(id => id.ToLower())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var existingRows = incomingIds.Length == 0
@@ -125,9 +257,9 @@ public sealed class ApplyPlaidSyncHandler
             : await attempt.Persistence.Query<BankTransaction>()
                 .Where(row => row.PortfolioId == command.PortfolioId
                     && row.BankConnectionId == connection.Id
-                    && incomingIds.Contains(row.ProviderTransactionId.ToLower()))
+                    && incomingIds.Contains(row.ProviderTransactionId))
                 .ToListAsync(ct);
-        var existing = existingRows.ToDictionary(row => row.ProviderTransactionId, StringComparer.OrdinalIgnoreCase);
+        var existing = existingRows.ToDictionary(row => row.ProviderTransactionId, StringComparer.Ordinal);
         var created = new List<BankTransaction>();
         var changed = new List<(BankTransaction Row, string Before, string Reason)>();
         var modifiedIds = new List<int>();
@@ -164,7 +296,6 @@ public sealed class ApplyPlaidSyncHandler
         }
 
         var removedIds = command.RemovedProviderTransactionIds
-            .Select(id => id.ToLower())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var removed = removedIds.Length == 0
@@ -172,7 +303,7 @@ public sealed class ApplyPlaidSyncHandler
             : await attempt.Persistence.Query<BankTransaction>()
                 .Where(row => row.PortfolioId == command.PortfolioId
                     && row.BankConnectionId == connection.Id
-                    && removedIds.Contains(row.ProviderTransactionId.ToLower()))
+                    && removedIds.Contains(row.ProviderTransactionId))
                 .ToListAsync(ct);
         foreach (var row in removed)
         {
@@ -366,19 +497,19 @@ public sealed class ImportBankTransactionsHandler
         if (createdConnection) attempt.Persistence.Add(connection);
 
         var inputs = command.Transactions
-            .GroupBy(row => row.ProviderTransactionId, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(row => row.ProviderTransactionId, StringComparer.Ordinal)
             .Select(group => group.First())
             .ToArray();
-        var ids = inputs.Select(row => row.ProviderTransactionId.ToLower()).Distinct(StringComparer.Ordinal).ToArray();
+        var ids = inputs.Select(row => row.ProviderTransactionId).Distinct(StringComparer.Ordinal).ToArray();
         var existing = createdConnection || ids.Length == 0
             ? new List<string>()
             : await attempt.Persistence.Query<BankTransaction>()
                 .Where(row => row.PortfolioId == command.PortfolioId
                     && row.BankConnectionId == connection.Id
-                    && ids.Contains(row.ProviderTransactionId.ToLower()))
+                    && ids.Contains(row.ProviderTransactionId))
                 .Select(row => row.ProviderTransactionId)
                 .ToListAsync(ct);
-        var existingSet = existing.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingSet = existing.ToHashSet(StringComparer.Ordinal);
         var imported = inputs
             .Where(input => !existingSet.Contains(input.ProviderTransactionId))
             .Select(input => ApplyPlaidSyncHandler.NewTransaction(
