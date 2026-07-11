@@ -17,6 +17,7 @@ class _FakeMessagesRepository extends MessagesRepository {
     int id, {
     required String body,
     required List<String> channels,
+    String? operationKey,
   }) async => _conversation;
 
   static final _conversation = Conversation(
