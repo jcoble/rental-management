@@ -6,7 +6,8 @@ namespace RentalCommand.Engine.Workers;
 
 /// <summary>
 /// Completes native e-sign requests left in ExecutionPending after transient PDF or storage failures.
-/// Finalization itself is receipt-backed and aggregate-locked, so overlap with an API retry is safe.
+/// Each batch is leased with PostgreSQL SKIP LOCKED; finalization is receipt-backed, aggregate-locked,
+/// and fenced by the current execution claim token.
 /// </summary>
 public sealed class NativeEsignReconciliationWorker : EngineWorkerBase
 {

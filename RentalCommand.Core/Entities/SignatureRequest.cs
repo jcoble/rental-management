@@ -57,6 +57,23 @@ public class SignatureRequest
 
     public DateTime CreatedAtUtc { get; set; }
 
+    /// <summary>The Engine/API process currently leased to render and attach the executed PDF.</summary>
+    public string? ExecutionClaimOwner { get; set; }
+
+    /// <summary>Opaque fencing token. Every completion/retry write must match this value.</summary>
+    public Guid? ExecutionClaimToken { get; set; }
+
+    /// <summary>When another worker may reclaim an abandoned execution attempt.</summary>
+    public DateTime? ExecutionClaimExpiresAtUtc { get; set; }
+
+    /// <summary>Number of durable execution leases issued for this request.</summary>
+    public int ExecutionAttemptCount { get; set; }
+
+    public DateTime? ExecutionLastAttemptAtUtc { get; set; }
+
+    /// <summary>Last bounded reconciliation error, cleared when a new lease is admitted.</summary>
+    public string? ExecutionLastError { get; set; }
+
     /// <summary>When every signer had signed and the executed document was produced; null until then.</summary>
     public DateTime? CompletedAtUtc { get; set; }
 

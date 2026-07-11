@@ -898,6 +898,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.DocumentName).IsRequired().HasMaxLength(260);
             entity.Property(e => e.Subject).HasMaxLength(200);
             entity.Property(e => e.ContentSha256).HasMaxLength(64);
+            entity.Property(e => e.ExecutionClaimOwner).HasMaxLength(200);
+            entity.Property(e => e.ExecutionLastError).HasMaxLength(2000);
             entity.Property(e => e.TemplateFieldSnapshotJson).HasColumnType("jsonb");
             // Stored as the string enum name to match the app-wide string-enum convention.
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
@@ -907,6 +909,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.LeaseId);
             entity.HasIndex(e => e.DocumentTemplateId);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.Status, e.ExecutionClaimExpiresAtUtc, e.CreatedAtUtc, e.Id });
+            entity.HasIndex(e => new { e.ExecutionClaimExpiresAtUtc, e.Id })
+                .HasFilter("\"ExecutionClaimToken\" IS NOT NULL");
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)

@@ -15,15 +15,12 @@ public sealed class FinalizeNativeEsignRequestHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
-        var requestId = await attempt.Persistence.Query<SignatureRequest>()
-            .Where(request => request.PublicId == command.PublicId)
-            .Select(request => (int?)request.Id)
-            .SingleOrDefaultAsync(ct)
-            ?? throw new InvalidOperationException("The native e-sign request no longer exists.");
-
-        await attempt.Locking.AcquireAsync(AtomicLockResource.SignatureRequest, requestId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.SignatureRequest, command.SignatureRequestId, ct);
         var request = await attempt.Persistence.Query<SignatureRequest>()
-            .SingleAsync(candidate => candidate.Id == requestId, ct);
+            .SingleOrDefaultAsync(candidate => candidate.Id == command.SignatureRequestId
+                && candidate.PublicId == command.PublicId, ct)
+            ?? throw new InvalidOperationException("The native e-sign request no longer exists.");
         if (request.Status == SignatureRequestStatus.Completed && request.SignedStoredFileId.HasValue)
         {
             return new FinalizeNativeEsignRequestResult(
@@ -33,6 +30,12 @@ public sealed class FinalizeNativeEsignRequestHandler
         if (request.Status != SignatureRequestStatus.ExecutionPending)
         {
             throw new InvalidOperationException("The native e-sign request is not ready for execution.");
+        }
+        if (request.ExecutionClaimToken != command.ClaimToken
+            || request.ExecutionClaimExpiresAtUtc is null
+            || request.ExecutionClaimExpiresAtUtc <= command.FinalizeAttemptedAtUtc)
+        {
+            throw new NativeEsignExecutionClaimLostException(command.SignatureRequestId);
         }
 
         var hasUnsignedSigner = await attempt.Persistence.Query<SignatureSigner>()
@@ -67,6 +70,10 @@ public sealed class FinalizeNativeEsignRequestHandler
         request.ContentSha256 = command.ContentSha256;
         request.CompletedAtUtc = command.CompletedAtUtc;
         request.Status = SignatureRequestStatus.Completed;
+        request.ExecutionClaimOwner = null;
+        request.ExecutionClaimToken = null;
+        request.ExecutionClaimExpiresAtUtc = null;
+        request.ExecutionLastError = null;
         lease.EsignEnvelopeId = request.PublicId;
         lease.EsignStatus = EsignStatus.Signed;
         lease.SignedDocumentStoredFileId = storedFile.Id;

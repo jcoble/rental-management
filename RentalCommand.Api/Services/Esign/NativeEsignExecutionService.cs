@@ -8,14 +8,20 @@ using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Api.Services.Esign;
 
 /// <inheritdoc cref="INativeEsignExecutionService"/>
 public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 {
+    private static readonly TimeSpan ExecutionLease = TimeSpan.FromMinutes(10);
+    private readonly string _claimOwner =
+        $"{Environment.MachineName}:{Environment.ProcessId}:native-esign-api:{Guid.NewGuid():N}";
+
     private readonly RentalCommandDbContext _db;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly INativeEsignExecutionClaimStore _claims;
     private readonly IFileStorage _storage;
     private readonly IExecutedLeasePdfGenerator _executedPdf;
     private readonly TimeProvider _timeProvider;
@@ -24,6 +30,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     public NativeEsignExecutionService(
         RentalCommandDbContext db,
         IAtomicUnitOfWork atomic,
+        INativeEsignExecutionClaimStore claims,
         IFileStorage storage,
         IExecutedLeasePdfGenerator executedPdf,
         TimeProvider timeProvider,
@@ -31,6 +38,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     {
         _db = db;
         _atomic = atomic;
+        _claims = claims;
         _storage = storage;
         _executedPdf = executedPdf;
         _timeProvider = timeProvider;
@@ -39,8 +47,27 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
     public async Task<bool> FinalizePendingAsync(int signatureRequestId, CancellationToken ct = default)
     {
+        var completed = await _db.SignatureRequests.AsNoTracking()
+            .AnyAsync(request => request.Id == signatureRequestId
+                && request.Status == SignatureRequestStatus.Completed
+                && request.SignedStoredFileId != null, ct);
+        if (completed)
+        {
+            return true;
+        }
+
+        var claim = await _claims.TryClaimAsync(
+            signatureRequestId, _claimOwner, _timeProvider.UtcNow(), ExecutionLease, ct);
+        return claim is not null
+            && await FinalizeClaimedAsync(claim.Id, claim.ClaimToken, ct);
+    }
+
+    public async Task<bool> FinalizeClaimedAsync(
+        int signatureRequestId, Guid claimToken, CancellationToken ct = default)
+    {
         var sigRequest = await _db.SignatureRequests.AsNoTracking()
-            .SingleOrDefaultAsync(request => request.Id == signatureRequestId, ct);
+            .SingleOrDefaultAsync(request => request.Id == signatureRequestId
+                && request.ExecutionClaimToken == claimToken, ct);
         if (sigRequest is null)
         {
             return false;
@@ -56,52 +83,80 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             return false;
         }
 
-        var now = _timeProvider.UtcNow();
-        var data = await BuildExecutedDataAsync(sigRequest, now, ct);
-        if (data is null)
-        {
-            _logger.LogWarning(
-                "Native e-sign: could not build executed document for request {PublicId} (lease graph missing).",
-                sigRequest.PublicId);
-            return false;
-        }
-
-        var executedBytes = _executedPdf.Generate(data, contentSha256: string.Empty);
-        var sha256 = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
-        var fileName = $"lease-{sigRequest.LeaseId}-executed.pdf";
-        string storageKey;
-        await using (var stream = new MemoryStream(executedBytes))
-        {
-            storageKey = await _storage.UploadAsync(stream, fileName, "application/pdf", ct);
-        }
-
-        AtomicCommandOutcome<FinalizeNativeEsignRequestResult> outcome;
+        string? storageKey = null;
         try
         {
-            outcome = await _atomic.ExecuteAsync(
+            var now = _timeProvider.UtcNow();
+            var data = await BuildExecutedDataAsync(sigRequest, now, ct);
+            if (data is null)
+            {
+                _logger.LogWarning(
+                    "Native e-sign: could not build executed document for request {PublicId} (lease graph missing).",
+                    sigRequest.PublicId);
+                await _claims.ReleaseForRetryAsync(
+                    signatureRequestId, claimToken, "Lease graph missing while building executed document.", ct);
+                return false;
+            }
+
+            var executedBytes = _executedPdf.Generate(data, contentSha256: string.Empty);
+            var sha256 = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
+            var fileName = $"lease-{sigRequest.LeaseId}-executed.pdf";
+            await using (var stream = new MemoryStream(executedBytes))
+            {
+                storageKey = await _storage.UploadAsync(stream, fileName, "application/pdf", ct);
+            }
+
+            var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("native-esign.finalize", TokenIdentity(sigRequest.PublicId)),
                 new FinalizeNativeEsignRequestCommand(
+                    sigRequest.Id,
                     sigRequest.PublicId,
-                    storageKey,
+                    claimToken,
+                    storageKey!,
                     fileName,
                     executedBytes.LongLength,
                     sha256,
+                    _timeProvider.UtcNow(),
                     now),
                 new AtomicJsonResultCodec<FinalizeNativeEsignRequestResult>("native-esign.finalize.v1"),
                 ct);
+
+            if (outcome.Disposition == AtomicCommandDisposition.Replayed)
+            {
+                await DeleteReplayExecutionUploadIfUnreferencedAsync(outcome.Value.StoredFileId, storageKey!);
+            }
+
+            return true;
         }
-        catch
+        catch (NativeEsignExecutionClaimLostException)
         {
-            await DeleteFailedExecutionUploadIfUnreferencedAsync(sigRequest.PublicId, storageKey);
+            if (storageKey is not null)
+            {
+                await DeleteFailedExecutionUploadIfUnreferencedAsync(sigRequest.PublicId, storageKey);
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (storageKey is not null)
+            {
+                await DeleteFailedExecutionUploadIfUnreferencedAsync(sigRequest.PublicId, storageKey);
+            }
+            try
+            {
+                await _claims.ReleaseForRetryAsync(
+                    signatureRequestId, claimToken, ex.Message, CancellationToken.None);
+            }
+            catch (Exception releaseEx)
+            {
+                _logger.LogWarning(
+                    releaseEx,
+                    "Could not release native e-sign execution claim {ClaimToken} for request {SignatureRequestId}; expiry will make it reclaimable.",
+                    claimToken,
+                    signatureRequestId);
+            }
             throw;
         }
-
-        if (outcome.Disposition == AtomicCommandDisposition.Replayed)
-        {
-            await DeleteReplayExecutionUploadIfUnreferencedAsync(outcome.Value.StoredFileId, storageKey);
-        }
-
-        return true;
     }
 
     private async Task<ExecutedLeaseData?> BuildExecutedDataAsync(

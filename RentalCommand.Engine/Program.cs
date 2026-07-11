@@ -148,6 +148,8 @@ builder.Services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdf
     RentalCommand.Api.Services.Esign.ExecutedLeasePdfGenerator>();
 builder.Services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
     RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
+builder.Services.AddScoped<RentalCommand.Data.Esign.INativeEsignExecutionClaimStore,
+    RentalCommand.Data.Esign.NativeEsignExecutionClaimStore>();
 builder.Services.AddScoped<NativeEsignReconciliationService>();
 builder.Services.AddScoped<RentalCommand.Data.Payments.IProviderInboxClaimStore,
     RentalCommand.Data.Payments.ProviderInboxClaimStore>();

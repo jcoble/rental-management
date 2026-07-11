@@ -11,4 +11,11 @@ public interface INativeEsignExecutionService
     /// an already-completed request returns <see langword="true"/> without creating another file.
     /// </summary>
     Task<bool> FinalizePendingAsync(int signatureRequestId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Finalizes a request already leased by the reconciliation worker. Every durable completion
+    /// is fenced by <paramref name="claimToken"/>.
+    /// </summary>
+    Task<bool> FinalizeClaimedAsync(
+        int signatureRequestId, Guid claimToken, CancellationToken ct = default);
 }
