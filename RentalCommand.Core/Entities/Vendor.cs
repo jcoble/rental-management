@@ -1,15 +1,32 @@
+using RentalCommand.Core;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
 public class Vendor : IAuditable, IPortfolioScoped
 {
+    private string? _phone;
+
     public int Id { get; set; }
     public int PortfolioId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string ServiceType { get; set; } = string.Empty;
     public string? Email { get; set; }
-    public string? Phone { get; set; }
+    public string? Phone
+    {
+        get => _phone;
+        set
+        {
+            _phone = value;
+            NormalizedPhone = PhoneNumber.Normalize(value);
+        }
+    }
+
+    /// <summary>
+    /// Persisted canonical phone fact used by inbound-provider matching. It is maintained whenever
+    /// <see cref="Phone"/> is assigned so matching never requires loading free-form phone values.
+    /// </summary>
+    public string? NormalizedPhone { get; private set; }
     public string? Website { get; set; }
     public string? TaxId { get; set; }
     public string? AddressLine1 { get; set; }

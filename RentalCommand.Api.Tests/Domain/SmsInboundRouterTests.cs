@@ -1,12 +1,19 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Operations;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Operations;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -21,17 +28,36 @@ public class SmsInboundRouterTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteTestContext _ctx = new();
+    private readonly ServiceProvider _services;
 
-    public void Dispose() => _ctx.Dispose();
+    public SmsInboundRouterTests()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            CompleteVendorDispatchFromInboundCommand,
+            CompleteVendorDispatchFromInboundResult,
+            CompleteVendorDispatchFromInboundHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
 
     private SmsInboundRouter CreateRouter()
     {
         var vendorDone = new SmsInboundVendorDoneService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>(),
-            Mock.Of<ILogger<SmsInboundVendorDoneService>>(),
-            TimeProvider.System);
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            Mock.Of<ILogger<SmsInboundVendorDoneService>>());
 
         var rent = new SmsInboundRentConfirmationService(
             _ctx.Db,
@@ -72,10 +98,12 @@ public class SmsInboundRouterTests : IDisposable
         });
         await _ctx.Db.SaveChangesAsync();
 
-        var reply = await CreateRouter().RouteAsync("+16145550199", "DONE", DateTime.UtcNow);
+        var reply = await CreateRouter().RouteAsync(
+            "SM-router-vendor-done", "+16145550199", "DONE", DateTime.UtcNow);
 
         reply.Should().Contain("complete");
 
+        _ctx.Db.ChangeTracker.Clear();
         var reloadedWo = await _ctx.Db.WorkOrders.FindAsync(workOrder.Id);
         reloadedWo!.Status.Should().Be(WorkOrderStatus.Completed);
 
@@ -93,7 +121,8 @@ public class SmsInboundRouterTests : IDisposable
         var rent = SeedRent(lease);
         await _ctx.Db.SaveChangesAsync();
 
-        var reply = await CreateRouter().RouteAsync("+16145550123", "YES", DateTime.UtcNow);
+        var reply = await CreateRouter().RouteAsync(
+            "SM-router-tenant-yes", "+16145550123", "YES", DateTime.UtcNow);
 
         reply.Should().Contain("recorded");
 

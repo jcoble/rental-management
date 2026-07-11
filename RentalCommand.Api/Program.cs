@@ -167,6 +167,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.DispatchWorkOrderToVendorResult,
     RentalCommand.Data.Operations.DispatchWorkOrderToVendorHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CompleteVendorDispatchFromInboundCommand,
+    RentalCommand.Core.Operations.CompleteVendorDispatchFromInboundResult,
+    RentalCommand.Data.Operations.CompleteVendorDispatchFromInboundHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Screening.CreateAdverseActionNoticeCommand,
     RentalCommand.Core.Screening.CreateAdverseActionNoticeResult,
     RentalCommand.Data.Screening.CreateAdverseActionNoticeHandler>();

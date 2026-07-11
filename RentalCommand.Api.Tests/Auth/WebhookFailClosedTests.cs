@@ -57,7 +57,7 @@ public sealed class WebhookFailClosedTests
         var router = new Mock<ISmsInboundRouter>(MockBehavior.Strict); // strict => any RouteAsync call fails the test
         var controller = CreateSmsController(router, twilioToken: null, environment: Environments.Production);
 
-        var result = await controller.Inbound(from: "+15551234567", body: "YES", CancellationToken.None);
+        var result = await controller.Inbound("SM-production-rejected", "+15551234567", "YES", CancellationToken.None);
 
         result.Should().BeOfType<StatusCodeResult>()
             .Which.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
@@ -68,14 +68,30 @@ public sealed class WebhookFailClosedTests
     public async Task Sms_unconfigured_token_in_development_is_routed_with_warning()
     {
         var router = new Mock<ISmsInboundRouter>();
-        router.Setup(r => r.RouteAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+        router.Setup(r => r.RouteAsync(
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("Thanks!");
         var controller = CreateSmsController(router, twilioToken: null, environment: Environments.Development);
 
-        var result = await controller.Inbound(from: "+15551234567", body: "YES", CancellationToken.None);
+        var result = await controller.Inbound("SM-development-routed", "+15551234567", "YES", CancellationToken.None);
 
         result.Should().BeOfType<ContentResult>();
-        router.Verify(r => r.RouteAsync("+15551234567", "YES", It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
+        router.Verify(r => r.RouteAsync(
+            "SM-development-routed", "+15551234567", "YES",
+            It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Sms_missing_provider_event_id_is_rejected_before_routing()
+    {
+        var router = new Mock<ISmsInboundRouter>(MockBehavior.Strict);
+        var controller = CreateSmsController(router, twilioToken: null, environment: Environments.Development);
+
+        var result = await controller.Inbound(null, "+15551234567", "DONE", CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        router.VerifyNoOtherCalls();
     }
 
     // ---- helpers ----

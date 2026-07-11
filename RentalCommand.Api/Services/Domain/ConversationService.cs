@@ -18,7 +18,6 @@ namespace RentalCommand.Api.Services.Domain;
 public class ConversationService : IConversationService
 {
     private const string EntityType = "Conversation";
-    private const int PreviewMaxLength = 280;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -322,107 +321,66 @@ public class ConversationService : IConversationService
     }
 
     public async Task<ConversationDetail?> TenantStartAsync(
-        int portfolioId, int tenantId, string subject, string body, CancellationToken ct = default)
+        int portfolioId, int tenantId, string subject, string body, string operationKey,
+        CancellationToken ct = default)
     {
-        var tenant = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId && t.DeletedAt == null, ct);
-
-        if (tenant == null)
-        {
-            return null;
-        }
-
-        var now = _timeProvider.UtcNow();
-        var conversation = new Conversation
-        {
-            PortfolioId = portfolioId,
-            TenantId = tenant.Id,
-            Subject = subject,
-            StartedByLandlord = false,
-            CreatedAt = now,
-            LastMessageAt = now,
-            LastMessagePreview = Preview(body),
-            LandlordUnreadCount = 1,
-            TenantUnreadCount = 0,
-        };
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        conversation.Messages.Add(new ConversationMessage
-        {
-            SenderRole = ConversationSenderRole.Tenant,
-            Body = body,
-            Channels = null, // tenant messages are in-app only
-            CreatedAt = now,
-        });
-
-        _db.Conversations.Add(conversation);
-        await _db.SaveChangesAsync(ct);
-
-        var notifications = await CreateTenantMessageNotificationsAsync(portfolioId, conversation, tenant, now, ct);
-        _db.Notifications.AddRange(notifications);
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        conversation.Tenant = tenant;
-        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId, tenantViewer: true, ct);
-        if (detail is null)
-        {
-            return null;
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        foreach (var notification in notifications)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
-        }
-        return detail;
+        return await ExecuteTenantSendAsync(
+            new AtomicCommandIdentity(
+                "conversation.tenant-start",
+                ScopedOperationKey(portfolioId, tenantId, operationKey)),
+            new SendConversationMessageCommand(
+                portfolioId, null, tenantId, subject, body, ConversationSenderRole.Tenant,
+                [], _timeProvider.UtcNow()),
+            tenantId,
+            ct);
     }
 
     public async Task<ConversationDetail?> TenantPostAsync(
-        int portfolioId, int tenantId, int id, string body, CancellationToken ct = default)
+        int portfolioId, int tenantId, int id, string body, string operationKey,
+        CancellationToken ct = default)
     {
-        var conversation = await _db.Conversations
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Include(c => c.Messages)
-            .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId && c.TenantId == tenantId, ct);
+        return await ExecuteTenantSendAsync(
+            new AtomicCommandIdentity(
+                "conversation.tenant-post-message",
+                ScopedOperationKey(portfolioId, id, operationKey)),
+            new SendConversationMessageCommand(
+                portfolioId, id, tenantId, string.Empty, body, ConversationSenderRole.Tenant,
+                [], _timeProvider.UtcNow()),
+            tenantId,
+            ct);
+    }
 
-        if (conversation == null)
+    private async Task<ConversationDetail?> ExecuteTenantSendAsync(
+        AtomicCommandIdentity identity,
+        SendConversationMessageCommand command,
+        int tenantId,
+        CancellationToken ct)
+    {
+        var outcome = await _atomic.ExecuteAsync(identity, command, SendCodec, ct);
+        if (outcome.Value.Outcome == SendConversationMessageOutcome.NotFound) return null;
+
+        var detail = await LoadDetailAsync(
+            command.PortfolioId, outcome.Value.ConversationId, tenantId, tenantViewer: true, ct);
+        if (detail is null) return null;
+
+        await _dataUpdate.BroadcastEntityUpdateAsync(
+            command.PortfolioId, EntityType, detail.Id, detail, ct);
+        if (outcome.Value.NotificationIds.Count > 0)
         {
-            return null;
+            var notifications = await _db.Notifications
+                .AsNoTracking()
+                .Where(notification => notification.PortfolioId == command.PortfolioId
+                    && outcome.Value.NotificationIds.Contains(notification.Id))
+                .OrderBy(notification => notification.Id)
+                .ToListAsync(ct);
+            foreach (var notification in notifications)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    command.PortfolioId, "Notification", notification.Id,
+                    NotificationResponse.FromEntity(notification), ct);
+            }
         }
 
-        var now = _timeProvider.UtcNow();
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        conversation.Messages.Add(new ConversationMessage
-        {
-            ConversationId = conversation.Id,
-            SenderRole = ConversationSenderRole.Tenant,
-            Body = body,
-            Channels = null,
-            CreatedAt = now,
-        });
-        conversation.LastMessageAt = now;
-        conversation.LastMessagePreview = Preview(body);
-        conversation.LandlordUnreadCount += 1;
-        var notifications = await CreateTenantMessageNotificationsAsync(portfolioId, conversation, conversation.Tenant, now, ct);
-        _db.Notifications.AddRange(notifications);
-
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId, tenantViewer: true, ct);
-        if (detail is null)
-        {
-            return null;
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        foreach (var notification in notifications)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
-        }
         return detail;
     }
 
@@ -480,58 +438,6 @@ public class ConversationService : IConversationService
             "Fair Housing-flagged message SENT via acknowledged override (portfolio {PortfolioId}, tenant {TenantId}, conversation {ConversationId}). Flagged phrases: {Phrases}",
             portfolioId, tenantId, conversationId,
             string.Join(" | ", concerns.Select(c => c.Phrase)));
-    }
-
-    private async Task<IReadOnlyList<Notification>> CreateTenantMessageNotificationsAsync(
-        int portfolioId,
-        Conversation conversation,
-        Tenant? tenant,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var tenantName = tenant != null ? $"{tenant.FirstName} {tenant.LastName}".Trim() : "Tenant";
-        if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
-
-        var staffUserIds = await StaffUserIdsAsync(portfolioId, ct);
-
-        return staffUserIds.Select(userId => new Notification
-            {
-                PortfolioId = portfolioId,
-                UserId = userId,
-                Type = "TenantMessage",
-                Title = $"New message from {tenantName}",
-                Message = conversation.LastMessagePreview ?? conversation.Subject,
-                Severity = "Info",
-                ActionUrl = $"/messages?conversationId={conversation.Id}",
-                RelatedEntityType = "Conversation",
-                RelatedEntityId = conversation.Id,
-                CreatedAt = now,
-            })
-            .ToList();
-    }
-
-    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct)
-    {
-        var staffRoles = new[] { nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent) };
-
-        return await (
-                from user in _db.Users.AsNoTracking()
-                join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
-                join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
-                where user.PortfolioId == portfolioId && role.Name != null && staffRoles.Contains(role.Name)
-                select user.Id)
-            .Distinct()
-            .ToListAsync(ct);
-    }
-
-    private static string? Preview(string body)
-    {
-        if (string.IsNullOrEmpty(body))
-        {
-            return null;
-        }
-
-        return body.Length <= PreviewMaxLength ? body : body[..PreviewMaxLength];
     }
 
 }

@@ -261,6 +261,7 @@ public class NoticeAutoSendTests : IDisposable
             int tenantId,
             string subject,
             string body,
+            string operationKey,
             CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(null);
 
@@ -269,6 +270,7 @@ public class NoticeAutoSendTests : IDisposable
             int tenantId,
             int id,
             string body,
+            string operationKey,
             CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(null);
     }

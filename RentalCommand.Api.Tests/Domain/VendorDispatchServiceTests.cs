@@ -40,6 +40,10 @@ public class VendorDispatchServiceTests : IDisposable
             DispatchWorkOrderToVendorCommand,
             DispatchWorkOrderToVendorResult,
             DispatchWorkOrderToVendorHandler>();
+        services.AddAtomicCommandHandler<
+            CompleteVendorDispatchFromInboundCommand,
+            CompleteVendorDispatchFromInboundResult,
+            CompleteVendorDispatchFromInboundHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -67,9 +71,8 @@ public class VendorDispatchServiceTests : IDisposable
     private SmsInboundVendorDoneService CreateDoneSut() => new(
         _ctx.Db,
         Mock.Of<IDataUpdateService>(),
-        Mock.Of<IAuditTrailService>(),
-        Mock.Of<ILogger<SmsInboundVendorDoneService>>(),
-        TimeProvider.System);
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
+        Mock.Of<ILogger<SmsInboundVendorDoneService>>());
 
     [Fact]
     public async Task DispatchAsync_CreatesOpenDispatch_AndEnqueuesSms()
@@ -187,13 +190,13 @@ public class VendorDispatchServiceTests : IDisposable
         var doneSut = CreateDoneSut();
         var receivedAt = new DateTime(2026, 06, 03, 15, 0, 0, DateTimeKind.Utc);
 
-        (await doneSut.CanHandleAsync("+16145550199", "DONE")).Should().BeTrue();
-
-        var result = await doneSut.HandleAsync("+16145550199", "Done!", receivedAt);
+        var result = await doneSut.TryHandleAsync(
+            "SM-vendor-done-1", "+16145550199", "Done!", receivedAt);
 
         result.Handled.Should().BeTrue();
         result.WorkOrderId.Should().Be(workOrder.Id);
 
+        _ctx.Db.ChangeTracker.Clear();
         var dispatch = await _ctx.Db.VendorDispatches.SingleAsync();
         dispatch.Status.Should().Be(VendorDispatchStatus.Completed);
         dispatch.RespondedAtUtc.Should().Be(receivedAt);
@@ -222,7 +225,8 @@ public class VendorDispatchServiceTests : IDisposable
         await _ctx.Db.SaveChangesAsync();
 
         // No dispatch created → cannot handle even with the right keyword/phone.
-        (await CreateDoneSut().CanHandleAsync("+16145550199", "DONE")).Should().BeFalse();
+        (await CreateDoneSut().TryHandleAsync(
+            "SM-vendor-no-dispatch", "+16145550199", "DONE", DateTime.UtcNow)).Handled.Should().BeFalse();
         vendor.Id.Should().BeGreaterThan(0);
     }
 
@@ -262,9 +266,11 @@ public class VendorDispatchServiceTests : IDisposable
         dispatch.DispatchedAtUtc = new DateTime(2026, 06, 03, 12, 0, 0, DateTimeKind.Utc);
         await _ctx.Db.SaveChangesAsync();
 
-        await CreateDoneSut().HandleAsync(
+        await CreateDoneSut().TryHandleAsync(
+            "SM-scorecard-done",
             "+16145550199", "DONE", new DateTime(2026, 06, 03, 14, 0, 0, DateTimeKind.Utc));
 
+        _ctx.Db.ChangeTracker.Clear();
         var card = await CreateDispatchSut().GetScorecardAsync(PortfolioId, vendor.Id);
         card!.JobsCompleted.Should().Be(1);
         card.AvgResponseHours.Should().Be(2.00m);

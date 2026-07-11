@@ -356,7 +356,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         }
 
         var created = await _conversations.TenantStartAsync(
-            GetPortfolioId(), tenantId.Value, request.Subject, request.Body, ct);
+            GetPortfolioId(), tenantId.Value, request.Subject, request.Body, request.OperationKey, ct);
 
         return created == null
             ? NotFound(new { error = "Tenant not found" })
@@ -378,7 +378,8 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var result = await _conversations.TenantPostAsync(GetPortfolioId(), tenantId.Value, id, request.Body, ct);
+        var result = await _conversations.TenantPostAsync(
+            GetPortfolioId(), tenantId.Value, id, request.Body, request.OperationKey, ct);
         return result == null ? NotFound(new { error = "Conversation not found" }) : Ok(result);
     }
 }
