@@ -47,6 +47,17 @@ public sealed class NativeSigningService : INativeSigningService
         }
 
         var now = _timeProvider.UtcNow();
+        // Public tokens are attacker-controlled. Reject unknown tokens with one indexed DB query
+        // before entering the atomic kernel so random probes cannot create durable receipts or
+        // audit rows. The handler still resolves the request and rechecks state under its aggregate
+        // lock; this preflight is only an admission boundary and does not replace that protection.
+        var tokenExists = await _db.SignatureSigners.AsNoTracking()
+            .AnyAsync(signer => signer.Token == token, ct);
+        if (!tokenExists)
+        {
+            return SignTokenResult<SignPackageResponse>.NotFound();
+        }
+
         await _atomic.ExecuteAsync(
             new AtomicCommandIdentity("native-esign.view", TokenIdentity(token)),
             new RecordNativeEsignViewCommand(token, ipAddress, userAgent, now),

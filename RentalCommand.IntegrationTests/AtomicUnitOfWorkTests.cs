@@ -407,8 +407,8 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             .ToListAsync();
         auditPayloads.Should().HaveCount(2);
         auditPayloads.Should().OnlyContain(audit =>
-            !(audit.OldValues?.Contains(token, StringComparison.Ordinal) ?? false)
-            && !(audit.NewValues?.Contains(token, StringComparison.Ordinal) ?? false),
+            (audit.OldValues == null || !audit.OldValues.Contains(token, StringComparison.Ordinal))
+            && (audit.NewValues == null || !audit.NewValues.Contains(token, StringComparison.Ordinal)),
             "the two command-scoped audit payloads must never retain the raw signer token");
     }
 
