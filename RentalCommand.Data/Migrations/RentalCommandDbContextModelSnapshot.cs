@@ -4896,6 +4896,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("ConfirmedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("ConfirmedEntityId")
+                        .HasColumnType("integer");
+
                     b.Property<decimal?>("CostUsd")
                         .HasPrecision(18, 4)
                         .HasColumnType("numeric(18,4)");
@@ -4929,6 +4932,9 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<int?>("SourceStoredFileId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -4953,6 +4959,8 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("SourceStoredFileId");
 
                     b.ToTable("ScanDrafts");
                 });
@@ -7369,9 +7377,16 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("RentalCommand.Core.Entities.StoredFile", "SourceStoredFile")
+                        .WithMany()
+                        .HasForeignKey("SourceStoredFileId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Batch");
 
                     b.Navigation("Portfolio");
+
+                    b.Navigation("SourceStoredFile");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.ScreeningResult", b =>

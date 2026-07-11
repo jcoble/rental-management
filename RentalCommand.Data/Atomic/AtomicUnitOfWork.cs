@@ -300,6 +300,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly AtomicAuditScope _auditScope;
         private readonly IAtomicSetBasedPersistence _setBased;
         private readonly IAtomicLockingPersistence _locking;
+        private readonly IAtomicScanConfirmationPersistence _scanConfirmation;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -315,6 +316,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _auditScope = auditScope;
             _setBased = new AtomicSetBasedMutationExecutor(db, auditScope, timeProvider);
             _locking = new AtomicLockingPersistence(db);
+            _scanConfirmation = new AtomicScanConfirmationPersistence(db, auditScope, _locking);
             _timeProvider = timeProvider;
         }
 
@@ -323,6 +325,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => _setBased;
         public IAtomicLockingPersistence Locking => _locking;
+        public IAtomicScanConfirmationPersistence ScanConfirmation => _scanConfirmation;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();

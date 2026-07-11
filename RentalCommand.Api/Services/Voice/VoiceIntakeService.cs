@@ -70,6 +70,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         }
 
         var filePath = $"voice://{Guid.NewGuid():N}";
+        StoredFile? sourceStoredFile = null;
         if (audioBytes.Length > 0)
         {
             filePath = await _storage.UploadAsync(
@@ -78,7 +79,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
                 contentType ?? "application/octet-stream",
                 ct);
 
-            _db.StoredFiles.Add(new StoredFile
+            sourceStoredFile = new StoredFile
             {
                 PortfolioId = portfolioId,
                 FileName = voiceFileName,
@@ -88,7 +89,8 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
                 EntityType = "ScanDraft",
                 EntityId = null,
                 UploadedAt = _timeProvider.UtcNow(),
-            });
+            };
+            _db.StoredFiles.Add(sourceStoredFile);
         }
 
         var classification = await ClassifyTranscriptAsync(portfolioId, transcript, ct);
@@ -97,6 +99,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         {
             PortfolioId = portfolioId,
             FilePath = filePath,
+            SourceStoredFile = sourceStoredFile,
             TargetEntityType = classification.TargetEntityType,
             Status = "Reviewing",
             ExtractedFields = classification.ExtractedFieldsJson,

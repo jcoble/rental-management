@@ -139,6 +139,8 @@ public sealed class ScanService : IScanService
             PortfolioId = portfolioId,
             BatchId = batchId,
             FilePath = stored.FilePath,
+            SourceStoredFileId = stored.Id,
+            SourceStoredFile = stored,
             ThumbnailPath = thumbnailPath,
             TargetEntityType = targetEntityType,
             Status = "Pending",
