@@ -188,6 +188,11 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
             EventType = command.ProviderEventType,
             Payload = command.PayloadJson,
             ProviderObjectId = command.ProviderPaymentId,
+            EventKind = command.EventKind,
+            Amount = command.Amount,
+            Currency = command.Currency,
+            FailureReason = command.FailureReason,
+            OccurredAtUtc = command.OccurredAtUtc,
             ReceivedAtUtc = now,
             NextAttemptAtUtc = now,
         };
@@ -236,18 +241,17 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         inbox.LastAttemptAtUtc = now;
         inbox.ProcessedAtUtc = now;
         inbox.NextAttemptAtUtc = now;
-        transaction.Status = MapStatus(command.EventKind);
-        transaction.FailureReason = command.FailureReason;
-        transaction.UpdatedAt = command.OccurredAtUtc ?? now;
+        var paymentChanged = ApplyEvent(
+            transaction,
+            transaction.Payment,
+            command.EventKind,
+            command.ProviderPaymentId,
+            command.FailureReason,
+            command.OccurredAtUtc ?? now);
 
-        if (command.EventKind == ProviderPaymentEventKind.Succeeded && transaction.Payment is not null)
+        if (paymentChanged && transaction.Payment is not null)
         {
             var payment = transaction.Payment;
-            payment.Status = PaymentStatus.Paid;
-            payment.PaidDate = command.OccurredAtUtc ?? now;
-            payment.Method = "online";
-            payment.ExternalReference = command.ProviderPaymentId;
-            payment.UpdatedAt = command.OccurredAtUtc ?? now;
             attempt.BindSemanticAudit(payment, new AtomicSemanticAudit(
                 payment.PortfolioId,
                 nameof(Payment),
@@ -378,6 +382,38 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
             null);
     }
 
+    internal static bool ApplyEvent(
+        PaymentTransaction transaction,
+        Payment? payment,
+        ProviderPaymentEventKind kind,
+        string providerPaymentId,
+        string? failureReason,
+        DateTime occurredAtUtc)
+    {
+        var terminalSuccess = transaction.Status == PaymentTransactionStatus.Succeeded ||
+                              payment?.Status == PaymentStatus.Paid;
+        if (terminalSuccess && kind != ProviderPaymentEventKind.Succeeded)
+        {
+            return false;
+        }
+
+        transaction.Status = MapStatus(kind);
+        transaction.FailureReason = kind == ProviderPaymentEventKind.Succeeded ? null : failureReason;
+        transaction.UpdatedAt = occurredAtUtc;
+
+        if (kind != ProviderPaymentEventKind.Succeeded || payment is null || payment.Status == PaymentStatus.Paid)
+        {
+            return false;
+        }
+
+        payment.Status = PaymentStatus.Paid;
+        payment.PaidDate = occurredAtUtc;
+        payment.Method = "online";
+        payment.ExternalReference = providerPaymentId;
+        payment.UpdatedAt = occurredAtUtc;
+        return true;
+    }
+
     private static PaymentTransactionStatus MapStatus(ProviderPaymentEventKind kind) => kind switch
     {
         ProviderPaymentEventKind.Pending => PaymentTransactionStatus.Pending,
@@ -386,4 +422,156 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         ProviderPaymentEventKind.Canceled => PaymentTransactionStatus.Canceled,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
+}
+
+public sealed class ReconcileClaimedProviderPaymentEventHandler
+    : IAtomicCommandHandler<ReconcileClaimedProviderPaymentEventCommand, ReconcileClaimedProviderPaymentEventResult>
+{
+    internal const int MaximumAttempts = 8;
+
+    public async Task<ReconcileClaimedProviderPaymentEventResult> HandleAsync(
+        ReconcileClaimedProviderPaymentEventCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var inbox = await attempt.Persistence.Query<ProviderInboxEvent>()
+            .SingleOrDefaultAsync(candidate =>
+                candidate.Id == command.ProviderInboxEventId &&
+                candidate.ClaimToken == command.ClaimToken &&
+                candidate.ProcessedAtUtc == null &&
+                candidate.DeadLetteredAtUtc == null, ct);
+        if (inbox is null)
+        {
+            throw new AtomicReceiptInvariantException(
+                $"Provider inbox event {command.ProviderInboxEventId} is not owned by claim {command.ClaimToken}.");
+        }
+
+        if (inbox.EventKind is ProviderPaymentEventKind.SetupCompleted or ProviderPaymentEventKind.Ignored ||
+            string.IsNullOrWhiteSpace(inbox.ProviderObjectId))
+        {
+            throw new AtomicReceiptInvariantException(
+                $"Provider inbox event {inbox.Id} does not contain a replayable payment event.");
+        }
+
+        var transaction = await attempt.Persistence.Query<PaymentTransaction>()
+            .Include(candidate => candidate.Payment)
+            .SingleOrDefaultAsync(candidate =>
+                candidate.Provider == inbox.Provider &&
+                candidate.ProviderPaymentIntentId == inbox.ProviderObjectId, ct);
+        if (transaction is null)
+        {
+            return await ReleaseUnmatchedAsync(inbox, command.ReconciledAtUtc, attempt, ct);
+        }
+
+        inbox.PortfolioId = transaction.PortfolioId;
+        inbox.ProcessedAtUtc = command.ReconciledAtUtc;
+        inbox.NextAttemptAtUtc = command.ReconciledAtUtc;
+        inbox.FailureKind = null;
+        inbox.LastError = null;
+        ReleaseClaim(inbox);
+
+        var occurredAtUtc = inbox.OccurredAtUtc ?? command.ReconciledAtUtc;
+        var paymentChanged = RecordVerifiedProviderPaymentEventHandler.ApplyEvent(
+            transaction,
+            transaction.Payment,
+            inbox.EventKind,
+            inbox.ProviderObjectId,
+            inbox.FailureReason,
+            occurredAtUtc);
+        if (paymentChanged && transaction.Payment is not null)
+        {
+            var payment = transaction.Payment;
+            attempt.BindSemanticAudit(payment, new AtomicSemanticAudit(
+                payment.PortfolioId,
+                nameof(Payment),
+                payment.Id,
+                AuditLogOperation.Updated,
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    payment.Status,
+                    payment.PaidDate,
+                    payment.Method,
+                    payment.ExternalReference,
+                }),
+                ChangeReason: $"Reconciled {inbox.Provider} payment event {inbox.ProviderEventId}."));
+        }
+
+        attempt.StageSemanticEvent(PrepareProviderPaymentCreateHandler.Audit(
+            transaction.PortfolioId,
+            transaction.Id,
+            AuditLogOperation.Updated,
+            "Claimed provider payment event reconciled",
+            new
+            {
+                inbox.ProviderEventId,
+                inbox.EventType,
+                inbox.EventKind,
+                transaction.Status,
+                inbox.FailureReason,
+            }));
+        await attempt.FlushBusinessAsync(ct);
+
+        return new ReconcileClaimedProviderPaymentEventResult(
+            ReconcileProviderPaymentEventOutcome.Applied,
+            inbox.Id,
+            transaction.PortfolioId,
+            transaction.PaymentId,
+            transaction.Id,
+            transaction.Status,
+            null);
+    }
+
+    private static async Task<ReconcileClaimedProviderPaymentEventResult> ReleaseUnmatchedAsync(
+        ProviderInboxEvent inbox,
+        DateTime nowUtc,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        inbox.FailureKind = ProviderInboxFailureKind.Unmatched;
+        inbox.LastError = "No local provider payment transaction matched this verified event.";
+        ReleaseClaim(inbox);
+
+        ReconcileProviderPaymentEventOutcome outcome;
+        DateTime? nextAttemptAtUtc;
+        if (inbox.AttemptCount >= MaximumAttempts)
+        {
+            inbox.DeadLetteredAtUtc = nowUtc;
+            outcome = ReconcileProviderPaymentEventOutcome.DeadLettered;
+            nextAttemptAtUtc = null;
+        }
+        else
+        {
+            inbox.NextAttemptAtUtc = nowUtc.Add(RetryDelay(inbox.AttemptCount));
+            outcome = ReconcileProviderPaymentEventOutcome.RetryScheduled;
+            nextAttemptAtUtc = inbox.NextAttemptAtUtc;
+        }
+
+        await attempt.FlushBusinessAsync(ct);
+        return new ReconcileClaimedProviderPaymentEventResult(
+            outcome,
+            inbox.Id,
+            inbox.PortfolioId,
+            null,
+            null,
+            null,
+            nextAttemptAtUtc);
+    }
+
+    private static TimeSpan RetryDelay(int attemptCount) => attemptCount switch
+    {
+        <= 1 => TimeSpan.FromMinutes(1),
+        2 => TimeSpan.FromMinutes(5),
+        3 => TimeSpan.FromMinutes(15),
+        4 => TimeSpan.FromHours(1),
+        5 => TimeSpan.FromHours(3),
+        6 => TimeSpan.FromHours(12),
+        _ => TimeSpan.FromDays(1),
+    };
+
+    private static void ReleaseClaim(ProviderInboxEvent inbox)
+    {
+        inbox.ClaimOwner = null;
+        inbox.ClaimToken = null;
+        inbox.ClaimExpiresAtUtc = null;
+    }
 }

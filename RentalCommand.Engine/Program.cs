@@ -66,6 +66,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Conversations.SendConversationMessageCommand,
     RentalCommand.Core.Conversations.SendConversationMessageResult,
     RentalCommand.Data.Conversations.SendConversationMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventCommand,
+    RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventResult,
+    RentalCommand.Data.Payments.ReconcileClaimedProviderPaymentEventHandler>();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
@@ -139,6 +143,9 @@ builder.Services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdf
 builder.Services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
     RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
 builder.Services.AddScoped<NativeEsignReconciliationService>();
+builder.Services.AddScoped<RentalCommand.Data.Payments.IProviderInboxClaimStore,
+    RentalCommand.Data.Payments.ProviderInboxClaimStore>();
+builder.Services.AddScoped<ProviderInboxReconciliationService>();
 // Realtime backplane (TSK-624): the Engine can't reach the API's in-memory SignalR hub, so it
 // publishes each entity change as a Postgres NOTIFY on its own pooled connection. The API-hosted
 // EntityChangeListener LISTENs and re-broadcasts to the hub. Shared NpgsqlDataSource so publishes
@@ -203,6 +210,7 @@ builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
 builder.Services.AddHostedService<NativeEsignReconciliationWorker>();
+builder.Services.AddHostedService<ProviderInboxReconciliationWorker>();
 
 // Dev-only (Simulation:Enabled, non-prod): the command-bridge worker that runs automation jobs on demand
 // at sim-time when the API enqueues a SimWorkerCommand. Never registered in production.

@@ -27,6 +27,11 @@ namespace RentalCommand.Data.Migrations
                     EventType = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
                     Payload = table.Column<string>(type: "jsonb", nullable: false),
                     ProviderObjectId = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
+                    EventKind = table.Column<int>(type: "integer", nullable: false),
+                    Amount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: true),
+                    Currency = table.Column<string>(type: "character varying(10)", maxLength: 10, nullable: true),
+                    FailureReason = table.Column<string>(type: "character varying(2000)", maxLength: 2000, nullable: true),
+                    OccurredAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     ReceivedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     NextAttemptAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     AttemptCount = table.Column<int>(type: "integer", nullable: false),
@@ -54,7 +59,7 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_ProviderInboxEvents_NextAttemptAtUtc_ReceivedAtUtc_Id",
                 table: "ProviderInboxEvents",
                 columns: new[] { "NextAttemptAtUtc", "ReceivedAtUtc", "Id" },
-                filter: "\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL AND \"ClaimToken\" IS NULL");
+                filter: "\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_ProviderInboxEvents_Provider_ProviderEventId",
