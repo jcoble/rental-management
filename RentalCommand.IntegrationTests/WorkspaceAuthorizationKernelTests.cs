@@ -77,6 +77,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             ChangeWorkspaceAssignmentEndCommand,
             WorkspaceAccessMutationResult,
             ChangeWorkspaceAssignmentEndHandler>();
+        services.AddAtomicCommandHandler<
+            UnsafeWorkspaceAssignmentMutationCommand,
+            WorkspaceAccessMutationResult,
+            UnsafeWorkspaceAssignmentMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -508,6 +512,44 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task AtomicBoundary_RejectsAuthorityHandlerThatForgetsRevisionAdvance()
+    {
+        SkipIfNoDocker();
+        int assignmentId;
+        DateTime originalUpdatedAt;
+        await using (var db = NewContext())
+        {
+            var assignment = await db.MembershipRoleAssignments.FirstAsync(item =>
+                item.WorkspaceMembershipId == _membershipId);
+            assignmentId = assignment.Id;
+            originalUpdatedAt = assignment.UpdatedAtUtc;
+        }
+
+        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+            Identity(nameof(AtomicBoundary_RejectsAuthorityHandlerThatForgetsRevisionAdvance)),
+            new UnsafeWorkspaceAssignmentMutationCommand(
+                _accessContextId,
+                ExpectedRevision: 7,
+                assignmentId,
+                _now.AddMinutes(2)),
+            MutationCodec);
+
+        await act.Should().ThrowAsync<AccessAuthorityMutationException>();
+
+        await using var verificationDb = NewContext();
+        (await verificationDb.WorkspaceAccessContexts
+                .Where(context => context.Id == _accessContextId)
+                .Select(context => context.AccessRevision)
+                .SingleAsync())
+            .Should().Be(7);
+        (await verificationDb.MembershipRoleAssignments
+                .Where(assignment => assignment.Id == assignmentId)
+                .Select(assignment => assignment.UpdatedAtUtc)
+                .SingleAsync())
+            .Should().Be(originalUpdatedAt);
+    }
+
+    [SkippableFact]
     public async Task MutationBoundary_RollsBackRevisionAndAuthorityRowsWhenStoredScopeIsInvalid()
     {
         SkipIfNoDocker();
@@ -911,6 +953,32 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     private IAtomicUnitOfWork AtomicUnitOfWork =>
         _services?.GetRequiredService<IAtomicUnitOfWork>()
         ?? throw new InvalidOperationException("Atomic access services are unavailable.");
+
+    private sealed record UnsafeWorkspaceAssignmentMutationCommand(
+        int AccessContextId,
+        long ExpectedRevision,
+        int AssignmentId,
+        DateTime ChangedAtUtc) : IWorkspaceAccessMutationCommand;
+
+    private sealed class UnsafeWorkspaceAssignmentMutationHandler
+        : IAtomicCommandHandler<UnsafeWorkspaceAssignmentMutationCommand, WorkspaceAccessMutationResult>
+    {
+        public async Task<WorkspaceAccessMutationResult> HandleAsync(
+            UnsafeWorkspaceAssignmentMutationCommand command,
+            IAtomicWriteAttempt attempt,
+            CancellationToken ct)
+        {
+            var assignment = await attempt.Persistence.Query<MembershipRoleAssignment>()
+                .SingleAsync(item => item.Id == command.AssignmentId &&
+                                     item.WorkspaceMembership!.AccessContextId == command.AccessContextId, ct);
+            assignment.UpdatedAtUtc = command.ChangedAtUtc;
+
+            return new WorkspaceAccessMutationResult(
+                command.AccessContextId,
+                command.AssignmentId,
+                command.ExpectedRevision);
+        }
+    }
 
     private IServiceProvider Services =>
         _services ?? throw new InvalidOperationException("Atomic access services are unavailable.");

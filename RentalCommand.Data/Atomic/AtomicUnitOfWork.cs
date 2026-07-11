@@ -5,6 +5,8 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -128,7 +130,30 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             }
 
             ValidateResultValue(value);
+            WorkspaceAccessGuardResult? accessGuardResult = null;
+            if (command is IWorkspaceAccessMutationCommand accessMutation)
+            {
+                accessGuardResult = await services
+                    .GetRequiredService<WorkspaceAccessRevisionGuard>()
+                    .ValidatePendingMutationAsync(
+                        db,
+                        accessMutation.AccessContextId,
+                        accessMutation.ExpectedRevision,
+                        ct);
+            }
+
             await attempt.FlushBusinessAsync(ct);
+            if (accessGuardResult is not null)
+            {
+                var assignmentIds = accessGuardResult.ExistingAssignmentIdsToValidate
+                    .Concat(accessGuardResult.AssignmentEntitiesToValidate.Select(assignment => assignment.Id))
+                    .Where(id => id > 0)
+                    .Distinct()
+                    .ToArray();
+                await services
+                    .GetRequiredService<MembershipAssignmentScopeValidator>()
+                    .ValidateAsync(assignmentIds, ct);
+            }
             var resultJson = resultCodec.Serialize(value);
             using (JsonDocument.Parse(resultJson))
             {
