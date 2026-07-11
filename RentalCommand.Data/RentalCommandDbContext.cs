@@ -380,12 +380,17 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.BatchId);
+            entity.HasIndex(e => e.SourceStoredFileId);
             // The owning batch is optional (single-file scans carry null). SetNull rather than Cascade
             // so a draft (and the record it created) survives if a batch row is ever removed.
             entity.HasOne(e => e.Batch)
                 .WithMany()
                 .HasForeignKey(e => e.BatchId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.SourceStoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.SourceStoredFileId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ScanBatch>(entity =>

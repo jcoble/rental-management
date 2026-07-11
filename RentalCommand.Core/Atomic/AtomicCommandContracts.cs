@@ -68,6 +68,7 @@ public interface IAtomicWriteAttempt
     IAtomicPersistenceSession Persistence { get; }
     IAtomicSetBasedPersistence SetBased { get; }
     IAtomicLockingPersistence Locking { get; }
+    IAtomicScanConfirmationPersistence ScanConfirmation { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -95,6 +96,50 @@ public enum AtomicLockResource
     WorkOrder = 2,
     Conversation = 3,
     RefreshTokenFamily = 4,
+    ScanDraft = 5,
+}
+
+public enum AtomicScanDraftClaimOutcome
+{
+    Claimed,
+    NotFound,
+    NotReady,
+    Rejected,
+    TargetMismatch,
+    AlreadyConfirmed,
+}
+
+/// <summary>Data snapshot returned by the kernel-owned scan-draft claim operation.</summary>
+public sealed record AtomicScanDraftClaim(
+    AtomicScanDraftClaimOutcome Outcome,
+    int PortfolioId,
+    int DraftId,
+    string TargetEntityType,
+    int? SourceStoredFileId,
+    string? ExtractedFieldsJson,
+    string? CanonicalEntityType,
+    int? CanonicalEntityId);
+
+/// <summary>
+/// Restricted scan persistence boundary. Implementations own the EF-tracked draft/file objects and
+/// transaction lock; command handlers receive only immutable facts and cannot escape to a DbContext.
+/// </summary>
+public interface IAtomicScanConfirmationPersistence
+{
+    Task<AtomicScanDraftClaim> TryClaimAsync(
+        int portfolioId,
+        int draftId,
+        string expectedTargetEntityType,
+        int confirmedByUserId,
+        CancellationToken ct = default);
+
+    Task FinalizeAsync(
+        AtomicScanDraftClaim claim,
+        string entityType,
+        int entityId,
+        int confirmedByUserId,
+        DateTime confirmedAtUtc,
+        CancellationToken ct = default);
 }
 
 /// <summary>

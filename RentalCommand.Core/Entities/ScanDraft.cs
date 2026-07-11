@@ -1,3 +1,5 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
@@ -5,7 +7,7 @@ namespace RentalCommand.Core.Entities;
 /// extraction is Phase 2). <see cref="ExtractedFields"/> holds JSON of
 /// {value, confidence, sourceBox} per field.
 /// </summary>
-public class ScanDraft
+public class ScanDraft : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -17,6 +19,12 @@ public class ScanDraft
     public int? BatchId { get; set; }
 
     public string FilePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Exact uploaded source owned by this draft. Null is valid for transcript-only voice intake;
+    /// confirmation never infers a source row from <see cref="FilePath"/>.
+    /// </summary>
+    public int? SourceStoredFileId { get; set; }
 
     /// <summary>Storage key of a small downscaled JPEG preview; null until generated (or for
     /// non-image uploads like PDFs). Served to clients by default so phones never fetch the
@@ -43,7 +51,10 @@ public class ScanDraft
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedBy { get; set; }
     public DateTime? ConfirmedAt { get; set; }
+    /// <summary>Canonical business record created by atomic confirmation, including no-source voice drafts.</summary>
+    public int? ConfirmedEntityId { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public ScanBatch? Batch { get; set; }
+    public StoredFile? SourceStoredFile { get; set; }
 }

@@ -1,9 +1,11 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
 /// Polymorphic attachment record (entity shape only in Phase 0; upload pipeline is Phase 1).
 /// </summary>
-public class StoredFile
+public class StoredFile : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }

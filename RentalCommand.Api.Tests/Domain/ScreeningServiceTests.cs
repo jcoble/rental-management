@@ -401,6 +401,8 @@ public class ScreeningServiceTests : IDisposable
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => Mock.Of<IAtomicSetBasedPersistence>();
         public IAtomicLockingPersistence Locking => Mock.Of<IAtomicLockingPersistence>();
+        public IAtomicScanConfirmationPersistence ScanConfirmation =>
+            Mock.Of<IAtomicScanConfirmationPersistence>();
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
         public void Add<TEntity>(TEntity entity) where TEntity : class => _db.Add(entity);

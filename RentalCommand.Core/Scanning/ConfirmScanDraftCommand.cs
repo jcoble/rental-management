@@ -1,0 +1,234 @@
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Core.Scanning;
+
+public enum ScanConfirmationTargetKind
+{
+    Expense,
+    Payment,
+    WorkOrder,
+    Lease,
+    Application,
+    Loan,
+}
+
+public sealed record ScanReceiptLineData(
+    string? Description,
+    decimal? Quantity,
+    decimal? UnitPrice,
+    decimal? Amount) : IAtomicCommandData;
+
+/// <summary>Complete reviewed receipt/check facts shared by expense and payment confirmation.</summary>
+public sealed record ScanReceiptData(
+    string? VendorName,
+    string? VendorAddress,
+    string? VendorPhone,
+    string? VendorWebsite,
+    string? VendorTaxId,
+    string? ReceiptNumber,
+    DateTime? TransactionDate,
+    decimal? Subtotal,
+    decimal? Tax,
+    decimal? TaxRate,
+    decimal? Tip,
+    decimal? Discount,
+    decimal? Shipping,
+    decimal? Total,
+    string? PaymentMethod,
+    string? CardLast4,
+    ScheduleECategory? Category,
+    string? DocumentKind,
+    string? Notes,
+    DateTime? DueDate,
+    IReadOnlyList<ScanReceiptLineData> LineItems,
+    string? PayerName,
+    string? CheckNumber,
+    string? BankName,
+    IReadOnlyList<ScanExtraFieldData> ExtraFields) : IAtomicCommandData;
+
+public sealed record ScanExtraFieldData(string Name, string Value) : IAtomicCommandData;
+
+public sealed record ScanExpenseTargetData(
+    ScanReceiptData Receipt,
+    bool IsPaid,
+    int? PropertyId,
+    int? UnitId,
+    int? WorkOrderId) : IAtomicCommandData;
+
+public sealed record ScanPaymentTargetData(
+    ScanReceiptData Receipt,
+    int LeaseId) : IAtomicCommandData;
+
+public sealed record ScanWorkOrderTargetData(
+    int PropertyId,
+    int? UnitId,
+    int? TenantId,
+    int? LeaseId,
+    int? VendorId,
+    string? Title,
+    string? Description,
+    string? Category,
+    WorkOrderPriority Priority,
+    decimal? EstimatedCost) : IAtomicCommandData;
+
+public sealed record ScanLeaseTargetData(
+    int PropertyId,
+    int? UnitId,
+    int? TenantId,
+    string? TenantName,
+    string? TenantEmail,
+    string? TenantPhone,
+    string? TenantEmergencyContact,
+    string? PropertyName,
+    string? PropertyType,
+    string? PropertyAddress,
+    string? PropertyCity,
+    string? PropertyState,
+    string? PropertyPostalCode,
+    string? UnitNumber,
+    decimal? UnitBedrooms,
+    decimal? UnitBathrooms,
+    int? UnitSquareFeet,
+    string? LeaseNumber,
+    DateTime? StartDate,
+    DateTime? EndDate,
+    decimal? MonthlyRent,
+    decimal? SecurityDeposit,
+    decimal? LateFee,
+    int? RentDueDay,
+    RentTrackingStartMode? RentTrackingStartMode,
+    DateTime? RentTrackingStartDate,
+    decimal? OpeningBalanceAmount,
+    DateTime? OpeningBalanceAsOfDate,
+    string? OpeningBalanceNote) : IAtomicCommandData;
+
+public sealed record ScanApplicationTargetData(
+    string? FirstName,
+    string? LastName,
+    string? Email,
+    string? Phone,
+    DateTime? DateOfBirth,
+    string? CurrentAddress,
+    string? Employer,
+    decimal? MonthlyIncome,
+    DateTime? DesiredMoveInDate,
+    string? ApplyingFor,
+    string? IdLast4,
+    string? CoSignerName,
+    string? Notes,
+    int? PropertyId,
+    int? UnitId) : IAtomicCommandData;
+
+public sealed record ScanLoanTargetData(
+    int PropertyId,
+    string? Lender,
+    decimal? OriginalAmount,
+    decimal? CurrentBalance,
+    decimal? AnnualInterestRatePct,
+    int? TermMonths,
+    DateTime? StartDate,
+    int? DayOfMonthDue,
+    decimal? MonthlyPrincipalInterest,
+    decimal? MonthlyEscrow,
+    bool? EscrowCoversTaxes,
+    bool? EscrowCoversInsurance,
+    string? Notes) : IAtomicCommandData;
+
+/// <summary>
+/// Sealed discriminated envelope accepted by the atomic admission validator. Exactly the member named
+/// by <see cref="Kind"/> must be present; no raw request JSON or API-layer type crosses the boundary.
+/// </summary>
+public sealed record ScanConfirmationTargetData(
+    ScanConfirmationTargetKind Kind,
+    ScanExpenseTargetData? Expense = null,
+    ScanPaymentTargetData? Payment = null,
+    ScanWorkOrderTargetData? WorkOrder = null,
+    ScanLeaseTargetData? Lease = null,
+    ScanApplicationTargetData? Application = null,
+    ScanLoanTargetData? Loan = null) : IAtomicCommandData
+{
+    public void Validate()
+    {
+        var populated = (Expense is null ? 0 : 1)
+            + (Payment is null ? 0 : 1)
+            + (WorkOrder is null ? 0 : 1)
+            + (Lease is null ? 0 : 1)
+            + (Application is null ? 0 : 1)
+            + (Loan is null ? 0 : 1);
+        var selectedIsPresent = Kind switch
+        {
+            ScanConfirmationTargetKind.Expense => Expense is not null,
+            ScanConfirmationTargetKind.Payment => Payment is not null,
+            ScanConfirmationTargetKind.WorkOrder => WorkOrder is not null,
+            ScanConfirmationTargetKind.Lease => Lease is not null,
+            ScanConfirmationTargetKind.Application => Application is not null,
+            ScanConfirmationTargetKind.Loan => Loan is not null,
+            _ => false,
+        };
+        if (populated != 1 || !selectedIsPresent)
+        {
+            throw new ArgumentException("Exactly the target payload selected by Kind must be supplied.");
+        }
+    }
+
+    public string EntityType => Kind.ToString();
+}
+
+public sealed record ConfirmScanDraftCommand(
+    int PortfolioId,
+    int DraftId,
+    int ConfirmedByUserId,
+    DateTime ConfirmedAtUtc,
+    ScanConfirmationTargetData Target) : IAtomicCommandData;
+
+/// <summary>One canonical receipt identity per portfolio-owned draft, independent of HTTP retries.</summary>
+public static class ScanConfirmationCommandIdentity
+{
+    public static AtomicCommandIdentity Create(int portfolioId, int draftId)
+    {
+        if (portfolioId <= 0 || draftId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(draftId), "A persisted portfolio and scan draft are required.");
+        }
+
+        return new AtomicCommandIdentity("scan.confirm", $"{portfolioId}:{draftId}");
+    }
+}
+
+public enum ConfirmScanDraftOutcome
+{
+    Confirmed,
+    AlreadyConfirmed,
+    DraftNotFound,
+    DraftNotReady,
+    DraftRejected,
+    TargetMismatch,
+    UnsupportedTarget,
+}
+
+public sealed record ConfirmScanDraftResult(
+    ConfirmScanDraftOutcome Outcome,
+    int DraftId,
+    string TargetEntityType,
+    int? TargetEntityId,
+    int? UnitId = null,
+    string? Error = null) : IAtomicResultData;
+
+/// <summary>Internal writer result; the handler turns it into the stable receipt result contract.</summary>
+public sealed record ScanConfirmationTargetWriteResult(int EntityId, int? UnitId = null);
+
+/// <summary>
+/// Transaction-only target seam. Implementations must be sealed, data/persistence-only atomic
+/// dependencies; remote work and broadcasting are forbidden and represented by durable outbox intent.
+/// </summary>
+public interface IScanConfirmationTargetWriter : IAtomicTransactionSafeDependency
+{
+    bool Supports(ScanConfirmationTargetKind kind);
+
+    Task<ScanConfirmationTargetWriteResult> WriteAsync(
+        ConfirmScanDraftCommand command,
+        string? extractedFieldsJson,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct);
+}
