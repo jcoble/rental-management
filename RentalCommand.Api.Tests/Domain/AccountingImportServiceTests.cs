@@ -11,6 +11,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -401,10 +402,12 @@ public sealed class AccountingImportServiceTests : IDisposable
         };
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
         var providerResolver = new AccountingProviderResolver(new[] { provider });
+        var claims = new AccountingConnectionClaimStore(_ctx.Db);
         var tokenService = new AccountingTokenService(
-            _dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+            _dp, providerResolver, settingsResolver, claims,
+            TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         return new AccountingImportService(
-            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
+            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService, claims,
             TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
     }

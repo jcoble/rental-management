@@ -2,7 +2,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Engine.Workers;
@@ -31,7 +30,6 @@ public sealed class AccountingTokenRefreshWorker : EngineWorkerBase
 
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
-        var db = scoped.GetRequiredService<RentalCommandDbContext>();
         var tokenService = scoped.GetRequiredService<AccountingTokenService>();
         var claims = scoped.GetRequiredService<IAccountingConnectionClaimStore>();
         var logger = scoped.GetRequiredService<ILogger<AccountingTokenRefreshWorker>>();
@@ -43,16 +41,14 @@ public sealed class AccountingTokenRefreshWorker : EngineWorkerBase
         foreach (var claim in batch)
         {
             ct.ThrowIfCancellationRequested();
-            db.Attach(claim.Connection);
             try
             {
-                var result = await tokenService.RefreshAsync(db, claim.Connection, ct, claim.Fence);
+                var result = await tokenService.RefreshAsync(claim.Connection, claim.Fence, ct);
                 if (result.Outcome == AccountingTokenService.RefreshOutcome.Refreshed)
                 {
                     refreshed++;
                 }
 
-                db.ChangeTracker.Clear();
             }
             catch (OperationCanceledException)
             {
@@ -61,8 +57,7 @@ public sealed class AccountingTokenRefreshWorker : EngineWorkerBase
             catch (Exception ex)
             {
                 logger.LogError(ex, "Accounting token refresh failed for connection {ConnectionId}", claim.Connection.Id);
-                db.ChangeTracker.Clear();
-                await claims.MarkRefreshFailedAsync(
+                await claims.MarkTokenRotationRecoveryRequiredAsync(
                     claim.Connection.Id, claim.Fence.ClaimToken,
                     scoped.GetRequiredService<TimeProvider>().UtcNow(), ex.Message, ct);
             }

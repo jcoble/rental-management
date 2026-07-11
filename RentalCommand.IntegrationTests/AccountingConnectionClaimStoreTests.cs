@@ -87,7 +87,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         {
             (await new AccountingConnectionClaimStore(activeRefreshDb).ClaimTokenRefreshAsync(
                     "refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 10))
-                .Should().HaveCount(4, "pull and refresh have separate ownership lanes");
+                .Should().HaveCount(4, "pull work and token rotation have separate ownership lanes");
         }
 
         await using (var expire = NewContext())
@@ -203,11 +203,137 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Stale_refresh_cannot_persist_rotated_tokens_after_reclaim()
+    public async Task Disabling_pull_revokes_claim_and_blocks_in_flight_persistence()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
-        var portfolioId = await SeedPortfolioAsync(now, "Stale refresh");
+        var portfolioId = await SeedPortfolioAsync(now, "Disable in flight");
+        await using (var seed = NewContext())
+        {
+            seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
+            await seed.SaveChangesAsync();
+        }
+
+        AccountingConnectionClaim claim;
+        await using (var claimDb = NewContext())
+            claim = (await new AccountingConnectionClaimStore(claimDb)
+                .ClaimPullAsync("pull", now, TimeSpan.FromMinutes(5), 1)).Single();
+
+        var provider = new Mock<IAccountingProvider>();
+        provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
+        provider.SetupGet(x => x.Capabilities).Returns(new AccountingCapabilities(
+            true, false, false, false, false, false, false));
+        provider.Setup(x => x.PullCustomersAsync(
+                It.IsAny<AcctCallCtx>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                await using var controlDb = NewContext();
+                await CreateConnectionService(controlDb, provider.Object)
+                    .SetPullEnabledAsync(portfolioId, AccountingProvider.QuickBooks, false, CancellationToken.None);
+                return new AccountingPullResult<ExtCustomerDto>(
+                    [new ExtCustomerDto("customer-disable", "Disabled", true, now, null, null, "{}")],
+                    now, false);
+            });
+
+        await using var importDb = NewContext();
+        importDb.Attach(claim.Connection);
+        var act = () => CreateImportService(importDb, provider.Object)
+            .ImportAsync(claim.Connection, null, CancellationToken.None, claim.Fence);
+        await act.Should().ThrowAsync<DbUpdateConcurrencyException>();
+
+        await using var verify = NewContext();
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == claim.Connection.Id);
+        saved.PullEnabled.Should().BeFalse();
+        saved.PullClaimToken.Should().BeNull();
+        (await verify.AccountingEntityMappings.CountAsync()).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Disconnect_revokes_rotation_and_blocks_provider_completion()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now, "Disconnect rotation");
+        await using (var seed = NewContext())
+        {
+            seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
+            await seed.SaveChangesAsync();
+        }
+
+        AccountingConnectionClaim claim;
+        await using (var claimDb = NewContext())
+            claim = (await new AccountingConnectionClaimStore(claimDb).ClaimTokenRefreshAsync(
+                "refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
+
+        var provider = new Mock<IAccountingProvider>();
+        provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
+        provider.Setup(x => x.RevokeAsync(
+                It.IsAny<AccountingAppSettings>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        provider.Setup(x => x.RefreshTokenAsync(
+                It.IsAny<AccountingAppSettings>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                await using var controlDb = NewContext();
+                await CreateConnectionService(controlDb, provider.Object)
+                    .DisconnectAsync(portfolioId, AccountingProvider.QuickBooks, CancellationToken.None);
+                return new AccountingTokenResult(
+                    "rotated-access", "rotated-refresh", now.AddHours(1), null, null);
+            });
+
+        await using var tokenDb = NewContext();
+        var service = CreateTokenService(provider.Object, new AccountingConnectionClaimStore(tokenDb));
+        var act = () => service.RefreshAsync(claim.Connection, claim.Fence, CancellationToken.None);
+        await act.Should().ThrowAsync<DbUpdateConcurrencyException>();
+
+        await using var verify = NewContext();
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == claim.Connection.Id);
+        saved.Status.Should().Be(AccountingConnectionStatus.Disconnected);
+        saved.TokenRotationClaimToken.Should().BeNull();
+        saved.AccessTokenCipherText.Should().BeNull();
+        saved.RefreshTokenCipherText.Should().BeNull();
+    }
+
+    [SkippableFact]
+    public async Task Scheduled_and_inline_refresh_share_one_durable_rotation_lane()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now, "Shared rotation");
+        await using (var seed = NewContext())
+        {
+            seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
+            await seed.SaveChangesAsync();
+        }
+
+        AccountingConnectionClaim pull;
+        await using (var pullDb = NewContext())
+            pull = (await new AccountingConnectionClaimStore(pullDb)
+                .ClaimPullAsync("pull", now, TimeSpan.FromMinutes(5), 1)).Single();
+
+        await using var scheduledDb = NewContext();
+        await using var inlineDb = NewContext();
+        var scheduledTask = new AccountingConnectionClaimStore(scheduledDb).ClaimTokenRefreshAsync(
+            "scheduled", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1);
+        var inlineTask = new AccountingConnectionClaimStore(inlineDb).ClaimInlineTokenRotationAsync(
+            pull.Connection.Id, pull.Fence.ClaimToken, "inline", now, TimeSpan.FromMinutes(3));
+        await Task.WhenAll(scheduledTask, inlineTask);
+
+        var winners = scheduledTask.Result.Count + (inlineTask.Result is null ? 0 : 1);
+        winners.Should().Be(1, "the same rotating refresh token may be submitted only once");
+
+        await using var verify = NewContext();
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == pull.Connection.Id);
+        saved.TokenRotationState.Should().Be(AccountingTokenRotationState.InFlight);
+        saved.TokenRotationAttemptCount.Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Expired_rotation_is_not_retried_and_reconciles_to_reconnect()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now, "Abandoned rotation");
         await using (var seed = NewContext())
         {
             seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
@@ -221,11 +347,35 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using (var expire = NewContext())
             await expire.AccountingConnections.Where(row => row.Id == stale.Connection.Id)
                 .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.RefreshClaimExpiresAtUtc, now.AddMinutes(-1)));
-        AccountingConnectionClaim current;
-        await using (var reclaim = NewContext())
-            current = (await new AccountingConnectionClaimStore(reclaim).ClaimTokenRefreshAsync(
-                "current", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
+                    .SetProperty(row => row.TokenRotationClaimExpiresAtUtc, now.AddMinutes(-1)));
+        await using (var retry = NewContext())
+            (await new AccountingConnectionClaimStore(retry).ClaimTokenRefreshAsync(
+                "must-not-retry", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1))
+                .Should().BeEmpty();
+
+        await using var verify = NewContext();
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == stale.Connection.Id);
+        saved.Status.Should().Be(AccountingConnectionStatus.NeedsReconnect);
+        saved.TokenRotationState.Should().Be(AccountingTokenRotationState.RecoveryRequired);
+        saved.RefreshTokenCipherText.Should().BeNull();
+    }
+
+    [SkippableFact]
+    public async Task Provider_success_with_local_completion_failure_enters_recovery_state()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now, "Persistence loss");
+        await using (var seed = NewContext())
+        {
+            seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = NewContext();
+        var durable = new AccountingConnectionClaimStore(db);
+        var claim = (await durable.ClaimTokenRefreshAsync(
+            "refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
 
         var provider = new Mock<IAccountingProvider>();
         provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
@@ -233,17 +383,16 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
                 It.IsAny<AccountingAppSettings>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AccountingTokenResult("rotated-access", "rotated-refresh", now.AddHours(1), null, null));
 
-        await using var staleDb = NewContext();
-        staleDb.Attach(stale.Connection);
-        var tokenService = CreateTokenService(provider.Object);
-        var act = () => tokenService.RefreshAsync(staleDb, stale.Connection, CancellationToken.None, stale.Fence);
-        await act.Should().ThrowAsync<DbUpdateConcurrencyException>();
+        var tokenService = CreateTokenService(provider.Object, new FailCompletionClaimStore(durable));
+        var result = await tokenService.RefreshAsync(claim.Connection, claim.Fence, CancellationToken.None);
+        result.Outcome.Should().Be(AccountingTokenService.RefreshOutcome.NeedsReconnect);
 
         await using var verify = NewContext();
-        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == stale.Connection.Id);
-        saved.RefreshClaimToken.Should().Be(current.Fence.ClaimToken);
-        _dataProtection.CreateProtector("RentalCommand.Accounting.v1")
-            .Unprotect(saved.AccessTokenCipherText!).Should().Be("access-token");
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == claim.Connection.Id);
+        saved.Status.Should().Be(AccountingConnectionStatus.NeedsReconnect);
+        saved.TokenRotationState.Should().Be(AccountingTokenRotationState.RecoveryRequired);
+        saved.AccessTokenCipherText.Should().BeNull();
+        saved.RefreshTokenCipherText.Should().BeNull();
     }
 
     private async Task<int> SeedPortfolioAsync(DateTime now, string? suffix = null)
@@ -299,19 +448,64 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     private AccountingImportService CreateImportService(RentalCommandDbContext db, IAccountingProvider provider)
     {
         var (providerResolver, settingsResolver) = CreateResolvers(provider);
+        var claims = new AccountingConnectionClaimStore(db);
         return new AccountingImportService(
             db, _dataProtection, providerResolver, settingsResolver,
             new AccountingTokenService(_dataProtection, providerResolver, settingsResolver,
-                TimeProvider.System, NullLogger<AccountingTokenService>.Instance),
+                claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance),
+            claims,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
     }
 
-    private AccountingTokenService CreateTokenService(IAccountingProvider provider)
+    private AccountingTokenService CreateTokenService(
+        IAccountingProvider provider, IAccountingConnectionClaimStore claims)
     {
         var (providerResolver, settingsResolver) = CreateResolvers(provider);
         return new AccountingTokenService(
             _dataProtection, providerResolver, settingsResolver,
+            claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+    }
+
+    private AccountingConnectionService CreateConnectionService(
+        RentalCommandDbContext db, IAccountingProvider provider)
+    {
+        var (providerResolver, settingsResolver) = CreateResolvers(provider);
+        var claims = new AccountingConnectionClaimStore(db);
+        var tokenService = new AccountingTokenService(
+            _dataProtection, providerResolver, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+        var import = new AccountingImportService(
+            db, _dataProtection, providerResolver, settingsResolver, tokenService, claims,
+            TimeProvider.System, NullLogger<AccountingImportService>.Instance);
+        return new AccountingConnectionService(
+            db, _dataProtection, providerResolver, settingsResolver, import,
+            TimeProvider.System, NullLogger<AccountingConnectionService>.Instance);
+    }
+
+    private sealed class FailCompletionClaimStore(IAccountingConnectionClaimStore inner)
+        : IAccountingConnectionClaimStore
+    {
+        public Task<IReadOnlyList<AccountingConnectionClaim>> ClaimPullAsync(
+            string owner, DateTime now, TimeSpan duration, int size, CancellationToken ct = default) =>
+            inner.ClaimPullAsync(owner, now, duration, size, ct);
+        public Task<IReadOnlyList<AccountingConnectionClaim>> ClaimTokenRefreshAsync(
+            string owner, DateTime now, DateTime before, TimeSpan duration, int size, CancellationToken ct = default) =>
+            inner.ClaimTokenRefreshAsync(owner, now, before, duration, size, ct);
+        public Task<AccountingConnectionClaim?> ClaimInlineTokenRotationAsync(
+            int id, Guid? pullToken, string owner, DateTime now, TimeSpan duration, CancellationToken ct = default) =>
+            inner.ClaimInlineTokenRotationAsync(id, pullToken, owner, now, duration, ct);
+        public Task<int> MarkPullFailedAsync(
+            int id, Guid token, DateTime failed, DateTime next, string error, CancellationToken ct = default) =>
+            inner.MarkPullFailedAsync(id, token, failed, next, error, ct);
+        public Task<int> MarkTokenRotationRecoveryRequiredAsync(
+            int id, Guid token, DateTime failed, string error, CancellationToken ct = default) =>
+            inner.MarkTokenRotationRecoveryRequiredAsync(id, token, failed, error, ct);
+        public Task<int> CompleteTokenRotationAsync(
+            int id, Guid token, Guid? parentPullToken, string access, string refresh,
+            DateTime expires, DateTime completed,
+            CancellationToken ct = default) => throw new DbUpdateException("Injected local persistence loss.");
+        public Task<int> ReconcileAbandonedTokenRotationsAsync(DateTime now, CancellationToken ct = default) =>
+            inner.ReconcileAbandonedTokenRotationsAsync(now, ct);
     }
 
     private static (AccountingProviderResolver Provider, AccountingAppSettingsResolver Settings) CreateResolvers(

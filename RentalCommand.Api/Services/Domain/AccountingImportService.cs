@@ -48,6 +48,7 @@ public sealed class AccountingImportService
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly AccountingTokenService _tokenService;
+    private readonly IAccountingConnectionClaimStore _claims;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingImportService> _logger;
 
@@ -57,6 +58,7 @@ public sealed class AccountingImportService
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
         AccountingTokenService tokenService,
+        IAccountingConnectionClaimStore claims,
         TimeProvider timeProvider,
         ILogger<AccountingImportService> logger)
     {
@@ -66,6 +68,7 @@ public sealed class AccountingImportService
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
         _tokenService = tokenService;
+        _claims = claims;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -130,10 +133,17 @@ public sealed class AccountingImportService
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                var refresh = await _tokenService.RefreshAsync(_db, conn, token, workerFence);
+                var rotation = await _claims.ClaimInlineTokenRotationAsync(
+                    conn.Id,
+                    workerFence?.Operation == AccountingWorkerOperation.Pull ? workerFence.ClaimToken : null,
+                    $"inline-pull:{Environment.MachineName}:{Guid.NewGuid():N}",
+                    _timeProvider.UtcNow(), TimeSpan.FromMinutes(3), token)
+                    ?? throw new DbUpdateConcurrencyException(
+                        "The accounting token is already rotating or the connection is no longer eligible.");
+                var refresh = await _tokenService.RefreshAsync(rotation.Connection, rotation.Fence, token);
                 if (refresh.Outcome != AccountingTokenService.RefreshOutcome.Refreshed || refresh.AccessToken == null)
                 {
-                    throw new InvalidOperationException(
+                    throw new AccountingReconnectRequiredException(
                         $"Accounting access token for connection {conn.Id} is unauthorized and could not be refreshed — reconnect required.", ex);
                 }
 
@@ -150,6 +160,14 @@ public sealed class AccountingImportService
                 return await pull();
             }
             catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                throw;
+            }
+            catch (AccountingReconnectRequiredException)
             {
                 throw;
             }
@@ -171,7 +189,10 @@ public sealed class AccountingImportService
             // Conditional UPDATE both validates ownership and holds the row lock until all local
             // domain writes commit. An expired worker therefore rolls the entire local phase back.
             var owned = await _db.AccountingConnections.IgnoreQueryFilters()
-                .Where(row => row.Id == connection.Id && row.PullClaimToken == workerFence.ClaimToken)
+                .Where(row => row.Id == connection.Id
+                    && row.PullClaimToken == workerFence.ClaimToken
+                    && row.Status == AccountingConnectionStatus.Connected
+                    && row.PullEnabled)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(row => row.PullClaimExpiresAtUtc, row => row.PullClaimExpiresAtUtc), ct);
             if (owned == 0)

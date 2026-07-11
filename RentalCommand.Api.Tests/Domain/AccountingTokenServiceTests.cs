@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -41,8 +42,9 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var fake = new FakeRefreshProvider(
             new AccountingTokenResult("new-access", "new-refresh", newExpiry, null, null));
         var sut = CreateService(fake);
+        var fence = BeginRotation(conn);
 
-        var result = await sut.RefreshAsync(_ctx.Db, conn, CancellationToken.None);
+        var result = await sut.RefreshAsync(conn, fence, CancellationToken.None);
 
         result.Outcome.Should().Be(AccountingTokenService.RefreshOutcome.Refreshed);
         result.AccessToken.Should().Be("new-access"); // decrypted, for a 401-retry caller to reuse
@@ -50,6 +52,7 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var saved = await _ctx.Db.AccountingConnections.AsNoTracking().SingleAsync(c => c.Id == conn.Id);
         saved.Status.Should().Be(AccountingConnectionStatus.Connected);
         saved.TokenExpiresAt.Should().Be(newExpiry);
+        saved.TokenGeneration.Should().Be(1);
 
         // BOTH tokens rotated and are stored ONLY as cipher text (not plaintext), and decrypt to the new pair.
         saved.AccessTokenCipherText.Should().NotBeNullOrEmpty();
@@ -72,8 +75,9 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var fake = new FakeRefreshProvider(
             throwReconnect: new AccountingReconnectRequiredException("invalid_grant — refresh token dead"));
         var sut = CreateService(fake);
+        var fence = BeginRotation(conn);
 
-        var result = await sut.RefreshAsync(_ctx.Db, conn, CancellationToken.None);
+        var result = await sut.RefreshAsync(conn, fence, CancellationToken.None);
 
         result.Outcome.Should().Be(AccountingTokenService.RefreshOutcome.NeedsReconnect);
         result.AccessToken.Should().BeNull();
@@ -114,7 +118,20 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var qbOptions = new QuickBooksOptions { ClientId = "id", ClientSecret = "secret", Environment = "sandbox" };
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
         var providerResolver = new AccountingProviderResolver(new[] { provider });
-        return new AccountingTokenService(_dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+        return new AccountingTokenService(_dp, providerResolver, settingsResolver,
+            new AccountingConnectionClaimStore(_ctx.Db), TimeProvider.System,
+            NullLogger<AccountingTokenService>.Instance);
+    }
+
+    private AccountingWorkerFence BeginRotation(AccountingConnection connection)
+    {
+        var token = Guid.NewGuid();
+        connection.TokenRotationState = AccountingTokenRotationState.InFlight;
+        connection.TokenRotationClaimToken = token;
+        connection.TokenRotationClaimOwner = "unit-test";
+        connection.TokenRotationClaimExpiresAtUtc = DateTime.UtcNow.AddMinutes(3);
+        _ctx.Db.SaveChanges();
+        return new AccountingWorkerFence(AccountingWorkerOperation.TokenRotation, token);
     }
 
     /// <summary>Fake provider whose RefreshTokenAsync returns a fixed result or throws a reconnect-required.</summary>

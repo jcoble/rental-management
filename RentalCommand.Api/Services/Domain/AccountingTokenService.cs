@@ -5,7 +5,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -22,8 +21,9 @@ namespace RentalCommand.Api.Services.Domain;
 /// service used (<c>"RentalCommand.Accounting.v1"</c>, AC-4); they are never logged. On a dead refresh
 /// token (<see cref="AccountingReconnectRequiredException"/> — provider-neutral) the connection flips to
 /// <see cref="AccountingConnectionStatus.NeedsReconnect"/> and the tokens are blanked, so the UI prompts
-/// a reconnect instead of failing silently. The caller persists via the SAME <see cref="RentalCommandDbContext"/>
-/// it passed in (the connection is already tracked there).
+/// a reconnect instead of failing silently. Every caller must first acquire the same durable
+/// token-rotation claim; the provider call then runs outside a database transaction and completion
+/// is a single fenced SQL update.
 /// </para>
 /// </summary>
 public sealed class AccountingTokenService
@@ -32,18 +32,21 @@ public sealed class AccountingTokenService
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
     private readonly TimeProvider _timeProvider;
+    private readonly IAccountingConnectionClaimStore _claims;
     private readonly ILogger<AccountingTokenService> _logger;
 
     public AccountingTokenService(
         IDataProtectionProvider dataProtection,
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
+        IAccountingConnectionClaimStore claims,
         TimeProvider timeProvider,
         ILogger<AccountingTokenService> logger)
     {
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
+        _claims = claims;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -63,25 +66,29 @@ public sealed class AccountingTokenService
 
     /// <summary>
     /// Refresh <paramref name="connection"/>'s tokens through its provider and persist the rotated pair
-    /// (both tokens rotate on QuickBooks). Mutates the tracked entity and calls SaveChanges on
-    /// <paramref name="db"/>. Returns the new decrypted access token so a 401-retry caller can reuse it.
+    /// (both tokens rotate on QuickBooks). Returns the new decrypted access token so a 401-retry
+    /// caller can reuse it. If provider success cannot be durably persisted, the connection is put
+    /// in an explicit reconnect-required recovery state instead of retrying the consumed token.
     ///
     /// <para>On <see cref="AccountingReconnectRequiredException"/> the connection is flipped to
     /// NeedsReconnect (tokens blanked) and the method returns <see cref="RefreshOutcome.NeedsReconnect"/>
     /// rather than throwing — a dead refresh token is an expected, recoverable state, not a cycle error.
-    /// Transient failures still throw so the worker records an Error and retries next cycle.</para>
+    /// Other provider failures are conservatively treated as ambiguous because the remote side may
+    /// have consumed the rotating token before the response was lost.</para>
     /// </summary>
     public async Task<RefreshResult> RefreshAsync(
-        RentalCommandDbContext db,
         AccountingConnection connection,
-        CancellationToken ct,
-        AccountingWorkerFence? workerFence = null)
+        AccountingWorkerFence rotationFence,
+        CancellationToken ct)
     {
+        if (rotationFence.Operation != AccountingWorkerOperation.TokenRotation)
+            throw new InvalidOperationException("Token refresh requires the shared token-rotation fence.");
+
         var refreshToken = UnprotectNullable(connection.RefreshTokenCipherText);
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
-            // No refresh token to use — treat as needing a reconnect (can't recover without one).
-            await MarkNeedsReconnectAsync(db, connection, "No refresh token on the connection.", workerFence, ct);
+            await MarkNeedsReconnectAsync(
+                connection, rotationFence, "No refresh token on the connection.", ct);
             return new RefreshResult(RefreshOutcome.NeedsReconnect, null, null);
         }
 
@@ -91,23 +98,44 @@ public sealed class AccountingTokenService
         try
         {
             var result = await provider.RefreshTokenAsync(settings, refreshToken, ct);
-
-            await using var transaction = await db.Database.BeginTransactionAsync(ct);
-            await LockOwnedConnectionAsync(db, connection.Id, workerFence, ct);
-            connection.AccessTokenCipherText = ProtectNullable(result.AccessToken);
-            connection.RefreshTokenCipherText = ProtectNullable(result.RefreshToken);
-            connection.TokenExpiresAt = result.ExpiresAtUtc;
-            connection.LastError = null;
-            // A successful refresh recovers a connection that had errored.
-            if (connection.Status == AccountingConnectionStatus.Error)
+            var completedAt = _timeProvider.UtcNow();
+            var accessCipherText = ProtectNullable(result.AccessToken)!;
+            var refreshCipherText = ProtectNullable(result.RefreshToken)!;
+            int completed;
+            try
             {
-                connection.Status = AccountingConnectionStatus.Connected;
+                completed = await _claims.CompleteTokenRotationAsync(
+                    connection.Id, rotationFence.ClaimToken, rotationFence.ParentPullClaimToken,
+                    accessCipherText, refreshCipherText,
+                    result.ExpiresAtUtc, completedAt, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex,
+                    "Provider rotated tokens for AccountingConnection {ConnectionId}, but local persistence failed; reconnect is required",
+                    connection.Id);
+                await MarkNeedsReconnectAsync(connection, rotationFence,
+                    "Provider rotated the token, but Rental Command could not confirm the new token. Reconnect the accounting provider.", ct);
+                return new RefreshResult(RefreshOutcome.NeedsReconnect, null, null);
             }
 
-            connection.UpdatedAt = _timeProvider.UtcNow();
-            ClearCompletedRefreshClaim(connection, workerFence);
-            await db.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
+            if (completed == 0)
+            {
+                await MarkNeedsReconnectAsync(connection, rotationFence,
+                    "Provider rotated the token, but the rotation claim was no longer current. Reconnect the accounting provider.", ct);
+                throw new DbUpdateConcurrencyException("The accounting token-rotation claim is no longer owned.");
+            }
+
+            connection.AccessTokenCipherText = accessCipherText;
+            connection.RefreshTokenCipherText = refreshCipherText;
+            connection.TokenExpiresAt = result.ExpiresAtUtc;
+            connection.TokenGeneration++;
+            connection.TokenRotationState = AccountingTokenRotationState.Idle;
+            connection.TokenRotationClaimOwner = null;
+            connection.TokenRotationClaimToken = null;
+            connection.TokenRotationClaimExpiresAtUtc = null;
+            connection.LastError = null;
+            connection.UpdatedAt = completedAt;
 
             _logger.LogInformation(
                 "Refreshed tokens for AccountingConnection {ConnectionId} ({Provider})",
@@ -121,64 +149,32 @@ public sealed class AccountingTokenService
                 "Refresh token dead for AccountingConnection {ConnectionId} ({Provider}); flipping to NeedsReconnect: {Reason}",
                 connection.Id, connection.Provider, ex.Message);
             await MarkNeedsReconnectAsync(
-                db, connection, "Refresh token expired — please reconnect.", workerFence, ct);
+                connection, rotationFence, "Refresh token expired — please reconnect.", ct);
             return new RefreshResult(RefreshOutcome.NeedsReconnect, null, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not DbUpdateConcurrencyException)
+        {
+            await MarkNeedsReconnectAsync(connection, rotationFence,
+                "Token rotation may have reached the provider but could not be confirmed. Reconnect the accounting provider.", ct);
+            throw;
         }
     }
 
     private async Task MarkNeedsReconnectAsync(
-        RentalCommandDbContext db,
         AccountingConnection connection,
+        AccountingWorkerFence rotationFence,
         string reason,
-        AccountingWorkerFence? workerFence,
         CancellationToken ct)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        await LockOwnedConnectionAsync(db, connection.Id, workerFence, ct);
+        var updated = await _claims.MarkTokenRotationRecoveryRequiredAsync(
+            connection.Id, rotationFence.ClaimToken, _timeProvider.UtcNow(), reason, ct);
+        if (updated == 0) return; // Disconnect/revocation already established a safer terminal state.
         connection.Status = AccountingConnectionStatus.NeedsReconnect;
         connection.AccessTokenCipherText = null;
         connection.RefreshTokenCipherText = null;
         connection.TokenExpiresAt = null;
+        connection.TokenRotationState = AccountingTokenRotationState.RecoveryRequired;
         connection.LastError = reason;
-        connection.UpdatedAt = _timeProvider.UtcNow();
-        ClearCompletedRefreshClaim(connection, workerFence);
-        await db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
-    }
-
-    private static async Task LockOwnedConnectionAsync(
-        RentalCommandDbContext db,
-        int connectionId,
-        AccountingWorkerFence? workerFence,
-        CancellationToken ct)
-    {
-        if (workerFence is null) return;
-
-        var query = db.AccountingConnections.IgnoreQueryFilters().Where(row => row.Id == connectionId);
-        var owned = workerFence.Operation switch
-        {
-            AccountingWorkerOperation.Pull => await query
-                .Where(row => row.PullClaimToken == workerFence.ClaimToken)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.PullClaimExpiresAtUtc, row => row.PullClaimExpiresAtUtc), ct),
-            AccountingWorkerOperation.Refresh => await query
-                .Where(row => row.RefreshClaimToken == workerFence.ClaimToken)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.RefreshClaimExpiresAtUtc, row => row.RefreshClaimExpiresAtUtc), ct),
-            _ => 0,
-        };
-        if (owned == 0)
-            throw new DbUpdateConcurrencyException("The accounting token-refresh claim is no longer owned.");
-    }
-
-    private static void ClearCompletedRefreshClaim(
-        AccountingConnection connection,
-        AccountingWorkerFence? workerFence)
-    {
-        if (workerFence?.Operation != AccountingWorkerOperation.Refresh) return;
-        connection.RefreshClaimOwner = null;
-        connection.RefreshClaimToken = null;
-        connection.RefreshClaimExpiresAtUtc = null;
     }
 
     private string? ProtectNullable(string? value) =>

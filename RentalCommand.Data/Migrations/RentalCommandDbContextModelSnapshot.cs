@@ -237,21 +237,27 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("PullLastAttemptAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<int>("RefreshAttemptCount")
+                    b.Property<long>("TokenGeneration")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("TokenRotationAttemptCount")
                         .HasColumnType("integer");
 
-                    b.Property<DateTime?>("RefreshClaimExpiresAtUtc")
+                    b.Property<DateTime?>("TokenRotationClaimExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("RefreshClaimOwner")
+                    b.Property<string>("TokenRotationClaimOwner")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
-                    b.Property<Guid?>("RefreshClaimToken")
+                    b.Property<Guid?>("TokenRotationClaimToken")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime?>("RefreshLastAttemptAtUtc")
+                    b.Property<DateTime?>("TokenRotationLastAttemptAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("TokenRotationState")
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
@@ -270,9 +276,9 @@ namespace RentalCommand.Data.Migrations
                         .HasDatabaseName("IX_AccountingConnections_ExpiredPullClaim")
                         .HasFilter("\"PullClaimToken\" IS NOT NULL");
 
-                    b.HasIndex("RefreshClaimExpiresAtUtc", "Id")
-                        .HasDatabaseName("IX_AccountingConnections_ExpiredRefreshClaim")
-                        .HasFilter("\"RefreshClaimToken\" IS NOT NULL");
+                    b.HasIndex("TokenRotationClaimExpiresAtUtc", "Id")
+                        .HasDatabaseName("IX_AccountingConnections_ExpiredTokenRotationClaim")
+                        .HasFilter("\"TokenRotationClaimToken\" IS NOT NULL");
 
                     b.ToTable("AccountingConnections");
                 });

@@ -64,11 +64,18 @@ public class AccountingConnection : IPortfolioScoped, IAuditable
     public int PullAttemptCount { get; set; }
     public DateTime? PullLastAttemptAtUtc { get; set; }
 
-    public string? RefreshClaimOwner { get; set; }
-    public Guid? RefreshClaimToken { get; set; }
-    public DateTime? RefreshClaimExpiresAtUtc { get; set; }
-    public int RefreshAttemptCount { get; set; }
-    public DateTime? RefreshLastAttemptAtUtc { get; set; }
+    /// <summary>
+    /// Durable serialization lane for every refresh-token rotation, whether scheduled or caused by
+    /// an inline provider 401. An expired in-flight rotation is never retried with the same rotating
+    /// provider token; reconciliation moves the connection to <see cref="AccountingConnectionStatus.NeedsReconnect"/>.
+    /// </summary>
+    public AccountingTokenRotationState TokenRotationState { get; set; }
+    public long TokenGeneration { get; set; }
+    public string? TokenRotationClaimOwner { get; set; }
+    public Guid? TokenRotationClaimToken { get; set; }
+    public DateTime? TokenRotationClaimExpiresAtUtc { get; set; }
+    public int TokenRotationAttemptCount { get; set; }
+    public DateTime? TokenRotationLastAttemptAtUtc { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
