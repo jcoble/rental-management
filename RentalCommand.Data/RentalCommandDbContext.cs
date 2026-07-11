@@ -1488,6 +1488,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ServiceType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.NormalizedPhone).HasMaxLength(32);
             entity.Property(e => e.Website).HasMaxLength(500);
             entity.Property(e => e.TaxId).HasMaxLength(50);
             entity.Property(e => e.AddressLine1).HasMaxLength(250);
@@ -1496,6 +1497,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.PostalCode).HasMaxLength(20);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.NormalizedPhone);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.Property(e => e.AverageRating).HasPrecision(3, 2);
             entity.HasOne(e => e.Portfolio)
@@ -1513,6 +1515,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.WorkOrderId);
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.VendorId, e.Status, e.DispatchedAtUtc });
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)

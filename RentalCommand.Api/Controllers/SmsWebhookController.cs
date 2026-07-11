@@ -38,6 +38,7 @@ public class SmsWebhookController : ControllerBase
     [Consumes("application/x-www-form-urlencoded", "multipart/form-data")]
     [Produces("application/xml")]
     public async Task<IActionResult> Inbound(
+        [FromForm(Name = "MessageSid")] string? providerEventId,
         [FromForm(Name = "From")] string? from,
         [FromForm(Name = "Body")] string? body,
         CancellationToken ct)
@@ -65,8 +66,14 @@ public class SmsWebhookController : ControllerBase
             return StatusCode(StatusCodes.Status403Forbidden);
         }
 
+        if (string.IsNullOrWhiteSpace(providerEventId))
+        {
+            return BadRequest(new { error = "The provider MessageSid is required." });
+        }
+
         // Route to vendor-DONE (job completion) or fall back to tenant rent-YES confirmation.
-        var responseMessage = await _router.RouteAsync(from, body, _timeProvider.UtcNow(), ct);
+        var responseMessage = await _router.RouteAsync(
+            providerEventId, from, body, _timeProvider.UtcNow(), ct);
         return Content(ToMessageResponse(responseMessage), "application/xml", Encoding.UTF8);
     }
 

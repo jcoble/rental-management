@@ -7,5 +7,10 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface ISmsInboundRouter
 {
-    Task<string> RouteAsync(string? fromPhone, string? body, DateTime receivedAtUtc, CancellationToken ct = default);
+    Task<string> RouteAsync(
+        string providerEventId,
+        string? fromPhone,
+        string? body,
+        DateTime receivedAtUtc,
+        CancellationToken ct = default);
 }

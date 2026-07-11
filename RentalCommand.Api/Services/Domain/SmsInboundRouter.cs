@@ -14,13 +14,19 @@ public sealed class SmsInboundRouter : ISmsInboundRouter
         _rentConfirmation = rentConfirmation;
     }
 
-    public async Task<string> RouteAsync(string? fromPhone, string? body, DateTime receivedAtUtc, CancellationToken ct = default)
+    public async Task<string> RouteAsync(
+        string providerEventId,
+        string? fromPhone,
+        string? body,
+        DateTime receivedAtUtc,
+        CancellationToken ct = default)
     {
-        // Vendor DONE wins when the sender is a vendor with an open dispatch and used a DONE keyword.
-        // This is checked first so a vendor's "DONE" never gets read as a tenant rent confirmation.
-        if (await _vendorDone.CanHandleAsync(fromPhone, body, ct))
+        // Vendor DONE wins when an open dispatch matches. The atomic handler performs the only match
+        // query and returns NoOpenDispatch when the rent-confirmation path should be attempted.
+        var vendorResult = await _vendorDone.TryHandleAsync(
+            providerEventId, fromPhone, body, receivedAtUtc, ct);
+        if (vendorResult.Handled)
         {
-            var vendorResult = await _vendorDone.HandleAsync(fromPhone, body, receivedAtUtc, ct);
             return vendorResult.ResponseMessage;
         }
 

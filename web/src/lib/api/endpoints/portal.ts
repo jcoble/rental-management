@@ -12,12 +12,14 @@ export type { Conversation, ConversationMessage, ConversationSummary };
 
 /** Tenant starts a topic thread to their landlord/management. No channels, no recipient. */
 export interface StartPortalConversationRequest {
+	operationKey: string;
 	subject: string;
 	body: string;
 }
 
 /** Tenant replies to an existing thread. No channels (portal-only on the tenant side). */
 export interface SendPortalMessageRequest {
+	operationKey: string;
 	body: string;
 }
 

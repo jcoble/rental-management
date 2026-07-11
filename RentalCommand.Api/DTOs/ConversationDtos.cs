@@ -122,6 +122,10 @@ public class TenantStartConversationRequest
 {
     [Required]
     [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(200)]
     public string Subject { get; set; } = string.Empty;
 
     [Required]
@@ -132,6 +136,10 @@ public class TenantStartConversationRequest
 /// <summary>Tenant: append a message to one of their own conversations (no channel selection).</summary>
 public class TenantPostMessageRequest
 {
+    [Required]
+    [MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     [Required]
     [MaxLength(4000)]
     public string Body { get; set; } = string.Empty;

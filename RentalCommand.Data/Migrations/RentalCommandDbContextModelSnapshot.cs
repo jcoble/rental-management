@@ -5869,6 +5869,10 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("JobsCompleted")
                         .HasColumnType("integer");
 
+                    b.Property<string>("NormalizedPhone")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -5920,6 +5924,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("NormalizedPhone");
+
                     b.HasIndex("PortfolioId");
 
                     b.ToTable("Vendors");
@@ -5962,6 +5968,8 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("Status");
 
                     b.HasIndex("VendorId");
+
+                    b.HasIndex("VendorId", "Status", "DispatchedAtUtc");
 
                     b.HasIndex("WorkOrderId");
 

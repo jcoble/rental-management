@@ -910,6 +910,7 @@ public class NoticeDraftServiceTests : IDisposable
             int tenantId,
             string subject,
             string body,
+            string operationKey,
             CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(null);
 
@@ -918,6 +919,7 @@ public class NoticeDraftServiceTests : IDisposable
             int tenantId,
             int id,
             string body,
+            string operationKey,
             CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(null);
     }

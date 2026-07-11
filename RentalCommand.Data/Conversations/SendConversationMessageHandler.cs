@@ -19,11 +19,12 @@ public sealed class SendConversationMessageHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
-        if (command.SenderRole != ConversationSenderRole.Landlord)
+        if (command.SenderRole is not (ConversationSenderRole.Landlord or ConversationSenderRole.Tenant))
         {
-            throw new InvalidOperationException("This command accepts landlord-to-tenant messages only.");
+            throw new InvalidOperationException("Unsupported conversation sender role.");
         }
 
+        var createsConversation = command.ConversationId is null;
         Conversation conversation;
         Tenant tenant;
         if (command.ConversationId is { } conversationId)
@@ -33,7 +34,9 @@ public sealed class SendConversationMessageHandler
                 .Include(candidate => candidate.Tenant)
                 .SingleOrDefaultAsync(
                     candidate => candidate.Id == conversationId
-                        && candidate.PortfolioId == command.PortfolioId,
+                        && candidate.PortfolioId == command.PortfolioId
+                        && (command.SenderRole != ConversationSenderRole.Tenant
+                            || candidate.TenantId == command.TenantId),
                     ct);
             if (existing?.Tenant is null)
             {
@@ -44,7 +47,14 @@ public sealed class SendConversationMessageHandler
             tenant = existing.Tenant;
             conversation.LastMessageAt = command.OccurredAtUtc;
             conversation.LastMessagePreview = Preview(command.Body);
-            conversation.TenantUnreadCount += 1;
+            if (command.SenderRole == ConversationSenderRole.Landlord)
+            {
+                conversation.TenantUnreadCount += 1;
+            }
+            else
+            {
+                conversation.LandlordUnreadCount += 1;
+            }
         }
         else
         {
@@ -63,22 +73,25 @@ public sealed class SendConversationMessageHandler
                 PortfolioId = command.PortfolioId,
                 TenantId = tenant.Id,
                 Subject = command.Subject,
-                StartedByLandlord = true,
+                StartedByLandlord = command.SenderRole == ConversationSenderRole.Landlord,
                 CreatedAt = command.OccurredAtUtc,
                 LastMessageAt = command.OccurredAtUtc,
                 LastMessagePreview = Preview(command.Body),
-                TenantUnreadCount = 1,
+                LandlordUnreadCount = command.SenderRole == ConversationSenderRole.Tenant ? 1 : 0,
+                TenantUnreadCount = command.SenderRole == ConversationSenderRole.Landlord ? 1 : 0,
             };
             attempt.Persistence.Add(conversation);
         }
 
-        var channels = NormalizeChannels(command.RequestedChannels, tenant);
+        var channels = command.SenderRole == ConversationSenderRole.Landlord
+            ? NormalizeChannels(command.RequestedChannels, tenant)
+            : [];
         var message = new ConversationMessage
         {
             Conversation = conversation,
-            SenderRole = ConversationSenderRole.Landlord,
+            SenderRole = command.SenderRole,
             Body = command.Body,
-            Channels = string.Join(',', channels),
+            Channels = channels.Count == 0 ? null : string.Join(',', channels),
             CreatedAt = command.OccurredAtUtc,
         };
         attempt.Persistence.Add(message);
@@ -95,14 +108,53 @@ public sealed class SendConversationMessageHandler
                 SenderRole = message.SenderRole.ToString(),
                 message.Channels,
             }),
-            ChangeReason: "Landlord conversation message committed with recipient destinations."));
+            ChangeReason: command.SenderRole == ConversationSenderRole.Landlord
+                ? "Landlord conversation message committed with recipient destinations."
+                : "Tenant conversation message committed with staff notifications."));
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(Conversation),
+            conversation.Id,
+            createsConversation ? AuditLogOperation.Created : AuditLogOperation.Updated,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                conversation.TenantId,
+                conversation.Subject,
+                conversation.LastMessageAt,
+                conversation.LastMessagePreview,
+                conversation.LandlordUnreadCount,
+                conversation.TenantUnreadCount,
+            }),
+            ChangeReason: createsConversation
+                ? "Conversation opened with its first durable message."
+                : "Conversation activity and unread state advanced with a durable message."));
 
-        StageDestinationIntents(attempt, command, tenant, conversation, message, channels);
-        var notifications = await CreatePortalNotificationsAsync(attempt, command, conversation, channels, ct);
+        if (command.SenderRole == ConversationSenderRole.Landlord)
+        {
+            StageDestinationIntents(attempt, command, tenant, conversation, message, channels);
+        }
+        var notifications = command.SenderRole == ConversationSenderRole.Landlord
+            ? await CreatePortalNotificationsAsync(attempt, command, conversation, channels, ct)
+            : await CreateStaffNotificationsAsync(attempt, command, conversation, tenant, ct);
         if (notifications.Count > 0)
         {
             attempt.Persistence.AddRange(notifications);
             await attempt.FlushBusinessAsync(ct);
+            foreach (var notification in notifications)
+            {
+                attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                    command.PortfolioId,
+                    nameof(Notification),
+                    notification.Id,
+                    AuditLogOperation.Created,
+                    NewValues: JsonSerializer.Serialize(new
+                    {
+                        notification.UserId,
+                        notification.Type,
+                        notification.RelatedEntityId,
+                    }),
+                    ChangeReason: "Conversation notification committed with its source message."));
+            }
         }
 
         return new SendConversationMessageResult(
@@ -110,6 +162,45 @@ public sealed class SendConversationMessageHandler
             conversation.Id,
             message.Id,
             notifications.Select(notification => notification.Id).ToArray());
+    }
+
+    private static async Task<List<Notification>> CreateStaffNotificationsAsync(
+        IAtomicWriteAttempt attempt,
+        SendConversationMessageCommand command,
+        Conversation conversation,
+        Tenant tenant,
+        CancellationToken ct)
+    {
+        var staffRoles = new[] { nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent) };
+        var userIds = await (
+                from user in attempt.Persistence.Query<ApplicationUser>()
+                join userRole in attempt.Persistence.Query<Microsoft.AspNetCore.Identity.IdentityUserRole<int>>()
+                    on user.Id equals userRole.UserId
+                join role in attempt.Persistence.Query<Microsoft.AspNetCore.Identity.IdentityRole<int>>()
+                    on userRole.RoleId equals role.Id
+                where user.PortfolioId == command.PortfolioId
+                    && role.Name != null
+                    && staffRoles.Contains(role.Name)
+                select user.Id)
+            .Distinct()
+            .OrderBy(userId => userId)
+            .ToListAsync(ct);
+
+        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+        if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
+        return userIds.Select(userId => new Notification
+        {
+            PortfolioId = command.PortfolioId,
+            UserId = userId,
+            Type = "TenantMessage",
+            Title = $"New message from {tenantName}",
+            Message = Preview(command.Body) ?? conversation.Subject,
+            Severity = "Info",
+            ActionUrl = $"/messages?conversationId={conversation.Id}",
+            RelatedEntityType = nameof(Conversation),
+            RelatedEntityId = conversation.Id,
+            CreatedAt = command.OccurredAtUtc,
+        }).ToList();
     }
 
     private static async Task<List<Notification>> CreatePortalNotificationsAsync(

@@ -79,7 +79,11 @@ class MessagesRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         tenantMode ? '/portal/conversations' : '/conversations',
         data: tenantMode
-            ? {'subject': subject, 'body': body}
+            ? {
+                'operationKey': operationKey ?? createOperationKey(),
+                'subject': subject,
+                'body': body,
+              }
             : {
                 'operationKey': operationKey ?? createOperationKey(),
                 'tenantId': tenantId,
@@ -114,7 +118,10 @@ class MessagesRepository {
             ? '/portal/conversations/$id/messages'
             : '/conversations/$id/messages',
         data: tenantMode
-            ? {'body': body}
+            ? {
+                'operationKey': operationKey ?? createOperationKey(),
+                'body': body,
+              }
             : {
                 'operationKey': operationKey ?? createOperationKey(),
                 'body': body,

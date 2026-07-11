@@ -7,13 +7,5 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 internal static class SmsPhone
 {
-    public static string Normalize(string? phone)
-    {
-        if (string.IsNullOrWhiteSpace(phone)) return string.Empty;
-
-        var digits = new string(phone.Where(char.IsDigit).ToArray());
-        if (digits.Length == 10) return "+1" + digits;
-        if (digits.Length == 11 && digits.StartsWith('1')) return "+" + digits;
-        return digits.Length > 0 ? "+" + digits : string.Empty;
-    }
+    public static string Normalize(string? phone) => RentalCommand.Core.PhoneNumber.Normalize(phone) ?? string.Empty;
 }

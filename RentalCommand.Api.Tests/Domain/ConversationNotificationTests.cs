@@ -61,7 +61,8 @@ public class ConversationNotificationTests : IDisposable
         var tenant = SeedTenantWithStaffAndTenantUsers();
         var sut = CreateSut();
 
-        var result = await sut.TenantStartAsync(1, tenant.Id, "Sink leak", "Water under the cabinet");
+        var result = await sut.TenantStartAsync(
+            1, tenant.Id, "Sink leak", "Water under the cabinet", "tenant-start-sink-leak");
 
         result.Should().NotBeNull();
         var notification = _ctx.Db.Notifications.Should().ContainSingle().Subject;

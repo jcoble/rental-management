@@ -64,12 +64,14 @@ public interface IConversationService
     /// no channel fan-out). Bumps the landlord's unread count.
     /// </summary>
     Task<ConversationDetail?> TenantStartAsync(
-        int portfolioId, int tenantId, string subject, string body, CancellationToken ct = default);
+        int portfolioId, int tenantId, string subject, string body, string operationKey,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Tenant appends a reply to one of their own conversations (in-app only). Bumps the landlord's
     /// unread count. Returns null when not found or not owned by this tenant.
     /// </summary>
     Task<ConversationDetail?> TenantPostAsync(
-        int portfolioId, int tenantId, int id, string body, CancellationToken ct = default);
+        int portfolioId, int tenantId, int id, string body, string operationKey,
+        CancellationToken ct = default);
 }
