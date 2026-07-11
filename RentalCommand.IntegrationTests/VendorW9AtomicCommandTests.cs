@@ -92,6 +92,12 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
         _otherPortfolioId = other.Id;
+
+        // Keep the scoped portfolio id and target vendor id distinct so the SQL probe can
+        // independently prove that both values were sent to the translated eligibility query.
+        db.Vendors.Add(NewVendor(_otherPortfolioId, "+16145550999"));
+        await db.SaveChangesAsync();
+
         var vendor = NewVendor(_portfolioId, "+16145550142");
         db.Vendors.Add(vendor);
         await db.SaveChangesAsync();
@@ -135,10 +141,21 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         payload.RootElement.GetProperty("to").GetString().Should().Be("+16145550142");
         payload.RootElement.GetProperty("message").GetString().Should().Contain("Sample Management");
 
-        Probe.Commands.Count(sql =>
-            sql.Contains("FROM \"Vendors\"", StringComparison.Ordinal)
-            && sql.Contains("INNER JOIN \"Portfolios\"", StringComparison.Ordinal))
-            .Should().Be(1, "the physical execution resolves vendor, portfolio, and phone in one DB query");
+        var eligibility = Probe.Commands
+            .Where(command => command.CommandText.Contains(
+                "vendor-w9.target-eligibility",
+                StringComparison.Ordinal))
+            .Should().ContainSingle(
+                "the physical execution must issue exactly one tagged DB-side eligibility query")
+            .Which;
+        eligibility.CommandText.Should().Contain("\"Vendors\"");
+        eligibility.CommandText.Should().Contain("\"Portfolios\"");
+        eligibility.ParameterValues.Should().Contain(
+            value => Equals(value, _vendorId),
+            "vendor identity must be enforced by the translated query");
+        eligibility.ParameterValues.Should().Contain(
+            value => Equals(value, _portfolioId),
+            "portfolio scope must be enforced by the translated query");
     }
 
     [SkippableFact]
@@ -262,8 +279,8 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
 
     private sealed class CommandProbe : DbCommandInterceptor
     {
-        private readonly ConcurrentQueue<string> _commands = new();
-        public IReadOnlyCollection<string> Commands => _commands.ToArray();
+        private readonly ConcurrentQueue<CapturedCommand> _commands = new();
+        public IReadOnlyCollection<CapturedCommand> Commands => _commands.ToArray();
         public void Clear()
         {
             while (_commands.TryDequeue(out _)) { }
@@ -275,9 +292,15 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             InterceptionResult<DbDataReader> result,
             CancellationToken cancellationToken = default)
         {
-            _commands.Enqueue(command.CommandText);
+            _commands.Enqueue(new CapturedCommand(
+                command.CommandText,
+                command.Parameters.Cast<DbParameter>().Select(parameter => parameter.Value).ToArray()));
             return ValueTask.FromResult(result);
         }
+
+        public sealed record CapturedCommand(
+            string CommandText,
+            IReadOnlyCollection<object?> ParameterValues);
     }
 
     private sealed class AuditFailureInterceptor : DbCommandInterceptor

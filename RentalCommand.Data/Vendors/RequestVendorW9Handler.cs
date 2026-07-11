@@ -31,6 +31,7 @@ public sealed class RequestVendorW9Handler
                 vendor.NormalizedPhone,
                 portfolio.ManagementCompanyName,
             })
+            .TagWith("vendor-w9.target-eligibility")
             .SingleOrDefaultAsync(ct);
 
         if (target is null)
