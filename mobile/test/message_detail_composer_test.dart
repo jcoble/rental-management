@@ -58,6 +58,22 @@ class _FakeMessagesRepository extends MessagesRepository {
 }
 
 void main() {
+  Future<void> dismissSendError(WidgetTester tester) async {
+    ScaffoldMessenger.of(
+      tester.element(find.byType(Scaffold)),
+    ).hideCurrentSnackBar();
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tapSend(WidgetTester tester) async {
+    final sendButton = find.byKey(const Key('message-send-button'));
+    expect(sendButton, findsOneWidget);
+    await tester.ensureVisible(sendButton);
+    await tester.pump();
+    await tester.tap(sendButton);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('message composer keeps the text box full width', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -101,22 +117,15 @@ void main() {
       find.byType(TextField),
       'Please retry this message.',
     );
-    final sendButton = find.byKey(const Key('message-send-button'));
-    expect(sendButton, findsOneWidget);
-    await tester.tap(sendButton);
-    await tester.pumpAndSettle();
+    await tapSend(tester);
 
     expect(repository.operationKeys, hasLength(1));
     final firstOperationKey = repository.operationKeys.single;
     expect(firstOperationKey, isNotNull);
     expect(firstOperationKey, isNotEmpty);
 
-    ScaffoldMessenger.of(
-      tester.element(find.byType(Scaffold)),
-    ).hideCurrentSnackBar();
-    await tester.pumpAndSettle();
-    await tester.tap(sendButton);
-    await tester.pumpAndSettle();
+    await dismissSendError(tester);
+    await tapSend(tester);
 
     expect(repository.operationKeys, [firstOperationKey, firstOperationKey]);
   });
@@ -137,15 +146,13 @@ void main() {
     await tester.pumpAndSettle();
 
     final field = find.byType(TextField);
-    final sendButton = find.byKey(const Key('message-send-button'));
     await tester.enterText(field, 'Original payload');
-    await tester.tap(sendButton);
-    await tester.pumpAndSettle();
+    await tapSend(tester);
     final failedKey = repository.operationKeys.single;
 
+    await dismissSendError(tester);
     await tester.enterText(field, 'Corrected payload');
-    await tester.tap(sendButton);
-    await tester.pumpAndSettle();
+    await tapSend(tester);
 
     expect(repository.bodies, ['Original payload', 'Corrected payload']);
     expect(repository.operationKeys, hasLength(2));
@@ -168,15 +175,13 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), 'Channel payload');
-    final sendButton = find.byKey(const Key('message-send-button'));
-    await tester.tap(sendButton);
-    await tester.pumpAndSettle();
+    await tapSend(tester);
     final failedKey = repository.operationKeys.single;
 
+    await dismissSendError(tester);
     await tester.tap(find.widgetWithText(FilterChip, 'Email'));
     await tester.pump();
-    await tester.tap(sendButton);
-    await tester.pumpAndSettle();
+    await tapSend(tester);
 
     expect(repository.channelSelections, [
       ['Portal'],

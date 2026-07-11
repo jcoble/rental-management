@@ -94,12 +94,13 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         var portfolioId = dispatch.PortfolioId;
         var receivedAt = DateTime.SpecifyKind(command.ReceivedAtUtc, DateTimeKind.Utc);
         var previousStatus = workOrder.Status;
+        var completedWorkOrder = previousStatus != WorkOrderStatus.Completed;
 
         dispatch.Status = VendorDispatchStatus.Completed;
         dispatch.RespondedAtUtc = receivedAt;
 
         WorkOrderStatusEvent? statusEvent = null;
-        if (workOrder.Status != WorkOrderStatus.Completed)
+        if (completedWorkOrder)
         {
             workOrder.Status = WorkOrderStatus.Completed;
             workOrder.CompletedAt = receivedAt;
@@ -132,7 +133,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             attempt.Persistence.Add(statusEvent);
         }
 
-        if (statusEvent is not null)
+        if (completedWorkOrder)
         {
             // A sibling dispatch can still be closed after another vendor completed the work order,
             // but scorecard credit belongs only to the first actual WorkOrder -> Completed transition.
@@ -147,10 +148,10 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                 ChangeReason: "Vendor completed-jobs total advanced with the first work-order completion."));
         }
 
-        List<Notification> notifications = statusEvent is null
-            ? []
-            : await CreateNotificationsAsync(
-                attempt, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct);
+        List<Notification> notifications = completedWorkOrder
+            ? await CreateNotificationsAsync(
+                attempt, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct)
+            : [];
         if (notifications.Count > 0)
         {
             attempt.Persistence.AddRange(notifications);
@@ -168,7 +169,9 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                 respondedAtUtc = receivedAt,
                 command.ProviderEventId,
             }),
-            ChangeReason: $"Verified inbound provider event {command.ProviderEventId} completed work order #{workOrder.Id}."));
+            ChangeReason: completedWorkOrder
+                ? $"Verified inbound provider event {command.ProviderEventId} completed work order #{workOrder.Id}."
+                : $"Verified inbound provider event {command.ProviderEventId} closed a sibling dispatch for already-completed work order #{workOrder.Id}."));
         if (statusEvent is not null)
         {
             attempt.StageSemanticEvent(new AtomicSemanticAudit(
