@@ -1,10 +1,12 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -70,13 +72,16 @@ public sealed class AccountingTokenService
     /// Transient failures still throw so the worker records an Error and retries next cycle.</para>
     /// </summary>
     public async Task<RefreshResult> RefreshAsync(
-        RentalCommandDbContext db, AccountingConnection connection, CancellationToken ct)
+        RentalCommandDbContext db,
+        AccountingConnection connection,
+        CancellationToken ct,
+        AccountingWorkerFence? workerFence = null)
     {
         var refreshToken = UnprotectNullable(connection.RefreshTokenCipherText);
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             // No refresh token to use — treat as needing a reconnect (can't recover without one).
-            await MarkNeedsReconnectAsync(db, connection, "No refresh token on the connection.", ct);
+            await MarkNeedsReconnectAsync(db, connection, "No refresh token on the connection.", workerFence, ct);
             return new RefreshResult(RefreshOutcome.NeedsReconnect, null, null);
         }
 
@@ -87,6 +92,8 @@ public sealed class AccountingTokenService
         {
             var result = await provider.RefreshTokenAsync(settings, refreshToken, ct);
 
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            await LockOwnedConnectionAsync(db, connection.Id, workerFence, ct);
             connection.AccessTokenCipherText = ProtectNullable(result.AccessToken);
             connection.RefreshTokenCipherText = ProtectNullable(result.RefreshToken);
             connection.TokenExpiresAt = result.ExpiresAtUtc;
@@ -98,7 +105,9 @@ public sealed class AccountingTokenService
             }
 
             connection.UpdatedAt = _timeProvider.UtcNow();
+            ClearCompletedRefreshClaim(connection, workerFence);
             await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
 
             _logger.LogInformation(
                 "Refreshed tokens for AccountingConnection {ConnectionId} ({Provider})",
@@ -111,21 +120,65 @@ public sealed class AccountingTokenService
             _logger.LogWarning(
                 "Refresh token dead for AccountingConnection {ConnectionId} ({Provider}); flipping to NeedsReconnect: {Reason}",
                 connection.Id, connection.Provider, ex.Message);
-            await MarkNeedsReconnectAsync(db, connection, "Refresh token expired — please reconnect.", ct);
+            await MarkNeedsReconnectAsync(
+                db, connection, "Refresh token expired — please reconnect.", workerFence, ct);
             return new RefreshResult(RefreshOutcome.NeedsReconnect, null, null);
         }
     }
 
     private async Task MarkNeedsReconnectAsync(
-        RentalCommandDbContext db, AccountingConnection connection, string reason, CancellationToken ct)
+        RentalCommandDbContext db,
+        AccountingConnection connection,
+        string reason,
+        AccountingWorkerFence? workerFence,
+        CancellationToken ct)
     {
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await LockOwnedConnectionAsync(db, connection.Id, workerFence, ct);
         connection.Status = AccountingConnectionStatus.NeedsReconnect;
         connection.AccessTokenCipherText = null;
         connection.RefreshTokenCipherText = null;
         connection.TokenExpiresAt = null;
         connection.LastError = reason;
         connection.UpdatedAt = _timeProvider.UtcNow();
+        ClearCompletedRefreshClaim(connection, workerFence);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+    }
+
+    private static async Task LockOwnedConnectionAsync(
+        RentalCommandDbContext db,
+        int connectionId,
+        AccountingWorkerFence? workerFence,
+        CancellationToken ct)
+    {
+        if (workerFence is null) return;
+
+        var query = db.AccountingConnections.IgnoreQueryFilters().Where(row => row.Id == connectionId);
+        var owned = workerFence.Operation switch
+        {
+            AccountingWorkerOperation.Pull => await query
+                .Where(row => row.PullClaimToken == workerFence.ClaimToken)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.PullClaimExpiresAtUtc, row => row.PullClaimExpiresAtUtc), ct),
+            AccountingWorkerOperation.Refresh => await query
+                .Where(row => row.RefreshClaimToken == workerFence.ClaimToken)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.RefreshClaimExpiresAtUtc, row => row.RefreshClaimExpiresAtUtc), ct),
+            _ => 0,
+        };
+        if (owned == 0)
+            throw new DbUpdateConcurrencyException("The accounting token-refresh claim is no longer owned.");
+    }
+
+    private static void ClearCompletedRefreshClaim(
+        AccountingConnection connection,
+        AccountingWorkerFence? workerFence)
+    {
+        if (workerFence?.Operation != AccountingWorkerOperation.Refresh) return;
+        connection.RefreshClaimOwner = null;
+        connection.RefreshClaimToken = null;
+        connection.RefreshClaimExpiresAtUtc = null;
     }
 
     private string? ProtectNullable(string? value) =>

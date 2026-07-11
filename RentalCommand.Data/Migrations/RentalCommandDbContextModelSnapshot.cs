@@ -190,6 +190,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<string>("LastPulledAtJson")
                         .HasColumnType("jsonb");
 
+                    b.Property<DateTime>("NextPullAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("LastSyncedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -218,6 +221,38 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("PullAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("PullClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PullClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("PullClaimToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("PullLastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RefreshAttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("RefreshClaimExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RefreshClaimOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("RefreshClaimToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("RefreshLastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
 
                     b.HasIndex("PortfolioId");
@@ -227,6 +262,17 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("Status", "TokenExpiresAt")
                         .HasDatabaseName("IX_AccountingConnections_Status_TokenExpiresAt");
+
+                    b.HasIndex("Status", "PullEnabled", "NextPullAtUtc", "Id")
+                        .HasDatabaseName("IX_AccountingConnections_PullEligibility");
+
+                    b.HasIndex("PullClaimExpiresAtUtc", "Id")
+                        .HasDatabaseName("IX_AccountingConnections_ExpiredPullClaim")
+                        .HasFilter("\"PullClaimToken\" IS NOT NULL");
+
+                    b.HasIndex("RefreshClaimExpiresAtUtc", "Id")
+                        .HasDatabaseName("IX_AccountingConnections_ExpiredRefreshClaim")
+                        .HasFilter("\"RefreshClaimToken\" IS NOT NULL");
 
                     b.ToTable("AccountingConnections");
                 });

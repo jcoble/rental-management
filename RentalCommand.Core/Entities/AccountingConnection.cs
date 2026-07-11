@@ -55,6 +55,21 @@ public class AccountingConnection : IPortfolioScoped, IAuditable
     public DateTime? ConnectedAt { get; set; }
     public DateTime? DisconnectedAt { get; set; }
 
+    /// <summary>DB-side due time used for fair scheduled-pull ordering.</summary>
+    public DateTime NextPullAtUtc { get; set; } = DateTime.SpecifyKind(DateTime.MinValue, DateTimeKind.Utc);
+
+    public string? PullClaimOwner { get; set; }
+    public Guid? PullClaimToken { get; set; }
+    public DateTime? PullClaimExpiresAtUtc { get; set; }
+    public int PullAttemptCount { get; set; }
+    public DateTime? PullLastAttemptAtUtc { get; set; }
+
+    public string? RefreshClaimOwner { get; set; }
+    public Guid? RefreshClaimToken { get; set; }
+    public DateTime? RefreshClaimExpiresAtUtc { get; set; }
+    public int RefreshAttemptCount { get; set; }
+    public DateTime? RefreshLastAttemptAtUtc { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
