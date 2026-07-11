@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -10,6 +12,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -139,12 +142,54 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             contentSha256 = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, ct)).ToLowerInvariant();
         }
 
-        // Store the blob.
-        string storageKey;
+        var sanitizedFileName = DiskFileStorage.SanitizeFileName(fileName);
+        var requestFingerprint = Fingerprint(new
+        {
+            portfolioId,
+            actorUserId = GetUserId(),
+            target = target.ToString(),
+            entityId,
+            contentSha256,
+            fileName = sanitizedFileName,
+            contentType,
+            sizeBytes = file.Length,
+            category = category?.Trim(),
+        });
+
+        PendingFileUploadAdmission admission;
+        try
+        {
+            admission = await _documents.PrepareUploadAsync(
+                portfolioId,
+                GetUserId(),
+                clientOperationId,
+                requestFingerprint,
+                sanitizedFileName,
+                contentType,
+                file.Length,
+                ct);
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+
+        var finalized = await _documents.GetFinalizedUploadAsync(portfolioId, admission, ct);
+        if (finalized is not null)
+        {
+            finalized.Category = category;
+            return CreatedAtAction(nameof(GetFile), new { id = finalized.Id }, finalized);
+        }
+
         try
         {
             await using var uploadStream = file.OpenReadStream();
-            storageKey = await _storage.UploadAsync(uploadStream, fileName, contentType, ct);
+            await _storage.UploadAtAsync(
+                uploadStream,
+                admission.StoragePath,
+                sanitizedFileName,
+                contentType,
+                ct);
         }
         catch (Exception ex)
         {
@@ -153,6 +198,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         }
 
         var dto = await _documents.CreateAsync(
+            admission.Id,
             portfolioId,
             target,
             entityId,
@@ -160,11 +206,12 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             tenantId,
             isStaff,
             clientOperationId,
+            requestFingerprint,
             contentSha256,
-            DiskFileStorage.SanitizeFileName(fileName),
+            sanitizedFileName,
             contentType,
             file.Length,
-            storageKey,
+            admission.StoragePath,
             ct);
         if (dto is null)
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
@@ -325,7 +372,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         var tenantId = GetTenantIdOrNull();
         if (tenantId is null)
         {
-            return true;
+            return false;
         }
 
         if (entityId is null || string.IsNullOrWhiteSpace(entityType))
@@ -337,6 +384,13 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         return await _db.WorkOrders.AnyAsync(
             w => w.Id == entityId.Value && w.PortfolioId == portfolioId && w.TenantId == tenantId.Value, ct);
+    }
+
+
+    private static string Fingerprint<T>(T request)
+    {
+        var json = JsonSerializer.Serialize(request);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
     }
 
     // -------------------------------------------------------------------------

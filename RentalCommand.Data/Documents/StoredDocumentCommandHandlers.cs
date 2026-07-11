@@ -15,6 +15,20 @@ public sealed class CreateStoredDocumentHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        var pendingUpload = await attempt.Persistence.Query<PendingFileUpload>()
+            .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
+                && upload.PortfolioId == command.PortfolioId
+                && upload.State == PendingFileUploadState.Prepared
+                && upload.CleanupClaimToken == null
+                && upload.RequestFingerprint == command.RequestFingerprint,
+                ct)
+            ?? throw new InvalidOperationException("The durable upload admission is missing, finalized, or does not match the request.");
+
+        if (!string.Equals(pendingUpload.StoragePath, command.StoragePath, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The stored blob path does not match its durable upload admission.");
+        }
+
         if (!await StoredDocumentAuthorization.TargetExistsAsync(command, attempt.Persistence, ct))
         {
             return NotFound(command);
@@ -52,6 +66,10 @@ public sealed class CreateStoredDocumentHandler
             }),
             ChangeReason: $"Document uploaded: {command.FileName}"));
         await attempt.FlushBusinessAsync(ct);
+
+        pendingUpload.State = PendingFileUploadState.Finalized;
+        pendingUpload.StoredFileId = row.Id;
+        pendingUpload.UpdatedAtUtc = command.UploadedAtUtc;
 
         if (command.Target == StoredDocumentTarget.Unit)
         {
@@ -163,6 +181,10 @@ public sealed class DeleteStoredDocumentHandler
             NewValues: JsonSerializer.Serialize(new { row.FileName, row.DeletedAt }),
             ChangeReason: $"Document removed: {row.FileName}"));
 
+        // Flush the bound StoredFile mutation before staging a semantic Unit history entry. Staging
+        // first would make the Unit descriptor compete with the exact StoredFile mutation audit.
+        await attempt.FlushBusinessAsync(ct);
+
         if (string.Equals(entityType, nameof(StoredDocumentTarget.Unit), StringComparison.Ordinal))
         {
             attempt.StageSemanticEvent(new AtomicSemanticAudit(
@@ -180,7 +202,7 @@ public sealed class DeleteStoredDocumentHandler
         {
             PortfolioId = command.PortfolioId,
             MessageType = "blob-delete",
-            Payload = JsonSerializer.Serialize(new { storagePath = row.FilePath }),
+            Payload = JsonSerializer.Serialize(new { storedFileId = row.Id, storagePath = row.FilePath }),
             IdempotencyKey = $"stored-file-delete:{row.Id}",
             CreatedAtUtc = command.DeletedAtUtc,
             NextAttemptAtUtc = command.DeletedAtUtc,

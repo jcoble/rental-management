@@ -212,7 +212,7 @@
 		if (!file) return;
 		uploadingPhoto = true;
 		try {
-			await documents.upload(ENTITY_TYPE, depositId, file);
+			await documents.upload(ENTITY_TYPE, depositId, file, undefined, crypto.randomUUID());
 			showSuccess(`"${file.name}" attached.`);
 			queryClient.invalidateQueries({ queryKey: ['deposit-documents', depositId] });
 		} catch (err) {

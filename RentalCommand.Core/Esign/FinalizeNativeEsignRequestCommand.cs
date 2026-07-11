@@ -4,6 +4,8 @@ namespace RentalCommand.Core.Esign;
 
 /// <summary>Attaches one rendered executed PDF and finalizes its request and lease atomically.</summary>
 public sealed record FinalizeNativeEsignRequestCommand(
+    Guid PendingUploadId,
+    string RequestFingerprint,
     int SignatureRequestId,
     string PublicId,
     Guid ClaimToken,

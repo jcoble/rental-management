@@ -162,6 +162,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IKnowledgeBaseService, KnowledgeBaseService>();
 
         // --- document hub ---
+        services.AddScoped<RentalCommand.Data.Documents.IPendingFileUploadStore,
+            RentalCommand.Data.Documents.PendingFileUploadStore>();
         services.AddScoped<IDocumentService, DocumentService>();
 
         // --- CSV / bulk import (migration on-ramp) ---

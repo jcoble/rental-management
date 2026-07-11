@@ -836,7 +836,33 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     private CreateNativeEsignRequestCommand NativeEsignCommand(int leaseId, string storageKey)
     {
         var now = DateTime.UtcNow;
+        var pendingUploadId = Guid.NewGuid();
+        const string fingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        using (var db = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_postgres!.GetConnectionString()).Options))
+        {
+            db.PendingFileUploads.Add(new PendingFileUpload
+            {
+                Id = pendingUploadId,
+                PortfolioId = _portfolioId,
+                ActorScopeId = 0,
+                Purpose = "native-esign-source",
+                OperationKeyHash = Guid.NewGuid().ToString("N").PadRight(64, '0'),
+                RequestFingerprint = fingerprint,
+                StoragePath = storageKey,
+                FileName = $"lease-{leaseId}-agreement.pdf",
+                ContentType = "application/pdf",
+                SizeBytes = 1234,
+                State = PendingFileUploadState.Prepared,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            });
+            db.SaveChanges();
+        }
         return new CreateNativeEsignRequestCommand(
+            pendingUploadId,
+            fingerprint,
             _portfolioId,
             leaseId,
             Guid.NewGuid().ToString("N"),

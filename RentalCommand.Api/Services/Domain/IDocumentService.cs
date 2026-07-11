@@ -1,16 +1,32 @@
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
 /// Portfolio-scoped CRUD for <see cref="StoredFile"/> rows surfaced via the Documents hub.
-/// Upload is completed before this boundary. This service owns receipt-backed database mutation
-/// plus safe compensation of only a newly uploaded, unreferenced blob.
+/// Upload is completed against a durable admission before this boundary. This service owns
+/// receipt-backed database mutation and finalizes that admission atomically with the StoredFile row.
 /// </summary>
 public interface IDocumentService
 {
+    Task<PendingFileUploadAdmission> PrepareUploadAsync(
+        int portfolioId,
+        int actorUserId,
+        string clientOperationId,
+        string requestFingerprint,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        CancellationToken ct = default);
+
+    Task<DocumentDto?> GetFinalizedUploadAsync(
+        int portfolioId,
+        PendingFileUploadAdmission admission,
+        CancellationToken ct = default);
+
     /// <summary>
     /// List non-deleted <see cref="StoredFile"/>s for a given entity in the portfolio,
     /// newest first.
@@ -25,6 +41,7 @@ public interface IDocumentService
     /// Persist a <see cref="StoredFile"/> row for an already-stored blob. Returns the DTO.
     /// </summary>
     Task<DocumentDto?> CreateAsync(
+        Guid pendingUploadId,
         int portfolioId,
         StoredDocumentTarget target,
         int entityId,
@@ -32,6 +49,7 @@ public interface IDocumentService
         int? tenantId,
         bool isStaff,
         string clientOperationId,
+        string requestFingerprint,
         string contentSha256,
         string fileName,
         string contentType,

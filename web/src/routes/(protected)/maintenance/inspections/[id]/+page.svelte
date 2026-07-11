@@ -287,7 +287,7 @@
 		uploadingPhotoFor = item.id;
 		try {
 			// 1. Upload the file as an Inspection document → returns a stored file (id).
-			const doc = await documents.upload('Inspection', id, file);
+			const doc = await documents.upload('Inspection', id, file, undefined, crypto.randomUUID());
 			// 2. Attach that stored file to this checklist item.
 			const updated = await inspections.setItemPhoto(id, item.id, doc.id);
 			patchItemInCache(updated);

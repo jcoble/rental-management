@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { vendors } from '$lib/api/endpoints/vendors';
+	import { ApiError } from '$lib/api/client';
 	import type { Vendor } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -70,13 +71,19 @@
 	}
 
 	// --- Text W-9 request ---
+	let requestW9OperationId = $state<string | null>(null);
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: (clientOperationId: string) => vendors.requestW9(id, clientOperationId),
+		mutationFn: () => vendors.requestW9(id, (requestW9OperationId ??= crypto.randomUUID())),
 		onSuccess: (res) => {
+			requestW9OperationId = null;
 			showSuccess(`W-9 request texted to ${res.sentTo}.`);
 		},
 		// The API returns 400 { error } when the vendor has no phone — surface it.
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			if (err instanceof ApiError && err.status >= 400 && err.status < 500
+				&& err.status !== 408 && err.status !== 429) requestW9OperationId = null;
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	// --- Toggle "W-9 on file" ---
@@ -181,7 +188,7 @@
 					variant="outline"
 					size="sm"
 					data-testid="vendor-request-w9-button"
-					onclick={() => requestW9Mutation.mutate(crypto.randomUUID())}
+					onclick={() => requestW9Mutation.mutate()}
 					disabled={requestW9Mutation.isPending}
 				>
 					<MessageSquare class="h-4 w-4" />

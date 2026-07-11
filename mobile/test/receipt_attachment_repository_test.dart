@@ -53,6 +53,7 @@ void main() {
         bytes: Uint8List.fromList([4, 5, 6]),
         fileName: 'supply-receipt.pdf',
         contentType: 'application/pdf',
+        clientOperationId: 'receipt-upload-22',
       );
 
       final formData = adapter.data! as FormData;

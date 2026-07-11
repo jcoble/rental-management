@@ -2,7 +2,6 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
@@ -291,7 +290,7 @@ class WorkOrdersRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
-    String? clientOperationId,
+    required String clientOperationId,
   }) async {
     try {
       final formData = FormData.fromMap({
@@ -303,7 +302,7 @@ class WorkOrdersRepository {
         'entityType': 'WorkOrder',
         'entityId': workOrderId,
         'category': 'Maintenance photo',
-        'clientOperationId': clientOperationId ?? const Uuid().v4(),
+        'clientOperationId': clientOperationId,
       });
       await _dio.post<Map<String, dynamic>>('/documents', data: formData);
     } on DioException catch (e) {

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import 'package:go_router/go_router.dart';
 
@@ -1480,6 +1481,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
   Uint8List? _photoBytes;
   String? _photoName;
   String? _photoContentType;
+  String? _photoUploadOperationId;
   bool _saving = false;
 
   @override
@@ -1503,6 +1505,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
       _photoBytes = bytes;
       _photoName = picked.name;
       _photoContentType = _mimeFromExtension(picked.name);
+      _photoUploadOperationId = const Uuid().v4();
     });
   }
 
@@ -1533,6 +1536,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
           bytes: photoBytes,
           fileName: photoName,
           contentType: photoContentType,
+          clientOperationId: _photoUploadOperationId ??= const Uuid().v4(),
         );
       }
       ref.invalidate(tenantPortalSnapshotProvider);
@@ -1541,6 +1545,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
       _photoBytes = null;
       _photoName = null;
       _photoContentType = null;
+      _photoUploadOperationId = null;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Maintenance request submitted.')),

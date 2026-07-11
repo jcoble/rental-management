@@ -14,6 +14,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
+using RentalCommand.Data.Documents;
 using SkiaSharp;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -52,7 +53,10 @@ public sealed class DocumentsControllerTests : IDisposable
             .Setup(s => s.DownloadAsync("stored/inspection.png", It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new MemoryStream(TestPng));
 
-        var controller = CreateController(documents.Object, storage.Object);
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
 
         var result = await controller.GetFile(7, thumb: true, CancellationToken.None);
 
@@ -81,8 +85,19 @@ public sealed class DocumentsControllerTests : IDisposable
         var entityId = SeedDocumentTarget(entityType);
 
         var documents = new Mock<IDocumentService>();
+        var admission = new PendingFileUploadAdmission(
+            Guid.NewGuid(), "stored/test-upload.txt", PendingFileUploadState.Prepared, null,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        documents.Setup(d => d.PrepareUploadAsync(
+                PortfolioId, 7, "upload-operation", It.IsAny<string>(), "test-upload.txt",
+                "text/plain", It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(admission);
+        documents.Setup(d => d.GetFinalizedUploadAsync(
+                PortfolioId, admission, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDto?)null);
         documents
             .Setup(d => d.CreateAsync(
+                admission.Id,
                 PortfolioId,
                 Enum.Parse<StoredDocumentTarget>(entityType),
                 entityId,
@@ -90,6 +105,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 6,
                 true,
                 "upload-operation",
+                It.IsAny<string>(),
                 It.IsAny<string>(),
                 "test-upload.txt",
                 "text/plain",
@@ -109,12 +125,13 @@ public sealed class DocumentsControllerTests : IDisposable
 
         var storage = new Mock<IFileStorage>();
         storage
-            .Setup(s => s.UploadAsync(
+            .Setup(s => s.UploadAtAsync(
                 It.IsAny<Stream>(),
+                "stored/test-upload.txt",
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync("stored/test-upload.txt");
+            .Returns(Task.CompletedTask);
 
         var controller = CreateController(
             documents.Object,
@@ -129,12 +146,14 @@ public sealed class DocumentsControllerTests : IDisposable
         var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
         created.Value.Should().BeOfType<DocumentDto>()
             .Which.Should().Match<DocumentDto>(d => d.EntityType == entityType && d.EntityId == entityId);
-        storage.Verify(s => s.UploadAsync(
+        storage.Verify(s => s.UploadAtAsync(
             It.IsAny<Stream>(),
+            "stored/test-upload.txt",
             "test-upload.txt",
             "text/plain",
             It.IsAny<CancellationToken>()), Times.Once);
         documents.Verify(d => d.CreateAsync(
+            admission.Id,
             PortfolioId,
             Enum.Parse<StoredDocumentTarget>(entityType),
             entityId,
@@ -142,6 +161,7 @@ public sealed class DocumentsControllerTests : IDisposable
             6,
             true,
             "upload-operation",
+            It.IsAny<string>(),
             It.IsAny<string>(),
             "test-upload.txt",
             "text/plain",
@@ -158,8 +178,19 @@ public sealed class DocumentsControllerTests : IDisposable
         var tenantId = _ctx.Db.WorkOrders.Single(w => w.Id == entityId).TenantId!.Value;
 
         var documents = new Mock<IDocumentService>();
+        var admission = new PendingFileUploadAdmission(
+            Guid.NewGuid(), "stored/test-upload.txt", PendingFileUploadState.Prepared, null,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        documents.Setup(d => d.PrepareUploadAsync(
+                PortfolioId, 7, "tenant-upload-operation", It.IsAny<string>(), "test-upload.txt",
+                "text/plain", It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(admission);
+        documents.Setup(d => d.GetFinalizedUploadAsync(
+                PortfolioId, admission, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDto?)null);
         documents
             .Setup(d => d.CreateAsync(
+                admission.Id,
                 PortfolioId,
                 StoredDocumentTarget.WorkOrder,
                 entityId,
@@ -167,6 +198,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 tenantId,
                 false,
                 "tenant-upload-operation",
+                It.IsAny<string>(),
                 It.IsAny<string>(),
                 "test-upload.txt",
                 "text/plain",
@@ -186,12 +218,13 @@ public sealed class DocumentsControllerTests : IDisposable
 
         var storage = new Mock<IFileStorage>();
         storage
-            .Setup(s => s.UploadAsync(
+            .Setup(s => s.UploadAtAsync(
                 It.IsAny<Stream>(),
+                "stored/test-upload.txt",
                 "test-upload.txt",
                 "text/plain",
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync("stored/test-upload.txt");
+            .Returns(Task.CompletedTask);
 
         var controller = CreateController(
             documents.Object,
@@ -204,12 +237,14 @@ public sealed class DocumentsControllerTests : IDisposable
             file, entityType, entityId, category: null, clientOperationId: "tenant-upload-operation", ct: CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
-        storage.Verify(s => s.UploadAsync(
+        storage.Verify(s => s.UploadAtAsync(
             It.IsAny<Stream>(),
+            "stored/test-upload.txt",
             "test-upload.txt",
             "text/plain",
             It.IsAny<CancellationToken>()), Times.Once);
         documents.Verify(d => d.CreateAsync(
+            admission.Id,
             PortfolioId,
             StoredDocumentTarget.WorkOrder,
             entityId,
@@ -217,6 +252,7 @@ public sealed class DocumentsControllerTests : IDisposable
             tenantId,
             false,
             "tenant-upload-operation",
+            It.IsAny<string>(),
             It.IsAny<string>(),
             "test-upload.txt",
             "text/plain",
@@ -244,25 +280,80 @@ public sealed class DocumentsControllerTests : IDisposable
             file, entityType, entityId, category: null, clientOperationId: "denied-upload-operation", ct: CancellationToken.None);
 
         result.Result.Should().BeOfType<NotFoundObjectResult>();
-        storage.Verify(s => s.UploadAsync(
+        storage.Verify(s => s.UploadAtAsync(
             It.IsAny<Stream>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
+            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
-        documents.Verify(d => d.CreateAsync(
-            It.IsAny<int>(),
-            It.IsAny<StoredDocumentTarget>(),
+        documents.Verify(d => d.PrepareUploadAsync(
             It.IsAny<int>(),
             It.IsAny<int>(),
-            It.IsAny<int?>(),
-            It.IsAny<bool>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<long>(),
-            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("MaintenanceTechnician")]
+    [InlineData("UnknownRole")]
+    public async Task List_WithoutExplicitStaffRole_FailsClosed(string? role)
+    {
+        var documents = new Mock<IDocumentService>();
+        Claim[] claims = role is null ? [] : [new Claim(ClaimTypes.Role, role)];
+        var controller = CreateController(documents.Object, Mock.Of<IFileStorage>(), claims);
+
+        var result = await controller.List("Unit", 10, CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>()
+            .Which.Value.Should().BeAssignableTo<IReadOnlyList<DocumentDto>>()
+            .Which.Should().BeEmpty();
+        documents.Verify(d => d.ListAsync(
+            It.IsAny<int>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task List_WithTenantClaim_AllowsOwnedWorkOrder()
+    {
+        var workOrderId = SeedDocumentTarget("WorkOrder");
+        var tenantId = _ctx.Db.WorkOrders.Single(workOrder => workOrder.Id == workOrderId).TenantId!.Value;
+        var expected = new[] { new DocumentDto { Id = 44, EntityType = "WorkOrder", EntityId = workOrderId } };
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.ListAsync(
+                PortfolioId, "WorkOrder", workOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            new Claim("tenantId", tenantId.ToString()),
+            new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
+
+        var result = await controller.List("WorkOrder", workOrderId, CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>()
+            .Which.Value.Should().BeSameAs(expected);
+    }
+
+    [Fact]
+    public async Task List_WithExplicitStaffRole_AllowsPortfolioEntity()
+    {
+        var expected = new[] { new DocumentDto { Id = 45, EntityType = "Unit", EntityId = 10 } };
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.ListAsync(PortfolioId, "Unit", 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+
+        var result = await controller.List("Unit", 10, CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>()
+            .Which.Value.Should().BeSameAs(expected);
     }
 
     private static byte[] BuildTestPng()

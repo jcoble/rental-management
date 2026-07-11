@@ -7,6 +7,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { FileText, Image, Trash2, Upload, AlertCircle, FolderOpen } from '@lucide/svelte';
+	import { ApiError } from '$lib/api/client';
 
 	let {
 		entityType,
@@ -35,18 +36,32 @@
 	// ── Upload ─────────────────────────────────────────────────────────────────
 	let fileInput: HTMLInputElement | undefined = $state();
 	let uploading = $state(false);
+	let pendingUploadOperation = $state<{ fingerprint: string; id: string } | null>(null);
+
+	function isTerminal(error: unknown): boolean {
+		return error instanceof ApiError
+			&& error.status >= 400 && error.status < 500
+			&& error.status !== 408 && error.status !== 429;
+	}
 
 	async function handleFileChange(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
+		const fingerprint = `${entityType}:${entityId}:${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+		const operation = pendingUploadOperation?.fingerprint === fingerprint
+			? pendingUploadOperation
+			: { fingerprint, id: crypto.randomUUID() };
+		pendingUploadOperation = operation;
 		uploading = true;
 		try {
-			await documents.upload(entityType, entityId, file);
+			await documents.upload(entityType, entityId, file, undefined, operation.id);
+			pendingUploadOperation = null;
 			showSuccess(`"${file.name}" uploaded.`);
 			queryClient.invalidateQueries({ queryKey: queryKey });
 			onChanged?.();
 		} catch (err) {
+			if (isTerminal(err)) pendingUploadOperation = null;
 			showError(apiErrorMessage(err, 'Upload failed.'));
 		} finally {
 			uploading = false;
@@ -70,18 +85,23 @@
 
 	// ── Delete ─────────────────────────────────────────────────────────────────
 	let pendingDelete = $state<DocumentItem | null>(null);
+	let deleteOperationId = $state<string | null>(null);
 
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (id: number) => documents.delete(id),
+		mutationFn: (id: number) => documents.delete(id, (deleteOperationId ??= crypto.randomUUID())),
 		onSuccess: () => {
 			showSuccess('Document deleted.');
 			queryClient.invalidateQueries({ queryKey: queryKey });
 			onChanged?.();
 			pendingDelete = null;
+			deleteOperationId = null;
 		},
 		onError: (err) => {
 			showError(apiErrorMessage(err, 'Delete failed.'));
-			pendingDelete = null;
+			if (isTerminal(err)) {
+				pendingDelete = null;
+				deleteOperationId = null;
+			}
 		},
 	}));
 
@@ -198,5 +218,8 @@
 	busy={deleteMutation.isPending}
 	testid="documents-delete"
 	onconfirm={() => pendingDelete && deleteMutation.mutate(pendingDelete.id)}
-	oncancel={() => (pendingDelete = null)}
+	oncancel={() => {
+		pendingDelete = null;
+		deleteOperationId = null;
+	}}
 />

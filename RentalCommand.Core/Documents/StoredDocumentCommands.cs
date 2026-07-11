@@ -31,9 +31,11 @@ public enum StoredDocumentMutationOutcome
 
 /// <summary>
 /// Persists one already-uploaded blob as a general document. Blob I/O is deliberately excluded from
-/// this command; the caller compensates an unreferenced upload after a failed or replayed command.
+/// this command. A durable pending-upload admission owns the deterministic blob key until this command
+/// finalizes it or the stale-upload scavenger safely removes it.
 /// </summary>
 public sealed record CreateStoredDocumentCommand(
+    Guid PendingUploadId,
     int PortfolioId,
     StoredDocumentTarget Target,
     int EntityId,
@@ -41,6 +43,7 @@ public sealed record CreateStoredDocumentCommand(
     int? TenantId,
     bool IsStaff,
     string ClientOperationId,
+    string RequestFingerprint,
     string ContentSha256,
     string FileName,
     string StoragePath,

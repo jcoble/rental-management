@@ -13,6 +13,8 @@ public sealed record NativeEsignSignerCommand(
 /// sent event, and every signing-link delivery as one receipt-backed database command.
 /// </summary>
 public sealed record CreateNativeEsignRequestCommand(
+    Guid PendingUploadId,
+    string RequestFingerprint,
     int PortfolioId,
     int LeaseId,
     string PublicId,
