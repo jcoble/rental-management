@@ -15,8 +15,11 @@ target and receives no production secrets.
   EdiPlatform jobs on the same host.
 - Preview credentials are random, local to the preview, and stored mode `0600`.
   Provider, OAuth, payment, email, SMS, and production credentials stay empty.
-- Persistent preview state lives under `/srv/dev-stacks/rental-command`, outside
-  the disposable Actions workspace.
+- Disposable preview state lives under `/srv/dev-stacks/rental-command`, while
+  PostgreSQL data and its generated preview credentials live under
+  `/srv/dev-stack-data/rental-command`. Both are outside the Actions workspace.
+  Stop, replacement, and TTL cleanup preserve the database; only the explicit
+  `reset-data` action deletes it.
 
 ## Verify a pushed branch
 
@@ -64,7 +67,18 @@ gh workflow run remote-preview.yml --ref my-branch -f action=logs   -f ref=my-br
 gh workflow run remote-preview.yml --ref my-branch -f action=stop   -f ref=my-branch -f stack_id=rental -f ttl_hours=4
 ```
 
-Starting the same `stack_id` replaces it. Only one Rental Command preview is
+These normal lifecycle actions preserve the preview database, including tenant
+and seeded/manual test data. To deliberately start with an empty database, run:
+
+```bash
+gh workflow run remote-preview.yml --ref my-branch \
+  -f action=reset-data -f ref=my-branch -f stack_id=rental -f ttl_hours=4
+```
+
+`reset-data` stops the stack and permanently deletes that stack's PostgreSQL
+files and stored preview credentials. The next `start` initializes a fresh
+database. Starting the same `stack_id` otherwise replaces only the application
+containers and source. Only one Rental Command preview is
 allowed because the VM has four cores and the private port is intentionally
 stable. Logs are uploaded as workflow artifacts.
 
@@ -74,6 +88,7 @@ The runner account needs Docker access and ownership of the persistent roots:
 
 ```bash
 sudo install -d -o github-runner -g github-runner /srv/dev-stacks/rental-command
+sudo install -d -o github-runner -g github-runner /srv/dev-stack-data/rental-command
 sudo install -d -o github-runner -g github-runner /opt/runner-tools/rental-command
 sudo install -m 0755 scripts/remote/preview-stack.sh /opt/runner-tools/rental-command/preview-stack.sh
 sudo install -m 0755 scripts/remote/cleanup-preview-stacks.sh /usr/local/bin/rental-preview-cleanup

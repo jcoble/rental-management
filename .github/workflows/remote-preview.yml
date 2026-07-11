@@ -8,7 +8,7 @@ on:
         required: true
         default: status
         type: choice
-        options: [start, health, status, logs, stop, cleanup]
+        options: [start, health, status, logs, stop, cleanup, reset-data]
       ref:
         description: "Pushed branch, tag, or SHA (required for start; audited for every action)"
         required: true
@@ -38,6 +38,7 @@ jobs:
     timeout-minutes: 120
     env:
       PREVIEW_ROOT: /srv/dev-stacks/rental-command
+      PREVIEW_DATA_ROOT: /srv/dev-stack-data/rental-command
       PREVIEW_WEB_PORT: "15667"
       ARTIFACT_DIR: ${{ github.workspace }}/.runner-artifacts/rental-command-preview-${{ github.run_id }}
     steps:
@@ -85,6 +86,9 @@ jobs:
             echo "- Stack: \`$STACK_ID\`"
             if [[ "$PREVIEW_ACTION" =~ ^(start|health|status)$ ]]; then
               echo "- Private URL: http://$tailscale_host:$PREVIEW_WEB_PORT"
+            fi
+            if [[ "$PREVIEW_ACTION" == "reset-data" ]]; then
+              echo "- Persistent preview database: deleted by explicit request"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
