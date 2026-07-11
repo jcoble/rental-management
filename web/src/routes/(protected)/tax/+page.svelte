@@ -46,7 +46,8 @@
 	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
 
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: (vendorId: number) => vendors.requestW9(vendorId),
+		mutationFn: ({ vendorId, clientOperationId }: { vendorId: number; clientOperationId: string }) =>
+			vendors.requestW9(vendorId, clientOperationId),
 		onSuccess: (res) => showSuccess(`W-9 request texted to ${res.sentTo}.`),
 		// 400 { error } when the vendor has no phone on file — surface it plainly.
 		onError: (err) => showError(apiErrorMessage(err))
@@ -250,7 +251,11 @@
 											<Button
 												variant="outline"
 												size="sm"
-												onclick={() => requestW9Mutation.mutate(v.vendorId)}
+												onclick={() =>
+													requestW9Mutation.mutate({
+														vendorId: v.vendorId,
+														clientOperationId: crypto.randomUUID()
+													})}
 												disabled={requestW9Mutation.isPending}
 												data-testid="vendor-1099-request-w9-{v.vendorId}"
 											>

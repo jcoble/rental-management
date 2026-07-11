@@ -24,6 +24,8 @@ export const vendors = {
 	// Performance scorecard: rating, jobs completed, average DONE response time.
 	scorecard: (id: number) => api.get<VendorScorecard>(`/vendors/${id}/scorecard`),
 	// Text the vendor a W-9 request. 200 { queued, sentTo }; 400 { error } if no phone.
-	requestW9: (id: number) =>
-		api.post<{ queued: boolean; sentTo: string }>(`/vendors/${id}/request-w9`),
+	requestW9: (id: number, clientOperationId: string) =>
+		api.post<{ queued: boolean; sentTo: string }>(`/vendors/${id}/request-w9`, {
+			clientOperationId
+		}),
 };

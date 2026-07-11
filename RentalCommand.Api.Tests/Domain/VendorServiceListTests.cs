@@ -2,10 +2,10 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
@@ -26,9 +26,7 @@ public class VendorServiceListTests : IDisposable
         _sut = new VendorService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IMessagePublisher>(),
-            Mock.Of<IAuditTrailService>(),
-            NullLogger<VendorService>.Instance,
+            Mock.Of<IAtomicUnitOfWork>(),
             TimeProvider.System);
     }
 
