@@ -151,6 +151,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.CreateNativeEsignRequestResult,
     RentalCommand.Data.Esign.CreateNativeEsignRequestHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeEsignViewCommand,
+    RentalCommand.Core.Esign.RecordNativeEsignViewResult,
+    RentalCommand.Data.Esign.RecordNativeEsignViewHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.RecordNativeSignatureCommand,
     RentalCommand.Core.Esign.NativeSignerActionResult,
     RentalCommand.Data.Esign.RecordNativeSignatureHandler>();

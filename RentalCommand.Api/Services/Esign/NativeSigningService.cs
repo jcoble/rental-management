@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -20,7 +19,6 @@ public sealed class NativeSigningService : INativeSigningService
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IFileStorage _storage;
     private readonly INativeEsignExecutionService _execution;
-    private readonly ILeaseEsignService _leaseEsign;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeSigningService> _logger;
 
@@ -29,7 +27,6 @@ public sealed class NativeSigningService : INativeSigningService
         IAtomicUnitOfWork atomic,
         IFileStorage storage,
         INativeEsignExecutionService execution,
-        ILeaseEsignService leaseEsign,
         TimeProvider timeProvider,
         ILogger<NativeSigningService> logger)
     {
@@ -37,7 +34,6 @@ public sealed class NativeSigningService : INativeSigningService
         _atomic = atomic;
         _storage = storage;
         _execution = execution;
-        _leaseEsign = leaseEsign;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -45,57 +41,58 @@ public sealed class NativeSigningService : INativeSigningService
     public async Task<SignTokenResult<SignPackageResponse>> GetPackageAsync(
         string token, string? ipAddress, string? userAgent, CancellationToken ct = default)
     {
-        var (signer, request, error) = await ResolveAsync(token, requireActive: false, ct);
-        if (error is not null)
+        if (string.IsNullOrWhiteSpace(token))
         {
-            return error.Cast<SignPackageResponse>();
+            return SignTokenResult<SignPackageResponse>.NotFound();
         }
 
         var now = _timeProvider.UtcNow();
-
-        // Mark Viewed + audit on the first open. Only meaningful while the signer is still pending.
-        if (signer!.Status == SignatureSignerStatus.Pending)
+        await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("native-esign.view", TokenIdentity(token)),
+            new RecordNativeEsignViewCommand(token, ipAddress, userAgent, now),
+            new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1"),
+            ct);
+        // The durable receipt proves only that the first-view command ran. Always project current state
+        // after commit so later opens never replay stale status or stale expiry decisions.
+        var current = await _db.SignatureSigners.AsNoTracking()
+            .Where(signer => signer.Token == token)
+            .Select(signer => new
+            {
+                signer.Name,
+                signer.Email,
+                signer.ExpiresAtUtc,
+                SignerStatus = signer.Status,
+                RequestStatus = signer.SignatureRequest!.Status,
+                signer.SignatureRequest.Subject,
+                signer.SignatureRequest.DocumentName,
+                SenderName = signer.SignatureRequest.Portfolio!.ManagementCompanyName
+                    ?? signer.SignatureRequest.Portfolio.Name,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (current is null)
         {
-            signer.Status = SignatureSignerStatus.Viewed;
-            signer.ViewedAtUtc ??= now;
-            signer.IpAddress ??= ipAddress;
-            signer.UserAgent ??= userAgent;
-
-            if (request!.Status == SignatureRequestStatus.Sent)
-            {
-                request.Status = SignatureRequestStatus.Viewed;
-            }
-
-            _db.SignatureAuditEvents.Add(new SignatureAuditEvent
-            {
-                SignatureRequestId = request!.Id,
-                SignerId = signer.Id,
-                Type = SignatureAuditEventType.Viewed,
-                AtUtc = now,
-                IpAddress = ipAddress,
-                UserAgent = userAgent,
-                Detail = $"{signer.Name} opened the signing page.",
-            });
-
-            await _db.SaveChangesAsync(ct);
-
-            // Best-effort: surface the "viewed" status onto the lease workflow if it tracks it.
-            await SafeAsync("lease viewed sync", () => _leaseEsign.GetSignatureStatusAsync(request.PortfolioId, request.LeaseId, ct));
+            return SignTokenResult<SignPackageResponse>.NotFound();
         }
-
-        var portfolio = await _db.Portfolios.AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == request!.PortfolioId, ct);
+        if (current.ExpiresAtUtc <= now
+            && current.SignerStatus is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
+            && current.RequestStatus is not (SignatureRequestStatus.Completed
+                or SignatureRequestStatus.Declined
+                or SignatureRequestStatus.Voided))
+        {
+            return SignTokenResult<SignPackageResponse>.Expired(
+                "This signing link has expired. Please ask the sender for a new one.");
+        }
 
         var package = new SignPackageResponse
         {
-            SignerName = signer.Name,
-            SignerEmail = signer.Email,
-            Subject = request!.Subject,
-            DocumentName = request.DocumentName,
-            SenderName = portfolio?.ManagementCompanyName ?? portfolio?.Name ?? "Rental Command",
-            SignerStatus = signer.Status.ToString(),
-            RequestStatus = request.Status.ToString(),
-            AlreadySigned = signer.Status == SignatureSignerStatus.Signed,
+            SignerName = current.Name,
+            SignerEmail = current.Email,
+            Subject = current.Subject,
+            DocumentName = current.DocumentName,
+            SenderName = current.SenderName ?? "Rental Command",
+            SignerStatus = current.SignerStatus.ToString(),
+            RequestStatus = current.RequestStatus.ToString(),
+            AlreadySigned = current.SignerStatus == SignatureSignerStatus.Signed,
             DocumentUrl = $"/api/v1/sign/{token}/document",
             ConsentDisclosure = EsignConsentText.ConsentDisclosure,
         };
@@ -245,9 +242,8 @@ public sealed class NativeSigningService : INativeSigningService
             return (null, null, SignTokenError.NotFound());
         }
 
-        // Tracked load (we mutate signer/request). Include sibling signers so completion can check "all signed".
-        var signer = await _db.SignatureSigners
-            .Include(s => s.SignatureRequest!).ThenInclude(r => r.Signers)
+        var signer = await _db.SignatureSigners.AsNoTracking()
+            .Include(s => s.SignatureRequest!)
             .FirstOrDefaultAsync(s => s.Token == token, ct);
         if (signer?.SignatureRequest is null)
         {
@@ -310,6 +306,9 @@ public sealed class NativeSigningService : INativeSigningService
     private static string OperationIdentity(string token, string operationKey) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{token}:{operationKey}"))).ToLowerInvariant();
 
+    private static string TokenIdentity(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
     private static SignTokenResult<SignActionResponse> MapSignerActionError(NativeSignerActionResult result) =>
         result.Outcome switch
         {
@@ -317,18 +316,6 @@ public sealed class NativeSigningService : INativeSigningService
             _ => SignTokenResult<SignActionResponse>.Expired(
                 result.Error ?? "This signing request is no longer active."),
         };
-
-    private async Task SafeAsync(string label, Func<Task> action)
-    {
-        try
-        {
-            await action();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Native e-sign side effect '{Label}' failed (continuing).", label);
-        }
-    }
 
     /// <summary>Internal error carrier so a single resolve can serve multiple result types.</summary>
     private sealed class SignTokenError
