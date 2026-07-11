@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Constants;
 using RentalCommand.Core.Atomic;
