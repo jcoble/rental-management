@@ -1,12 +1,12 @@
 # RentalCommand.Engine — runtime-only Worker image (outbox dispatch).
 #
-# Compiled + published on the self-hosted build box (see Dockerfile.api for the rationale):
+# Compiled + published by the GitHub Actions deploy workflow (see Dockerfile.api):
 # no SDK stage, no in-image compile. Build context is the published output (publish/engine).
 #
 # The Engine is a Microsoft.NET.Sdk.Worker host (Host.CreateApplicationBuilder) with NO
 # Kestrel/HTTP endpoint, so it has no /health URL — the healthcheck below is process-based.
 # .NET base images mirrored into our own GHCR to avoid Microsoft MCR's 429 rate limit on the
-# build box (see Dockerfile.api for the refresh command).
+# hosted runner (see Dockerfile.api for the refresh command).
 FROM ghcr.io/jcoble/rentalcommand-dotnet-aspnet:10.0
 WORKDIR /app
 

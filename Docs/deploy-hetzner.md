@@ -8,6 +8,8 @@ The files this uses:
 
 - `deploy/docker-compose.prod.yml` — the production stack.
 - `deploy/.env.prod.example` — every variable, with notes on required vs optional.
+- `.github/workflows/deploy.yml` — explicit version-tag/manual deployment from a
+  GitHub-hosted runner. Ordinary branch pushes and merges never deploy.
 
 Target box: **49.13.236.209** (Hetzner, Ubuntu 24.04).
 
@@ -65,23 +67,25 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin do
 docker --version && docker compose version   # confirm both work
 ```
 
-## 4. Get the code onto the box
+## 4. Create the deployment directory
 
 ```bash
-mkdir -p /opt/rentalcommand
-git clone https://github.com/jcoble/rental-management.git /opt/rentalcommand
-cd /opt/rentalcommand
+mkdir -p /opt/rental-command/deploy
+cd /opt/rental-command
 ```
 
-(Or `scp`/`rsync` the repo up if it isn't on a remote you can clone. The build is from
-source via the in-repo `Dockerfile.*`, so the whole repo needs to be present.)
+The production box does not clone or compile the repository. The deploy workflow builds
+the API, Engine, and Web images on a GitHub-hosted runner, pushes them to GHCR, and copies
+the production compose file into this directory before pulling the selected images.
 
 ## 5. Configure the environment
 
 ```bash
-cp deploy/.env.prod.example .env
 nano .env
 ```
+
+Use `deploy/.env.prod.example` from the repository as the field reference. The `.env`
+file itself exists only on the production box and is never copied by the deploy workflow.
 
 Fill in **at minimum** the required values:
 
@@ -103,14 +107,19 @@ Then the integrations you actually want on day one (all optional, all gated off 
 > `.env` lives next to the compose file's working dir and is gitignored — it never gets
 > committed. Keep a copy of the secrets in your password manager.
 
-## 6. Launch
+## 6. Deploy
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml up -d --build
+# Release a specific commit by pushing a version tag:
+git tag vX.Y.Z
+git push origin vX.Y.Z
+
+# Or use GitHub: Actions -> Deploy -> Run workflow (optionally enter a ref).
 ```
 
-First run builds all three images from source (a few minutes) and Traefik requests the
-TLS cert. **Migrations apply automatically on boot** — both the API and the Engine run
+The workflow builds and pushes all three images, then the production box pulls and starts
+them; it never builds application images locally. Traefik requests the TLS cert on the first
+run. **Migrations apply automatically on boot** — both the API and the Engine run
 the EF Core migrations themselves, serialized behind a shared PostgreSQL advisory lock so
 they never race. There is no separate migration step.
 
@@ -194,11 +203,13 @@ propagated or port 443 not open).
 ## Operations cheatsheet
 
 ```bash
-cd /opt/rentalcommand
+cd /opt/rental-command
 
-# Update to latest code:
-git pull
-docker compose -f deploy/docker-compose.prod.yml up -d --build
+# Deploy a release from the repository checkout on your workstation:
+git tag vX.Y.Z
+git push origin vX.Y.Z
+
+# Or run Actions -> Deploy -> Run workflow for an explicit manual deploy.
 
 # Logs / restart one service:
 docker compose -f deploy/docker-compose.prod.yml logs -f web
@@ -206,7 +217,7 @@ docker compose -f deploy/docker-compose.prod.yml restart engine
 
 # Manual DB backup (data lives in the `rentalcommand-postgres` volume):
 docker exec rentalcommand-postgres pg_dump -U rentalcommand_app rentalcommand \
-  | gzip > /opt/rentalcommand/backup-$(date +%F).sql.gz
+  | gzip > /opt/rental-command/backup-$(date +%F).sql.gz
 
 # Inspect the issued cert:
 docker exec rentalcommand-traefik cat /letsencrypt/acme.json | head
