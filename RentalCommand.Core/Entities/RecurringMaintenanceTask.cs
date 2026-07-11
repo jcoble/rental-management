@@ -61,6 +61,12 @@ public class RecurringMaintenanceTask
     /// <summary>Soft-delete marker; the global query filter hides deleted tasks from every read.</summary>
     public DateTime? DeletedAt { get; set; }
 
+    /// <summary>Short-lived Engine ownership for recurring-maintenance generation.</summary>
+    public string? WorkerClaimOwner { get; set; }
+    public Guid? WorkerClaimToken { get; set; }
+    public DateTime? WorkerClaimExpiresAtUtc { get; set; }
+    public int WorkerClaimAttemptCount { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }

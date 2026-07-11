@@ -1352,9 +1352,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.MonthlyEscrow).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.WorkerClaimOwner).HasMaxLength(200);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.Status, e.WorkerClaimExpiresAtUtc, e.StartDate, e.Id })
+                .HasDatabaseName("IX_Loans_DebtServiceClaim");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -1399,10 +1402,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Category).HasConversion<int>();
             entity.Property(e => e.Frequency).HasConversion<int>();
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.WorkerClaimOwner).HasMaxLength(200);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             // The worker scans active, due templates across all portfolios — index the due predicate.
-            entity.HasIndex(e => new { e.Active, e.NextRunDate });
+            entity.HasIndex(e => new { e.Active, e.NextRunDate, e.WorkerClaimExpiresAtUtc, e.Id })
+                .HasDatabaseName("IX_RecurringExpenses_GenerationClaim");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -1622,6 +1627,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // Stored as the string enum name to match the app-wide string-enum convention.
             entity.Property(e => e.RecurrenceInterval).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.Priority).HasConversion<int>();
+            entity.Property(e => e.WorkerClaimOwner).HasMaxLength(200);
             // The worker's hot path: scan active, not-yet-deleted tasks that are due. The query filter
             // already excludes soft-deleted rows; this index serves the (active, due) scan per portfolio.
             entity.HasIndex(e => new { e.PortfolioId, e.IsActive, e.NextDueDate });
@@ -1630,6 +1636,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // filter (a skip-scan), so add (IsActive, NextDueDate) for the sweep to range-scan directly.
             entity.HasIndex(e => new { e.IsActive, e.NextDueDate })
                   .HasDatabaseName("IX_RecurringMaintenanceTasks_Active_NextDueDate");
+            entity.HasIndex(e => new { e.IsActive, e.NextDueDate, e.WorkerClaimExpiresAtUtc, e.Id })
+                  .HasDatabaseName("IX_RecurringMaintenanceTasks_GenerationClaim");
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.VendorId);

@@ -34,7 +34,8 @@ public class DebtServiceServiceTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:TimeZone"] = "UTC" })
             .Build();
         return new DebtServiceService(
-            _ctx.Db, TimeProvider.System, new AppTimeZoneProvider(config), NullLogger<DebtServiceService>.Instance);
+            _ctx.Db, TimeProvider.System, new AppTimeZoneProvider(config),
+            new TestScheduledAutomationClaimStore(_ctx.Db), NullLogger<DebtServiceService>.Instance);
     }
 
     private Property SeedProperty()

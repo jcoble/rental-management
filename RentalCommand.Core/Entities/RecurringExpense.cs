@@ -47,6 +47,12 @@ public class RecurringExpense : IAuditable, IPortfolioScoped
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }
 
+    /// <summary>Short-lived Engine ownership for recurring-expense generation.</summary>
+    public string? WorkerClaimOwner { get; set; }
+    public Guid? WorkerClaimToken { get; set; }
+    public DateTime? WorkerClaimExpiresAtUtc { get; set; }
+    public int WorkerClaimAttemptCount { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
