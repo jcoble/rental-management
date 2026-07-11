@@ -75,6 +75,9 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         WorkOrderStatusEvent? statusEvent = null;
         if (workOrder.Status != WorkOrderStatus.Completed)
         {
+            workOrder.Status = WorkOrderStatus.Completed;
+            workOrder.CompletedAt = receivedAt;
+            workOrder.UpdatedAt = receivedAt;
             attempt.BindSemanticAudit(workOrder, new AtomicSemanticAudit(
                 portfolioId,
                 nameof(WorkOrder),
@@ -88,9 +91,6 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                     command.ProviderEventId,
                 }),
                 ChangeReason: "Vendor replied DONE through a verified SMS provider event."));
-            workOrder.Status = WorkOrderStatus.Completed;
-            workOrder.CompletedAt = receivedAt;
-            workOrder.UpdatedAt = receivedAt;
 
             statusEvent = new WorkOrderStatusEvent
             {
@@ -106,15 +106,15 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             attempt.Persistence.Add(statusEvent);
         }
 
+        vendor.JobsCompleted += 1;
+        vendor.UpdatedAt = receivedAt;
         attempt.BindSemanticAudit(vendor, new AtomicSemanticAudit(
             portfolioId,
             nameof(Vendor),
             vendor.Id,
             AuditLogOperation.Updated,
-            NewValues: JsonSerializer.Serialize(new { JobsCompleted = vendor.JobsCompleted + 1 }),
+            NewValues: JsonSerializer.Serialize(new { JobsCompleted = vendor.JobsCompleted }),
             ChangeReason: "Vendor completed-jobs total advanced with the atomic dispatch completion."));
-        vendor.JobsCompleted += 1;
-        vendor.UpdatedAt = receivedAt;
 
         var notifications = await CreateNotificationsAsync(
             attempt, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct);
