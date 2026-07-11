@@ -9,7 +9,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Constants;
 using RentalCommand.Core.Atomic;
@@ -62,6 +61,10 @@ public sealed class NativeEsignTests : IDisposable
             CreateNativeEsignRequestCommand,
             CreateNativeEsignRequestResult,
             CreateNativeEsignRequestHandler>();
+        services.AddAtomicCommandHandler<
+            RecordNativeEsignViewCommand,
+            RecordNativeEsignViewResult,
+            RecordNativeEsignViewHandler>();
         services.AddAtomicCommandHandler<
             RecordNativeSignatureCommand,
             NativeSignerActionResult,
@@ -219,6 +222,9 @@ public sealed class NativeEsignTests : IDisposable
         pkg.Value.ConsentDisclosure.Should().Contain("E-SIGN");
         pkg.Value.DocumentUrl.Should().Be($"/api/v1/sign/{token}/document");
 
+        var replay = await signing.GetPackageAsync(token, "198.51.100.99", "UA/replay", default);
+        replay.Outcome.Should().Be(SignTokenOutcome.Ok);
+
         var signer = await _db.SignatureSigners.AsNoTracking().FirstAsync(s => s.Token == token);
         signer.Status.Should().Be(SignatureSignerStatus.Viewed);
         signer.ViewedAtUtc.Should().NotBeNull();
@@ -229,6 +235,113 @@ public sealed class NativeEsignTests : IDisposable
         viewed.Should().ContainSingle();
         viewed[0].IpAddress.Should().Be("203.0.113.5");
         viewed[0].UserAgent.Should().Be("Mozilla/Test");
+
+        var receipt = await _db.AtomicCommandReceipts.AsNoTracking()
+            .SingleAsync(candidate => candidate.CommandType == "native-esign.view");
+        receipt.IdempotencyKey.Should().HaveLength(64);
+        receipt.IdempotencyKey.Should().NotBe(token);
+        receipt.IdempotencyKey.Should().NotContain(token);
+        receipt.ResultJson.Should().NotContain(token);
+        (await _db.AtomicCommandReceipts.CountAsync(candidate => candidate.CommandType == "native-esign.view"))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetPackage_ReplayAfterSigning_ProjectsCurrentSignedState()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
+        var (token, _) = await SendAndGetTokenAsync(lease);
+        var signing = CreateSigningService();
+
+        (await signing.GetPackageAsync(token, "203.0.113.5", "UA/view", default)).Outcome
+            .Should().Be(SignTokenOutcome.Ok);
+        (await signing.SignAsync(token, new SubmitSignatureRequest
+        {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            Consent = true,
+            SignatureType = "Typed",
+            TypedName = "Marcus Williams",
+        }, "203.0.113.5", "UA/sign", default)).Outcome.Should().Be(SignTokenOutcome.Ok);
+
+        var current = await signing.GetPackageAsync(token, "198.51.100.10", "UA/later", default);
+
+        current.Outcome.Should().Be(SignTokenOutcome.Ok);
+        current.Value!.AlreadySigned.Should().BeTrue();
+        current.Value.SignerStatus.Should().Be(nameof(SignatureSignerStatus.Signed));
+        current.Value.RequestStatus.Should().Be(nameof(SignatureRequestStatus.Completed));
+        (await _db.SignatureAuditEvents.CountAsync(candidate =>
+            candidate.Type == SignatureAuditEventType.Viewed)).Should().Be(1);
+        (await _db.AtomicCommandReceipts.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetPackage_ReplayReevaluatesCurrentExpiryInsteadOfReceiptOutcome()
+    {
+        var (token, _) = await SendAndGetTokenAsync();
+        var signing = CreateSigningService();
+        (await signing.GetPackageAsync(token, null, null, default)).Outcome
+            .Should().Be(SignTokenOutcome.Ok);
+
+        var signer = await _db.SignatureSigners.SingleAsync(candidate => candidate.Token == token);
+        signer.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-1);
+        await _db.SaveChangesAsync();
+
+        var expired = await signing.GetPackageAsync(token, null, null, default);
+
+        expired.Outcome.Should().Be(SignTokenOutcome.Expired);
+        (await _db.SignatureAuditEvents.CountAsync(candidate =>
+            candidate.Type == SignatureAuditEventType.Viewed)).Should().Be(1);
+        (await _db.AtomicCommandReceipts.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(SignatureRequestStatus.PartiallySigned)]
+    [InlineData(SignatureRequestStatus.ExecutionPending)]
+    [InlineData(SignatureRequestStatus.Completed)]
+    [InlineData(SignatureRequestStatus.Declined)]
+    [InlineData(SignatureRequestStatus.Voided)]
+    public async Task GetPackage_DoesNotDowngradeRequestThatAlreadyAdvancedPastSent(
+        SignatureRequestStatus advancedStatus)
+    {
+        var (token, envelopeId) = await SendAndGetTokenAsync();
+        var request = await _db.SignatureRequests.SingleAsync(candidate => candidate.PublicId == envelopeId);
+        request.Status = advancedStatus;
+        await _db.SaveChangesAsync();
+
+        var result = await CreateSigningService().GetPackageAsync(token, null, null, default);
+
+        result.Outcome.Should().Be(SignTokenOutcome.Ok);
+        result.Value!.SignerStatus.Should().Be(nameof(SignatureSignerStatus.Viewed));
+        result.Value.RequestStatus.Should().Be(advancedStatus.ToString());
+        (await _db.SignatureRequests.AsNoTracking().SingleAsync(candidate => candidate.Id == request.Id)).Status
+            .Should().Be(advancedStatus);
+    }
+
+    [Fact]
+    public async Task GetPackage_FinalCompanionFailure_RollsBackViewAuditAndReceipt()
+    {
+        var (token, envelopeId) = await SendAndGetTokenAsync();
+        _atomicFailure.ArmForView();
+
+        var action = () => CreateSigningService().GetPackageAsync(
+            token, "203.0.113.5", "UA/view", default);
+
+        await action.Should().ThrowAsync<InjectedEsignFailure>();
+        (await _db.SignatureSigners.AsNoTracking().SingleAsync(candidate => candidate.Token == token)).Status
+            .Should().Be(SignatureSignerStatus.Pending);
+        (await _db.SignatureRequests.AsNoTracking().SingleAsync(candidate => candidate.PublicId == envelopeId)).Status
+            .Should().Be(SignatureRequestStatus.Sent);
+        (await _db.SignatureAuditEvents.CountAsync(candidate =>
+            candidate.Type == SignatureAuditEventType.Viewed)).Should().Be(0);
+        (await _db.AtomicCommandReceipts.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(0);
+        (await _db.AtomicAuditLogs.CountAsync(candidate =>
+            candidate.CommandType == "native-esign.view")).Should().Be(0);
+
+        (await CreateSigningService().GetPackageAsync(token, null, null, default)).Outcome
+            .Should().Be(SignTokenOutcome.Ok);
     }
 
     [Fact]
@@ -616,31 +729,13 @@ public sealed class NativeEsignTests : IDisposable
             TimeProvider.System,
             NullLogger<NativeEsignProvider>.Instance);
 
-    private LeaseEsignService CreateLeaseEsignService(IEsignProvider provider)
-    {
-        var leaseService = new LeaseService(
-            _db, new NoopDataUpdateService(), _storage, new LeaseAgreementPdfGenerator(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System), NullLogger<LeaseService>.Instance,
-            TimeProvider.System);
-
-        return new LeaseEsignService(
-            _db, leaseService, provider, _storage, new NoopDataUpdateService(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            _config,
-            TimeProvider.System,
-            NullLogger<LeaseEsignService>.Instance);
-    }
-
     private NativeSigningService CreateSigningService()
     {
-        var provider = CreateProvider();
-        var leaseEsign = CreateLeaseEsignService(provider);
         return new NativeSigningService(
             _db,
             _services.GetRequiredService<IAtomicUnitOfWork>(),
             _storage,
             CreateExecutionService(),
-            leaseEsign,
             TimeProvider.System,
             NullLogger<NativeSigningService>.Instance);
     }
@@ -850,14 +945,6 @@ public sealed class NativeEsignTests : IDisposable
         return lease;
     }
 
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
-    }
-
     private sealed class InMemoryFileStorage : IFileStorage
     {
         private readonly Dictionary<string, byte[]> _files = new();
@@ -899,6 +986,7 @@ public sealed class NativeEsignTests : IDisposable
 
         public void Arm() => Interlocked.Exchange(ref _armed, 1);
         public void ArmForFinalization() => Interlocked.Exchange(ref _armed, 2);
+        public void ArmForView() => Interlocked.Exchange(ref _armed, 3);
 
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
             DbContextEventData eventData,
@@ -918,6 +1006,14 @@ public sealed class NativeEsignTests : IDisposable
                     .Any(entry => entry.State == EntityState.Modified
                         && entry.Entity.Status == SignatureRequestStatus.Completed) == true
                 && Interlocked.Exchange(ref _armed, 0) == 2)
+            {
+                throw new InjectedEsignFailure();
+            }
+            if (mode == 3
+                && eventData.Context?.ChangeTracker.Entries<SignatureAuditEvent>()
+                    .Any(entry => entry.State == EntityState.Added
+                        && entry.Entity.Type == SignatureAuditEventType.Viewed) == true
+                && Interlocked.Exchange(ref _armed, 0) == 3)
             {
                 throw new InjectedEsignFailure();
             }

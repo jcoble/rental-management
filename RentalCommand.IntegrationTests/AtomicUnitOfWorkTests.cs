@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -92,6 +94,10 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             CreateNativeEsignRequestCommand,
             CreateNativeEsignRequestResult,
             CreateNativeEsignRequestHandler>();
+        services.AddAtomicCommandHandler<
+            RecordNativeEsignViewCommand,
+            RecordNativeEsignViewResult,
+            RecordNativeEsignViewHandler>();
         services.AddAtomicCommandHandler<
             RecordNativeSignatureCommand,
             NativeSignerActionResult,
@@ -347,6 +353,152 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         (await verify.Db.SignatureAuditEvents.AsNoTracking()
             .CountAsync(audit => audit.SignatureRequestId == request.Id
                 && audit.Type == SignatureAuditEventType.Signed)).Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task NativeEsignConcurrentFirstViews_CommitOneLegalFactAuditAndRedactedReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var leaseId = await SeedLeaseAsync();
+        var send = NativeEsignCommand(leaseId, "blob/view-concurrent.pdf");
+        var sent = await UnitOfWork.ExecuteAsync(
+            Identity(nameof(NativeEsignConcurrentFirstViews_CommitOneLegalFactAuditAndRedactedReceipt) + "-send"),
+            send,
+            new AtomicJsonResultCodec<CreateNativeEsignRequestResult>("native-esign.send.v1"));
+        var token = send.Signers.Single().Token;
+        var identity = ViewIdentity(token);
+        var command = new RecordNativeEsignViewCommand(
+            token,
+            "203.0.113.20",
+            "integration/view",
+            DateTime.UtcNow);
+        var codec = new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1");
+
+        var outcomes = await Task.WhenAll(
+            UnitOfWork.ExecuteAsync(identity, command, codec),
+            UnitOfWork.ExecuteAsync(identity, command, codec));
+
+        outcomes.Select(outcome => outcome.Disposition).Should()
+            .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
+        outcomes.Should().OnlyContain(outcome => outcome.Value.Outcome == NativeEsignViewOutcome.Available);
+
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        var signer = await verify.Db.SignatureSigners.AsNoTracking()
+            .SingleAsync(candidate => candidate.Token == token);
+        signer.Status.Should().Be(SignatureSignerStatus.Viewed);
+        signer.IpAddress.Should().Be("203.0.113.20");
+        var request = await verify.Db.SignatureRequests.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == sent.Value.SignatureRequestId);
+        request.Status.Should().Be(SignatureRequestStatus.Viewed);
+        (await verify.Db.SignatureAuditEvents.AsNoTracking().CountAsync(audit =>
+            audit.SignatureRequestId == request.Id
+            && audit.Type == SignatureAuditEventType.Viewed)).Should().Be(1);
+
+        var receipt = await verify.Db.AtomicCommandReceipts.AsNoTracking().SingleAsync(candidate =>
+            candidate.CommandType == identity.CommandType
+            && candidate.IdempotencyKey == identity.IdempotencyKey);
+        receipt.IdempotencyKey.Should().HaveLength(64);
+        receipt.IdempotencyKey.Should().NotContain(token);
+        receipt.ResultJson.Should().NotContain(token);
+        (await verify.Db.AtomicAuditLogs.AsNoTracking().CountAsync(audit =>
+            audit.CommandType == identity.CommandType
+            && audit.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2);
+        (await verify.Db.AtomicAuditLogs.AsNoTracking().AnyAsync(audit =>
+            audit.CommandType == identity.CommandType
+            && ((audit.OldValues != null && audit.OldValues.Contains(token))
+                || (audit.NewValues != null && audit.NewValues.Contains(token))))).Should().BeFalse();
+    }
+
+    [SkippableFact]
+    public async Task NativeEsignFirstView_FinalAuditFailureRollsBackBusinessLegalEventAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var leaseId = await SeedLeaseAsync();
+        var send = NativeEsignCommand(leaseId, "blob/view-rollback.pdf");
+        var sent = await UnitOfWork.ExecuteAsync(
+            Identity(nameof(NativeEsignFirstView_FinalAuditFailureRollsBackBusinessLegalEventAndReceipt) + "-send"),
+            send,
+            new AtomicJsonResultCodec<CreateNativeEsignRequestResult>("native-esign.send.v1"));
+        var token = send.Signers.Single().Token;
+        var identity = ViewIdentity(token);
+        Services.GetRequiredService<AtomicFlushFailureInterceptor>().Arm();
+
+        var action = () => UnitOfWork.ExecuteAsync(
+            identity,
+            new RecordNativeEsignViewCommand(token, "203.0.113.30", "integration/rollback", DateTime.UtcNow),
+            new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1"));
+
+        await action.Should().ThrowAsync<InjectedFailureException>();
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.SignatureSigners.AsNoTracking().SingleAsync(candidate => candidate.Token == token)).Status
+            .Should().Be(SignatureSignerStatus.Pending);
+        (await verify.Db.SignatureRequests.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == sent.Value.SignatureRequestId)).Status
+            .Should().Be(SignatureRequestStatus.Sent);
+        (await verify.Db.SignatureAuditEvents.AsNoTracking().CountAsync(audit =>
+            audit.SignatureRequestId == sent.Value.SignatureRequestId
+            && audit.Type == SignatureAuditEventType.Viewed)).Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(candidate =>
+            candidate.CommandType == identity.CommandType
+            && candidate.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.Db.AtomicAuditLogs.AsNoTracking().CountAsync(audit =>
+            audit.CommandType == identity.CommandType
+            && audit.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task NativeEsignFirstViewAndSignature_ShareAggregateLockWithoutStatusDowngrade()
+    {
+        SkipIfDockerUnavailable();
+        var leaseId = await SeedLeaseAsync();
+        var send = NativeEsignCommand(leaseId, "blob/view-sign-race.pdf");
+        var sent = await UnitOfWork.ExecuteAsync(
+            Identity(nameof(NativeEsignFirstViewAndSignature_ShareAggregateLockWithoutStatusDowngrade) + "-send"),
+            send,
+            new AtomicJsonResultCodec<CreateNativeEsignRequestResult>("native-esign.send.v1"));
+        var token = send.Signers.Single().Token;
+        var now = DateTime.UtcNow;
+
+        var outcomes = await Task.WhenAll(ViewOnceAsync(), SignOnceAsync());
+
+        outcomes.Should().OnlyContain(completed => completed);
+        await using var verify = await VerificationScope.CreateAsync(Services);
+        (await verify.Db.SignatureSigners.AsNoTracking().SingleAsync(candidate => candidate.Token == token)).Status
+            .Should().Be(SignatureSignerStatus.Signed);
+        (await verify.Db.SignatureRequests.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == sent.Value.SignatureRequestId)).Status
+            .Should().Be(SignatureRequestStatus.ExecutionPending);
+        (await verify.Db.SignatureAuditEvents.AsNoTracking().CountAsync(audit =>
+            audit.SignatureRequestId == sent.Value.SignatureRequestId
+            && audit.Type == SignatureAuditEventType.Signed)).Should().Be(1);
+        (await verify.Db.SignatureAuditEvents.AsNoTracking().CountAsync(audit =>
+            audit.SignatureRequestId == sent.Value.SignatureRequestId
+            && audit.Type == SignatureAuditEventType.Viewed)).Should().BeLessThanOrEqualTo(1);
+
+        async Task<bool> ViewOnceAsync()
+        {
+            var outcome = await UnitOfWork.ExecuteAsync(
+                ViewIdentity(token),
+                new RecordNativeEsignViewCommand(token, "203.0.113.50", "integration/view-race", now),
+                new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1"));
+            return outcome.Value.Outcome == NativeEsignViewOutcome.Available;
+        }
+
+        async Task<bool> SignOnceAsync()
+        {
+            var outcome = await UnitOfWork.ExecuteAsync(
+                Identity(nameof(NativeEsignFirstViewAndSignature_ShareAggregateLockWithoutStatusDowngrade) + "-sign"),
+                new RecordNativeSignatureCommand(
+                    token,
+                    SignatureSignatureType.Typed,
+                    "Tenant Signer",
+                    null,
+                    "203.0.113.51",
+                    "integration/sign-race",
+                    now),
+                new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.sign.v1"));
+            return outcome.Value.Outcome == NativeSignerActionOutcome.Applied;
+        }
     }
 
     [SkippableFact]
@@ -672,6 +824,11 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
 
     private AtomicCommandIdentity Identity(string testName) =>
         new($"test.atomic.{testName}", Guid.NewGuid().ToString("N"));
+
+    private static AtomicCommandIdentity ViewIdentity(string token) =>
+        new(
+            "native-esign.view",
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant());
 
     private CreateNativeEsignRequestCommand NativeEsignCommand(int leaseId, string storageKey)
     {
