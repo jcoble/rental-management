@@ -194,6 +194,15 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventCommand,
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventResult,
     RentalCommand.Data.Payments.RecordVerifiedProviderPaymentEventHandler>();
+// The writer intentionally supports only the five completed non-lease targets. There is no API
+// call site yet; ScanService continues to own confirmation until the lease aggregate writer and the
+// post-commit notification adapter are ready, preventing a partial old/new production path.
+builder.Services.AddScoped<RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.ConfirmScanDraftCommand,
+    RentalCommand.Core.Scanning.ConfirmScanDraftResult,
+    RentalCommand.Data.Scanning.ConfirmScanDraftHandler<
+        RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
