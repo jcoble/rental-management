@@ -52,14 +52,17 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
         var (portfolioId, propertyId) = await SeedScopeAsync(now);
+        int earliestExpenseId;
 
         await using (var seed = NewContext())
         {
+            var earliestExpense = Expense(portfolioId, propertyId, now.AddDays(-3), true);
             seed.Loans.AddRange(
                 Loan(portfolioId, propertyId, now.AddMonths(-2), LoanStatus.Active),
                 Loan(portfolioId, propertyId, now.AddMonths(1), LoanStatus.Active),
                 Loan(portfolioId, propertyId, now.AddMonths(-2), LoanStatus.Closed));
             seed.RecurringExpenses.AddRange(
+                earliestExpense,
                 Expense(portfolioId, propertyId, now.AddDays(-2), true),
                 Expense(portfolioId, propertyId, now.AddDays(2), true),
                 Expense(portfolioId, propertyId, now.AddDays(-2), false));
@@ -68,6 +71,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
                 Maintenance(portfolioId, propertyId, now.AddDays(2), true),
                 Maintenance(portfolioId, propertyId, now.AddDays(-2), false));
             await seed.SaveChangesAsync();
+            earliestExpenseId = earliestExpense.Id;
         }
 
         await using var db = NewContext();
@@ -75,7 +79,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         (await store.ClaimDebtServiceAsync("debt", now, now, TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
         (await store.ClaimRecurringExpensesAsync("expense", now, now, TimeSpan.FromMinutes(2), 1))
-            .Should().ContainSingle();
+            .Should().ContainSingle(claim => claim.Id == earliestExpenseId);
         (await store.ClaimRecurringMaintenanceAsync("maintenance", now, now, TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
     }
@@ -118,14 +122,11 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         replacement.Id.Should().Be(first.Id);
         replacement.ClaimToken.Should().NotBe(first.ClaimToken);
 
-        var originalBatch = batches.Single(batch => batch.Any(claim => claim.Id == first.Id));
         await using var fenced = NewContext();
-        await using var tx = await fenced.Database.BeginTransactionAsync();
-        var stillOwned = await new ScheduledAutomationClaimStore(fenced)
-            .LockOwnedRecurringExpensesAsync(originalBatch, now);
-        stillOwned.Should().HaveCount(originalBatch.Count - 1);
-        stillOwned.Should().NotContain(row => row.Id == first.Id);
-        await tx.RollbackAsync();
+        var durable = await fenced.RecurringExpenses.IgnoreQueryFilters()
+            .SingleAsync(row => row.Id == first.Id);
+        durable.WorkerClaimToken.Should().Be(replacement.ClaimToken);
+        durable.WorkerClaimOwner.Should().Be("expense-replacement");
     }
 
     [SkippableFact]
@@ -175,11 +176,12 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Loan_batch_lock_and_tail_projection_use_two_reads_regardless_of_batch_size()
+    public async Task Debt_claim_selection_is_one_statement_and_orders_by_next_due_occurrence()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
         var (portfolioId, propertyId) = await SeedScopeAsync(now);
+        int oldestDebtOccurrenceLoanId;
 
         await using (var seed = NewContext())
         {
@@ -189,12 +191,12 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
             seed.Loans.AddRange(loans);
             await seed.SaveChangesAsync();
 
-            seed.LoanPayments.AddRange(loans.Select(loan => new LoanPayment
+            seed.LoanPayments.AddRange(loans.Select((loan, index) => new LoanPayment
             {
                 PortfolioId = portfolioId,
                 LoanId = loan.Id,
-                PeriodKey = now.AddMonths(-2).ToString("yyyy-MM"),
-                DueDate = now.AddMonths(-2),
+                PeriodKey = now.AddMonths(index - 3).ToString("yyyy-MM"),
+                DueDate = now.AddMonths(index - 3),
                 InterestAmount = 100m,
                 PrincipalAmount = 500m,
                 TotalAmount = 600m,
@@ -202,24 +204,16 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
                 CreatedAt = now,
             }));
             await seed.SaveChangesAsync();
+            oldestDebtOccurrenceLoanId = loans[0].Id;
         }
 
         var counter = new ReaderCommandCounter();
         await using var db = NewContext(counter);
         var store = new ScheduledAutomationClaimStore(db);
         var claims = await store.ClaimDebtServiceAsync(
-            "debt-batch", now, now, TimeSpan.FromMinutes(2), 25);
-        claims.Should().HaveCount(3);
-
-        counter.Reset();
-        await using var tx = await db.Database.BeginTransactionAsync();
-        var locked = await store.LockOwnedLoansAsync(claims, now);
-        var tails = await store.LoadLoanTailsAsync(locked.Select(loan => loan.Id).ToArray());
-
-        locked.Should().HaveCount(3);
-        tails.Should().HaveCount(3);
-        counter.ReaderCommands.Should().Be(2);
-        await tx.RollbackAsync();
+            "debt-batch", now, now, TimeSpan.FromMinutes(2), 1);
+        claims.Should().ContainSingle(claim => claim.Id == oldestDebtOccurrenceLoanId);
+        counter.ReaderCommands.Should().Be(1);
     }
 
     private async Task<(int PortfolioId, int PropertyId)> SeedScopeAsync(DateTime now)

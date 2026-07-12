@@ -12,6 +12,8 @@ public class Expense : IAuditable, IPortfolioScoped
     public int? VendorId { get; set; }
     public int? WorkOrderId { get; set; }
     public int? CapitalizedAssetId { get; set; }
+    public int? RecurringExpenseId { get; set; }
+    public DateTime? RecurringExpenseOccurrenceDate { get; set; }
     public ScheduleECategory Category { get; set; } = ScheduleECategory.Other;
     public string Description { get; set; } = string.Empty;
     public ExpenseStatus Status { get; set; } = ExpenseStatus.Pending;
@@ -55,6 +57,7 @@ public class Expense : IAuditable, IPortfolioScoped
     public Vendor? Vendor { get; set; }
     public WorkOrder? WorkOrder { get; set; }
     public CapitalAsset? CapitalizedAsset { get; set; }
+    public RecurringExpense? RecurringExpense { get; set; }
 
     /// <summary>Itemized lines from the scanned receipt, promoted to a queryable child table.</summary>
     public ICollection<ExpenseLineItem> LineItems { get; set; } = new List<ExpenseLineItem>();

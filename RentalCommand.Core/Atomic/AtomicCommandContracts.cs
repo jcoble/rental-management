@@ -73,6 +73,7 @@ public interface IAtomicWriteAttempt
     IAtomicAccountingPersistence Accounting { get; }
     IAtomicLockingPersistence Locking { get; }
     IAtomicScanConfirmationPersistence ScanConfirmation { get; }
+    IAtomicScheduledFinancePersistence ScheduledFinance { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -92,6 +93,31 @@ public interface IAtomicWriteAttempt
     /// <summary>Stages an outbox companion for the owner's final flush.</summary>
     void StageOutbox(OutboxMessage message);
 }
+
+/// <summary>
+/// Row-locking persistence boundary for already-bounded scheduled-finance claims. Eligibility is
+/// rechecked with the claim token and lease expiry in PostgreSQL before any tracked row is exposed.
+/// </summary>
+public interface IAtomicScheduledFinancePersistence
+{
+    Task<IReadOnlyList<Loan>> LockDebtServiceClaimsAsync(
+        int[] loanIds,
+        Guid claimToken,
+        DateTime businessDateUtc,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyDictionary<int, AtomicLoanPaymentTail>> LoadLoanPaymentTailsAsync(
+        int[] loanIds,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<RecurringExpense>> LockRecurringExpenseClaimsAsync(
+        int[] recurringExpenseIds,
+        Guid claimToken,
+        DateTime businessDateUtc,
+        CancellationToken ct = default);
+}
+
+public sealed record AtomicLoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);
 
 /// <summary>Small, fixed namespace of transaction-scoped aggregate locks owned by the kernel.</summary>
 public enum AtomicLockResource

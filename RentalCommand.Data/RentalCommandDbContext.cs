@@ -1325,6 +1325,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.WorkOrderId);
             entity.HasIndex(e => e.CapitalizedAssetId);
+            entity.HasIndex(e => new { e.RecurringExpenseId, e.RecurringExpenseOccurrenceDate })
+                .IsUnique()
+                .HasFilter("\"RecurringExpenseId\" IS NOT NULL AND \"RecurringExpenseOccurrenceDate\" IS NOT NULL")
+                .HasDatabaseName("UX_Expenses_RecurringExpense_Occurrence");
             entity.HasIndex(e => e.Status);
             // #2 Every financial report + the grid Expense date-range filter buckets expenses by
             // IncurredAt (accrual) and PaidAt (cash-basis / Schedule E), portfolio-scoped.
@@ -1362,6 +1366,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.CapitalizedAssetId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.RecurringExpense)
+                .WithMany()
+                .HasForeignKey(e => e.RecurringExpenseId)
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasMany(e => e.LineItems)
                 .WithOne(li => li.Expense)
                 .HasForeignKey(li => li.ExpenseId)
@@ -1473,8 +1481,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
             entity.Property(e => e.BalanceAfter).HasPrecision(18, 2);
             entity.Property(e => e.Status).HasConversion<int>();
-            // Idempotency: at most one amortization row per (loan, period). The DebtServiceWorker's
-            // own AnyAsync check is the primary guard; this unique index is the race backstop.
+            // Durable occurrence fence: different command receipts still cannot create the same
+            // amortization period twice.
             entity.HasIndex(e => new { e.LoanId, e.PeriodKey }).IsUnique();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LoanId);

@@ -2271,6 +2271,12 @@ namespace RentalCommand.Data.Migrations
                     b.Property<string>("ReceiptData")
                         .HasColumnType("jsonb");
 
+                    b.Property<int?>("RecurringExpenseId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("RecurringExpenseOccurrenceDate")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
@@ -2302,6 +2308,11 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("PropertyId");
+
+                    b.HasIndex("RecurringExpenseId", "RecurringExpenseOccurrenceDate")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Expenses_RecurringExpense_Occurrence")
+                        .HasFilter("\"RecurringExpenseId\" IS NOT NULL AND \"RecurringExpenseOccurrenceDate\" IS NOT NULL");
 
                     b.HasIndex("Status");
 
@@ -7063,6 +7074,11 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("PropertyId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("RentalCommand.Core.Entities.RecurringExpense", "RecurringExpense")
+                        .WithMany()
+                        .HasForeignKey("RecurringExpenseId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.Unit", "Unit")
                         .WithMany()
                         .HasForeignKey("UnitId")
@@ -7083,6 +7099,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
 
                     b.Navigation("Property");
+
+                    b.Navigation("RecurringExpense");
 
                     b.Navigation("Unit");
 
