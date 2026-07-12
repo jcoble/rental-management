@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -19,10 +20,13 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _updates;
     private readonly IAuditTrailService _audit;
+    private readonly IAtomicInfrastructureWriteGate _infrastructureWrites;
     private readonly TimeProvider _time;
 
-    public ListingWorkspaceService(RentalCommandDbContext db, IDataUpdateService updates, IAuditTrailService audit, TimeProvider time)
-        => (_db, _updates, _audit, _time) = (db, updates, audit, time);
+    public ListingWorkspaceService(RentalCommandDbContext db, IDataUpdateService updates, IAuditTrailService audit,
+        IAtomicInfrastructureWriteGate infrastructureWrites, TimeProvider time)
+        => (_db, _updates, _audit, _infrastructureWrites, _time) =
+            (db, updates, audit, infrastructureWrites, time);
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
         => _db.Units.AsNoTracking().AnyAsync(unit => unit.Id == unitId && unit.PortfolioId == portfolioId, ct);
@@ -53,9 +57,12 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             }
             else
             {
-                var previousFacts = CaptureGeneratedFacts(listing!);
-                ApplyUnitFacts(listing!, seed);
-                if (previousFacts != CaptureGeneratedFacts(listing!))
+                // A later sync is deliberately non-destructive. Headline, description, rent,
+                // deposit, and lease terms are user-owned after initial preparation; only facts
+                // that cannot be edited in this workspace are refreshed from the Unit.
+                var previousFacts = CaptureSynchronizedUnitDetails(listing!);
+                ApplySynchronizedUnitDetails(listing!, seed);
+                if (previousFacts != CaptureSynchronizedUnitDetails(listing!))
                     listing!.ContentVersion++;
                 listing.UpdatedAt = now;
             }
@@ -63,7 +70,10 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             await _db.SaveChangesAsync(ct);
             await _audit.LogAsync(portfolioId, EntityType, listing!.Id,
                 created ? AuditLogOperation.Created : AuditLogOperation.Updated, userId: userId,
-                changeReason: "Prepared provider-neutral rental listing workspace", ct: ct);
+                changeReason: created
+                    ? "Prepared provider-neutral rental listing workspace"
+                    : "Synchronized non-editable unit details without replacing customized listing content",
+                ct: ct);
             await transaction.CommitAsync(ct);
             response = ListingWorkspaceResponse.FromEntity(listing);
         });
@@ -109,41 +119,59 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     public async Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
         IngestExternalListingSignalRequest request, CancellationToken ct = default)
     {
+        var providerMessageKey = CleanRequired(request.ProviderMessageKey, "Provider message key");
+        var signalType = CleanRequired(request.SignalType, "Signal type");
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        var existing = await _db.ExternalListingSignals.AsNoTracking()
-            .Where(signal => signal.PortfolioId == portfolioId && signal.ProviderMessageKey == request.ProviderMessageKey)
-            .Select(signal => new ExternalListingSignalResponse(signal.Id, signal.SignalType,
-                signal.SuggestedExternalListingId, signal.SuggestedListingUrl, signal.SuggestedExternalStatus,
-                signal.Disposition.ToString(), signal.ReceivedAtUtc))
-            .FirstOrDefaultAsync(ct);
-        if (existing is not null)
-        {
-            await transaction.CommitAsync(ct);
-            return existing;
-        }
-
         var publicationExists = await _db.ListingPublications.AsNoTracking().AnyAsync(publication =>
             publication.Id == publicationId && publication.PortfolioId == portfolioId
             && publication.RentalListing != null && publication.RentalListing.UnitId == unitId, ct);
         if (!publicationExists) return null;
 
-        var signal = new ExternalListingSignal
+        var suggestedExternalListingId = CleanOptional(request.SuggestedExternalListingId);
+        var suggestedListingUrl = CleanOptional(request.SuggestedListingUrl);
+        var suggestedExternalStatus = CleanOptional(request.SuggestedExternalStatus);
+        var receivedAtUtc = _time.UtcNow();
+
+        // The unique portfolio/message key is the concurrency boundary. PostgreSQL waits for
+        // an in-flight conflicting insert, then this statement either owns the row or performs
+        // a no-op. The following DB-side read therefore returns the same response to every
+        // concurrent delivery instead of surfacing a unique-constraint error.
+        using (_infrastructureWrites.BeginExternalListingSignalAdmission())
         {
-            PortfolioId = portfolioId,
-            ListingPublicationId = publicationId,
-            ProviderMessageKey = CleanRequired(request.ProviderMessageKey, "Provider message key"),
-            SignalType = CleanRequired(request.SignalType, "Signal type"),
-            SuggestedExternalListingId = CleanOptional(request.SuggestedExternalListingId),
-            SuggestedListingUrl = CleanOptional(request.SuggestedListingUrl),
-            SuggestedExternalStatus = CleanOptional(request.SuggestedExternalStatus),
-            Disposition = ExternalListingSignalDisposition.Unconfirmed,
-            ReceivedAtUtc = _time.UtcNow(),
-        };
-        _db.ExternalListingSignals.Add(signal);
-        await _db.SaveChangesAsync(ct);
+            await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+                INSERT INTO "ExternalListingSignals"
+                    ("PortfolioId", "ListingPublicationId", "ProviderMessageKey", "SignalType",
+                     "SuggestedExternalListingId", "SuggestedListingUrl", "SuggestedExternalStatus",
+                     "Disposition", "ReceivedAtUtc")
+                VALUES
+                    ({{portfolioId}}, {{publicationId}}, {{providerMessageKey}}, {{signalType}},
+                     {{suggestedExternalListingId}}, {{suggestedListingUrl}}, {{suggestedExternalStatus}},
+                     {{ExternalListingSignalDisposition.Unconfirmed.ToString()}}, {{receivedAtUtc}})
+                ON CONFLICT ("PortfolioId", "ProviderMessageKey") DO NOTHING
+                """, ct);
+        }
+
+        var admitted = await _db.ExternalListingSignals.AsNoTracking()
+            .Where(signal => signal.PortfolioId == portfolioId && signal.ProviderMessageKey == providerMessageKey)
+            .Select(signal => new
+            {
+                signal.ListingPublicationId,
+                signal.Id,
+                signal.SignalType,
+                signal.SuggestedExternalListingId,
+                signal.SuggestedListingUrl,
+                signal.SuggestedExternalStatus,
+                Disposition = signal.Disposition.ToString(),
+                signal.ReceivedAtUtc,
+            })
+            .SingleAsync(ct);
+        if (admitted.ListingPublicationId != publicationId)
+            throw new DomainValidationException("Provider message key is already assigned to another listing publication.");
+
         await transaction.CommitAsync(ct);
-        return new ExternalListingSignalResponse(signal.Id, signal.SignalType, signal.SuggestedExternalListingId,
-            signal.SuggestedListingUrl, signal.SuggestedExternalStatus, signal.Disposition.ToString(), signal.ReceivedAtUtc);
+        return new ExternalListingSignalResponse(admitted.Id, admitted.SignalType,
+            admitted.SuggestedExternalListingId, admitted.SuggestedListingUrl, admitted.SuggestedExternalStatus,
+            admitted.Disposition, admitted.ReceivedAtUtc);
     }
 
     public async Task<ListingWorkspaceResponse?> ConfirmSignalAsync(int portfolioId, int unitId, int signalId, bool accept,
@@ -217,7 +245,8 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             CreatedAt = now,
             UpdatedAt = now,
         };
-        ApplyUnitFacts(listing, seed);
+        ApplySynchronizedUnitDetails(listing, seed);
+        SeedCustomizableListingContent(listing, seed);
         listing.Photos = DefaultPhotoManifest(seed.PortfolioId, now);
         listing.Publications =
         [
@@ -235,17 +264,21 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         return listing;
     }
 
-    private static void ApplyUnitFacts(RentalListing listing, ListingSeed seed)
+    private static void ApplySynchronizedUnitDetails(RentalListing listing, ListingSeed seed)
     {
         listing.PropertyId = seed.PropertyId;
-        listing.Rent = seed.MarketRent;
-        listing.SecurityDeposit ??= seed.MarketRent > 0 ? seed.MarketRent : null;
         listing.Bedrooms = seed.Bedrooms;
         listing.Bathrooms = seed.Bathrooms;
         listing.SquareFeet = seed.SquareFeet;
+    }
+
+    private static void SeedCustomizableListingContent(RentalListing listing, ListingSeed seed)
+    {
+        listing.Rent = seed.MarketRent;
+        listing.SecurityDeposit = seed.MarketRent > 0 ? seed.MarketRent : null;
         listing.Headline = $"{Rooms(seed.Bedrooms, "bed")} / {Rooms(seed.Bathrooms, "bath")} at {seed.PropertyName} - Unit {seed.UnitNumber}";
         listing.Description = BuildDescription(seed);
-        listing.LeaseTerms ??= "12-month lease";
+        listing.LeaseTerms = "12-month lease";
     }
 
     private static bool ApplyListingRequest(RentalListing listing, SaveListingWorkspaceRequest request)
@@ -337,13 +370,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         return true;
     }
 
-    private static GeneratedFacts CaptureGeneratedFacts(RentalListing listing)
-        => new(listing.PropertyId, listing.Headline, listing.Description, listing.Rent, listing.SecurityDeposit,
-            listing.Bedrooms, listing.Bathrooms, listing.SquareFeet, listing.LeaseTerms);
+    private static SynchronizedUnitDetails CaptureSynchronizedUnitDetails(RentalListing listing)
+        => new(listing.PropertyId, listing.Bedrooms, listing.Bathrooms, listing.SquareFeet);
 
     private sealed record ListingSeed(int PortfolioId, int PropertyId, int UnitId, string PropertyName, string AddressLine1,
         string? AddressLine2, string City, string State, string PostalCode, string UnitNumber,
         decimal Bedrooms, decimal Bathrooms, int? SquareFeet, decimal MarketRent);
-    private sealed record GeneratedFacts(int PropertyId, string Headline, string Description, decimal Rent,
-        decimal? SecurityDeposit, decimal Bedrooms, decimal Bathrooms, int? SquareFeet, string? LeaseTerms);
+    private sealed record SynchronizedUnitDetails(int PropertyId, decimal Bedrooms, decimal Bathrooms, int? SquareFeet);
 }

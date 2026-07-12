@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -18,7 +19,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
 
     public ListingWorkspaceServiceTests()
         => _service = new ListingWorkspaceService(_context.Db, Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>(), TimeProvider.System);
+            Mock.Of<IAuditTrailService>(), new PermissiveInfrastructureWriteGate(), TimeProvider.System);
 
     public void Dispose() => _context.Dispose();
 
@@ -42,7 +43,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     public async Task SaveAsync_ContentChangeMarksPreviouslyPublishedGuidedVersionForRepublish()
     {
         var unit = SeedUnit();
-        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
+        await _service.GenerateAsync(PortfolioId, unit.Id, 42);
         await _service.SaveAsync(PortfolioId, unit.Id, new SaveListingWorkspaceRequest
         {
             ZillowGuided = new SaveGuidedPublicationRequest { MarkCurrentVersionPublished = true },
@@ -53,6 +54,37 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
 
         saved!.ContentVersion.Should().Be(generated!.ContentVersion + 1);
         saved.Publications.Single(item => item.Mode == "Guided").NeedsRepublish.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GenerateAsync_ExistingWorkspaceSyncsUnitDetailsWithoutReplacingCustomizedContent()
+    {
+        var unit = SeedUnit();
+        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
+        var customized = await _service.SaveAsync(PortfolioId, unit.Id, new SaveListingWorkspaceRequest
+        {
+            Headline = "Sunny corner apartment",
+            Description = "User-written listing copy",
+            Rent = 1725m,
+            SecurityDeposit = 900m,
+            LeaseTerms = "Flexible 10- or 12-month lease",
+        }, 42);
+        unit.Bedrooms = 3;
+        unit.SquareFeet = 1100;
+        unit.MarketRent = 1900m;
+        await _context.Db.SaveChangesAsync();
+
+        var synchronized = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
+
+        synchronized.Should().NotBeNull();
+        synchronized!.Headline.Should().Be("Sunny corner apartment");
+        synchronized.Description.Should().Be("User-written listing copy");
+        synchronized.Rent.Should().Be(1725m);
+        synchronized.SecurityDeposit.Should().Be(900m);
+        synchronized.LeaseTerms.Should().Be("Flexible 10- or 12-month lease");
+        synchronized.Bedrooms.Should().Be(3);
+        synchronized.SquareFeet.Should().Be(1100);
+        synchronized.ContentVersion.Should().Be(customized!.ContentVersion + 1);
     }
 
     [Fact]
@@ -110,5 +142,12 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         _context.Db.AddRange(property, unit);
         _context.Db.SaveChanges();
         return unit;
+    }
+
+    private sealed class PermissiveInfrastructureWriteGate : IAtomicInfrastructureWriteGate
+    {
+        public IDisposable BeginPendingFileUploadAdmission() => new Lease();
+        public IDisposable BeginExternalListingSignalAdmission() => new Lease();
+        private sealed class Lease : IDisposable { public void Dispose() { } }
     }
 }

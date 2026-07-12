@@ -166,6 +166,9 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
     IDisposable IAtomicInfrastructureWriteGate.BeginPendingFileUploadAdmission() =>
         BeginInfrastructureRawDml("PendingFileUploads", AtomicRawDmlOperation.Insert);
 
+    IDisposable IAtomicInfrastructureWriteGate.BeginExternalListingSignalAdmission() =>
+        BeginInfrastructureRawDml("ExternalListingSignals", AtomicRawDmlOperation.Insert);
+
     public void GuardRawDml(
         string tableName,
         AtomicRawDmlOperation operation)

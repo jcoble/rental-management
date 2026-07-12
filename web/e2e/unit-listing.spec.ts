@@ -102,7 +102,7 @@ test.describe('Unit listing workspace', () => {
 					response.request().method() === 'POST' &&
 					response.url().includes(`/api/v1/units/${unitId}/listing-workspace/generate`)
 			),
-			page.getByRole('button', { name: /Prepare listing|Refresh from unit/ }).first().click(),
+			page.getByRole('button', { name: /Prepare listing|Sync unit details/ }).first().click(),
 		]);
 		expect(generateResponse.ok(), `prepare failed: ${generateResponse.status()}`).toBeTruthy();
 		await expect(page.getByText('Listing copy', { exact: true })).toBeVisible({ timeout: 15_000 });

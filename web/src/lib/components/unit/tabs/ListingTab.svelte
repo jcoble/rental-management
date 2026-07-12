@@ -106,7 +106,7 @@
 		<div><h2 class="text-lg font-semibold">Listing workspace</h2><p class="text-sm text-muted-foreground">One listing for this unit, published through guided or connected channels.</p></div>
 		<div class="flex gap-2">
 			<Button variant="outline" size="sm" class="gap-1" onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
-				<RefreshCw class="h-4 w-4" /> {workspace ? 'Refresh from unit' : 'Prepare listing'}
+				<RefreshCw class="h-4 w-4" /> {workspace ? 'Sync unit details' : 'Prepare listing'}
 			</Button>
 			<Button size="sm" class="gap-1" onclick={() => saveMutation.mutate(false)} disabled={!canSave || saveMutation.isPending}>
 				<Save class="h-4 w-4" /> Save
@@ -122,6 +122,7 @@
 			<Button class="mt-4 gap-2" onclick={() => generateMutation.mutate()}><RefreshCw class="h-4 w-4" /> Prepare listing</Button>
 		</DetailCard>
 	{:else}
+		<p class="text-xs text-muted-foreground">Syncing updates bedrooms, bathrooms, and square footage. Your listing copy, rent, deposit, and lease terms are never replaced.</p>
 		{#if guided?.needsRepublish}
 			<div class="rounded-lg border border-amber-400/50 bg-amber-400/10 p-3 text-sm"><strong>Changes need republishing.</strong> The saved listing is version {workspace.contentVersion}; Zillow was last confirmed at version {guided.publishedContentVersion}.</div>
 		{/if}
