@@ -21,8 +21,6 @@ public class SecurityDepositService : ISecurityDepositService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IMoveOutStatementPdfGenerator _pdf;
-    private readonly IAuditTrailService _audit;
-    private readonly ICurrentActor _actor;
     private readonly ILogger<SecurityDepositService> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -30,28 +28,15 @@ public class SecurityDepositService : ISecurityDepositService
         RentalCommandDbContext db,
         IFileStorage storage,
         IMoveOutStatementPdfGenerator pdf,
-        IAuditTrailService audit,
-        ICurrentActor actor,
         ILogger<SecurityDepositService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _storage = storage;
         _pdf = pdf;
-        _audit = audit;
-        _actor = actor;
         _logger = logger;
         _timeProvider = timeProvider;
     }
-
-    // Deposits are NOT marked IAuditable (no generic twin), so these explicit rows are the sole audit
-    // for legally-sensitive deposit lifecycle events — holding, move-out deductions, and refunds — and
-    // must carry the actor/IP themselves (resolved from ICurrentActor).
-    private Task LogDepositAsync(int portfolioId, int id, AuditLogOperation operation,
-        string? oldValues, string? newValues, string changeReason, CancellationToken ct) =>
-        _audit.LogAsync(portfolioId, DepositEntityType, id, operation,
-            userId: _actor.UserId, actorLabel: _actor.ActorLabel, ipAddress: _actor.IpAddress,
-            oldValues: oldValues, newValues: newValues, changeReason: changeReason, ct: ct);
 
     public async Task<IReadOnlyList<SecurityDepositAccountResponse>> ListAsync(int portfolioId, int? leaseManagementId, CancellationToken ct = default)
     {
@@ -134,143 +119,6 @@ public class SecurityDepositService : ISecurityDepositService
                 Status = balance.DepositStatus,
                 CreatedAtUtc = deposit.CreatedAtUtc,
             };
-    }
-
-    public async Task<SecurityDepositResponse?> CreateAsync(int portfolioId, CreateDepositRequest request, CancellationToken ct = default)
-    {
-        var existing = await _db.SecurityDepositHoldings
-            .Include(h => h.Lease).ThenInclude(l => l!.Tenant)
-            .FirstOrDefaultAsync(h => h.PortfolioId == portfolioId && h.LeaseId == request.LeaseId, ct);
-        if (existing is not null)
-        {
-            return SecurityDepositResponse.FromEntity(existing);
-        }
-
-        // Verify the lease belongs to this portfolio. Pull the tenant nav too so the create
-        // response carries the tenant name for the grid row (Lease / Tenant column).
-        var lease = await _db.Leases
-            .AsNoTracking()
-            .Include(l => l.Tenant)
-            .FirstOrDefaultAsync(l => l.Id == request.LeaseId && l.PortfolioId == portfolioId, ct);
-
-        if (lease == null)
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var entity = new SecurityDepositHolding
-        {
-            PortfolioId = portfolioId,
-            LeaseId = request.LeaseId,
-            Amount = request.Amount ?? lease.SecurityDeposit,
-            Status = SecurityDepositStatus.Held,
-            HeldAt = now,
-            DeductionsJson = "[]",
-            Notes = request.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.SecurityDepositHoldings.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Created,
-            oldValues: null,
-            newValues: JsonSerializer.Serialize(new
-            {
-                leaseId = entity.LeaseId,
-                amount = entity.Amount,
-                status = entity.Status.ToString(),
-                heldAt = entity.HeldAt,
-            }),
-            changeReason: $"Security deposit held for lease #{entity.LeaseId} (${entity.Amount:0.##})", ct);
-
-        // Reload with navigation for response.
-        entity.Lease = lease;
-        return SecurityDepositResponse.FromEntity(entity);
-    }
-
-    public async Task<SecurityDepositResponse?> AddDeductionAsync(int portfolioId, int id, AddDeductionRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.SecurityDepositHoldings
-            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
-            .FirstOrDefaultAsync(h => h.Id == id && h.PortfolioId == portfolioId, ct);
-
-        if (entity == null)
-            return null;
-
-        // Reject if already returned.
-        if (entity.Status is SecurityDepositStatus.Returned or SecurityDepositStatus.PartiallyReturned)
-            return null;
-
-        var deductions = string.IsNullOrWhiteSpace(entity.DeductionsJson)
-            ? new List<DepositDeduction>()
-            : JsonSerializer.Deserialize<List<DepositDeduction>>(entity.DeductionsJson, _jsonOptions) ?? [];
-
-        var deductionsBefore = entity.DeductionsJson;
-        var totalBefore = entity.DeductionsTotal;
-
-        deductions.Add(new DepositDeduction(request.Reason, request.Amount, request.Notes));
-
-        entity.DeductionsJson = JsonSerializer.Serialize(deductions);
-        entity.DeductionsTotal = deductions.Sum(d => d.Amount);
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Updated,
-            oldValues: JsonSerializer.Serialize(new { deductions = deductionsBefore, totalDeductions = totalBefore }),
-            newValues: JsonSerializer.Serialize(new { deductions = entity.DeductionsJson, totalDeductions = entity.DeductionsTotal }),
-            changeReason: $"Deposit deduction added: {request.Reason} (${request.Amount:0.##})", ct);
-
-        return SecurityDepositResponse.FromEntity(entity);
-    }
-
-    public async Task<SecurityDepositResponse?> ReturnAsync(int portfolioId, int id, ReturnDepositRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.SecurityDepositHoldings
-            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
-            .FirstOrDefaultAsync(h => h.Id == id && h.PortfolioId == portfolioId, ct);
-
-        if (entity == null)
-            return null;
-
-        // Reject if already returned.
-        if (entity.Status is SecurityDepositStatus.Returned or SecurityDepositStatus.PartiallyReturned)
-            return null;
-
-        var totalDeductions = entity.DeductionsTotal;
-        var net = Math.Max(0m, entity.Amount - totalDeductions);
-
-        entity.ReturnedAmount = net;
-        entity.ReturnedAt = _timeProvider.UtcNow();
-        // Terminal status keys off the deductions taken and what (if anything) actually went back:
-        //   no deductions                 -> the full deposit was returned      -> Returned
-        //   deductions, net refund > 0    -> the landlord kept part of it       -> PartiallyReturned
-        //   deductions consume it all (net == 0) -> nothing was returned        -> Withheld
-        entity.Status = totalDeductions <= 0m
-            ? SecurityDepositStatus.Returned
-            : net > 0m
-                ? SecurityDepositStatus.PartiallyReturned
-                : SecurityDepositStatus.Withheld;
-        if (request.Notes != null)
-            entity.Notes = request.Notes;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Updated,
-            oldValues: JsonSerializer.Serialize(new { status = SecurityDepositStatus.Held.ToString(), amount = entity.Amount, returnedAmount = (decimal?)null }),
-            newValues: JsonSerializer.Serialize(new
-            {
-                status = entity.Status.ToString(),
-                amount = entity.Amount,
-                returnedAmount = net,
-                totalDeductions,
-                deductions = entity.DeductionsJson,
-            }),
-            changeReason: $"Deposit returned: ${net:0.##} of ${entity.Amount:0.##} (deductions ${totalDeductions:0.##})", ct);
-
-        return SecurityDepositResponse.FromEntity(entity);
     }
 
     public async Task<byte[]?> GetMoveOutStatementAsync(int portfolioId, int id, CancellationToken ct = default)

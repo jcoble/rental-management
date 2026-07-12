@@ -223,6 +223,22 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
     RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RecordTenantReceiptCommand,
+    RentalCommand.Core.Payments.RecordTenantReceiptResult,
+    RentalCommand.Data.Payments.RecordTenantReceiptHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FundSecurityDepositCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.FundSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.DeductSecurityDepositCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.DeductSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RefundSecurityDepositCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.RefundSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventCommand,
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventResult,
     RentalCommand.Data.Payments.RecordVerifiedProviderPaymentEventHandler>();
