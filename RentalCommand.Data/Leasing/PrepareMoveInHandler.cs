@@ -10,80 +10,27 @@ namespace RentalCommand.Data.Leasing;
 
 /// <summary>Pure database implementation of the pre-possession relationship command.</summary>
 public sealed class PrepareMoveInHandler
-    : IAtomicCommandHandler<PrepareMoveInCommand, PrepareMoveInResult>
+    : IAtomicCommandHandler<PrepareMoveInCommand, PrepareMoveInResult>,
+      IAtomicReplayAuthorizer<PrepareMoveInCommand>
 {
     public async Task<PrepareMoveInResult> HandleAsync(
         PrepareMoveInCommand command,
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
-        ValidateCommandShape(command);
+        var hasInvalidPartyRole = command.Parties.Any(party => !Enum.IsDefined(party.Role));
+        var hasInvalidTermType = !Enum.IsDefined(command.TermType);
+        ValidateAuthorizationShape(command);
 
         // Every command taking both locks uses this order. The Unit id is explicit in the request
         // so no unlocked application read is needed to discover the first aggregate lock.
         await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, command.ApplicationId, ct);
 
-        // Query 1: active session/context/revision, same-assignment capability/property scope, and
-        // application conversion facts in one translated statement.
-        var now = command.PreparedAtUtc;
-        var effectiveAssignments = attempt.Persistence.Query<MembershipRoleAssignment>()
-            .Where(assignment =>
-                assignment.Status == MembershipRoleAssignmentStatus.Active
-                && assignment.SuspendedAtUtc == null
-                && assignment.RevokedAtUtc == null
-                && assignment.EffectiveFromUtc <= now
-                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
-        var application = await attempt.Persistence.Query<RentalApplication>()
-            .Where(candidate =>
-                candidate.Id == command.ApplicationId
-                && candidate.PortfolioId == command.PortfolioId
-                && candidate.PropertyId != null
-                && candidate.UnitId == command.UnitId
-                && candidate.Unit != null
-                && candidate.Unit.PortfolioId == command.PortfolioId
-                && candidate.Unit.PropertyId == candidate.PropertyId
-                && candidate.Property != null
-                && candidate.Property.PortfolioId == command.PortfolioId
-                && attempt.Persistence.Query<AuthSession>().Any(session =>
-                    session.Id == command.AuthSessionId
-                    && session.UserId == command.CreatedByUserId
-                    && session.ActiveAccessContextId == command.AccessContextId
-                    && session.Status == AuthSessionStatus.Active
-                    && session.RevokedAtUtc == null
-                    && session.ExpiresAtUtc > now)
-                && attempt.Persistence.Query<WorkspaceAccessContext>().Any(context =>
-                    context.Id == command.AccessContextId
-                    && context.UserId == command.CreatedByUserId
-                    && context.PortfolioId == command.PortfolioId
-                    && context.AccessRevision == command.ExpectedAccessRevision
-                    && context.Status == WorkspaceAccessContextStatus.Active
-                    && context.SuspendedAtUtc == null
-                    && context.RevokedAtUtc == null)
-                && attempt.Persistence.Query<WorkspaceMembership>().Any(membership =>
-                    membership.AccessContextId == command.AccessContextId
-                    && membership.PortfolioId == command.PortfolioId
-                    && membership.Status == WorkspaceMembershipStatus.Active
-                    && membership.SuspendedAtUtc == null
-                    && membership.RevokedAtUtc == null
-                    && membership.EffectiveFromUtc <= now
-                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
-                    && effectiveAssignments.Any(assignment =>
-                        assignment.WorkspaceMembershipId == membership.Id
-                        && assignment.PortfolioId == command.PortfolioId
-                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                                && assignment.SelectedProperties.Any(scope =>
-                                    scope.PropertyId == candidate.PropertyId
-                                    && scope.PortfolioId == command.PortfolioId)))
-                        && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
-                            || (assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingApplicationsManage)
-                                && assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare)
-                                && assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage))))))
+        // Query 1 is the database wall clock. Security eligibility never trusts command time or a
+        // simulation clock. Query 2 combines the live access envelope and application facts.
+        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var application = await AuthorizedApplications(command, attempt.Persistence, securityNowUtc)
             .Select(candidate => new ApplicationPreparationTarget(
                 candidate,
                 candidate.PropertyId!.Value,
@@ -106,6 +53,25 @@ public sealed class PrepareMoveInHandler
             throw new UnauthorizedAccessException(
                 "The application, property, and unit are not authorized in the current portfolio context.");
         }
+
+        // Typed validation results are persisted only after the current caller has passed the live
+        // access-envelope check, so malformed input cannot reserve a receipt across tenant scope.
+        if (hasInvalidPartyRole)
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidParties,
+                command,
+                "Every party role must be a supported lease relationship role.");
+        }
+        if (hasInvalidTermType)
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidAgreementTerms,
+                command,
+                "The agreement term type is not supported.");
+        }
+
+        ValidateCommandShape(command);
 
         if (application.Entity.PreparedLeaseManagementId.HasValue)
         {
@@ -135,7 +101,7 @@ public sealed class PrepareMoveInHandler
 
         var requestedTenantIds = command.Parties.Select(party => party.TenantId).Distinct().ToArray();
 
-        // Query 2: every chosen Tenant is resolved in one bounded translated query. No per-row reads.
+        // Query 3: every chosen Tenant is resolved in one bounded translated query. No per-row reads.
         var tenants = await attempt.Persistence.Query<Tenant>()
             .Where(candidate =>
                 candidate.PortfolioId == command.PortfolioId
@@ -166,14 +132,34 @@ public sealed class PrepareMoveInHandler
         }
 
         var tenantById = tenants.ToDictionary(tenant => tenant.Id);
-        if (command.Parties.Any(party => party.IsAgreementSigner
-                && string.IsNullOrWhiteSpace(tenantById[party.TenantId].Email)))
+        var normalizedSignerEmails = command.Parties
+            .Where(party => party.IsAgreementSigner)
+            .Select(party => new
+            {
+                party.TenantId,
+                Email = NormalizeSignerEmail(tenantById[party.TenantId].Email),
+            })
+            .ToArray();
+        if (normalizedSignerEmails.Any(signer => signer.Email is null))
         {
             return Empty(
                 PrepareMoveInOutcome.InvalidParties,
                 command,
                 "Every selected agreement signer must have an email address.");
         }
+        if (normalizedSignerEmails
+            .Select(signer => signer.Email!)
+            .Distinct(StringComparer.Ordinal)
+            .Count() != normalizedSignerEmails.Length)
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidParties,
+                command,
+                "Agreement signers must have distinct email addresses.");
+        }
+        var signerEmailByTenantId = normalizedSignerEmails.ToDictionary(
+            signer => signer.TenantId,
+            signer => signer.Email!);
 
         var relationship = new LeaseManagement
         {
@@ -251,7 +237,7 @@ public sealed class PrepareMoveInHandler
                     TenantId = party.TenantId,
                     SignerRole = ToSignerRole(party.Role),
                     NameSnapshot = $"{tenant.FirstName} {tenant.LastName}".Trim(),
-                    EmailSnapshot = tenant.Email!.Trim(),
+                    EmailSnapshot = signerEmailByTenantId[party.TenantId],
                     SigningOrder = party.SigningOrder!.Value,
                     IsRequired = party.IsRequiredSigner,
                 };
@@ -333,12 +319,101 @@ public sealed class PrepareMoveInHandler
             null);
     }
 
-    private static void ValidateCommandShape(PrepareMoveInCommand command)
+    public async Task AuthorizeReplayAsync(
+        PrepareMoveInCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        ValidateAuthorizationShape(command);
+        var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var authorized = await AuthorizedApplications(command, persistence, securityNowUtc)
+            .AnyAsync(ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(
+                "The application, property, and unit are not authorized in the current portfolio context.");
+        }
+    }
+
+    private static IQueryable<RentalApplication> AuthorizedApplications(
+        PrepareMoveInCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime securityNowUtc)
+    {
+        var effectiveAssignments = persistence.Query<MembershipRoleAssignment>()
+            .Where(assignment =>
+                assignment.Status == MembershipRoleAssignmentStatus.Active
+                && assignment.SuspendedAtUtc == null
+                && assignment.RevokedAtUtc == null
+                && assignment.EffectiveFromUtc <= securityNowUtc
+                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
+
+        return persistence.Query<RentalApplication>()
+            .Where(candidate =>
+                candidate.Id == command.ApplicationId
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.PropertyId != null
+                && candidate.UnitId == command.UnitId
+                && candidate.Unit != null
+                && candidate.Unit.PortfolioId == command.PortfolioId
+                && candidate.Unit.PropertyId == candidate.PropertyId
+                && candidate.Property != null
+                && candidate.Property.PortfolioId == command.PortfolioId
+                && persistence.Query<AuthSession>().Any(session =>
+                    session.Id == command.AuthSessionId
+                    && session.UserId == command.CreatedByUserId
+                    && session.ActiveAccessContextId == command.AccessContextId
+                    && session.Status == AuthSessionStatus.Active
+                    && session.RevokedAtUtc == null
+                    && session.ExpiresAtUtc > securityNowUtc)
+                && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                    context.Id == command.AccessContextId
+                    && context.UserId == command.CreatedByUserId
+                    && context.PortfolioId == command.PortfolioId
+                    && context.AccessRevision == command.ExpectedAccessRevision
+                    && context.Status == WorkspaceAccessContextStatus.Active
+                    && context.SuspendedAtUtc == null
+                    && context.RevokedAtUtc == null)
+                && persistence.Query<WorkspaceMembership>().Any(membership =>
+                    membership.AccessContextId == command.AccessContextId
+                    && membership.PortfolioId == command.PortfolioId
+                    && membership.Status == WorkspaceMembershipStatus.Active
+                    && membership.SuspendedAtUtc == null
+                    && membership.RevokedAtUtc == null
+                    && membership.EffectiveFromUtc <= securityNowUtc
+                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > securityNowUtc)
+                    && effectiveAssignments.Any(assignment =>
+                        assignment.WorkspaceMembershipId == membership.Id
+                        && assignment.PortfolioId == command.PortfolioId
+                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                                && assignment.SelectedProperties.Any(scope =>
+                                    scope.PropertyId == candidate.PropertyId
+                                    && scope.PortfolioId == command.PortfolioId)))
+                        && (assignment.RoleProfile!.Capabilities.Any(capability =>
+                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                            || (assignment.RoleProfile.Capabilities.Any(capability =>
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingApplicationsManage)
+                                && assignment.RoleProfile.Capabilities.Any(capability =>
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare)
+                                && assignment.RoleProfile.Capabilities.Any(capability =>
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage))))));
+    }
+
+    private static void ValidateAuthorizationShape(PrepareMoveInCommand command)
     {
         if (command.ApplicationId <= 0 || command.UnitId <= 0 || command.PortfolioId <= 0
             || command.CreatedByUserId <= 0 || command.AuthSessionId == Guid.Empty
-            || command.AccessContextId <= 0 || command.ExpectedAccessRevision <= 0
-            || command.PreparedAtUtc == default || command.PartyEffectiveFrom == default
+            || command.AccessContextId <= 0 || command.ExpectedAccessRevision <= 0)
+        {
+            throw new ArgumentException("Portfolio, application, unit, and actor ids are required.");
+        }
+    }
+
+    private static void ValidateCommandShape(PrepareMoveInCommand command)
+    {
+        ValidateAuthorizationShape(command);
+        if (command.PreparedAtUtc == default || command.PartyEffectiveFrom == default
             || command.TermStartOn == default)
         {
             throw new ArgumentException("Portfolio, application, unit, and actor ids are required.");
@@ -398,6 +473,9 @@ public sealed class PrepareMoveInHandler
         LeaseManagementPartyRole.Guarantor => LeaseLegalSignerRole.Guarantor,
         _ => throw new ArgumentOutOfRangeException(nameof(role), "Occupants cannot be agreement signers."),
     };
+
+    private static string? NormalizeSignerEmail(string? email) =>
+        string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
 
     private static AtomicSemanticAudit CreatedAudit(
         PrepareMoveInCommand command,

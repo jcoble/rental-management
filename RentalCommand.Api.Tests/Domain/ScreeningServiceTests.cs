@@ -414,6 +414,9 @@ public class ScreeningServiceTests : IDisposable
         public IAtomicPendingFileUploadPersistence PendingFileUploads =>
             Mock.Of<IAtomicPendingFileUploadPersistence>();
 
+        public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException("The screening-only atomic test double has no database clock.");
+
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
         public void Add<TEntity>(TEntity entity) where TEntity : class => _db.Add(entity);
         public void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class => _db.AddRange(entities);
