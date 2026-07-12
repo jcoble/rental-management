@@ -122,13 +122,37 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        await Task.CompletedTask;
-        return StatusCode(
-            StatusCodes.Status503ServiceUnavailable,
-            new
+        var result = await _authService.RegisterAsync(request);
+        if (!result.Success)
+        {
+            if (result.ErrorType == AuthErrorType.BadRequest)
             {
-                error = "Registration is unavailable until workspace membership provisioning uses the canonical atomic authority command.",
+                return BadRequest(new
+                {
+                    error = result.Error ?? "Registration failed",
+                    details = result.ValidationErrors,
+                });
+            }
+
+            return Unauthorized(new { error = result.Error ?? "Registration failed" });
+        }
+
+        const string message =
+            "Registration successful. Please check your email to verify your account.";
+        if (ShouldExposeDevTokens)
+        {
+            _logger.LogWarning(
+                "Auth:ExposeDevTokens is enabled: returning emailConfirmationToken for user {UserId}. This must never be enabled outside local development.",
+                result.UserId);
+            return Ok(new
+            {
+                message,
+                userId = result.UserId,
+                emailConfirmationToken = result.EmailConfirmationToken,
             });
+        }
+
+        return Ok(new { message });
     }
 
     [HttpPost("refresh")]

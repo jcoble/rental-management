@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
@@ -19,7 +21,7 @@ namespace RentalCommand.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/admin/audit")]
-[Authorize(Roles = "Admin")]
+[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.SecurityManage)]
 [Produces("application/json")]
 public class AdminAuditController : ManagementControllerBase
 {

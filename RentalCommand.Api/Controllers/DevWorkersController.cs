@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
@@ -21,7 +23,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/dev/workers")]
 [SimulationOnly]
-[Authorize(Roles = "Admin")]
+[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.SecurityManage)]
 [Produces("application/json")]
 public sealed class DevWorkersController : ControllerBase
 {

@@ -68,6 +68,7 @@ public class AuthUserResult
 public interface IAuthService
 {
     Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> LoginExternalAsync(int userId, int? accessContextId = null, CancellationToken ct = default);
     Task<AuthResult> RegisterAsync(RegisterRequest request);
     Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
     Task<AuthUserResult> ConfirmEmailAsync(string userId, string token);
@@ -102,7 +103,6 @@ public class AuthService : IAuthService
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
-    private readonly IJwtTokenService _tokenService;
     private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
     private readonly ICanonicalAccessTokenService _canonicalTokens;
     private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
@@ -112,14 +112,13 @@ public class AuthService : IAuthService
     private readonly IAuthEmailSender _emailSender;
     private readonly RentalCommandDbContext _db;
     private readonly IAuditTrailService _audit;
-    private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
+    private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly ILogger<AuthService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
         SignInManager<ApplicationUser> signInManager,
-        IJwtTokenService tokenService,
         IAtomicAuthSessionCredentialService atomicCredentials,
         ICanonicalAccessTokenService canonicalTokens,
         IEffectiveAccessContextSelectionQuery contextSelection,
@@ -129,13 +128,12 @@ public class AuthService : IAuthService
         IAuthEmailSender emailSender,
         RentalCommandDbContext db,
         IAuditTrailService audit,
-        Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
+        ICanonicalAccountBootstrapService accountBootstrap,
         ILogger<AuthService> logger,
         TimeProvider timeProvider)
     {
         _userManager = userManager;
         _signInManager = signInManager;
-        _tokenService = tokenService;
         _atomicCredentials = atomicCredentials;
         _canonicalTokens = canonicalTokens;
         _contextSelection = contextSelection;
@@ -145,7 +143,7 @@ public class AuthService : IAuthService
         _emailSender = emailSender;
         _db = db;
         _audit = audit;
-        _selfOwnerProvisioner = selfOwnerProvisioner;
+        _accountBootstrap = accountBootstrap;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -191,8 +189,30 @@ public class AuthService : IAuthService
             return AuthResult.Fail("EMAIL_NOT_VERIFIED: Please verify your email address before logging in.");
         }
 
+        return await StartCanonicalLoginAsync(user, accessContextId);
+    }
+
+    public async Task<AuthResult> LoginExternalAsync(
+        int userId,
+        int? accessContextId = null,
+        CancellationToken ct = default)
+    {
+        var user = await _userManager.FindByIdAsync(userId.ToString());
+        if (user is null || !user.EmailConfirmed)
+        {
+            return AuthResult.Fail("The external account is unavailable.");
+        }
+
+        return await StartCanonicalLoginAsync(user, accessContextId, ct);
+    }
+
+    private async Task<AuthResult> StartCanonicalLoginAsync(
+        ApplicationUser user,
+        int? accessContextId,
+        CancellationToken ct = default)
+    {
         var now = _timeProvider.UtcNow();
-        var contexts = await _contextSelection.ListAsync(user.Id, now);
+        var contexts = await _contextSelection.ListAsync(user.Id, now, ct);
         if (contexts.Count == 0)
         {
             return AuthResult.Fail("This account has no active workspace access.");
@@ -214,7 +234,7 @@ public class AuthService : IAuthService
         string? challengeBearer = null;
         if (contexts.Count > 1)
         {
-            var challenge = await _atomicCredentials.IssueContextSelectionChallengeAsync(user.Id);
+            var challenge = await _atomicCredentials.IssueContextSelectionChallengeAsync(user.Id, ct);
             if (!challenge.Issued || challenge.ChallengeBearer is null)
             {
                 return AuthResult.Fail("Unable to authorize workspace selection.");
@@ -225,7 +245,7 @@ public class AuthService : IAuthService
         }
 
         var session = await _atomicCredentials.StartAsync(new AtomicAuthSessionStartRequest(
-            Guid.NewGuid(), user.Id, selected.AccessContextId, challengeId, challengeBearer));
+            Guid.NewGuid(), user.Id, selected.AccessContextId, challengeId, challengeBearer), ct);
         if (!session.Started || session.RefreshBearer is null)
         {
             return AuthResult.Fail("The selected workspace is no longer available.");
@@ -241,118 +261,26 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> RegisterAsync(RegisterRequest request)
     {
-        var existingUser = await _userManager.FindByEmailAsync(request.Email);
-        if (existingUser != null)
+        var bootstrap = await _accountBootstrap.CreateAsync(
+            request.Email,
+            request.DisplayName,
+            request.Password,
+            emailConfirmed: false);
+        if (!bootstrap.Succeeded)
         {
-            return AuthResult.Fail("Email is already registered", AuthErrorType.BadRequest);
+            var duplicate = bootstrap.Errors.Contains("Email is already registered");
+            return duplicate
+                ? AuthResult.Fail("Email is already registered", AuthErrorType.BadRequest)
+                : AuthResult.ValidationFail("Registration failed", bootstrap.Errors);
         }
 
-        var user = new ApplicationUser
-        {
-            UserName = request.Email,
-            Email = request.Email,
-            EmailConfirmed = false, // email-confirm gate
-            DisplayName = request.DisplayName,
-            CreatedAt = _timeProvider.UtcNow()
-        };
-
-        var createResult = await _userManager.CreateAsync(user, request.Password);
-        if (!createResult.Succeeded)
-        {
-            return AuthResult.ValidationFail(
-                "Registration failed",
-                createResult.Errors.Select(e => e.Description));
-        }
-
-        // New signups get an EMPTY portfolio with the first-login Sandbox-vs-Live choice still PENDING.
-        // We deliberately do NOT auto-seed demo data here: the user is asked, on first login, whether to
-        // "Explore with sample data (Sandbox)" or "Set up my real portfolio (Live)", and the demo seed
-        // runs only if they pick Sandbox (POST /api/v1/portfolio/onboarding-choice). Resilient: a
-        // provisioning failure must NOT fail registration — the account is still created and usable.
-        await ProvisionPendingPortfolioAsync(user);
-
+        var user = bootstrap.User!;
         var emailToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-
         await _emailSender.SendEmailConfirmationAsync(user, emailToken);
-
-        _logger.LogInformation("New user registered: {Email} (id {UserId}). Awaiting email verification.", request.Email, user.Id);
-
+        _logger.LogInformation(
+            "Registered user {Email} (id {UserId}) with one canonical Administrator context; awaiting email verification.",
+            request.Email, user.Id);
         return AuthResult.RegistrationPending(user.Id, emailToken);
-    }
-
-    /// <summary>
-    /// Creates a fresh EMPTY <see cref="Portfolio"/> for a just-registered user with the first-login
-    /// Sandbox-vs-Live choice still PENDING, scopes the user to it, and provisions the self-owner + Admin
-    /// role + staff row. It deliberately does NOT seed demo data and does NOT set <c>IsSandbox</c>: the
-    /// account stays a blank Live-shaped portfolio until the user makes the first-login choice. Picking
-    /// "Sandbox" later seeds the demo data and flips the flag (POST /portfolio/onboarding-choice). Picking
-    /// "Live" keeps it empty. Best-effort and self-contained: any failure is logged and swallowed so it can
-    /// never fail the registration that already succeeded.
-    /// </summary>
-    private async Task ProvisionPendingPortfolioAsync(ApplicationUser user)
-    {
-        try
-        {
-            var now = _timeProvider.UtcNow();
-            var portfolio = new Portfolio
-            {
-                Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
-                ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
-                Status = PortfolioStatus.Active,
-                Currency = "USD",
-                // Pending the first-login choice: not a sandbox yet, no demo data. Settings carries the
-                // pending marker so the landing logic routes the user to the choice gate.
-                IsSandbox = false,
-                SandboxSeededAtUtc = null,
-                Settings = Domain.PortfolioOnboarding.WriteChoice(null, Domain.OnboardingChoice.Pending),
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Portfolios.Add(portfolio);
-            await _db.SaveChangesAsync();
-
-            // Scope the new user to their portfolio so their first JWT carries this portfolioId.
-            user.PortfolioId = portfolio.Id;
-            await _userManager.UpdateAsync(user);
-
-            // The landlord IS the first owner: auto-create a primary self-owner from their account and
-            // link it, so onboarding never needs a separate "add an owner" step. Idempotent; needed for
-            // both the Sandbox and Live paths (the Go-Live wipe later recreates it).
-            await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, portfolio.Id);
-
-            // A self-service owner administers their own portfolio: grant the Admin role + a UserAccount
-            // staff row (mirrors the seeded admin). Without a role the nav only shows Dashboard + Help.
-            if (!await _userManager.IsInRoleAsync(user, nameof(UserRole.Admin)))
-            {
-                await _userManager.AddToRoleAsync(user, nameof(UserRole.Admin));
-            }
-            if (!await _db.UserAccounts.AnyAsync(a => a.PortfolioId == portfolio.Id && a.Email == user.Email))
-            {
-                _db.UserAccounts.Add(new UserAccount
-                {
-                    PortfolioId = portfolio.Id,
-                    Email = user.Email!,
-                    DisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName!,
-                    PasswordHash = string.Empty, // Identity owns the credential
-                    Role = UserRole.Admin,
-                    IsActive = true,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                });
-                await _db.SaveChangesAsync();
-            }
-
-            _logger.LogInformation(
-                "Provisioned pending portfolio {PortfolioId} (Admin role + account, awaiting Sandbox/Live choice) for new user {Email} (id {UserId}).",
-                portfolio.Id, user.Email, user.Id);
-        }
-        catch (Exception ex)
-        {
-            // Never fail registration over portfolio provisioning — log and continue.
-            _logger.LogError(ex,
-                "Failed to provision pending portfolio for new user {Email} (id {UserId}); registration still succeeds.",
-                user.Email, user.Id);
-        }
     }
 
     public async Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)

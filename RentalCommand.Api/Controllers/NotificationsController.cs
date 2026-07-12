@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -57,7 +59,7 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpPost("broadcast")]
-    [Authorize(Roles = "Admin,Manager,Owner")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     [ProducesResponseType(typeof(NotificationResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<NotificationResponse>> Broadcast(
         [FromBody] CreateBroadcastNotificationRequest request,

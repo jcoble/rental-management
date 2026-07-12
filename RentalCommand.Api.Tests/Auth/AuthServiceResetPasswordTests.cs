@@ -110,7 +110,6 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
     private AuthService CreateService() => new(
         _userManager,
         null!,
-        Mock.Of<IJwtTokenService>(),
         Mock.Of<IAtomicAuthSessionCredentialService>(),
         Mock.Of<ICanonicalAccessTokenService>(),
         Mock.Of<IEffectiveAccessContextSelectionQuery>(),
@@ -126,7 +125,7 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         Mock.Of<IAuthEmailSender>(),
         _ctx.Db,
         new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
-        Mock.Of<ISelfOwnerProvisioner>(),
+        Mock.Of<ICanonicalAccountBootstrapService>(),
         NullLogger<AuthService>.Instance,
         TimeProvider.System);
 

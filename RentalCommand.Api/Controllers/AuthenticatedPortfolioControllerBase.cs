@@ -64,7 +64,13 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
         return accessContext.UserId;
     }
 
-    protected IEnumerable<string> GetRoles() => Array.Empty<string>();
+    /// <summary>
+    /// True when the validated context has a Team membership. This is only a relationship-shape
+    /// signal; endpoint admission still belongs to canonical capability authorization.
+    /// </summary>
+    protected bool HasWorkspaceMembership() =>
+        HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+        value is ActiveAccessContext { WorkspaceMembershipId: not null };
 
     /// <summary>
     /// Tenant id from the <c>tenantId</c> claim, or <c>null</c> when the caller is not a tenant

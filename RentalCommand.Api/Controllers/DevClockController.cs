@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -45,7 +47,7 @@ public sealed class DevClockController : ControllerBase
 
     /// <summary>Set the clock to a specific instant in <c>offset</c> (default) or <c>frozen</c> mode.</summary>
     [HttpPost("set")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     public async Task<ActionResult<ClockStateResponse>> Set([FromBody] SetClockRequest request, CancellationToken ct)
     {
         DateTime instant;
@@ -81,7 +83,7 @@ public sealed class DevClockController : ControllerBase
 
     /// <summary>Shift the simulated clock forward (or back, with negatives) by a delta.</summary>
     [HttpPost("advance")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     public async Task<ActionResult<ClockStateResponse>> Advance([FromBody] AdvanceClockRequest request, CancellationToken ct)
     {
         var delta = new TimeSpan(request.Days, request.Hours, request.Minutes, request.Seconds);
@@ -105,7 +107,7 @@ public sealed class DevClockController : ControllerBase
 
     /// <summary>Freeze the clock at the current simulated instant.</summary>
     [HttpPost("freeze")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     public async Task<ActionResult<ClockStateResponse>> Freeze(CancellationToken ct)
     {
         var simNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -120,7 +122,7 @@ public sealed class DevClockController : ControllerBase
 
     /// <summary>Resume ticking from the currently-frozen instant (re-anchored Offset).</summary>
     [HttpPost("unfreeze")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     public async Task<ActionResult<ClockStateResponse>> Unfreeze(CancellationToken ct)
     {
         var simNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -136,7 +138,7 @@ public sealed class DevClockController : ControllerBase
 
     /// <summary>Return to real time (clears any timezone override).</summary>
     [HttpPost("reset")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     public async Task<ActionResult<ClockStateResponse>> Reset(CancellationToken ct)
     {
         var row = await LoadRowAsync(ct);
