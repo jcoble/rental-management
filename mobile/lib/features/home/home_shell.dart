@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -128,6 +129,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _TabItem(label: 'Inbox', icon: Symbols.inbox_rounded),
   ];
 
+  static const _tabIds = [
+    MobileShellTabId.today,
+    MobileShellTabId.rentals,
+    MobileShellTabId.money,
+    MobileShellTabId.work,
+    MobileShellTabId.inbox,
+  ];
+
   static const _tenantTabs = [
     _TabItem(label: 'Home', icon: Symbols.home_rounded),
     _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
@@ -157,7 +166,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     Object owner,
     bool hidden,
   ) {
-    final index = _tabIndexFor(tab);
+    final index = _tabIds.indexOf(tab);
     if (index >= _quickActionControllers.length) return;
     _quickActionControllers[index].setHidden(owner, hidden);
   }
@@ -169,36 +178,57 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
   }
 
-  int _tabIndexFor(MobileShellTabId tab) {
-    return switch (tab) {
-      MobileShellTabId.today => 0,
-      MobileShellTabId.rentals => 1,
-      MobileShellTabId.money => 2,
-      MobileShellTabId.work => 3,
-      MobileShellTabId.inbox => 4,
-    };
+  List<MobileShellTabId> _availableLandlordTabs(AuthStateAuthenticated auth) {
+    final capabilities = auth.capabilities;
+    bool hasAny(Iterable<String> keys) => keys.any(capabilities.contains);
+    final tabs = <MobileShellTabId>[
+      if (auth.activeExperience == WorkspaceExperience.management)
+        MobileShellTabId.today,
+      if (hasAny(const [
+        'rentals.read',
+        'rentals.manage',
+        'leasing.listings.manage',
+        'leasing.applications.manage',
+      ]))
+        MobileShellTabId.rentals,
+      if (hasAny(const [
+        'money.balances.read',
+        'money.payments.manage',
+        'money.expenses.manage',
+        'money.owner-reports.read',
+      ]))
+        MobileShellTabId.money,
+      if (hasAny(const [
+        'work.read',
+        'work.manage',
+        'maintenance.assigned-work.read',
+        'maintenance.assigned-work.update',
+      ]))
+        MobileShellTabId.work,
+      if (hasAny(const [
+        'rentals.read',
+        'work.read',
+        'leasing.applications.manage',
+        'maintenance.assigned-work.converse',
+      ]))
+        MobileShellTabId.inbox,
+    ];
+    return tabs.isEmpty ? const [MobileShellTabId.today] : tabs;
   }
 
-  MobileShellTabId? _landlordTabForIndex(int index) {
-    return switch (index) {
-      0 => MobileShellTabId.today,
-      1 => MobileShellTabId.rentals,
-      2 => MobileShellTabId.money,
-      3 => MobileShellTabId.work,
-      4 => MobileShellTabId.inbox,
-      _ => null,
-    };
-  }
-
-  void _handleBottomNavigationSelected(int index, {required bool tenantMode}) {
+  void _handleBottomNavigationSelected(
+    int index, {
+    required bool tenantMode,
+    required List<MobileShellTabId> landlordTabs,
+  }) {
     if (_selectedIndex != index) {
       setState(() => _selectedIndex = index);
       return;
     }
 
     if (tenantMode) return;
-    final tab = _landlordTabForIndex(index);
-    if (tab == null) return;
+    if (index >= landlordTabs.length) return;
+    final tab = landlordTabs[index];
     _domainNavigators[tab]?.popToCurrentRoot();
   }
 
@@ -209,7 +239,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   }) {
     final authState = ref.read(authControllerProvider);
     final tenantMode =
-        authState is AuthStateAuthenticated && authState.user.isTenant;
+        authState is AuthStateAuthenticated && authState.isTenantExperience;
     if (tenantMode) {
       if (detailBuilder != null) {
         Navigator.of(
@@ -218,8 +248,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
       }
       return;
     }
+    if (authState is! AuthStateAuthenticated) return;
 
-    final index = _tabIndexFor(tab);
+    final availableTabs = _availableLandlordTabs(authState);
+    final index = availableTabs.indexOf(tab);
+    if (index < 0) return;
     if (_selectedIndex != index) {
       setState(() => _selectedIndex = index);
     }
@@ -287,6 +320,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
         );
         return true;
       case '/notifications':
+        final auth = ref.read(authControllerProvider);
+        if (auth is AuthStateAuthenticated && auth.isTenantExperience) {
+          Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => const NotificationsInboxScreen(),
+            ),
+          );
+          return true;
+        }
         _openShellTab(
           MobileShellTabId.inbox,
           destination: MobileDestinationId.notifications,
@@ -441,7 +483,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // Voice commands are landlord-facing for now (matches on-device testing).
       final authState = ref.read(authControllerProvider);
       final isTenant =
-          authState is AuthStateAuthenticated && authState.user.isTenant;
+          authState is AuthStateAuthenticated && authState.isTenantExperience;
       if (isTenant) {
         toast("Voice commands aren't available for tenant accounts yet.");
         ref.read(pendingVoiceCommandProvider.notifier).consume();
@@ -473,6 +515,64 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
   }
 
+  _TabItem _tabItemFor(MobileShellTabId tab) => _tabs[_tabIds.indexOf(tab)];
+
+  Widget _buildLandlordTab(
+    MobileShellTabId tab,
+    AuthUser? user,
+    List<MobileShellTabId> availableTabs,
+  ) {
+    final staticIndex = _tabIds.indexOf(tab);
+    return _quickActionScope(staticIndex, switch (tab) {
+      MobileShellTabId.today => _HomeTab(
+        user: user,
+        onOpenCapture: _openCapture,
+        onOpenOverdue: () => _openShellTab(
+          MobileShellTabId.money,
+          destination: MobileDestinationId.moneyOverview,
+          detailBuilder: (_) => const OverdueScreen(),
+        ),
+        onSwitchToTab: (requestedStaticIndex) {
+          if (requestedStaticIndex < 0 ||
+              requestedStaticIndex >= _tabIds.length) {
+            return;
+          }
+          final visibleIndex = availableTabs.indexOf(
+            _tabIds[requestedStaticIndex],
+          );
+          if (visibleIndex >= 0) {
+            setState(() => _selectedIndex = visibleIndex);
+          }
+        },
+        onOpenAssistant: _openAssistant,
+      ),
+      MobileShellTabId.rentals => RentalsHubScreen(
+        onControllerReady: (controller) =>
+            _registerDomain(MobileShellTabId.rentals, controller),
+        onControllerDisposed: (controller) =>
+            _unregisterDomain(MobileShellTabId.rentals, controller),
+      ),
+      MobileShellTabId.money => MoneyHubScreen(
+        onControllerReady: (controller) =>
+            _registerDomain(MobileShellTabId.money, controller),
+        onControllerDisposed: (controller) =>
+            _unregisterDomain(MobileShellTabId.money, controller),
+      ),
+      MobileShellTabId.work => WorkHubScreen(
+        onControllerReady: (controller) =>
+            _registerDomain(MobileShellTabId.work, controller),
+        onControllerDisposed: (controller) =>
+            _unregisterDomain(MobileShellTabId.work, controller),
+      ),
+      MobileShellTabId.inbox => InboxHubScreen(
+        onControllerReady: (controller) =>
+            _registerDomain(MobileShellTabId.inbox, controller),
+        onControllerDisposed: (controller) =>
+            _unregisterDomain(MobileShellTabId.inbox, controller),
+      ),
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // Keep the realtime watcher alive while the shell is in the tree. It also
@@ -489,24 +589,39 @@ class _HomeShellState extends ConsumerState<HomeShell>
       if (next != null) _handlePushLink(next);
     });
 
+    ref.listen<AuthState>(authControllerProvider, (previous, next) {
+      if (previous is! AuthStateAuthenticated ||
+          next is! AuthStateAuthenticated) {
+        return;
+      }
+      final previousContext = previous.access.selectedContext;
+      final nextContext = next.access.selectedContext;
+      if (previousContext.accessContextId == nextContext.accessContextId &&
+          previousContext.accessRevision == nextContext.accessRevision) {
+        return;
+      }
+      _selectedIndex = 0;
+      unawaited(resetAccessScopedClient(ref));
+    });
+
     final authState = ref.watch(authControllerProvider);
-    final user = authState is AuthStateAuthenticated ? authState.user : null;
-    final tenantMode = user?.isTenant ?? false;
-    // A Tenant-role account with no linked tenantId can't load any /portal/* data
-    // (every call 403s), so show a friendly "not linked yet" screen instead of a
-    // dashboard that error-spams every card. Mirrors web's /portal/unlinked.
-    if (user != null && user.isTenant && user.tenantId == null) {
-      return _TenantUnlinkedScreen(
-        onSignOut: () => ref.read(authControllerProvider.notifier).logout(),
-      );
+    if (authState is! AuthStateAuthenticated) {
+      return const SizedBox.shrink();
     }
-    final tabs = tenantMode ? _tenantTabs : _tabs;
+    final user = authState.user;
+    final tenantMode = authState.isTenantExperience;
+    final landlordTabs = tenantMode
+        ? const <MobileShellTabId>[]
+        : _availableLandlordTabs(authState);
+    final tabs = tenantMode
+        ? _tenantTabs
+        : landlordTabs.map(_tabItemFor).toList(growable: false);
     final selectedIndex = _selectedIndex >= tabs.length
         ? tabs.length - 1
         : _selectedIndex;
     final quickActionController = tenantMode
         ? null
-        : _quickActionControllers[selectedIndex];
+        : _quickActionControllers[_tabIds.indexOf(landlordTabs[selectedIndex])];
 
     return MobileShellNavigation(
       controller: _shellNavigator,
@@ -526,79 +641,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
                         const _TenantMaintenanceTab(),
                         const _TenantMoreTab(),
                       ]
-                    : [
-                        _quickActionScope(
-                          0,
-                          _HomeTab(
-                            user: user,
-                            onOpenCapture: _openCapture,
-                            onOpenOverdue: () => _openShellTab(
-                              MobileShellTabId.money,
-                              destination: MobileDestinationId.moneyOverview,
-                              detailBuilder: (_) => const OverdueScreen(),
-                            ),
-                            onSwitchToTab: (index) =>
-                                setState(() => _selectedIndex = index),
-                            onOpenAssistant: _openAssistant,
-                          ),
-                        ),
-                        _quickActionScope(
-                          1,
-                          RentalsHubScreen(
-                            onControllerReady: (controller) => _registerDomain(
-                              MobileShellTabId.rentals,
-                              controller,
-                            ),
-                            onControllerDisposed: (controller) =>
-                                _unregisterDomain(
-                                  MobileShellTabId.rentals,
-                                  controller,
-                                ),
-                          ),
-                        ),
-                        _quickActionScope(
-                          2,
-                          MoneyHubScreen(
-                            onControllerReady: (controller) => _registerDomain(
-                              MobileShellTabId.money,
-                              controller,
-                            ),
-                            onControllerDisposed: (controller) =>
-                                _unregisterDomain(
-                                  MobileShellTabId.money,
-                                  controller,
-                                ),
-                          ),
-                        ),
-                        _quickActionScope(
-                          3,
-                          WorkHubScreen(
-                            onControllerReady: (controller) => _registerDomain(
-                              MobileShellTabId.work,
-                              controller,
-                            ),
-                            onControllerDisposed: (controller) =>
-                                _unregisterDomain(
-                                  MobileShellTabId.work,
-                                  controller,
-                                ),
-                          ),
-                        ),
-                        _quickActionScope(
-                          4,
-                          InboxHubScreen(
-                            onControllerReady: (controller) => _registerDomain(
-                              MobileShellTabId.inbox,
-                              controller,
-                            ),
-                            onControllerDisposed: (controller) =>
-                                _unregisterDomain(
-                                  MobileShellTabId.inbox,
-                                  controller,
-                                ),
-                          ),
-                        ),
-                      ],
+                    : landlordTabs
+                          .map(
+                            (tab) => _buildLandlordTab(tab, user, landlordTabs),
+                          )
+                          .toList(growable: false),
               ),
             ),
           ],
@@ -629,8 +676,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
           tabs: tabs,
           selectedIndex: selectedIndex,
           centerGap: false,
-          onSelected: (index) =>
-              _handleBottomNavigationSelected(index, tenantMode: tenantMode),
+          onSelected: (index) => _handleBottomNavigationSelected(
+            index,
+            tenantMode: tenantMode,
+            landlordTabs: landlordTabs,
+          ),
         ),
       ),
     );
@@ -694,65 +744,6 @@ class _SandboxIndicator extends ConsumerWidget {
                   Icons.arrow_forward_rounded,
                   size: 15,
                   color: scheme.onTertiaryContainer,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Resident-portal "account not linked" screen. Shown in place of the tenant
-/// dashboard when a Tenant-role account has no linked tenantId (so every
-/// /portal/* call would 403). Mirrors web's /portal/unlinked: a friendly
-/// explanation + a sign-out, rather than an error-spamming dashboard.
-class _TenantUnlinkedScreen extends StatelessWidget {
-  const _TenantUnlinkedScreen({required this.onSignOut});
-
-  final VoidCallback onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.link_off_rounded,
-                  size: 56,
-                  color: cs.onSurfaceVariant,
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Account not linked yet',
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Your account isn’t connected to a tenant record yet, so there’s '
-                  'nothing to show here. Please contact your landlord or property '
-                  'manager to finish setting up your resident portal.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 28),
-                OutlinedButton.icon(
-                  onPressed: onSignOut,
-                  icon: const Icon(Icons.logout_outlined),
-                  label: const Text('Sign out'),
                 ),
               ],
             ),
@@ -1045,7 +1036,9 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busyAutopayAccountId = tenantAccountId);
     try {
-      await ref.read(tenantPortalRepositoryProvider).autopayCancel(tenantAccountId);
+      await ref
+          .read(tenantPortalRepositoryProvider)
+          .autopayCancel(tenantAccountId);
       ref.invalidate(tenantAutopayStatusProvider(tenantAccountId));
       messenger
         ..hideCurrentSnackBar()
@@ -1067,15 +1060,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tenant Dashboard'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_outlined),
-            tooltip: 'Sign out',
-            onPressed: () async {
-              await ref.read(authControllerProvider.notifier).logout();
-            },
-          ),
-        ],
+        actions: const [MobileAccountMenu()],
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -1124,7 +1109,8 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
             final unreadNotifications = data.notifications
                 .where((n) => !n.isRead)
                 .length;
-            final primaryTenantAccountId = data.payments.firstOrNull?.tenantAccountId;
+            final primaryTenantAccountId =
+                data.payments.firstOrNull?.tenantAccountId;
 
             return ListView(
               padding: const EdgeInsets.all(20),

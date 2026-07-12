@@ -9,7 +9,7 @@
 		SmsProviderMeta,
 		LeaseEndAutoAction,
 	} from '$lib/api/types/notification';
-	import { getAuthState, currentUserIsAdmin, hasAnyRole } from '$lib/stores/auth.svelte';
+	import { getAuthState, hasCapability } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -51,8 +51,8 @@
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const isAdmin = $derived(currentUserIsAdmin());
-	const canBroadcast = $derived(hasAnyRole('Admin', 'Manager', 'Owner'));
+	const isAdmin = $derived(hasCapability('security.manage', 'billing.manage'));
+	const canBroadcast = $derived(hasCapability('rentals.manage', 'leasing.onboarding.manage'));
 
 	// Tabbed hub: each section is one tab. The active tab is mirrored to the URL hash so a deep-link
 	// (e.g. /settings#messaging) lands on the right tab and a refresh keeps your place. WalkMeThrough

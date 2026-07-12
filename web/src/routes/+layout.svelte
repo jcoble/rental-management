@@ -121,6 +121,7 @@
 			data.user ?? null,
 			data.accessToken ?? null,
 			data.accessTokenExpiration ? new Date(data.accessTokenExpiration) : null,
+			data.access ?? null,
 			data.isPlatformAdmin ?? false
 		);
 	});

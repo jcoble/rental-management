@@ -8,13 +8,15 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import type { User } from '$lib/types/user';
-import { hasRole, isAdmin, isManager, isStaff, isPortalUser } from '$lib/types/user';
+import type { AccessEnvelope, User, WorkspaceExperience } from '$lib/types/user';
+import { capabilityKeysForExperience } from '$lib/types/user';
 import { realNow } from '$lib/dev/real-time';
 
 let user = $state<User | null>(null);
 let accessToken = $state<string | null>(null);
 let accessTokenExpiration = $state<Date | null>(null);
+let accessEnvelope = $state<AccessEnvelope | null>(null);
+let activeExperience = $state<WorkspaceExperience | null>(null);
 let isLoading = $state(true);
 // Resolved server-side from the PLATFORM_ADMIN_EMAILS allowlist (root +layout.server.ts).
 // There is no super-admin role; this boolean gates the platform-operator shell (F6/TSK-212).
@@ -45,30 +47,61 @@ export function initAuth(
 	initialUser: User | null,
 	initialToken: string | null,
 	expiration: Date | null,
+	initialAccess: AccessEnvelope | null,
 	initialPlatformAdmin = false
 ) {
 	assertClientWrite('initAuth');
 	user = initialUser;
 	accessToken = initialToken;
 	accessTokenExpiration = expiration;
+	accessEnvelope = initialAccess;
+	activeExperience = initialAccess?.selectedContext.activeExperience ?? null;
 	platformAdmin = initialPlatformAdmin;
 	isLoading = false;
 }
 
 /** Set auth after a successful login (client-side). */
-export function setAuth(newUser: User, newToken: string, expiration: Date) {
+export function setAuth(newUser: User, newToken: string, expiration: Date, access: AccessEnvelope) {
 	assertClientWrite('setAuth');
 	user = newUser;
 	accessToken = newToken;
 	accessTokenExpiration = expiration;
+	accessEnvelope = access;
+	activeExperience = access.selectedContext.activeExperience;
 	isLoading = false;
 }
 
 /** Update only the token (after a refresh). */
-export function updateToken(newToken: string, expiration: Date) {
+export function updateToken(newToken: string, expiration: Date, access?: AccessEnvelope) {
 	assertClientWrite('updateToken');
 	accessToken = newToken;
 	accessTokenExpiration = expiration;
+	if (access) setAccessEnvelope(access);
+}
+
+export function setAccessEnvelope(access: AccessEnvelope) {
+	assertClientWrite('setAccessEnvelope');
+	accessEnvelope = access;
+	if (!activeExperience || !access.availableExperiences.includes(activeExperience)) {
+		activeExperience = access.selectedContext.activeExperience;
+	}
+}
+
+export function selectExperience(experience: WorkspaceExperience) {
+	assertClientWrite('selectExperience');
+	if (!accessEnvelope?.availableExperiences.includes(experience)) {
+		throw new Error('That experience is not available in the selected workspace.');
+	}
+	activeExperience = experience;
+}
+
+export function currentCapabilities(): ReadonlySet<string> {
+	return capabilityKeysForExperience(accessEnvelope, activeExperience);
+}
+
+export function hasCapability(...keys: string[]): boolean {
+	const available = currentCapabilities();
+	return keys.some((key) => available.has(key));
 }
 
 /**
@@ -82,6 +115,8 @@ export function clearAuthState() {
 	user = null;
 	accessToken = null;
 	accessTokenExpiration = null;
+	accessEnvelope = null;
+	activeExperience = null;
 	platformAdmin = false;
 	isLoading = false;
 
@@ -144,11 +179,17 @@ export function getAuthState() {
 		},
 		get isAuthenticated() {
 			return isAuthenticated;
+		},
+		get accessEnvelope() {
+			return accessEnvelope;
+		},
+		get activeExperience() {
+			return activeExperience;
 		}
 	};
 }
 
-// ---- Convenience accessors / role helpers bound to the current user ----
+// ---- Convenience accessors bound to the current session ----
 
 export function getCurrentUser(): User | null {
 	return user;
@@ -159,26 +200,6 @@ export function setCurrentUser(newUser: User | null) {
 	assertClientWrite('setCurrentUser');
 	user = newUser;
 	isLoading = false;
-}
-
-export function hasAnyRole(...roles: string[]): boolean {
-	return hasRole(user, ...roles);
-}
-
-export function currentUserIsAdmin(): boolean {
-	return isAdmin(user);
-}
-
-export function currentUserIsManager(): boolean {
-	return isManager(user);
-}
-
-export function currentUserIsStaff(): boolean {
-	return isStaff(user);
-}
-
-export function currentUserIsPortalUser(): boolean {
-	return isPortalUser(user);
 }
 
 /** Platform super-admin (email allowlist), gates the operator shell (Engine Health, etc.). */

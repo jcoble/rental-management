@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 const _keyAccessToken = 'rc_access_token';
 const _keyRefreshToken = 'rc_refresh_token';
+const _keyAccessEnvelope = 'rc_access_envelope';
 
 /// Secure storage wrapper for the JWT access token and refresh token.
 ///
@@ -34,12 +37,24 @@ class TokenStore {
     sw.stop();
     _accessLoaded = true;
     if (sw.elapsedMilliseconds > 40) {
-      debugPrint('[TokenStore] first secure-storage read took ${sw.elapsedMilliseconds}ms');
+      debugPrint(
+        '[TokenStore] first secure-storage read took ${sw.elapsedMilliseconds}ms',
+      );
     }
     return _accessToken;
   }
 
   Future<String?> getRefreshToken() => _storage.read(key: _keyRefreshToken);
+
+  Future<Map<String, dynamic>?> getAccessEnvelope() async {
+    final raw = await _storage.read(key: _keyAccessEnvelope);
+    if (raw == null || raw.isEmpty) return null;
+    final decoded = jsonDecode(raw);
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  Future<void> saveAccessEnvelope(Map<String, dynamic> access) =>
+      _storage.write(key: _keyAccessEnvelope, value: jsonEncode(access));
 
   Future<void> saveTokens({
     required String accessToken,
@@ -59,6 +74,7 @@ class TokenStore {
     await Future.wait([
       _storage.delete(key: _keyAccessToken),
       _storage.delete(key: _keyRefreshToken),
+      _storage.delete(key: _keyAccessEnvelope),
     ]);
   }
 }

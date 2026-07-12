@@ -33,11 +33,19 @@ class AuthRepository {
   ///
   /// On success, persists the access token and the refresh token extracted from
   /// the `Set-Cookie` response header.
-  Future<LoginResponse> login(String email, String password) async {
+  Future<LoginResponse> login(
+    String email,
+    String password, {
+    int? accessContextId,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/login',
-        data: {'email': email, 'password': password},
+        data: {
+          'email': email,
+          'password': password,
+          if (accessContextId != null) 'accessContextId': accessContextId,
+        },
         options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
@@ -64,9 +72,23 @@ class AuthRepository {
         accessToken: loginResponse.accessToken,
         refreshToken: refreshToken,
       );
+      await _tokenStore.saveAccessEnvelope(loginResponse.access.toJson());
 
       return loginResponse;
     } on DioException catch (e) {
+      final body = e.response?.data;
+      if (e.response?.statusCode == 409 &&
+          body is Map &&
+          body['code'] == 'ACCESS_CONTEXT_REQUIRED') {
+        final choices = (body['contexts'] as List<dynamic>? ?? const [])
+            .map(
+              (item) => EffectiveAccessContextOption.fromJson(
+                Map<String, dynamic>.from(item as Map),
+              ),
+            )
+            .toList(growable: false);
+        throw AccessContextSelectionRequiredException(choices);
+      }
       throw ApiException.fromDioException(e);
     }
   }
@@ -133,6 +155,7 @@ class AuthRepository {
         accessToken: loginResponse.accessToken,
         refreshToken: refreshToken,
       );
+      await _tokenStore.saveAccessEnvelope(loginResponse.access.toJson());
 
       return loginResponse;
     } on DioException catch (e) {
@@ -240,6 +263,66 @@ class AuthRepository {
     }
   }
 
+  Future<AccessEnvelope> currentAccess() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/auth/access');
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty access response from server.',
+        );
+      }
+      final access = AccessEnvelope.fromJson(data);
+      await _tokenStore.saveAccessEnvelope(access.toJson());
+      return access;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<EffectiveAccessContextOption>> contexts() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/auth/contexts');
+      return (response.data ?? const [])
+          .map(
+            (item) => EffectiveAccessContextOption.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<AccessContextSwitchResponse> selectContext(int accessContextId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/contexts/select',
+        data: {'accessContextId': accessContextId},
+      );
+      final result = AccessContextSwitchResponse.fromJson(
+        response.data ?? <String, dynamic>{},
+      );
+      final refreshToken = await _tokenStore.getRefreshToken();
+      if (refreshToken == null) {
+        throw const ApiException(
+          statusCode: 401,
+          message: 'Session expired. Please sign in again.',
+        );
+      }
+      await _tokenStore.saveTokens(
+        accessToken: result.accessToken,
+        refreshToken: refreshToken,
+      );
+      await _tokenStore.saveAccessEnvelope(result.access.toJson());
+      return result;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Logs out by revoking the server-side refresh token and clearing local storage.
   Future<void> logout() async {
     try {
@@ -260,9 +343,16 @@ class AuthRepository {
   }
 }
 
+class AccessContextSelectionRequiredException extends ApiException {
+  const AccessContextSelectionRequiredException(this.contexts)
+    : super(statusCode: 409, message: 'Select a workspace to continue.');
+  final List<EffectiveAccessContextOption> contexts;
+}
+
 /// Internal counter incremented by [AuthInterceptor] when a refresh fails.
 /// The [authControllerProvider] listens to this and calls logout().
 final logoutSignalProvider = _LogoutSignalNotifier.provider;
+final accessChangeSignalProvider = _AccessChangeSignalNotifier.provider;
 
 class _LogoutSignalNotifier extends Notifier<int> {
   static final provider = NotifierProvider<_LogoutSignalNotifier, int>(
@@ -273,6 +363,20 @@ class _LogoutSignalNotifier extends Notifier<int> {
   int build() => 0;
 
   void signal() => state++;
+}
+
+class _AccessChangeSignalNotifier extends Notifier<AccessEnvelope?> {
+  static final provider =
+      NotifierProvider<_AccessChangeSignalNotifier, AccessEnvelope?>(
+        _AccessChangeSignalNotifier.new,
+      );
+
+  @override
+  AccessEnvelope? build() => null;
+
+  void signal(Map<String, dynamic> json) {
+    state = AccessEnvelope.fromJson(json);
+  }
 }
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
@@ -290,6 +394,9 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
       // Signal logout — the auth controller's listener handles the state change.
       ref.read(logoutSignalProvider.notifier).signal();
     },
+    onAccessChanged: (access) {
+      ref.read(accessChangeSignalProvider.notifier).signal(access);
+    },
   );
 
   // Outermost: measures total wall-clock time including the auth interceptor.
@@ -298,6 +405,11 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 
   return AuthRepository(dio: baseDio, tokenStore: tokenStore);
 });
+
+final accessContextsProvider =
+    FutureProvider.autoDispose<List<EffectiveAccessContextOption>>((ref) {
+      return ref.watch(authRepositoryProvider).contexts();
+    });
 
 Dio _buildRefreshDio(Dio source) {
   final dio = Dio(source.options.copyWith());

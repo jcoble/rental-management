@@ -32,7 +32,7 @@
  */
 
 import type { Cookies } from '@sveltejs/kit';
-import type { LoginResponse, User } from '$lib/types/user';
+import type { AccessEnvelope, LoginResponse, User } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { AUTH_COOKIE_NAMES } from '$lib/server/auth-cookies';
 
@@ -52,6 +52,7 @@ export interface RefreshResult {
 	user: User;
 	accessToken: string;
 	accessTokenExpiration: string;
+	access: AccessEnvelope;
 	newRefreshToken?: string;
 	refreshTokenExpires?: Date;
 }
@@ -153,6 +154,7 @@ async function doRefresh(refreshToken: string): Promise<RefreshResult | null> {
 			user: data.user,
 			accessToken: data.accessToken,
 			accessTokenExpiration: data.accessTokenExpiration,
+			access: data.access,
 			newRefreshToken,
 			refreshTokenExpires
 		};
