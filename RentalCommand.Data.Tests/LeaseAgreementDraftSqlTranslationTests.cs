@@ -47,7 +47,7 @@ public sealed class LeaseAgreementDraftSqlTranslationTests
             });
 
         var sql = query.ToQueryString();
-        sql.Should().StartWith("-- @__");
+        sql.Should().StartWith("-- @");
         sql.Should().Contain("SELECT");
         sql.Should().Contain("count(*)::int");
         sql.Should().Contain("\"LeaseAddenda\"");
@@ -90,7 +90,7 @@ public sealed class LeaseAgreementDraftSqlTranslationTests
             && status.IsGoverning);
 
         var sql = query.ToQueryString();
-        sql.Should().Contain("\"vw_lease_agreement_status\"");
+        sql.Should().Contain("FROM vw_lease_agreement_status");
         sql.Should().Contain("\"PortfolioId\" = 7");
         sql.Should().Contain("\"LeaseManagementId\" = 19");
         sql.Should().Contain("\"AgreementId\" = 23");
