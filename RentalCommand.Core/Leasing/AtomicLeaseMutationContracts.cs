@@ -67,12 +67,40 @@ public sealed record AtomicTransferLeaseManagementMutationResult(
     IReadOnlyList<long> TenantLedgerEntryIds,
     IReadOnlyList<long> SecurityDepositEntryIds);
 
+public sealed record AtomicAgreementDraftSignerInput(
+    int? LeaseManagementPartyId,
+    int? TenantId,
+    int SignerRole,
+    string NameSnapshot,
+    string EmailSnapshot,
+    short SigningOrder,
+    bool IsRequired);
+
+public sealed record AtomicAgreementDraftSignerReplacementResult(
+    IReadOnlyList<int> DeletedSignerIds,
+    IReadOnlyList<int> CreatedSignerIds);
+
 /// <summary>
 /// PostgreSQL-owned lease graph mutations. Input sets are validated, joined, partitioned, and
 /// applied by one statement per operation; handlers never materialize a relationship graph.
 /// </summary>
 public interface IAtomicLeaseMutationPersistence
 {
+    Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAgreementId,
+        int successorAgreementId,
+        CancellationToken ct = default);
+
+    Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int leaseAgreementId,
+        int requiredDraftRevision,
+        IReadOnlyList<AtomicAgreementDraftSignerInput> signers,
+        CancellationToken ct = default);
+
     Task<AtomicTenantAccessTransitionResult> TransitionTenantAccessAsync(
         int portfolioId,
         int leaseManagementId,

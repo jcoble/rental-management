@@ -317,6 +317,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.TransferLeaseManagementResult,
     RentalCommand.Data.Leasing.TransferLeaseManagementHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.EditLeaseAgreementDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
+    RentalCommand.Data.Leasing.EditLeaseAgreementDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CreateLeaseAgreementSuccessorDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
+    RentalCommand.Data.Leasing.CreateLeaseAgreementSuccessorDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CompleteTurnoverCommand,
     RentalCommand.Core.Leasing.CompleteTurnoverResult,
     RentalCommand.Data.Leasing.CompleteTurnoverHandler>();
