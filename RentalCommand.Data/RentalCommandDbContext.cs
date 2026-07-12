@@ -29,6 +29,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<LeaseManagementParty> LeaseManagementParties => Set<LeaseManagementParty>();
     public DbSet<TenantUserAccess> TenantUserAccesses => Set<TenantUserAccess>();
     public DbSet<UnitOperationalPeriod> UnitOperationalPeriods => Set<UnitOperationalPeriod>();
+    public DbSet<LegalDocumentArtifact> LegalDocumentArtifacts => Set<LegalDocumentArtifact>();
+    public DbSet<LeaseAgreement> LeaseAgreements => Set<LeaseAgreement>();
+    public DbSet<LeaseAgreementSigner> LeaseAgreementSigners => Set<LeaseAgreementSigner>();
+    public DbSet<LeaseAddendum> LeaseAddenda => Set<LeaseAddendum>();
+    public DbSet<LeaseAddendumSigner> LeaseAddendumSigners => Set<LeaseAddendumSigner>();
+    public DbSet<LeaseAddendumFinancialEffect> LeaseAddendumFinancialEffects =>
+        Set<LeaseAddendumFinancialEffect>();
+    public DbSet<LeaseRenewalAddendumDecision> LeaseRenewalAddendumDecisions =>
+        Set<LeaseRenewalAddendumDecision>();
     public DbSet<DocumentTemplate> DocumentTemplates => Set<DocumentTemplate>();
     public DbSet<DocumentTemplateField> DocumentTemplateFields => Set<DocumentTemplateField>();
     public DbSet<Payment> Payments => Set<Payment>();
@@ -142,6 +151,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         base.OnModelCreating(modelBuilder);
         modelBuilder.ConfigureWorkspaceAccessKernel();
         modelBuilder.ConfigureLeaseRelationshipKernel();
+        modelBuilder.ConfigureLeaseLegalArtifacts();
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped

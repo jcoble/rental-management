@@ -42,5 +42,8 @@ public class LeaseManagement : IAuditable, IPortfolioScoped
     public ApplicationUser? EndingDispositionDecidedByUser { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }
     public List<LeaseManagementParty> Parties { get; set; } = [];
+    public List<LeaseAgreement> Agreements { get; set; } = [];
+    public List<LeaseAddendum> Addenda { get; set; } = [];
+    public List<LeaseRenewalAddendumDecision> RenewalAddendumDecisions { get; set; } = [];
     public List<UnitOperationalPeriod> SourceOperationalPeriods { get; set; } = [];
 }
