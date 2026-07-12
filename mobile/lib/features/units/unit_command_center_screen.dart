@@ -1072,6 +1072,13 @@ class _ListingHeader extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
+              'Sync updates bedrooms, bathrooms, and square footage without replacing your copy, rent, deposit, or lease terms.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onPrimaryContainer.withValues(alpha: 0.78),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
               'Updated ${_formatDate(updatedAt)}',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onPrimaryContainer.withValues(alpha: 0.78),
@@ -1090,7 +1097,7 @@ class _ListingHeader extends StatelessWidget {
                         )
                       : const Icon(Symbols.auto_awesome_rounded),
                   label: Text(
-                    isGenerating ? 'Preparing...' : 'Refresh from unit',
+                    isGenerating ? 'Syncing...' : 'Sync unit details',
                   ),
                   onPressed: onGenerate,
                 ),

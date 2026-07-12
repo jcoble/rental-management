@@ -85,6 +85,12 @@ public interface IAtomicRemoteDependency;
 public interface IAtomicInfrastructureWriteGate
 {
     IDisposable BeginPendingFileUploadAdmission();
+
+    /// <summary>
+    /// Admits exactly one conflict-safe insert of untrusted external listing metadata before it
+    /// enters user-confirmed business state. It grants no update or delete permission.
+    /// </summary>
+    IDisposable BeginExternalListingSignalAdmission();
 }
 
 /// <summary>Capabilities owned by the current physical attempt; it deliberately exposes no ORM.</summary>
