@@ -2,6 +2,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace RentalCommand.Core.Scanning;
 
@@ -209,7 +210,7 @@ public static class ScanConfirmationDraftFingerprint
             writer.Write(sourceStoredFileId.HasValue);
             if (sourceStoredFileId.HasValue)
                 writer.Write(sourceStoredFileId.Value);
-            WriteNullableString(writer, extractedFields);
+            WriteNullableString(writer, CanonicalizeJson(extractedFields));
         }
 
         return Convert.ToHexStringLower(SHA256.HashData(payload.GetBuffer().AsSpan(0, checked((int)payload.Length))));
@@ -220,6 +221,43 @@ public static class ScanConfirmationDraftFingerprint
         writer.Write(value is not null);
         if (value is not null)
             writer.Write(value);
+    }
+
+    private static string? CanonicalizeJson(string? value)
+    {
+        if (value is null)
+            return null;
+
+        using var document = JsonDocument.Parse(value);
+        using var output = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(output))
+            WriteCanonicalJson(writer, document.RootElement);
+        return Encoding.UTF8.GetString(output.ToArray());
+    }
+
+    private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject().OrderBy(property => property.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalJson(writer, property.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                    WriteCanonicalJson(writer, item);
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 }
 

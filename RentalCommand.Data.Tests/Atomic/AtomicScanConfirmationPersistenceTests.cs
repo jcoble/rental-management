@@ -10,6 +10,16 @@ namespace RentalCommand.Data.Tests.Atomic;
 public sealed class AtomicScanConfirmationPersistenceTests
 {
     [Fact]
+    public void Fingerprint_IsStableAcrossPostgresJsonbNormalization()
+    {
+        var original = "{\"z\":1,\"nested\":{\"b\":2,\"a\":[3,{\"y\":true,\"x\":null}]}}";
+        var normalized = "{ \"nested\": { \"a\": [3, { \"x\": null, \"y\": true }], \"b\": 2 }, \"z\": 1 }";
+
+        ScanConfirmationDraftFingerprint.Create("Expense", 12, original).Should().Be(
+            ScanConfirmationDraftFingerprint.Create("Expense", 12, normalized));
+    }
+
+    [Fact]
     public async Task TryClaimAsync_ExactPreparedSnapshot_ClaimsReviewingDraft()
     {
         await using var db = CreateContext();
