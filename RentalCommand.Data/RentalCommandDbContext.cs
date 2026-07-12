@@ -896,6 +896,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.SubmittedAtUtc);
+            entity.HasIndex(e => new { e.PreparedLeaseManagementId, e.PortfolioId })
+                .IsUnique()
+                .HasFilter("\"PreparedLeaseManagementId\" IS NOT NULL");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.RentalApplications)
@@ -913,6 +916,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.ApprovedTenantId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.PreparedLeaseManagement)
+                .WithOne(e => e.PreparedFromApplication)
+                .HasForeignKey<RentalApplication>(e => new { e.PreparedLeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey<LeaseManagement>(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ScreeningResult>(entity =>

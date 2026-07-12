@@ -186,6 +186,7 @@ public enum AtomicLockResource
     Unit = 13,
     LeaseManagement = 14,
     TenantAccount = 15,
+    RentalApplication = 16,
 }
 
 public enum AtomicScanDraftClaimOutcome

@@ -21,8 +21,6 @@ public sealed class ApplicationService : IApplicationService
     private readonly IFileStorage _files;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
-    private readonly ITenantPortalProvisioningService _portalProvisioning;
-    private readonly ILogger<ApplicationService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public ApplicationService(
@@ -38,8 +36,6 @@ public sealed class ApplicationService : IApplicationService
         _files = files;
         _dataUpdate = dataUpdate;
         _audit = audit;
-        _portalProvisioning = portalProvisioning;
-        _logger = logger;
         _timeProvider = timeProvider;
     }
 
@@ -568,20 +564,6 @@ public sealed class ApplicationService : IApplicationService
         entity.ApprovedTenantId = tenant.Id;
         entity.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
-
-        // The approved applicant is now a tenant — provision their portal login immediately (silent;
-        // the invite email is a separate on-demand staff action). Best-effort: a tenant with no email
-        // is a normal no-op, and a provisioning hiccup must never fail the approval.
-        try
-        {
-            await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenant.Id, portfolioId, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to provision portal access for tenant {TenantId} created from application {ApplicationId}; approval still succeeds.",
-                tenant.Id, entity.Id);
-        }
 
         // Audit the PII-touching mutation: an application was approved and a tenant was created.
         await _audit.LogAsync(

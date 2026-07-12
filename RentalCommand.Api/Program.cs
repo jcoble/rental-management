@@ -276,6 +276,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.ConfirmScanDraftResult,
     RentalCommand.Data.Scanning.ConfirmScanDraftHandler<
         RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.PrepareMoveInCommand,
+    RentalCommand.Core.Leasing.PrepareMoveInResult,
+    RentalCommand.Data.Leasing.PrepareMoveInHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
