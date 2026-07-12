@@ -176,7 +176,7 @@ public sealed record ImportBankTransactionsResult(
 
 public enum BankReconciliationAction
 {
-    MatchPayment,
+    MatchReceipt,
     MatchExpense,
     Clear,
     Dismiss,
@@ -187,13 +187,16 @@ public sealed record ReconcileBankTransactionCommand(
     int PortfolioId,
     int TransactionId,
     BankReconciliationAction Action,
-    int? TargetEntityId,
+    int? TenantAccountId,
+    long? TenantLedgerEntryId,
+    int? ExpenseId,
     DateTime ExpectedUpdatedAtUtc,
     DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public enum ReconcileBankTransactionOutcome
 {
     Applied,
+    AlreadyApplied,
     TransactionNotFound,
     TargetNotFound,
     StaleVersion,

@@ -61,7 +61,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "plaid-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "ACH CREDIT EMILY CHEN RENT",
                     Amount = payment.Amount,
                     IsoCurrencyCode = "USD",
@@ -81,7 +81,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "plaid-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Duplicate line",
                     Amount = payment.Amount,
                 },
@@ -90,7 +90,7 @@ public class BankingServiceTests : IDisposable
 
         first.ImportedCount.Should().Be(1);
         first.Transactions.Single().SuggestedMatch.Should().NotBeNull();
-        first.Transactions.Single().SuggestedMatch!.EntityType.Should().Be("Payment");
+        first.Transactions.Single().SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
         first.Transactions.Single().SuggestedMatch!.EntityId.Should().Be(payment.Id);
         duplicate.ImportedCount.Should().Be(0);
         duplicate.SkippedCount.Should().Be(1);
@@ -110,7 +110,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "manual-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Rent deposit",
                     Amount = payment.Amount,
                 },
@@ -120,17 +120,18 @@ public class BankingServiceTests : IDisposable
 
         var matched = await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
         {
-            EntityType = "Payment",
-            EntityId = payment.Id,
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
         });
         var cleared = await _sut.ClearMatchAsync(1, transactionId);
 
         matched.Should().NotBeNull();
         matched!.MatchStatus.Should().Be("Matched");
-        matched.MatchedPaymentId.Should().Be(payment.Id);
+        matched.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        matched.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
         cleared.Should().NotBeNull();
         cleared!.MatchStatus.Should().Be("Unmatched");
-        cleared.MatchedPaymentId.Should().BeNull();
+        cleared.MatchedTenantLedgerEntryId.Should().BeNull();
     }
 
     [Fact]
@@ -184,7 +185,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "audit-match-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Rent deposit",
                     Amount = payment.Amount,
                 },
@@ -196,8 +197,8 @@ public class BankingServiceTests : IDisposable
 
         await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
         {
-            EntityType = "Payment",
-            EntityId = payment.Id,
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
         });
 
         var log = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
@@ -206,8 +207,8 @@ public class BankingServiceTests : IDisposable
             a.Operation == AuditLogOperation.Updated).Subject;
         log.OldValues.Should().Contain("\"matchStatus\":\"Unmatched\"");
         log.NewValues.Should().Contain("\"matchStatus\":\"Matched\"");
-        log.NewValues.Should().Contain($"\"matchedPaymentId\":{payment.Id}");
-        log.ChangeReason.Should().Contain("matched to Payment");
+        log.NewValues.Should().Contain($"\"matchedTenantLedgerEntryId\":{payment.Id}");
+        log.ChangeReason.Should().Contain("receipt");
     }
 
     [Fact]
@@ -224,7 +225,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "queue-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "ACH CREDIT EMILY CHEN RENT",
                     Amount = payment.Amount,
                 },
@@ -237,14 +238,15 @@ public class BankingServiceTests : IDisposable
         queue.Count.Should().Be(1);
         var item = queue.Items.Single();
         item.Transaction.Id.Should().Be(transactionId);
-        item.Suggestion.EntityType.Should().Be("Payment");
+        item.Suggestion.EntityType.Should().Be("TenantLedgerEntry");
         item.Suggestion.EntityId.Should().Be(payment.Id);
 
         // Confirming links the payment and removes the line from the queue.
         var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest());
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        confirmed.MatchedPaymentId.Should().Be(payment.Id);
+        confirmed.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        confirmed.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
         confirmed.SuggestedMatch.Should().BeNull();
         (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
     }
@@ -263,7 +265,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "queue-txn-2",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "ACH CREDIT EMILY CHEN RENT",
                     Amount = payment.Amount,
                 },
@@ -276,7 +278,7 @@ public class BankingServiceTests : IDisposable
 
         dismissed.Should().NotBeNull();
         dismissed!.MatchStatus.Should().Be("Dismissed");
-        dismissed.MatchedPaymentId.Should().BeNull();
+        dismissed.MatchedTenantLedgerEntryId.Should().BeNull();
         dismissed.SuggestedMatch.Should().BeNull();
         (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
     }
@@ -311,7 +313,7 @@ public class BankingServiceTests : IDisposable
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
         confirmed.MatchedExpenseId.Should().Be(expense.Id);
-        confirmed.MatchedPaymentId.Should().BeNull();
+        confirmed.MatchedTenantLedgerEntryId.Should().BeNull();
     }
 
     [Fact]
@@ -344,7 +346,7 @@ public class BankingServiceTests : IDisposable
 
         var suggestion = imported.Transactions.Single().SuggestedMatch;
         suggestion.Should().NotBeNull();
-        suggestion!.EntityType.Should().Be("Payment");
+        suggestion!.EntityType.Should().Be("TenantLedgerEntry");
         suggestion.EntityId.Should().Be(carlos.Id);
         suggestion.EntityId.Should().NotBe(emily.Id);
     }
@@ -405,7 +407,7 @@ public class BankingServiceTests : IDisposable
 
         ignored.Should().NotBeNull();
         ignored!.MatchStatus.Should().Be("Removed");
-        ignored.MatchedPaymentId.Should().BeNull();
+        ignored.MatchedTenantLedgerEntryId.Should().BeNull();
         ignored.MatchedExpenseId.Should().BeNull();
         ignored.SuggestedMatch.Should().BeNull();
         ignored.Notes.Should().Contain("personal");
@@ -588,7 +590,7 @@ public class BankingServiceTests : IDisposable
 
         var item = queue.Items.Should().ContainSingle().Subject;
         item.Transaction.SuggestedMatch.Should().NotBeNull();
-        item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
+        item.Transaction.SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
         item.Transaction.SuggestedMatch.EntityId.Should().Be(payment.Id);
 
         var reviewQueueSql = executedSql
@@ -635,7 +637,7 @@ public class BankingServiceTests : IDisposable
 
         var item = queue.Items.Should().ContainSingle().Subject;
         item.Transaction.SuggestedMatch.Should().NotBeNull();
-        item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
+        item.Transaction.SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
         item.Transaction.SuggestedMatch.EntityId.Should().Be(carlos.Id);
 
         var paymentCandidateSql = executedSql
@@ -969,7 +971,7 @@ public class BankingServiceTests : IDisposable
             Amount = 1000m,
             IsoCurrencyCode = "USD",
             MatchStatus = "Matched",
-            MatchedPaymentId = null,
+            MatchedTenantLedgerEntryId = null,
             MatchConfidence = 1m,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -1083,10 +1085,10 @@ public class BankingServiceTests : IDisposable
         });
     }
 
-    private Payment SeedRentPaymentFor(string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber) =>
+    private TenantLedgerEntry SeedRentPaymentFor(string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber) =>
         SeedRentPaymentInto(_ctx, firstName, lastName, amount, paidAt, leaseNumber);
 
-    private static Payment SeedRentPaymentInto(
+    private static TenantLedgerEntry SeedRentPaymentInto(
         SqliteTestContext ctx, string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber)
     {
         var property = new Property
@@ -1116,37 +1118,55 @@ public class BankingServiceTests : IDisposable
             CreatedAt = paidAt,
             UpdatedAt = paidAt,
         };
-        var lease = new Lease
+        var relationship = new LeaseManagement
         {
             PortfolioId = 1,
             Property = property,
             Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = leaseNumber,
-            Status = LeaseStatus.Active,
-            StartDate = paidAt.AddMonths(-12),
-            EndDate = paidAt.AddMonths(12),
-            MonthlyRent = amount,
-            SecurityDeposit = amount,
-            LateFeeAmount = 70m,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
+            RelationshipNumber = leaseNumber,
+            PossessionGivenAtUtc = paidAt.AddMonths(-12),
+            CreatedAtUtc = paidAt,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = paidAt,
+            RowVersion = Guid.NewGuid(),
         };
-        var payment = new Payment
+        relationship.Parties.Add(new LeaseManagementParty
         {
             PortfolioId = 1,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = amount,
-            DueDate = paidAt,
-            PaidDate = paidAt,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(paidAt.AddMonths(-12)),
+            ChangeReason = "Test setup",
+            CreatedAtUtc = paidAt,
+            CreatedByUserId = 1,
+        });
+        var account = new TenantAccount
+        {
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            AccountNumber = $"TA-{leaseNumber}",
+            Currency = "USD",
+            OpenedAtUtc = paidAt.AddMonths(-12),
+            CreatedAtUtc = paidAt,
+            CreatedByUserId = 1,
         };
-        ctx.Db.Payments.Add(payment);
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccount = account,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidAt),
+            PostedAtUtc = paidAt,
+            Description = "Rent payment",
+            BusinessKey = $"test-receipt:{leaseNumber}",
+            CreatedByUserId = 1,
+        };
+        ctx.Db.TenantLedgerEntries.Add(receipt);
         ctx.Db.SaveChanges();
-        return payment;
+        return receipt;
     }
 
     private BankingService CreateServiceFor(SqliteTestContext ctx, PlaidOptions? options = null)
@@ -1182,67 +1202,8 @@ public class BankingServiceTests : IDisposable
             TimeProvider.System);
     }
 
-    private Payment SeedRentPayment(DateTime paidAt)
-    {
-        var property = new Property
-        {
-            PortfolioId = 1,
-            Name = "Short North Condo",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "4B",
-            MarketRent = 1400m,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = 1,
-            FirstName = "Emily",
-            LastName = "Chen",
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = 1,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L2024-008",
-            Status = LeaseStatus.Active,
-            StartDate = paidAt.AddMonths(-12),
-            EndDate = paidAt.AddMonths(12),
-            MonthlyRent = 1400m,
-            SecurityDeposit = 1400m,
-            LateFeeAmount = 70m,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var payment = new Payment
-        {
-            PortfolioId = 1,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1400m,
-            DueDate = paidAt,
-            PaidDate = paidAt,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        _ctx.Db.Payments.Add(payment);
-        _ctx.Db.SaveChanges();
-        return payment;
-    }
+    private TenantLedgerEntry SeedRentPayment(DateTime paidAt) =>
+        SeedRentPaymentInto(_ctx, "Emily", "Chen", 1400m, paidAt, "L2024-008");
 
     private Expense SeedExpense(DateTime paidAt, decimal amount)
     {

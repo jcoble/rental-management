@@ -593,7 +593,7 @@ public class PortfolioQaService : IPortfolioQaService
                 t.PortfolioId == portfolioId &&
                 t.MatchStatus != "Removed" &&
                 t.Amount > 0 &&
-                t.MatchedPaymentId == null)
+                t.MatchedTenantLedgerEntryId == null)
             .GroupBy(_ => 1)
             .Select(g => new
             {

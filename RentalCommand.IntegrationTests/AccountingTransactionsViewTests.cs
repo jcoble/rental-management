@@ -680,7 +680,7 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
             IsoCurrencyCode = "USD",
             Category = category,
             MatchStatus = matchStatus,
-            MatchedPaymentId = matchedPaymentId,
+            MatchedTenantLedgerEntryId = matchedPaymentId,
             MatchedExpenseId = matchedExpenseId,
             CreatedAt = postedAt,
             UpdatedAt = postedAt,

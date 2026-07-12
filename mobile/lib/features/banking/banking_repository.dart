@@ -84,16 +84,20 @@ class BankingRepository {
     }
   }
 
-  /// Confirm the duplicate. Omitting [paymentId]/[expenseId] accepts the
+  /// Confirm the duplicate. Omitting the receipt identity/[expenseId] accepts the
   /// backend's suggestion (the common one-tap case).
   Future<void> confirmMatch(
     int transactionId, {
-    int? paymentId,
+    int? tenantAccountId,
+    int? tenantLedgerEntryId,
     int? expenseId,
   }) async {
     try {
       final body = <String, dynamic>{};
-      if (paymentId != null) body['paymentId'] = paymentId;
+      if (tenantAccountId != null) body['tenantAccountId'] = tenantAccountId;
+      if (tenantLedgerEntryId != null) {
+        body['tenantLedgerEntryId'] = tenantLedgerEntryId;
+      }
       if (expenseId != null) body['expenseId'] = expenseId;
       await _dio.post<Map<String, dynamic>>(
         '/banking/transactions/$transactionId/confirm-match',

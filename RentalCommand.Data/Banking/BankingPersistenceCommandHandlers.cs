@@ -303,7 +303,8 @@ public sealed class ApplyPlaidSyncHandler
         amount = row.Amount,
         isoCurrencyCode = row.IsoCurrencyCode,
         category = row.Category,
-        matchedPaymentId = row.MatchedPaymentId,
+        matchedTenantAccountId = row.MatchedTenantAccountId,
+        matchedTenantLedgerEntryId = row.MatchedTenantLedgerEntryId,
         matchedExpenseId = row.MatchedExpenseId,
         matchStatus = row.MatchStatus,
         matchConfidence = row.MatchConfidence,
@@ -476,6 +477,10 @@ public sealed class ReconcileBankTransactionHandler
         {
             return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
         }
+        if (IsAlreadyApplied(command, transaction))
+        {
+            return Result(ReconcileBankTransactionOutcome.AlreadyApplied, transaction.Id);
+        }
         var before = ApplyPlaidSyncHandler.Snapshot(transaction);
         Apply(command, transaction);
         await attempt.FlushBusinessAsync(ct);
@@ -493,29 +498,46 @@ public sealed class ReconcileBankTransactionHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct) => command.Action switch
         {
-            BankReconciliationAction.MatchPayment when command.TargetEntityId is { } paymentId =>
-                await attempt.Persistence.Query<Payment>().AnyAsync(row => row.Id == paymentId
-                    && row.PortfolioId == command.PortfolioId, ct),
-            BankReconciliationAction.MatchExpense when command.TargetEntityId is { } expenseId =>
+            BankReconciliationAction.MatchReceipt
+                when command.TenantAccountId is { } accountId
+                    && command.TenantLedgerEntryId is { } ledgerEntryId
+                    && command.ExpenseId is null =>
+                await attempt.Persistence.Query<TenantLedgerEntry>().AnyAsync(row =>
+                    row.Id == ledgerEntryId
+                    && row.TenantAccountId == accountId
+                    && row.PortfolioId == command.PortfolioId
+                    && row.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    && row.Direction == TenantLedgerDirection.Credit, ct),
+            BankReconciliationAction.MatchExpense
+                when command.ExpenseId is { } expenseId
+                    && command.TenantAccountId is null
+                    && command.TenantLedgerEntryId is null =>
                 await attempt.Persistence.Query<Expense>().AnyAsync(row => row.Id == expenseId
                     && row.PortfolioId == command.PortfolioId, ct),
-            BankReconciliationAction.MatchPayment or BankReconciliationAction.MatchExpense => false,
-            _ => command.TargetEntityId is null,
+            BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense => false,
+            _ => command.TenantAccountId is null
+                && command.TenantLedgerEntryId is null
+                && command.ExpenseId is null,
         };
 
     private static void Apply(ReconcileBankTransactionCommand command, BankTransaction row)
     {
-        row.MatchedPaymentId = command.Action == BankReconciliationAction.MatchPayment ? command.TargetEntityId : null;
-        row.MatchedExpenseId = command.Action == BankReconciliationAction.MatchExpense ? command.TargetEntityId : null;
+        row.MatchedTenantAccountId = command.Action == BankReconciliationAction.MatchReceipt
+            ? command.TenantAccountId
+            : null;
+        row.MatchedTenantLedgerEntryId = command.Action == BankReconciliationAction.MatchReceipt
+            ? command.TenantLedgerEntryId
+            : null;
+        row.MatchedExpenseId = command.Action == BankReconciliationAction.MatchExpense ? command.ExpenseId : null;
         row.MatchStatus = command.Action switch
         {
-            BankReconciliationAction.MatchPayment or BankReconciliationAction.MatchExpense => "Matched",
+            BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense => "Matched",
             BankReconciliationAction.Clear => "Unmatched",
             BankReconciliationAction.Dismiss => "Dismissed",
             BankReconciliationAction.Ignore => "Removed",
             _ => throw new ArgumentOutOfRangeException(nameof(command.Action)),
         };
-        row.MatchConfidence = command.Action is BankReconciliationAction.MatchPayment or BankReconciliationAction.MatchExpense
+        row.MatchConfidence = command.Action is BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense
             ? 1m
             : null;
         if (command.Action == BankReconciliationAction.Ignore)
@@ -525,10 +547,42 @@ public sealed class ReconcileBankTransactionHandler
         row.UpdatedAt = command.AppliedAtUtc;
     }
 
+    private static bool IsAlreadyApplied(ReconcileBankTransactionCommand command, BankTransaction row) =>
+        command.Action switch
+        {
+            BankReconciliationAction.MatchReceipt =>
+                row.MatchStatus == "Matched"
+                && row.MatchedTenantAccountId == command.TenantAccountId
+                && row.MatchedTenantLedgerEntryId == command.TenantLedgerEntryId
+                && row.MatchedExpenseId is null,
+            BankReconciliationAction.MatchExpense =>
+                row.MatchStatus == "Matched"
+                && row.MatchedExpenseId == command.ExpenseId
+                && row.MatchedTenantAccountId is null
+                && row.MatchedTenantLedgerEntryId is null,
+            BankReconciliationAction.Clear =>
+                row.MatchStatus == "Unmatched"
+                && row.MatchedTenantAccountId is null
+                && row.MatchedTenantLedgerEntryId is null
+                && row.MatchedExpenseId is null,
+            BankReconciliationAction.Dismiss =>
+                row.MatchStatus == "Dismissed"
+                && row.MatchedTenantAccountId is null
+                && row.MatchedTenantLedgerEntryId is null
+                && row.MatchedExpenseId is null,
+            BankReconciliationAction.Ignore =>
+                row.MatchStatus == "Removed"
+                && row.MatchedTenantAccountId is null
+                && row.MatchedTenantLedgerEntryId is null
+                && row.MatchedExpenseId is null,
+            _ => false,
+        };
+
     private static string Reason(ReconcileBankTransactionCommand command) => command.Action switch
     {
-        BankReconciliationAction.MatchPayment => $"Bank transaction matched to Payment #{command.TargetEntityId}.",
-        BankReconciliationAction.MatchExpense => $"Bank transaction matched to Expense #{command.TargetEntityId}.",
+        BankReconciliationAction.MatchReceipt =>
+            $"Bank transaction matched to tenant account #{command.TenantAccountId} receipt #{command.TenantLedgerEntryId}.",
+        BankReconciliationAction.MatchExpense => $"Bank transaction matched to Expense #{command.ExpenseId}.",
         BankReconciliationAction.Clear => "Bank transaction match cleared.",
         BankReconciliationAction.Dismiss => "Bank suggested match dismissed.",
         BankReconciliationAction.Ignore => "Bank transaction ignored as personal / not business.",

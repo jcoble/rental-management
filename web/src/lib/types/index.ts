@@ -845,7 +845,8 @@ export interface BankTransaction {
 	amount: number;
 	isoCurrencyCode: string;
 	category?: string;
-	matchedPaymentId?: number;
+	matchedTenantAccountId?: number;
+	matchedTenantLedgerEntryId?: number;
 	matchedExpenseId?: number;
 	matchStatus: string;
 	matchConfidence?: number;
@@ -861,8 +862,9 @@ export interface BankTransactionListResponse {
 }
 
 export interface BankMatchSuggestion {
-	entityType: 'Payment' | 'Expense' | string;
+	entityType: 'TenantLedgerEntry' | 'Expense' | string;
 	entityId: number;
+	tenantAccountId?: number;
 	confidence: number;
 	label: string;
 	reason: string;
@@ -905,12 +907,14 @@ export interface SyncBankConnectionResponse {
 }
 
 export interface MatchBankTransactionRequest {
-	entityType: string;
-	entityId: number;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
+	expenseId?: number;
 }
 
 export interface ConfirmBankMatchRequest {
-	paymentId?: number;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
 	expenseId?: number;
 }
 

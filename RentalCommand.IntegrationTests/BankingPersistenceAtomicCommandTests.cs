@@ -516,7 +516,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         final.Description.Should().Be("After merge");
         final.Amount.Should().Be(30m);
         final.MatchStatus.Should().Be("Removed");
-        final.MatchedPaymentId.Should().BeNull();
+        final.MatchedTenantLedgerEntryId.Should().BeNull();
         final.MatchConfidence.Should().BeNull();
         var audit = await verify.AtomicAuditLogs.SingleAsync(row =>
             row.CommandIdempotencyKey.EndsWith(":set-merge")
@@ -566,7 +566,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             transactionId = seededTransaction.Id;
         }
         var command = new ReconcileBankTransactionCommand(
-            _portfolioId, transactionId, BankReconciliationAction.Ignore, null, _now, _now.AddSeconds(1));
+            _portfolioId, transactionId, BankReconciliationAction.Ignore, null, null, null, _now, _now.AddSeconds(1));
         var identity = new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{transactionId}:ignore-once");
 
         var outcomes = await Task.WhenAll(
@@ -638,6 +638,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
                 _portfolioId,
                 otherTransactionId,
                 BankReconciliationAction.Ignore,
+                null,
+                null,
                 null,
                 _now,
                 _now.AddSeconds(1)),
