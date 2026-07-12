@@ -67,6 +67,41 @@ public sealed record CancelPlannedRelationshipResponse(
     IReadOnlyList<int> RetainedAccessIds,
     bool Replayed);
 
+public sealed class TransferLeaseManagementRequest
+{
+    public int SourceUnitId { get; set; }
+    public int DestinationUnitId { get; set; }
+    public DateOnly EffectiveOn { get; set; }
+    public DateTime? PlannedDestinationPossessionAtUtc { get; set; }
+    public bool GiveDestinationPossessionNow { get; set; }
+    public string? PossessionAgreementExceptionReason { get; set; }
+    public int DestinationDocumentTemplateId { get; set; }
+    public int DestinationDocumentTemplateVersion { get; set; }
+    public bool CarryTenantBalance { get; set; } = true;
+    public bool CarrySecurityDeposit { get; set; } = true;
+    public string TransferReason { get; set; } = string.Empty;
+}
+
+public sealed record TransferLeaseManagementResponse(
+    Guid TransferPublicId,
+    int SourceLeaseManagementId,
+    int SourceUnitId,
+    int DestinationLeaseManagementId,
+    int DestinationUnitId,
+    int DestinationTenantAccountId,
+    int DestinationAgreementId,
+    int? DestinationSecurityDepositAccountId,
+    int TurnoverPeriodId,
+    DateTime SourcePossessionReturnedAtUtc,
+    DateTime? DestinationPossessionGivenAtUtc,
+    decimal CarriedTenantBalance,
+    decimal CarriedSecurityDeposit,
+    IReadOnlyList<int> DestinationPartyIds,
+    IReadOnlyList<int> DestinationSignerIds,
+    IReadOnlyList<int> DestinationAccessIds,
+    bool DestinationAgreementRequiresSignature,
+    bool Replayed);
+
 public sealed record CompleteTurnoverResponse(
     int UnitId,
     int TurnoverPeriodId,

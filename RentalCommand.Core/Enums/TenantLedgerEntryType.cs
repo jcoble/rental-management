@@ -12,5 +12,7 @@ public enum TenantLedgerEntryType
     Credit,
     Adjustment,
     Refund,
+    TransferIn,
+    TransferOut,
     Reversal,
 }

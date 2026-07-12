@@ -79,6 +79,10 @@ One row is one continuous household/account episode at one Unit.
 | `PortfolioId` | `int` | no | scoped FK |
 | `PropertyId` | `int` | no | constrained scope accelerator |
 | `UnitId` | `int` | no | canonical physical parent |
+| `TransferredFromLeaseManagementId` | `int` | yes | prior Unit relationship when opened by transfer; same-portfolio scoped self-FK |
+| `TransferPublicId` | `uuid` | yes | durable public identity shared by the transfer command and paired financial entries |
+| `TransferredAtUtc` | `timestamptz` | yes | DB-clock transfer fact |
+| `TransferReason` | `varchar(1000)` | yes | required explanation for a transferred relationship |
 | `RelationshipNumber` | `varchar(100)` | no | human-readable, unique per portfolio |
 | `PlannedPossessionAtUtc` | `timestamptz` | yes | planned handover; not occupancy |
 | `PossessionGivenAtUtc` | `timestamptz` | yes | opens physical possession |
@@ -103,6 +107,7 @@ Keys and indexes:
 
 - PK `Id`; alternate key `UNIQUE (Id, PortfolioId)`.
 - `UNIQUE (PublicId)`.
+- `UNIQUE (TransferPublicId) WHERE TransferPublicId IS NOT NULL` and `UNIQUE (TransferredFromLeaseManagementId) WHERE TransferredFromLeaseManagementId IS NOT NULL`; one source episode can produce only one destination episode.
 - `UNIQUE (PortfolioId, RelationshipNumber)`.
 - `UNIQUE (Id, UnitId, PropertyId, PortfolioId)` for constrained downstream context.
 - index `(PortfolioId, UnitId, CreatedAtUtc DESC, Id DESC)`.
@@ -112,6 +117,7 @@ Keys and indexes:
 Checks:
 
 - property/unit/portfolio match through `FK_LeaseManagements_Units_Scope (UnitId, PropertyId, PortfolioId)`.
+- transfer source, public identity, timestamp, and reason are either all null or all present.
 - `PossessionGivenAtUtc IS NULL OR CanceledAtUtc IS NULL`.
 - `PossessionReturnedAtUtc IS NULL OR PossessionGivenAtUtc IS NOT NULL`.
 - `PossessionReturnedAtUtc IS NULL OR PossessionReturnedAtUtc >= PossessionGivenAtUtc`.
@@ -258,7 +264,8 @@ One row is one base legal version within a LeaseManagement.
 | `LeaseManagementId` | `int` | no | scoped FK, `RESTRICT` |
 | `VersionNumber` | `int` | no | starts at 1, strictly increases inside LeaseManagement |
 | `AgreementNumber` | `varchar(100)` | no | display/legal identifier |
-| `ChangeType` | `varchar(30)` | no | `Initial`, `Correction`, `Renewal`, `MonthToMonth`, `Restatement` |
+| `ChangeType` | `varchar(30)` | no | `Initial`, `Transfer`, `Correction`, `Renewal`, `MonthToMonth`, `Restatement` |
+| `TransferredFromAgreementId` | `int` | yes | executed source-Unit Agreement copied into a destination transfer draft; same portfolio, intentionally different LeaseManagement |
 | `ReplacesAgreementId` | `int` | yes | correction/restatement predecessor |
 | `RenewsAgreementId` | `int` | yes | renewal/month-to-month predecessor |
 | `TermType` | `varchar(20)` | no | `FixedTerm`, `MonthToMonth` |
@@ -304,9 +311,10 @@ Checks and lineage:
 - issuance requires issued artifact; execution requires issuance and executed artifact.
 - void requires issuance; draft cancellation requires no issuance; void and draft cancellation are mutually exclusive.
 - `Initial`: both predecessor FKs null and version 1.
+- `Transfer`: `TransferredFromAgreementId` required, replacement/renewal FKs null, and version 1 in the new destination LeaseManagement.
 - `Correction`/`Restatement`: `ReplacesAgreementId` required, `RenewsAgreementId` null.
 - `Renewal`/`MonthToMonth`: `RenewsAgreementId` required, `ReplacesAgreementId` null.
-- composite self-FKs guarantee predecessor/successor belongs to the same LeaseManagement and portfolio.
+- correction, renewal, and supersession composite self-FKs guarantee predecessor/successor belongs to the same LeaseManagement and portfolio. The transfer-source FK deliberately guarantees only the same portfolio because the destination has a new LeaseManagement.
 - trigger locks the parent LeaseManagement and rejects a new `VersionNumber` unless it equals current max + 1. Rollback cannot consume a visible version.
 
 Governing period expression:
@@ -661,7 +669,7 @@ This replaces lease-tied `Payments` and `OpeningBalances`. It is the tenant rece
 | `PublicId` | `uuid` | no | unique |
 | `PortfolioId` | `int` | no | RLS |
 | `TenantAccountId` | `int` | no | scoped FK, `RESTRICT` |
-| `EntryType` | `varchar(40)` | no | `OpeningBalance`, `RentCharge`, `AddendumCharge`, `LateFeeCharge`, `DepositCharge`, `ManualCharge`, `PaymentReceipt`, `Credit`, `Adjustment`, `Refund`, `Reversal` |
+| `EntryType` | `varchar(40)` | no | `OpeningBalance`, `RentCharge`, `AddendumCharge`, `LateFeeCharge`, `DepositCharge`, `ManualCharge`, `PaymentReceipt`, `Credit`, `Adjustment`, `Refund`, `TransferIn`, `TransferOut`, `Reversal` |
 | `Direction` | `varchar(10)` | no | `Debit` increases amount owed; `Credit` decreases it |
 | `Amount` | `numeric(18,2)` | no | positive magnitude |
 | `Currency` | `varchar(3)` | no | account currency |
@@ -670,6 +678,7 @@ This replaces lease-tied `Payments` and `OpeningBalances`. It is the tenant rece
 | `PostedAtUtc` | `timestamptz` | no | append time |
 | `Description` | `varchar(500)` | no | tenant-readable |
 | `BusinessKey` | `varchar(200)` | no | command/schedule idempotency key |
+| `TransferPublicId` | `uuid` | yes | required only for `TransferIn`/`TransferOut`; pairs entries across source and destination accounts |
 | `LeaseAgreementId` | `int` | yes | legal provenance |
 | `LeaseAddendumId` | `int` | yes | legal provenance |
 | `ReversesEntryId` | `bigint` | yes | exact original for full reversal |
@@ -684,6 +693,7 @@ Constraints:
 - debit types: opening balance may be either direction; charges are debit; payment/credit/refund are credit; reversal must be opposite its original.
 - charge types require `DueOn`; receipt/credit/refund/reversal do not.
 - addendum charge requires Addendum provenance; scheduled rent requires Agreement provenance.
+- transfer types require `TransferPublicId`; unique `(PortfolioId, TransferPublicId, EntryType)` permits exactly one `TransferOut` and one `TransferIn` for a completed carried balance.
 - both provenance FKs must resolve to the same LeaseManagement as the account (deferred constraint trigger).
 - `ReversesEntryId` unique so one full reversal cannot be posted twice. Trigger verifies same account/currency/amount and opposite direction.
 - posted rows reject every update/delete. Corrections append adjustment or reversal entries.
@@ -820,6 +830,7 @@ Deposit funds are not mixed into receivable balance.
 | `PostedAtUtc` | `timestamptz` | no | DB clock |
 | `BusinessKey` | `varchar(200)` | no | idempotency |
 | `Description` | `varchar(500)` | no | tenant/operator explanation |
+| `TransferPublicId` | `uuid` | yes | required only for `TransferIn`/`TransferOut`; pairs source and destination deposit entries |
 | `LeaseAgreementId` | `int` | yes | legal provenance |
 | `LeaseAddendumId` | `int` | yes | legal provenance |
 | `ReversesEntryId` | `bigint` | yes | exact full reversal |
@@ -828,6 +839,7 @@ Deposit funds are not mixed into receivable balance.
 | `CreatedByUserId` | `int` | no | actor/system |
 
 - unique `PublicId` and `(SecurityDepositAccountId, BusinessKey)`;
+- transfer types require `TransferPublicId`; unique `(PortfolioId, TransferPublicId, EntryType)` prevents duplicate transfer legs;
 - amount positive; currency/account and all provenance must share portfolio/LeaseManagement;
 - `Receipt`/`TransferIn` increase, `Deduction`/`Refund`/`TransferOut` decrease, `Adjustment` may be either, and `Reversal` is exact opposite of its referenced entry;
 - `ReversesEntryId` is unique; a trigger validates same account, currency, amount, and opposite direction;
@@ -845,6 +857,7 @@ Every FK below is `ON DELETE RESTRICT` and includes `PortfolioId` in the child/p
 |---|---|
 | `Units(PropertyId, PortfolioId)` | `Properties(Id, PortfolioId)` |
 | `LeaseManagements(UnitId, PropertyId, PortfolioId)` | `Units(Id, PropertyId, PortfolioId)` |
+| `LeaseManagements(TransferredFromLeaseManagementId, PortfolioId)` | `LeaseManagements(Id, PortfolioId)` when transfer source is non-null |
 | `LeaseManagementParties(LeaseManagementId, PortfolioId)` | `LeaseManagements(Id, PortfolioId)` |
 | `LeaseManagementParties(TenantId, PortfolioId)` | `Tenants(Id, PortfolioId)` |
 | `TenantUserAccesses(LeaseManagementPartyId, PortfolioId)` | `LeaseManagementParties(Id, PortfolioId)` |
@@ -853,6 +866,7 @@ Every FK below is `ON DELETE RESTRICT` and includes `PortfolioId` in the child/p
 | `UnitOperationalPeriods(SourceLeaseManagementId, UnitId, PortfolioId)` | `LeaseManagements(Id, UnitId, PortfolioId)` when source is non-null |
 | `LegalDocumentArtifacts(StoredFileId, PortfolioId)` | `StoredFiles(Id, PortfolioId)` |
 | `LeaseAgreements(LeaseManagementId, PortfolioId)` | `LeaseManagements(Id, PortfolioId)` |
+| `LeaseAgreements(TransferredFromAgreementId, PortfolioId)` | `LeaseAgreements(Id, PortfolioId)` when a destination transfer draft is copied from another LeaseManagement |
 | `LeaseAgreements(ReplacesAgreementId, LeaseManagementId, PortfolioId)` | `LeaseAgreements(Id, LeaseManagementId, PortfolioId)` |
 | `LeaseAgreements(RenewsAgreementId, LeaseManagementId, PortfolioId)` | same Agreement alternate key |
 | `LeaseAgreements(SupersededByAgreementId, LeaseManagementId, PortfolioId)` | same Agreement alternate key |
@@ -1045,7 +1059,7 @@ Lock LeaseManagement, end the old membership date, insert the new effective memb
 
 - Give possession locks Unit and LeaseManagement, validates executed governing Agreement or records an explicitly authorized reconciliation exception path, sets `PossessionGivenAtUtc`, audit/outbox, commit. Exclusion constraint closes the race.
 - Return possession sets return fact, ends current resident memberships according to command input, starts Unit turnover, changes portal access policy, audit/outbox, commit. It does not close the account or delete legal/financial history.
-- Transfer closes possession at old LeaseManagement and creates the destination LeaseManagement/account/agreement under the destination Unit in one deferred-constraint transaction. Money transfer is explicit paired ledger/deposit entries, never reassigned history.
+- Transfer locks source/destination Units in stable identifier order plus the source LeaseManagement; validates open source possession, destination availability, an executed governing source Agreement, current household/signers, and settled payment/autopay work; then closes source possession and memberships, creates the destination LeaseManagement/account/current parties/new version-1 `Transfer` Agreement draft and signer snapshot, transitions access, and starts source turnover in one transaction. Destination possession remains planned unless an explicitly authorized possession-without-executed-agreement exception is supplied. Money transfer is explicit paired ledger/deposit entries sharing `TransferPublicId`, never reassigned history.
 
 ### 7.9 Post charge/receipt/reversal/deposit
 

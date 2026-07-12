@@ -313,6 +313,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CancelPlannedRelationshipResult,
     RentalCommand.Data.Leasing.CancelPlannedRelationshipHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.TransferLeaseManagementCommand,
+    RentalCommand.Core.Leasing.TransferLeaseManagementResult,
+    RentalCommand.Data.Leasing.TransferLeaseManagementHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CompleteTurnoverCommand,
     RentalCommand.Core.Leasing.CompleteTurnoverResult,
     RentalCommand.Data.Leasing.CompleteTurnoverHandler>();

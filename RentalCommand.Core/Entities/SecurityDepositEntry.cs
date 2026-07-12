@@ -17,6 +17,8 @@ public class SecurityDepositEntry : IPortfolioScoped
     public DateOnly EffectiveOn { get; set; }
     public DateTime PostedAtUtc { get; set; }
     public string BusinessKey { get; set; } = string.Empty;
+    /// <summary>Shared by the paired source/destination entries of one Unit transfer.</summary>
+    public Guid? TransferPublicId { get; set; }
     public string Description { get; set; } = string.Empty;
     public int? LeaseAgreementId { get; set; }
     public int? LeaseAddendumId { get; set; }

@@ -13,6 +13,8 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public int VersionNumber { get; set; } = 1;
     public string AgreementNumber { get; set; } = string.Empty;
     public LeaseAgreementChangeType ChangeType { get; set; }
+    /// <summary>The executed Agreement copied into this destination draft during a Unit transfer.</summary>
+    public int? TransferredFromAgreementId { get; set; }
     public int? ReplacesAgreementId { get; set; }
     public int? RenewsAgreementId { get; set; }
     public LeaseAgreementTermType TermType { get; set; }
@@ -49,6 +51,8 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public LeaseManagement? LeaseManagement { get; set; }
     public LeaseAgreement? ReplacesAgreement { get; set; }
+    public LeaseAgreement? TransferredFromAgreement { get; set; }
+    public List<LeaseAgreement> TransferSuccessors { get; set; } = [];
     public LeaseAgreement? RenewsAgreement { get; set; }
     public LeaseAgreement? SupersededByAgreement { get; set; }
     public DocumentTemplate? DocumentTemplate { get; set; }
