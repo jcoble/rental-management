@@ -33,7 +33,7 @@ public class DailyBriefingService : IDailyBriefingService
         var tomorrow = today.AddDays(1);
         var nextWeekEnd = today.AddDays(8);
         var sixtyDaysOut = today.AddDays(60);
-        var criticalOverdueCutoff = today.AddDays(-5);
+        var criticalOverdueCutoff = DateOnly.FromDateTime(today.AddDays(-5));
 
         // --- Rule 1: Emergency maintenance ---
         var emergencyWorkOrders = _db.WorkOrders
@@ -64,35 +64,48 @@ public class DailyBriefingService : IDailyBriefingService
             });
 
         // --- Rule 2: Overdue rent ---
-        var overduePayments = _db.Payments
-            .AsNoTracking()
-            .ForCurrentLeaseAttention(today)
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                (p.Status == PaymentStatus.Scheduled ||
-                 p.Status == PaymentStatus.Partial ||
-                 p.Status == PaymentStatus.Late) &&
-                p.DueDate < today)
-            .Select(p => new BriefingCandidate
+        var overduePayments =
+            from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { charge.PortfolioId, charge.TenantAccountId }
+                equals new { account.PortfolioId, TenantAccountId = account.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { account.PortfolioId, account.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+                into agreementRows
+            from agreement in agreementRows.DefaultIfEmpty()
+            where charge.PortfolioId == portfolioId
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && charge.IsPastDue
+                && charge.OpenAmount > 0m
+                && charge.DueOn != null
+            select new BriefingCandidate
             {
                 SortOrder = 2,
-                SeverityOrder = p.DueDate <= criticalOverdueCutoff ? 0 : 1,
+                SeverityOrder = charge.DueOn <= criticalOverdueCutoff ? 0 : 1,
                 Category = "RentLate",
-                EntityType = "Payment",
-                EntityId = p.Id,
-                UnitId = p.Lease != null ? p.Lease.UnitId : null,
+                EntityType = "TenantAccount",
+                EntityId = account.Id,
+                UnitId = lifecycle.UnitId,
                 TitleText = null,
                 DetailText = null,
-                LeaseNumber = p.Lease != null ? p.Lease.LeaseNumber : null,
-                UnitNumber = p.Lease != null && p.Lease.Unit != null ? p.Lease.Unit.UnitNumber : null,
-                TenantName = p.Lease != null && p.Lease.Tenant != null
-                    ? (p.Lease.Tenant.FirstName + " " + p.Lease.Tenant.LastName).Trim()
-                    : null,
-                PropertyName = p.Lease != null && p.Lease.Property != null ? p.Lease.Property.Name : null,
-                Amount = p.Amount,
-                EventDate = p.DueDate,
+                LeaseNumber = agreement != null ? agreement.AgreementNumber : account.AccountNumber,
+                UnitNumber = unit.UnitNumber,
+                TenantName = lifecycle.CurrentPrimaryTenantName,
+                PropertyName = property.Name,
+                Amount = charge.OpenAmount,
+                EventDate = charge.DueOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                 TypeValue = 0,
-            });
+            };
 
         // --- Rule 3: Rent due today ---
         var rentDueLeases = _db.Leases
