@@ -50,6 +50,35 @@ class TenantNotification {
   }
 }
 
+/// Tenant-portal payable obligation. This is intentionally distinct from the
+/// management app's immutable [PaymentReceipt] projection.
+class TenantPortalPayment {
+  const TenantPortalPayment({
+    required this.id,
+    required this.type,
+    required this.status,
+    required this.amount,
+    required this.dueDate,
+  });
+
+  final int id;
+  final String type;
+  final String status;
+  final double amount;
+  final DateTime dueDate;
+
+  factory TenantPortalPayment.fromJson(Map<String, dynamic> json) {
+    return TenantPortalPayment(
+      id: (json['id'] as num).toInt(),
+      type: json['paymentType'] as String? ?? json['type'] as String? ?? '',
+      status: json['status'] as String? ?? '',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      dueDate:
+          DateTime.tryParse(json['dueDate'] as String? ?? '') ?? DateTime(0),
+    );
+  }
+}
+
 /// Autopay enrollment state for one of the tenant's own leases.
 class AutopayStatus {
   const AutopayStatus({
@@ -81,7 +110,7 @@ class TenantPortalSnapshot {
   });
 
   final TenantBalance balance;
-  final List<Payment> payments;
+  final List<TenantPortalPayment> payments;
   final List<WorkOrder> workOrders;
   final List<Lease> leases;
   final List<TenantNotification> notifications;
@@ -111,7 +140,7 @@ class TenantPortalRepository {
         ),
         payments: ((results[1].data as List<dynamic>?) ?? const [])
             .whereType<Map<String, dynamic>>()
-            .map(Payment.fromJson)
+            .map(TenantPortalPayment.fromJson)
             .toList(),
         workOrders: ((results[2].data as List<dynamic>?) ?? const [])
             .whereType<Map<String, dynamic>>()

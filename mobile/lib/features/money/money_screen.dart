@@ -85,10 +85,6 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
     ref.read(transactionsProvider.notifier).refresh();
   }
 
-  void _addPayment() {
-    showCreatePaymentSheet(context, ref, onSaved: _refreshAfterManualEntry);
-  }
-
   void _addExpense() {
     showCreateExpenseSheet(context, ref, onSaved: _refreshAfterManualEntry);
   }
@@ -124,11 +120,6 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
           : MobileQuickActionFab(
               heroTag: 'money-ledger-actions-fab',
               primaryActions: [
-                MobileQuickAction(
-                  label: 'Add payment',
-                  icon: Icons.add_card_outlined,
-                  onPressed: _addPayment,
-                ),
                 MobileQuickAction(
                   label: 'Add expense',
                   icon: Icons.receipt_long_outlined,

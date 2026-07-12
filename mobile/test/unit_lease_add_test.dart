@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -337,6 +335,8 @@ Unit _unit({String status = 'Occupied'}) {
 UnitLeaseSummary _leaseSummary() {
   return UnitLeaseSummary(
     id: 10,
+    leaseManagementId: 20,
+    tenantAccountId: 30,
     leaseNumber: 'L-2026-10',
     status: 'Active',
     startDate: DateTime(2026),
@@ -396,20 +396,15 @@ class _FakePaymentsRepository extends PaymentsRepository {
   _FakePaymentsRepository() : super(Dio());
 
   @override
-  Future<List<Payment>> listPayments({
-    int? leaseId,
-    int? applicationId,
-    String sort = '-createdAt',
-    String? dueFrom,
-    String? dueTo,
+  Future<List<PaymentReceipt>> listPayments({
+    int? tenantAccountId,
+    int? leaseManagementId,
+    String sort = '-postedAtUtc',
     String? paidFrom,
     String? paidTo,
   }) async {
     return const [];
   }
-
-  @override
-  Future<Uint8List> scanBytes(int id) async => Uint8List(0);
 }
 
 class _FakeEvictionCasesRepository extends EvictionCasesRepository {

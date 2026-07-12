@@ -5,8 +5,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_exception.dart';
 import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
-import '../payments/payment_detail_screen.dart';
-import '../payments/payments_repository.dart';
 import 'money_format.dart';
 
 /// "Who's behind" — one row per tenant/lease behind on rent, with one-tap
@@ -23,47 +21,6 @@ class OverdueScreen extends ConsumerStatefulWidget {
 }
 
 class _OverdueScreenState extends ConsumerState<OverdueScreen> {
-  /// Lease id currently being marked caught-up (its row shows a spinner).
-  int? _busyLeaseId;
-
-  /// Marks every past-due payment on [lease] as paid, then refreshes the list and
-  /// the dashboard KPI together so the count and the rows stay in lockstep.
-  Future<void> _markLeasePaid(PastDueLease lease) async {
-    if (_busyLeaseId != null) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busyLeaseId = lease.leaseId);
-    try {
-      final repo = ref.read(paymentsRepositoryProvider);
-      final today = DateTime.now().toIso8601String().split('T').first;
-      final result = await repo.markLeasePastDuePaid(
-        lease.leaseId,
-        paidDate: today,
-      );
-
-      // Refresh the shared sources so the KPI count and this list update together.
-      ref.invalidate(pastDueProvider);
-      ref.invalidate(moneySnapshotProvider);
-
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              result.markedPaidCount <= 1
-                  ? 'Marked paid.'
-                  : 'Marked ${result.markedPaidCount} payments paid.',
-            ),
-          ),
-        );
-    } on ApiException catch (e) {
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.message)));
-    } finally {
-      if (mounted) setState(() => _busyLeaseId = null);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(pastDueProvider);
@@ -123,11 +80,7 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
                   );
                 }
                 final lease = behind[i - 1];
-                return _OverdueLeaseCard(
-                  lease: lease,
-                  busy: _busyLeaseId == lease.leaseId,
-                  onMarkPaid: () => _markLeasePaid(lease),
-                );
+                return _OverdueLeaseCard(lease: lease);
               },
             );
           },
@@ -163,15 +116,9 @@ class _BehindSummary extends StatelessWidget {
 }
 
 class _OverdueLeaseCard extends StatelessWidget {
-  const _OverdueLeaseCard({
-    required this.lease,
-    required this.busy,
-    required this.onMarkPaid,
-  });
+  const _OverdueLeaseCard({required this.lease});
 
   final PastDueLease lease;
-  final bool busy;
-  final VoidCallback onMarkPaid;
 
   int get _daysLate {
     if (lease.oldestDueDate.year <= 1) return 0;
@@ -193,105 +140,67 @@ class _OverdueLeaseCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            InkWell(
-              // Tap drills into the oldest past-due payment, where the landlord
-              // can view/edit it or mark it paid individually.
-              onTap: lease.oldestPaymentId > 0
-                  ? () => Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) => PaymentDetailScreen(
-                          paymentId: lease.oldestPaymentId,
-                        ),
-                      ),
-                    )
-                  : null,
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: cs.errorContainer,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      Icons.person_outline,
-                      color: cs.onErrorContainer,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          lease.displayName,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        Text(
-                          '${moneyFmt(lease.pastDueAmount)} · '
-                          '${days > 0 ? '$days days late' : 'Past due'}',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: cs.error,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        if (lease.overduePaymentCount > 1 ||
-                            (lease.propertyName != null &&
-                                lease.propertyName!.isNotEmpty))
-                          Text(
-                            [
-                              if (lease.overduePaymentCount > 1)
-                                '${lease.overduePaymentCount} $paymentsWord',
-                              if (lease.propertyName != null &&
-                                  lease.propertyName!.isNotEmpty)
-                                lease.unitNumber != null &&
-                                        lease.unitNumber!.isNotEmpty
-                                    ? '${lease.propertyName} · Unit ${lease.unitNumber}'
-                                    : lease.propertyName!,
-                            ].join(' · '),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: cs.onSurfaceVariant,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
             Row(
               children: [
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    onPressed: busy ? null : onMarkPaid,
-                    icon: busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.check_circle_outline, size: 18),
-                    label: Text(
-                      lease.overduePaymentCount > 1
-                          ? 'Mark all paid'
-                          : 'Mark paid',
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: cs.errorContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.person_outline,
+                    color: cs.onErrorContainer,
+                    size: 20,
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _text(context),
-                    icon: const Icon(Icons.sms_outlined, size: 18),
-                    label: const Text('Text'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        lease.displayName,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        '${moneyFmt(lease.pastDueAmount)} · '
+                        '${days > 0 ? '$days days late' : 'Past due'}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (lease.overduePaymentCount > 1 ||
+                          (lease.propertyName != null &&
+                              lease.propertyName!.isNotEmpty))
+                        Text(
+                          [
+                            if (lease.overduePaymentCount > 1)
+                              '${lease.overduePaymentCount} $paymentsWord',
+                            if (lease.propertyName != null &&
+                                lease.propertyName!.isNotEmpty)
+                              lease.unitNumber != null &&
+                                      lease.unitNumber!.isNotEmpty
+                                  ? '${lease.propertyName} · Unit ${lease.unitNumber}'
+                                  : lease.propertyName!,
+                          ].join(' · '),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => _text(context),
+              icon: const Icon(Icons.sms_outlined, size: 18),
+              label: const Text('Text'),
             ),
           ],
         ),
