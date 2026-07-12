@@ -87,7 +87,8 @@ public class ScanServiceTests : IDisposable
             overridesJson: """{"vendor_name":"Reviewed Vendor","total":55.25,"is_paid":false,"propertyId":10}""");
 
         result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
-        var command = result.Command.Should().NotBeNull().Subject;
+        result.Command.Should().NotBeNull();
+        var command = result.Command!;
         command.PortfolioId.Should().Be(PortfolioId);
         command.DraftId.Should().Be(draft.Id);
         command.ConfirmedByUserId.Should().Be(7);
