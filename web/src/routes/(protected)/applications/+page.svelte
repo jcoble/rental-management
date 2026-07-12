@@ -22,8 +22,8 @@
 	import { recordHref } from '$lib/navigation/record-href';
 	import {
 		buildApplicationLinkUrl,
-		readUnitListingLinkContext,
-		type UnitListingLinkContext,
+		readRentalListingLinkContext,
+		type RentalListingLinkContext,
 	} from '$lib/applications/application-link';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
@@ -96,9 +96,9 @@
 	let showLinkDialog = $state(false);
 	let applyUrl = $state('');
 	let copied = $state(false);
-	let activeLinkContext = $state<UnitListingLinkContext | null>(null);
+	let activeLinkContext = $state<RentalListingLinkContext | null>(null);
 	let listUnitActionHandled = false;
-	const listUnitContext = $derived(readUnitListingLinkContext(page.url.searchParams));
+	const listUnitContext = $derived(readRentalListingLinkContext(page.url.searchParams));
 	const linkDialogTitle = $derived(
 		activeLinkContext ? 'Application link for this unit' : 'Your application link'
 	);
@@ -109,7 +109,7 @@
 	);
 
 	const linkMutation = createMutation(() => ({
-		mutationFn: async (context?: UnitListingLinkContext | null) => ({
+		mutationFn: async (context?: RentalListingLinkContext | null) => ({
 			result: await applications.createLink(),
 			context: context ?? null,
 		}),

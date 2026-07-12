@@ -24,7 +24,7 @@ public class Unit : IPortfolioScoped
 
     public Property? Property { get; set; }
     public List<Lease> Leases { get; set; } = [];
-    public List<UnitListing> UnitListings { get; set; } = [];
+    public List<RentalListing> RentalListings { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];

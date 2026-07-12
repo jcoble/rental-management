@@ -148,15 +148,60 @@ export interface Unit {
 	updatedAt: string;
 }
 
-export type UnitListingStatus = 'Draft' | 'ReadyToPost' | 'Posted' | 'Paused' | 'Filled' | 'Archived';
+export type RentalListingStatus = 'Draft' | 'ReadyToPublish' | 'Published' | 'Paused' | 'Filled' | 'Archived';
+export type ListingPublicationStatus = 'Draft' | 'Ready' | 'Publishing' | 'Published' | 'Paused' | 'Failed' | 'Removed';
 
-export interface UnitListing {
+export interface ListingPhoto {
+	id: number;
+	position: number;
+	category: string;
+	caption?: string | null;
+	storedFileId?: number | null;
+	fileName?: string | null;
+	sha256?: string | null;
+}
+
+export interface ExternalListingSignal {
+	id: number;
+	signalType: string;
+	suggestedExternalListingId?: string | null;
+	suggestedListingUrl?: string | null;
+	suggestedExternalStatus?: string | null;
+	disposition: 'Unconfirmed' | 'Confirmed' | 'Rejected';
+	receivedAtUtc: string;
+}
+
+export interface ListingPublication {
+	id: number;
+	providerKey: string;
+	mode: 'Guided' | 'Connected';
+	status: ListingPublicationStatus;
+	externalListingId?: string | null;
+	listingUrl?: string | null;
+	applicationUrl?: string | null;
+	managementUrl?: string | null;
+	lastConfirmedExternalStatus?: string | null;
+	lastConfirmedAtUtc?: string | null;
+	copyConfirmed: boolean;
+	termsConfirmed: boolean;
+	photosConfirmed: boolean;
+	providerWorkspaceOpened: boolean;
+	needsRepublish: boolean;
+	publishedContentVersion?: number | null;
+	lastDeliveryKey?: string | null;
+	lastDeliveryStatus?: string | null;
+	lastDeliveryError?: string | null;
+	lastDeliveryAttemptAtUtc?: string | null;
+	unconfirmedSignals: ExternalListingSignal[];
+}
+
+export interface ListingWorkspace {
 	id: number;
 	portfolioId: number;
 	propertyId: number;
 	unitId: number;
-	channel: 'ZillowManual';
-	status: UnitListingStatus;
+	status: RentalListingStatus;
+	contentVersion: number;
 	headline: string;
 	description: string;
 	rent: number;
@@ -170,34 +215,39 @@ export interface UnitListing {
 	utilities?: string | null;
 	parking?: string | null;
 	amenities?: string | null;
-	photoNotes?: string | null;
-	zillowListingUrl?: string | null;
-	zillowApplicationUrl?: string | null;
-	postedAtUtc?: string | null;
-	isPosted: boolean;
+	photoManifest: ListingPhoto[];
+	publications: ListingPublication[];
+	signedLeaseImportUrl: string;
 	createdAt: string;
 	updatedAt: string;
 }
 
-export interface SaveUnitListingRequest {
-	status?: UnitListingStatus;
+export interface SaveListingWorkspaceRequest {
+	status?: RentalListingStatus;
 	headline?: string;
 	description?: string;
 	rent?: number | null;
 	securityDeposit?: number | null;
-	bedrooms?: number | null;
-	bathrooms?: number | null;
-	squareFeet?: number | null;
 	availableOn?: string | null;
 	leaseTerms?: string | null;
 	petPolicy?: string | null;
 	utilities?: string | null;
 	parking?: string | null;
 	amenities?: string | null;
-	photoNotes?: string | null;
-	zillowListingUrl?: string | null;
-	zillowApplicationUrl?: string | null;
-	postedAtUtc?: string | null;
+	zillowGuided?: {
+		status?: ListingPublicationStatus;
+		externalListingId?: string | null;
+		listingUrl?: string | null;
+		applicationUrl?: string | null;
+		managementUrl?: string | null;
+		lastConfirmedExternalStatus?: string | null;
+		lastConfirmedAtUtc?: string | null;
+		copyConfirmed?: boolean;
+		termsConfirmed?: boolean;
+		photosConfirmed?: boolean;
+		providerWorkspaceOpened?: boolean;
+		markCurrentVersionPublished?: boolean;
+	};
 }
 
 /** A units-list row with health badges (GET /units/list-with-health). */

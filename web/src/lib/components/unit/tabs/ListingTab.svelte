@@ -1,349 +1,181 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
-	import type { SaveUnitListingRequest, UnitDashboard, UnitListing, UnitListingStatus } from '$lib/types';
+	import type { ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest, UnitDashboard } from '$lib/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
-	import { Clipboard, ExternalLink, FileText, RefreshCw, Save } from '@lucide/svelte';
+	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { Camera, Check, Clipboard, ExternalLink, FileDown, Link2, RefreshCw, Save, WifiOff } from '@lucide/svelte';
 
-	const ZILLOW_RENTAL_MANAGER_URL = 'https://www.zillow.com/rental-manager/properties';
-	const STATUS_OPTIONS: UnitListingStatus[] = ['Draft', 'ReadyToPost', 'Posted', 'Paused', 'Filled', 'Archived'];
-
-	type ListingForm = {
-		status: UnitListingStatus;
-		headline: string;
-		description: string;
-		rent: string;
-		securityDeposit: string;
-		leaseTerms: string;
-		petPolicy: string;
-		utilities: string;
-		parking: string;
-		amenities: string;
-		photoNotes: string;
-		zillowListingUrl: string;
-		zillowApplicationUrl: string;
+	type Form = {
+		headline: string; description: string; rent: string; securityDeposit: string;
+		leaseTerms: string; petPolicy: string; utilities: string; parking: string; amenities: string;
+		publicationStatus: ListingPublicationStatus; externalListingId: string; listingUrl: string;
+		applicationUrl: string; externalStatus: string; copyConfirmed: boolean; termsConfirmed: boolean;
+		photosConfirmed: boolean;
 	};
 
 	let { dashboard }: { dashboard: UnitDashboard } = $props();
-
 	const queryClient = useQueryClient();
 	const unitId = $derived(dashboard.unit.id);
-	const unitLabel = $derived(`${dashboard.propertyName} - Unit ${dashboard.unit.unitNumber}`);
-	let loadedListingId = $state<number | null>(null);
-	let form = $state<ListingForm>(blankForm());
+	let loadedVersion = $state<number | null>(null);
+	let form = $state<Form>(blankForm());
 
-	const listingQuery = createQuery(() => ({
-		queryKey: ['unit-listing', unitId],
-		enabled: unitId > 0,
-		queryFn: () => units.listing(unitId),
+	const workspaceQuery = createQuery(() => ({
+		queryKey: ['listing-workspace', unitId],
+		queryFn: () => units.listingWorkspace(unitId),
 	}));
-
-	const listing = $derived(listingQuery.data ?? null);
-	const hasListing = $derived(!!listing);
-	const canSave = $derived(
-		hasListing &&
-			form.headline.trim().length > 0 &&
-			form.description.trim().length > 0 &&
-			isOptionalNumber(form.rent) &&
-			isOptionalNumber(form.securityDeposit),
-	);
+	const workspace = $derived(workspaceQuery.data ?? null);
+	const guided = $derived(workspace?.publications.find((item) => item.providerKey === 'Zillow' && item.mode === 'Guided') ?? null);
+	const connected = $derived(workspace?.publications.find((item) => item.providerKey === 'Zillow' && item.mode === 'Connected') ?? null);
+	const canSave = $derived(!!workspace && !!form.headline.trim() && !!form.description.trim() && validNumber(form.rent));
 
 	$effect(() => {
-		const data = listingQuery.data;
-		if (!data) {
-			if (loadedListingId !== null && data === null) {
-				loadedListingId = null;
-				form = blankForm();
-			}
-			return;
-		}
-		if (data.id !== loadedListingId) {
-			loadedListingId = data.id;
-			form = formFromListing(data);
+		const value = workspaceQuery.data;
+		if (value && value.contentVersion !== loadedVersion) {
+			loadedVersion = value.contentVersion;
+			form = formFrom(value, value.publications.find((item) => item.providerKey === 'Zillow' && item.mode === 'Guided'));
 		}
 	});
 
 	const generateMutation = createMutation(() => ({
-		mutationFn: () => units.generateListing(unitId),
-		onSuccess: (data) => {
-			loadedListingId = data.id;
-			form = formFromListing(data);
-			showSuccess('Listing packet generated.');
-			queryClient.setQueryData(['unit-listing', unitId], data);
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		mutationFn: () => units.generateListingWorkspace(unitId),
+		onSuccess: acceptWorkspace,
+		onError: (error) => showError(apiErrorMessage(error)),
 	}));
-
 	const saveMutation = createMutation(() => ({
-		mutationFn: () => units.saveListing(unitId, buildPayload(form)),
-		onSuccess: (data) => {
-			loadedListingId = data.id;
-			form = formFromListing(data);
-			showSuccess('Listing packet saved.');
-			queryClient.setQueryData(['unit-listing', unitId], data);
-			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', unitId] });
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		mutationFn: (markPublished = false) => units.saveListingWorkspace(unitId, payload(markPublished)),
+		onSuccess: (value) => { acceptWorkspace(value); showSuccess('Listing workspace saved.'); },
+		onError: (error) => showError(apiErrorMessage(error)),
+	}));
+	const signalMutation = createMutation(() => ({
+		mutationFn: ({ signalId, accept }: { signalId: number; accept: boolean }) => units.confirmListingSignal(unitId, signalId, accept),
+		onSuccess: acceptWorkspace,
+		onError: (error) => showError(apiErrorMessage(error)),
 	}));
 
-	function blankForm(): ListingForm {
-		return {
-			status: 'Draft',
-			headline: '',
-			description: '',
-			rent: '',
-			securityDeposit: '',
-			leaseTerms: '',
-			petPolicy: '',
-			utilities: '',
-			parking: '',
-			amenities: '',
-			photoNotes: '',
-			zillowListingUrl: '',
-			zillowApplicationUrl: '',
-		};
+	function acceptWorkspace(value: ListingWorkspace) {
+		loadedVersion = value.contentVersion;
+		form = formFrom(value, value.publications.find((item) => item.providerKey === 'Zillow' && item.mode === 'Guided'));
+		queryClient.setQueryData(['listing-workspace', unitId], value);
 	}
 
-	function formFromListing(value: UnitListing): ListingForm {
-		return {
-			status: value.status,
-			headline: value.headline ?? '',
-			description: value.description ?? '',
-			rent: numberToFormValue(value.rent),
-			securityDeposit: numberToFormValue(value.securityDeposit),
-			leaseTerms: value.leaseTerms ?? '',
-			petPolicy: value.petPolicy ?? '',
-			utilities: value.utilities ?? '',
-			parking: value.parking ?? '',
-			amenities: value.amenities ?? '',
-			photoNotes: value.photoNotes ?? '',
-			zillowListingUrl: value.zillowListingUrl ?? '',
-			zillowApplicationUrl: value.zillowApplicationUrl ?? '',
-		};
+	function blankForm(): Form {
+		return { headline: '', description: '', rent: '', securityDeposit: '', leaseTerms: '', petPolicy: '', utilities: '',
+			parking: '', amenities: '', publicationStatus: 'Draft', externalListingId: '', listingUrl: '', applicationUrl: '',
+			externalStatus: '', copyConfirmed: false, termsConfirmed: false, photosConfirmed: false };
 	}
 
-	function buildPayload(value: ListingForm): SaveUnitListingRequest {
-		return {
-			status: value.status,
-			headline: value.headline,
-			description: value.description,
-			rent: parseOptionalNumber(value.rent),
-			securityDeposit: parseOptionalNumber(value.securityDeposit),
-			leaseTerms: value.leaseTerms,
-			petPolicy: value.petPolicy,
-			utilities: value.utilities,
-			parking: value.parking,
-			amenities: value.amenities,
-			photoNotes: value.photoNotes,
-			zillowListingUrl: value.zillowListingUrl,
-			zillowApplicationUrl: value.zillowApplicationUrl,
-		};
+	function formFrom(value: ListingWorkspace, publication?: ListingPublication): Form {
+		return { headline: value.headline, description: value.description, rent: String(value.rent),
+			securityDeposit: value.securityDeposit == null ? '' : String(value.securityDeposit), leaseTerms: value.leaseTerms ?? '',
+			petPolicy: value.petPolicy ?? '', utilities: value.utilities ?? '', parking: value.parking ?? '', amenities: value.amenities ?? '',
+			publicationStatus: publication?.status ?? 'Draft', externalListingId: publication?.externalListingId ?? '',
+			listingUrl: publication?.listingUrl ?? '', applicationUrl: publication?.applicationUrl ?? '',
+			externalStatus: publication?.lastConfirmedExternalStatus ?? '', copyConfirmed: publication?.copyConfirmed ?? false,
+			termsConfirmed: publication?.termsConfirmed ?? false, photosConfirmed: publication?.photosConfirmed ?? false };
 	}
 
-	function parseOptionalNumber(value: string): number | null {
-		const trimmed = value.trim();
-		if (!trimmed) return null;
-		const parsed = Number(trimmed);
-		return Number.isFinite(parsed) ? parsed : null;
+	function payload(markPublished: boolean): SaveListingWorkspaceRequest {
+		return { headline: form.headline, description: form.description, rent: numberOrNull(form.rent),
+			securityDeposit: numberOrNull(form.securityDeposit), leaseTerms: form.leaseTerms, petPolicy: form.petPolicy,
+			utilities: form.utilities, parking: form.parking, amenities: form.amenities,
+			zillowGuided: { status: form.publicationStatus, externalListingId: form.externalListingId,
+				listingUrl: form.listingUrl, applicationUrl: form.applicationUrl, lastConfirmedExternalStatus: form.externalStatus,
+				lastConfirmedAtUtc: form.externalStatus && form.externalStatus !== (guided?.lastConfirmedExternalStatus ?? '')
+					? new Date().toISOString() : undefined, copyConfirmed: form.copyConfirmed,
+				termsConfirmed: form.termsConfirmed, photosConfirmed: form.photosConfirmed,
+				providerWorkspaceOpened: guided?.providerWorkspaceOpened ?? false, markCurrentVersionPublished: markPublished } };
 	}
 
-	function isOptionalNumber(value: string): boolean {
-		const trimmed = value.trim();
-		return !trimmed || Number.isFinite(Number(trimmed));
+	function numberOrNull(value: string): number | null { return value.trim() ? Number(value) : null; }
+	function validNumber(value: string): boolean { return !!value.trim() && Number.isFinite(Number(value)); }
+	async function copy(label: string, value: string) {
+		if (!value.trim()) return showError(`${label} is empty.`);
+		await navigator.clipboard.writeText(value); showSuccess(`${label} copied.`);
 	}
-
-	function numberToFormValue(value: number | null | undefined): string {
-		return value === null || value === undefined ? '' : String(value);
-	}
-
-	async function copyText(label: string, text: string) {
-		const value = text.trim();
-		if (!value) {
-			showError(`${label} is empty.`);
-			return;
-		}
-		await navigator.clipboard.writeText(value);
-		showSuccess(`${label} copied.`);
+	function openZillow() {
+		window.open(guided?.managementUrl ?? 'https://www.zillow.com/rental-manager/properties', '_blank', 'noopener,noreferrer');
+		if (workspace) units.saveListingWorkspace(unitId, { zillowGuided: { providerWorkspaceOpened: true } }).then(acceptWorkspace);
 	}
 </script>
 
 <div class="space-y-4" data-testid="unit-listing-tab">
 	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div class="min-w-0">
-			<h2 class="truncate text-lg font-semibold">Listing</h2>
-			<p class="truncate text-sm text-muted-foreground">{unitLabel}</p>
-		</div>
-		<div class="flex flex-wrap items-center gap-2">
-			<Button
-				variant="outline"
-				size="sm"
-				class="gap-1"
-				onclick={() => generateMutation.mutate()}
-				disabled={generateMutation.isPending}
-				data-testid="listing-generate"
-			>
-				<RefreshCw class="h-4 w-4" />
-				{generateMutation.isPending ? 'Generating...' : hasListing ? 'Regenerate' : 'Generate packet'}
+		<div><h2 class="text-lg font-semibold">Listing workspace</h2><p class="text-sm text-muted-foreground">One listing for this unit, published through guided or connected channels.</p></div>
+		<div class="flex gap-2">
+			<Button variant="outline" size="sm" class="gap-1" onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
+				<RefreshCw class="h-4 w-4" /> {workspace ? 'Refresh from unit' : 'Prepare listing'}
 			</Button>
-			<Button
-				size="sm"
-				class="gap-1"
-				onclick={() => saveMutation.mutate()}
-				disabled={!canSave || saveMutation.isPending}
-				data-testid="listing-save"
-			>
-				<Save class="h-4 w-4" />
-				{saveMutation.isPending ? 'Saving...' : 'Save'}
+			<Button size="sm" class="gap-1" onclick={() => saveMutation.mutate(false)} disabled={!canSave || saveMutation.isPending}>
+				<Save class="h-4 w-4" /> Save
 			</Button>
 		</div>
 	</div>
 
-	{#if listingQuery.isLoading}
-		<p class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Loading listing...</p>
-	{:else if !hasListing}
-		<DetailCard title="No listing packet" icon={FileText} accent="muted" testid="listing-empty">
-			<div class="flex flex-wrap items-center justify-between gap-3">
-				<p class="text-sm text-muted-foreground">No Zillow packet is saved for this unit.</p>
-				<Button
-					size="sm"
-					class="gap-1"
-					onclick={() => generateMutation.mutate()}
-					disabled={generateMutation.isPending}
-					data-testid="listing-empty-generate"
-				>
-					<RefreshCw class="h-4 w-4" />
-					Generate packet
-				</Button>
-			</div>
+	{#if workspaceQuery.isLoading}
+		<p class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Loading listing workspace…</p>
+	{:else if !workspace}
+		<DetailCard title="Prepare this rental listing" icon={FileDown} accent="primary">
+			<p class="text-sm text-muted-foreground">Rental Command will prepare reusable copy, terms, and an ordered photo package for this unit.</p>
+			<Button class="mt-4 gap-2" onclick={() => generateMutation.mutate()}><RefreshCw class="h-4 w-4" /> Prepare listing</Button>
 		</DetailCard>
 	{:else}
-		<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-			<DetailCard title="Zillow packet" icon={FileText} accent="primary" testid="listing-editor">
-				<div class="space-y-4">
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Headline</span>
-						<div class="flex gap-2">
-							<Input bind:value={form.headline} data-testid="listing-headline" />
-							<Button
-								type="button"
-								variant="outline"
-								size="icon"
-								title="Copy headline"
-								aria-label="Copy headline"
-								onclick={() => copyText('Headline', form.headline)}
-								data-testid="listing-copy-headline"
-							>
-								<Clipboard class="h-4 w-4" />
-							</Button>
-						</div>
-					</label>
+		{#if guided?.needsRepublish}
+			<div class="rounded-lg border border-amber-400/50 bg-amber-400/10 p-3 text-sm"><strong>Changes need republishing.</strong> The saved listing is version {workspace.contentVersion}; Zillow was last confirmed at version {guided.publishedContentVersion}.</div>
+		{/if}
 
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Description</span>
-						<textarea
-							class="min-h-40 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							bind:value={form.description}
-							data-testid="listing-description"
-						></textarea>
-						<Button
-							type="button"
-							variant="outline"
-							size="sm"
-							class="gap-1"
-							onclick={() => copyText('Description', form.description)}
-							data-testid="listing-copy-description"
-						>
-							<Clipboard class="h-4 w-4" />
-							Copy description
-						</Button>
-					</label>
-
-					<div class="grid gap-3 sm:grid-cols-2">
-						<label class="space-y-1 text-sm">
-							<span class="font-medium">Rent</span>
-							<Input inputmode="decimal" bind:value={form.rent} data-testid="listing-rent" />
-						</label>
-						<label class="space-y-1 text-sm">
-							<span class="font-medium">Deposit</span>
-							<Input inputmode="decimal" bind:value={form.securityDeposit} data-testid="listing-deposit" />
-						</label>
+		<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+			<div class="space-y-4">
+				<DetailCard title="Listing copy" icon={Clipboard} accent="primary">
+					<div class="space-y-4">
+						<label class="space-y-1 text-sm"><span class="font-medium">Headline</span><div class="flex gap-2"><Input bind:value={form.headline} /><Button variant="outline" size="icon" onclick={() => copy('Headline', form.headline)} aria-label="Copy headline"><Clipboard class="h-4 w-4" /></Button></div></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Description</span><textarea class="min-h-36 w-full rounded-md border bg-background p-3 text-sm" bind:value={form.description}></textarea><Button variant="outline" size="sm" class="gap-1" onclick={() => copy('Description', form.description)}><Clipboard class="h-4 w-4" /> Copy description</Button></label>
+						<div class="grid gap-3 sm:grid-cols-2"><label class="space-y-1 text-sm"><span class="font-medium">Rent</span><Input bind:value={form.rent} inputmode="decimal" /></label><label class="space-y-1 text-sm"><span class="font-medium">Deposit</span><Input bind:value={form.securityDeposit} inputmode="decimal" /></label></div>
+						<label class="space-y-1 text-sm"><span class="font-medium">Lease terms</span><Input bind:value={form.leaseTerms} /></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Pet policy</span><Input bind:value={form.petPolicy} /></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Utilities</span><Input bind:value={form.utilities} /></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Parking</span><Input bind:value={form.parking} /></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Amenities</span><textarea class="min-h-20 w-full rounded-md border bg-background p-3 text-sm" bind:value={form.amenities}></textarea></label>
 					</div>
+				</DetailCard>
 
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Lease terms</span>
-						<Input bind:value={form.leaseTerms} data-testid="listing-lease-terms" />
-					</label>
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Pet policy</span>
-						<Input bind:value={form.petPolicy} data-testid="listing-pet-policy" />
-					</label>
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Utilities</span>
-						<Input bind:value={form.utilities} data-testid="listing-utilities" />
-					</label>
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Parking</span>
-						<Input bind:value={form.parking} data-testid="listing-parking" />
-					</label>
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Amenities</span>
-						<textarea
-							class="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							bind:value={form.amenities}
-							data-testid="listing-amenities"
-						></textarea>
-					</label>
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Photo notes</span>
-						<textarea
-							class="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							bind:value={form.photoNotes}
-							data-testid="listing-photo-notes"
-						></textarea>
-					</label>
-				</div>
-			</DetailCard>
+				<DetailCard title="Ordered photo package" icon={Camera} accent="muted">
+					<div class="space-y-2">{#each workspace.photoManifest as photo}<div class="flex items-center gap-3 rounded-md border p-3"><span class="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">{photo.position}</span><div><p class="text-sm font-medium">{photo.category}</p><p class="text-xs text-muted-foreground">{photo.fileName ?? photo.caption ?? 'Photo needed'}</p></div></div>{/each}</div>
+				</DetailCard>
+			</div>
 
-			<DetailCard title="Zillow handoff" icon={ExternalLink} accent="success" testid="listing-handoff">
-				<div class="space-y-4">
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Status</span>
-						<select
-							class="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-							bind:value={form.status}
-							data-testid="listing-status"
-						>
-							{#each STATUS_OPTIONS as status}
-								<option value={status}>{status}</option>
-							{/each}
-						</select>
-					</label>
+			<div class="space-y-4">
+				<DetailCard title="Zillow Guided" icon={ExternalLink} accent="success">
+					<div class="space-y-4">
+						<p class="text-sm text-muted-foreground">Rental Command prepares and tracks the work. You remain signed into Zillow and publish there.</p>
+						<Button class="w-full gap-2" onclick={openZillow}><ExternalLink class="h-4 w-4" /> Open Zillow Rental Manager</Button>
+						<label class="space-y-1 text-sm"><span class="font-medium">Publication state</span><select class="h-10 w-full rounded-md border bg-background px-3" bind:value={form.publicationStatus}><option value="Draft">Draft</option><option value="Ready">Ready</option><option value="Published">Published</option><option value="Paused">Paused</option><option value="Removed">Removed</option></select></label>
+						<div class="space-y-2 rounded-md border p-3 text-sm">
+							<label class="flex gap-2"><input type="checkbox" bind:checked={form.copyConfirmed} /> Copy entered in Zillow</label>
+							<label class="flex gap-2"><input type="checkbox" bind:checked={form.termsConfirmed} /> Terms reviewed in Zillow</label>
+							<label class="flex gap-2"><input type="checkbox" bind:checked={form.photosConfirmed} /> Photos uploaded in order</label>
+						</div>
+						<label class="space-y-1 text-sm"><span class="font-medium">Listing URL</span><Input bind:value={form.listingUrl} /></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Application URL</span><Input bind:value={form.applicationUrl} /></label>
+						<label class="space-y-1 text-sm"><span class="font-medium">Last status you confirmed</span><Input bind:value={form.externalStatus} placeholder="Active, paused, rented…" /></label>
+						<Button variant="outline" class="w-full gap-2" onclick={() => saveMutation.mutate(true)}><Check class="h-4 w-4" /> Save as published in Zillow</Button>
+						<a class="inline-flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted" href={workspace.signedLeaseImportUrl}><FileDown class="h-4 w-4" /> Import signed Zillow lease</a>
+					</div>
+				</DetailCard>
 
-					<a
-						href={ZILLOW_RENTAL_MANAGER_URL}
-						target="_blank"
-						rel="noreferrer"
-						class="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium transition hover:bg-muted"
-						data-testid="listing-open-zillow"
-					>
-						<ExternalLink class="h-4 w-4" />
-						Open Zillow Rental Manager
-					</a>
+				<DetailCard title="Zillow Connected" icon={WifiOff} accent="muted">
+					<p class="text-sm text-muted-foreground">Ready for provider approval. The same listing will publish, reconcile status, and receive leads through a Zillow adapter—without changing this screen or duplicating your data.</p>
+					<div class="mt-3 rounded-md bg-muted p-3 text-xs"><strong>Current state:</strong> {connected?.lastDeliveryStatus ?? 'Not connected'}<br />No Zillow API calls are made yet.</div>
+				</DetailCard>
 
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Zillow listing URL</span>
-						<Input bind:value={form.zillowListingUrl} data-testid="listing-zillow-url" />
-					</label>
-
-					<label class="space-y-1 text-sm">
-						<span class="font-medium">Zillow application URL</span>
-						<Input bind:value={form.zillowApplicationUrl} data-testid="listing-zillow-application-url" />
-					</label>
-				</div>
-			</DetailCard>
+				{#if guided?.unconfirmedSignals.length}
+					<DetailCard title="Updates to confirm" icon={Link2} accent="primary">
+						<div class="space-y-3">{#each guided.unconfirmedSignals as signal}<div class="rounded-md border p-3 text-sm"><p class="font-medium">{signal.signalType}</p><p class="text-muted-foreground">{signal.suggestedExternalStatus ?? signal.suggestedListingUrl ?? 'External listing metadata changed'}</p><div class="mt-2 flex gap-2"><Button size="sm" onclick={() => signalMutation.mutate({ signalId: signal.id, accept: true })}>Confirm</Button><Button size="sm" variant="outline" onclick={() => signalMutation.mutate({ signalId: signal.id, accept: false })}>Ignore</Button></div></div>{/each}</div>
+					</DetailCard>
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>
