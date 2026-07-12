@@ -19,15 +19,13 @@ public class LeaseController : ManagementControllerBase
 {
     private readonly ILeaseService _service;
     private readonly ILeaseQaService _qa;
-    private readonly ILeaseEsignService _esign;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
 
-    public LeaseController(ILeaseService service, ILeaseQaService qa, ILeaseEsignService esign, RentalCommandDbContext db, IFileStorage files)
+    public LeaseController(ILeaseService service, ILeaseQaService qa, RentalCommandDbContext db, IFileStorage files)
     {
         _service = service;
         _qa = qa;
-        _esign = esign;
         _db = db;
         _files = files;
     }
@@ -84,34 +82,6 @@ public class LeaseController : ManagementControllerBase
         return ledger == null ? NotFound(new { error = "Lease not found" }) : Ok(ledger);
     }
 
-    [HttpPost]
-    [ProducesResponseType(typeof(LeaseResponse), StatusCodes.Status201Created)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseResponse>> Create([FromBody] CreateLeaseRequest request, CancellationToken ct)
-    {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
-        return created == null
-            ? NotFound(new { error = "Referenced property, unit, or tenant not found in this portfolio" })
-            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
-    }
-
-    [HttpPatch("{id:int}")]
-    [ProducesResponseType(typeof(LeaseResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseResponse>> Update(int id, [FromBody] UpdateLeaseRequest request, CancellationToken ct)
-    {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
-        return updated == null ? NotFound(new { error = "Lease not found" }) : Ok(updated);
-    }
-
-    [HttpDelete("{id:int}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
-    {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
-        return deleted ? NoContent() : NotFound(new { error = "Lease not found" });
-    }
 
     [HttpPost("{id:int}/ask")]
     [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
@@ -122,116 +92,4 @@ public class LeaseController : ManagementControllerBase
         return answer == null ? NotFound(new { error = "Lease not found or question is empty" }) : Ok(answer);
     }
 
-    /// <summary>
-    /// Generate a standard residential lease agreement PDF from the lease's captured terms (the
-    /// "5-question generator"), store it as a document attached to the lease, and return its reference.
-    /// </summary>
-    [HttpPost("{id:int}/generate-document")]
-    [ProducesResponseType(typeof(LeaseDocumentResponse), StatusCodes.Status201Created)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseDocumentResponse>> GenerateDocument(int id, CancellationToken ct)
-    {
-        var doc = await _service.GenerateDocumentAsync(GetPortfolioId(), id, ct);
-        return doc == null
-            ? NotFound(new { error = "Lease not found" })
-            : CreatedAtAction(nameof(Document), new { id }, doc);
-    }
-
-    /// <summary>Lightweight status for the latest generated lease agreement, without streaming the PDF.</summary>
-    [HttpGet("{id:int}/document-status")]
-    [ProducesResponseType(typeof(LeaseDocumentStatusResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseDocumentStatusResponse>> DocumentStatus(int id, CancellationToken ct)
-    {
-        var status = await _service.GetDocumentStatusAsync(GetPortfolioId(), id, ct);
-        return status == null
-            ? NotFound(new { error = "Lease not found" })
-            : Ok(status);
-    }
-
-    /// <summary>Download the latest generated lease agreement PDF (404 until one has been generated).</summary>
-    [HttpGet("{id:int}/document", Name = nameof(Document))]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Document(int id, CancellationToken ct)
-    {
-        var file = await _service.GetDocumentAsync(GetPortfolioId(), id, ct);
-        if (file == null)
-        {
-            return NotFound(new { error = "No generated lease agreement; generate it first." });
-        }
-
-        Response.Headers["X-Content-Type-Options"] = "nosniff";
-        Response.Headers["Content-Disposition"] = $"inline; filename=\"{file.Value.FileName}\"";
-        return File(file.Value.Stream, file.Value.ContentType);
-    }
-
-    /// <summary>
-    /// Send the lease's generated agreement out for electronic signature. Generates the agreement PDF first
-    /// if none exists, defaults the signers to the lease's tenants, marks the lease
-    /// <c>EsignStatus=Sent</c> / <c>LeaseStatus=PendingSignature</c>, and returns the signature snapshot.
-    /// Returns 503 when the e-sign provider is not configured (gated) — the lease is left unchanged.
-    /// </summary>
-    [HttpPost("{id:int}/send-for-signature")]
-    [ProducesResponseType(typeof(LeaseSignatureStatusResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> SendForSignature(int id, [FromBody] SendForSignatureRequest request, CancellationToken ct)
-    {
-        var result = await _esign.SendForSignatureAsync(
-            GetPortfolioId(), id, request ?? new SendForSignatureRequest(),
-            GetUserId(), HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
-
-        return result.Outcome switch
-        {
-            SendForSignatureOutcome.Sent => Ok(result.Status),
-            SendForSignatureOutcome.NotFound => NotFound(new { error = result.Error }),
-            SendForSignatureOutcome.MissingSigner => BadRequest(new { error = result.Error }),
-            SendForSignatureOutcome.AlreadyFinalized => BadRequest(new { error = result.Error }),
-            SendForSignatureOutcome.NotConfigured =>
-                StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = result.Error }),
-            _ => StatusCode(StatusCodes.Status502BadGateway, new { error = result.Error }),
-        };
-    }
-
-    /// <summary>
-    /// Current signature status for the lease: <c>{ esignStatus, leaseStatus, envelopeId, hasSignedDocument }</c>.
-    /// When the provider is configured and a request is in flight, the status is refreshed from the provider.
-    /// </summary>
-    [HttpGet("{id:int}/signature-status")]
-    [ProducesResponseType(typeof(LeaseSignatureStatusResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseSignatureStatusResponse>> SignatureStatus(int id, CancellationToken ct)
-    {
-        var status = await _esign.GetSignatureStatusAsync(GetPortfolioId(), id, ct);
-        return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
-    }
-
-    /// <summary>Recent email queue activity for this lease's e-sign requests.</summary>
-    [HttpGet("{id:int}/signature-queue")]
-    [ProducesResponseType(typeof(LeaseSignatureQueueResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseSignatureQueueResponse>> SignatureQueue(int id, CancellationToken ct)
-    {
-        var queue = await _esign.GetSignatureQueueAsync(GetPortfolioId(), id, ct);
-        return queue == null ? NotFound(new { error = "Lease not found" }) : Ok(queue);
-    }
-
-    /// <summary>Download the stored fully-signed agreement PDF (404 until a signed document has been stored).</summary>
-    [HttpGet("{id:int}/signed-document")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> SignedDocument(int id, CancellationToken ct)
-    {
-        var file = await _esign.GetSignedDocumentAsync(GetPortfolioId(), id, ct);
-        if (file == null)
-        {
-            return NotFound(new { error = "No signed agreement on file for this lease." });
-        }
-
-        Response.Headers["X-Content-Type-Options"] = "nosniff";
-        Response.Headers["Content-Disposition"] = $"inline; filename=\"{file.Value.FileName}\"";
-        return File(file.Value.Stream, file.Value.ContentType);
-    }
 }

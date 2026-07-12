@@ -65,8 +65,6 @@ builder.Services.Configure<RentalCommand.Core.Configuration.StripeConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.StripeConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.ReportsConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ReportsConfig.SectionName));
-builder.Services.Configure<RentalCommand.Core.Configuration.EsignConfig>(
-    builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.QuickBooksOptions>(
@@ -149,9 +147,9 @@ builder.Services.AddAtomicCommandHandler<
     WorkspaceAccessMutationResult,
     ChangeWorkspaceAssignmentEndHandler>();
 builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Esign.CreateNativeEsignRequestCommand,
-    RentalCommand.Core.Esign.CreateNativeEsignRequestResult,
-    RentalCommand.Data.Esign.CreateNativeEsignRequestHandler>();
+    RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
+    RentalCommand.Core.Esign.IssueLeaseAgreementResult,
+    RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.RecordNativeEsignViewCommand,
     RentalCommand.Core.Esign.RecordNativeEsignViewResult,
@@ -516,27 +514,6 @@ builder.Services.AddHostedService<RentalCommand.Api.Services.ScheduledOwnerState
 
 // --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
 builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
-
-// --- E-sign provider. Out of the box this is the NATIVE, ESIGN/UETA-compliant provider (always
-// available — no third-party key needed). When a Dropbox Sign key IS configured the gated DropboxSign
-// provider takes over instead (unchanged). So e-sign works natively by default and can be swapped to a
-// hosted provider purely by setting Esign:ApiKey.
-var esignConfig = builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName)
-    .Get<RentalCommand.Core.Configuration.EsignConfig>() ?? new RentalCommand.Core.Configuration.EsignConfig();
-if (esignConfig.Enabled)
-{
-    builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.IEsignProvider,
-        RentalCommand.Api.Services.Esign.DropboxSignEsignProvider>(c =>
-    {
-        c.BaseAddress = new Uri("https://api.hellosign.com/v3/");
-        c.Timeout = TimeSpan.FromSeconds(90);
-    });
-}
-else
-{
-    builder.Services.AddScoped<RentalCommand.Core.Interfaces.IEsignProvider,
-        RentalCommand.Api.Services.Esign.NativeEsignProvider>();
-}
 
 // --- Tenant-screening provider (gated — like Stripe/LLM/e-sign, the real TransUnion call is only wired
 // when a key is set; otherwise a no-op provider returns a clear "not configured" result and never

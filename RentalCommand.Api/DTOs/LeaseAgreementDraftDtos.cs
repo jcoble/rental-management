@@ -74,3 +74,23 @@ public sealed record LeaseAgreementDraftMutationResponse(
         result.ReplacementAddendumIds,
         replayed);
 }
+
+public sealed class IssueLeaseAgreementRequest
+{
+    public int DraftRevision { get; set; }
+    public Guid PendingUploadId { get; set; }
+    public string RequestFingerprint { get; set; } = string.Empty;
+    public string StorageKey { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public string ContentSha256 { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+}
+
+public sealed record IssueLeaseAgreementResponse(
+    Guid SignatureRequestPublicId,
+    int LeaseManagementId,
+    int LeaseAgreementId,
+    int SignatureRequestId,
+    int IssuedArtifactId,
+    bool Replayed);

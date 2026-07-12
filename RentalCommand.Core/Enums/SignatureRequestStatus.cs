@@ -6,11 +6,9 @@ namespace RentalCommand.Core.Enums;
 /// </summary>
 public enum SignatureRequestStatus
 {
-    /// <summary>Created but not yet sent to any signer (reserved; native sends go straight to Sent).</summary>
-    Draft,
-
-    /// <summary>Dispatched to the signer(s); awaiting action.</summary>
-    Sent,
+    Prepared,
+    Dispatching,
+    AwaitingSignatures,
 
     /// <summary>At least one signer has opened/viewed the document but none has signed yet.</summary>
     Viewed,
@@ -28,5 +26,6 @@ public enum SignatureRequestStatus
     Declined,
 
     /// <summary>The request was voided/cancelled by the landlord before completion.</summary>
-    Voided
+    Voided,
+    DeliveryFailed
 }

@@ -17,7 +17,7 @@ public sealed class RecordNativeEsignViewHandler
         CancellationToken ct)
     {
         var target = await attempt.Persistence.Query<SignatureSigner>()
-            .Where(signer => signer.Token == command.Token)
+            .Where(signer => signer.TokenHash == command.TokenHash)
             .Select(signer => new { signer.Id, signer.SignatureRequestId })
             .SingleOrDefaultAsync(ct);
         if (target is null)
@@ -41,8 +41,9 @@ public sealed class RecordNativeEsignViewHandler
                     && candidate.SignatureRequestId == target.SignatureRequestId,
                 ct);
         var request = signer.SignatureRequest!;
+        var occurredAtUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
 
-        if (signer.ExpiresAtUtc <= command.OccurredAtUtc
+        if (signer.TokenExpiresAtUtc <= occurredAtUtc
             && signer.Status is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
             && request.Status is not (SignatureRequestStatus.Completed
                 or SignatureRequestStatus.Declined
@@ -63,11 +64,12 @@ public sealed class RecordNativeEsignViewHandler
         }
 
         signer.Status = SignatureSignerStatus.Viewed;
-        signer.ViewedAtUtc = command.OccurredAtUtc;
+        signer.ViewedAtUtc = occurredAtUtc;
+        signer.UpdatedAtUtc = occurredAtUtc;
         signer.IpAddress ??= command.IpAddress;
         signer.UserAgent ??= command.UserAgent;
 
-        var requestAdvanced = request.Status == SignatureRequestStatus.Sent;
+        var requestAdvanced = request.Status == SignatureRequestStatus.AwaitingSignatures;
         if (requestAdvanced)
         {
             request.Status = SignatureRequestStatus.Viewed;
@@ -76,12 +78,13 @@ public sealed class RecordNativeEsignViewHandler
         attempt.Persistence.Add(new SignatureAuditEvent
         {
             SignatureRequestId = request.Id,
-            SignerId = signer.Id,
+            SignatureSignerId = signer.Id,
             Type = SignatureAuditEventType.Viewed,
-            AtUtc = command.OccurredAtUtc,
+            PortfolioId = request.PortfolioId,
+            OccurredAtUtc = occurredAtUtc,
             IpAddress = command.IpAddress,
             UserAgent = command.UserAgent,
-            Detail = $"{signer.Name} opened the signing page.",
+            Detail = $"{signer.NameSnapshot} opened the signing page.",
         });
 
         attempt.StageSemanticEvent(new AtomicSemanticAudit(

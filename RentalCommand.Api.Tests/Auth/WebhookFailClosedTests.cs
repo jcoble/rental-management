@@ -13,44 +13,13 @@ using RentalCommand.Core.Configuration;
 namespace RentalCommand.Api.Tests.Auth;
 
 /// <summary>
-/// M-6 regression: the anonymous, state-changing e-sign and SMS inbound webhooks must FAIL CLOSED.
+/// M-6 regression: the anonymous, state-changing SMS inbound webhook must FAIL CLOSED.
 /// When the signature secret / provider auth token is unset, verification cannot run, so the request is
 /// unverifiable and spoofable. Outside Development these endpoints must reject with 403 and never invoke
 /// the downstream state mutation; skip-with-warning is permitted ONLY in Development.
 /// </summary>
 public sealed class WebhookFailClosedTests
 {
-    // ---- E-sign ----
-
-    [Fact]
-    public async Task Esign_unconfigured_secret_in_production_is_rejected_403_and_not_processed()
-    {
-        var esign = new Mock<ILeaseEsignService>(MockBehavior.Strict); // strict => any handler call fails the test
-        var controller = CreateEsignController(esign, webhookSecret: null, environment: Environments.Production);
-
-        var result = await Invoke(controller, EsignSignedPayload);
-
-        result.Should().BeOfType<ObjectResult>()
-            .Which.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
-        // Strict mock asserts HandleSignedEventAsync was never reached (no state change on a forged event).
-        esign.VerifyNoOtherCalls();
-    }
-
-    [Fact]
-    public async Task Esign_unconfigured_secret_in_development_is_processed_with_warning()
-    {
-        var esign = new Mock<ILeaseEsignService>();
-        var controller = CreateEsignController(esign, webhookSecret: null, environment: Environments.Development);
-
-        var result = await Invoke(controller, EsignSignedPayload);
-
-        // Dev: still acked (Content), and the signed handler is reached so local testing works without a secret.
-        result.Should().BeOfType<ContentResult>();
-        esign.Verify(e => e.HandleSignedEventAsync("sig_req_123", It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    // ---- SMS ----
-
     [Fact]
     public async Task Sms_unconfigured_token_in_production_is_rejected_403_and_not_routed()
     {
@@ -95,30 +64,6 @@ public sealed class WebhookFailClosedTests
     }
 
     // ---- helpers ----
-
-    private const string EsignSignedPayload =
-        "{\"event\":{\"event_type\":\"signature_request_all_signed\",\"event_time\":\"1\",\"event_hash\":\"x\"}," +
-        "\"signature_request\":{\"signature_request_id\":\"sig_req_123\"}}";
-
-    private static async Task<IActionResult> Invoke(EsignWebhookController controller, string rawJson)
-    {
-        controller.ControllerContext.HttpContext.Request.Body =
-            new MemoryStream(System.Text.Encoding.UTF8.GetBytes(rawJson));
-        return await controller.Handle(CancellationToken.None);
-    }
-
-    private static EsignWebhookController CreateEsignController(
-        Mock<ILeaseEsignService> esign, string? webhookSecret, string environment)
-    {
-        var config = Options.Create(new EsignConfig { ApiKey = "key", WebhookSecret = webhookSecret });
-        var validator = new EsignWebhookSignatureValidator(config, NullLogger<EsignWebhookSignatureValidator>.Instance);
-        var env = StubEnvironment(environment);
-
-        return new EsignWebhookController(esign.Object, validator, config, env, NullLogger<EsignWebhookController>.Instance)
-        {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
-        };
-    }
 
     private static SmsWebhookController CreateSmsController(
         Mock<ISmsInboundRouter> router, string? twilioToken, string environment)

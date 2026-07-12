@@ -22,27 +22,4 @@ public interface ILeaseService
     /// </summary>
     Task<LeaseLedgerResponse?> GetLedgerAsync(
         int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default);
-    Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default);
-    Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
-
-    /// <summary>
-    /// Generates a standard residential lease agreement PDF from the lease's captured terms (the
-    /// "5-question generator"), stores it as a <see cref="Core.Entities.StoredFile"/> (entityType=Lease,
-    /// entityId=lease id), and returns a reference to the stored document. Returns null when the lease is
-    /// not in the caller's portfolio.
-    /// </summary>
-    Task<LeaseDocumentResponse?> GenerateDocumentAsync(int portfolioId, int id, CancellationToken ct = default);
-
-    /// <summary>
-    /// Returns lightweight generated-agreement metadata for the lease. Returns null only when the lease is
-    /// not in the caller's portfolio; missing agreement is represented by <c>HasDocument=false</c>.
-    /// </summary>
-    Task<LeaseDocumentStatusResponse?> GetDocumentStatusAsync(int portfolioId, int id, CancellationToken ct = default);
-
-    /// <summary>
-    /// Streams the latest generated lease agreement PDF for the lease. Returns null when the lease is not
-    /// in the portfolio or no agreement has been generated yet (controller maps to 404).
-    /// </summary>
-    Task<(Stream Stream, string FileName, string ContentType)?> GetDocumentAsync(int portfolioId, int id, CancellationToken ct = default);
 }

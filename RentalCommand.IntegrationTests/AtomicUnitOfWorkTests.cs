@@ -90,6 +90,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         services.AddAtomicCommandHandler<ServiceBearingCommand, ExpenseResult, ServiceBearingCommandHandler>();
         services.AddAtomicCommandHandler<ServiceBearingResultCommand, ServiceBearingResult, ServiceBearingResultHandler>();
         services.AddAtomicCommandHandler<QueryResultCommand, IQueryable<Expense>, QueryResultHandler>();
+#if LEGACY_LEASE_ESIGN
         services.AddAtomicCommandHandler<
             CreateNativeEsignRequestCommand,
             CreateNativeEsignRequestResult,
@@ -110,6 +111,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             FinalizeNativeEsignRequestCommand,
             FinalizeNativeEsignRequestResult,
             FinalizeNativeEsignRequestHandler>();
+#endif
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(
                     _postgres.GetConnectionString(),
@@ -242,6 +244,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             && row.EntityId == atomicId)).Should().Be(1);
     }
 
+#if LEGACY_LEASE_ESIGN
     [SkippableFact]
     public async Task NativeEsignCommand_CommitsLeaseEnvelopeDocumentSignersAuditAndOutbox_Once()
     {
@@ -503,6 +506,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
             return outcome.Value.Outcome == NativeSignerActionOutcome.Applied;
         }
     }
+#endif
 
     [SkippableFact]
     public async Task FailureDuringFinalAuditFlush_RollsBackBusinessAuditReceipt()
@@ -828,6 +832,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
     private AtomicCommandIdentity Identity(string testName) =>
         new($"test.atomic.{testName}", Guid.NewGuid().ToString("N"));
 
+#if LEGACY_LEASE_ESIGN
     private static AtomicCommandIdentity ViewIdentity(string token) =>
         new(
             "native-esign.view",
@@ -949,6 +954,7 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         await db.SaveChangesAsync();
         return lease.Id;
     }
+#endif
 
     private async Task AssertAdmissionRejected<TCommand>(TCommand command, string messagePattern)
         where TCommand : notnull, IAtomicCommandData

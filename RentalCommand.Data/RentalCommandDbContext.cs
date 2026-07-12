@@ -970,85 +970,109 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<SignatureRequest>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.PublicId).IsRequired().HasMaxLength(64);
-            entity.Property(e => e.DocumentName).IsRequired().HasMaxLength(260);
-            entity.Property(e => e.Subject).HasMaxLength(200);
-            entity.Property(e => e.ContentSha256).HasMaxLength(64);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.PublicId).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ProviderEnvelopeId).HasMaxLength(200);
+            entity.Property(e => e.IdempotencyKey).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(300);
+            entity.Property(e => e.FailureCode).HasMaxLength(100);
+            entity.Property(e => e.LastError).HasMaxLength(2000);
             entity.Property(e => e.ExecutionClaimOwner).HasMaxLength(200);
-            entity.Property(e => e.ExecutionLastError).HasMaxLength(2000);
-            entity.Property(e => e.TemplateFieldSnapshotJson).HasColumnType("jsonb");
-            // Stored as the string enum name to match the app-wide string-enum convention.
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
-            // The envelope is resolved by its opaque PublicId (webhook/status path) — unique + indexed.
             entity.HasIndex(e => e.PublicId).IsUnique();
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.LeaseId);
-            entity.HasIndex(e => e.DocumentTemplateId);
-            entity.HasIndex(e => e.Status);
-            entity.HasIndex(e => new { e.Status, e.ExecutionClaimExpiresAtUtc, e.CreatedAtUtc, e.Id });
+            entity.HasIndex(e => new { e.Provider, e.IdempotencyKey }).IsUnique();
+            entity.HasIndex(e => new { e.Provider, e.ProviderEnvelopeId }).IsUnique()
+                .HasFilter("\"ProviderEnvelopeId\" IS NOT NULL");
+            entity.HasIndex(e => e.LeaseAgreementId).IsUnique()
+                .HasFilter("\"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Prepared','Dispatching','AwaitingSignatures','Viewed','PartiallySigned','ExecutionPending')");
+            entity.HasIndex(e => e.LeaseAddendumId).IsUnique()
+                .HasFilter("\"LeaseAddendumId\" IS NOT NULL AND \"Status\" IN ('Prepared','Dispatching','AwaitingSignatures','Viewed','PartiallySigned','ExecutionPending')");
+            entity.HasIndex(e => new { e.Status, e.NextAttemptAtUtc, e.PreparedAtUtc, e.Id });
             entity.HasIndex(e => new { e.ExecutionClaimExpiresAtUtc, e.Id })
                 .HasFilter("\"ExecutionClaimToken\" IS NOT NULL");
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint("CK_SignatureRequest_Parent", "(\"LeaseAgreementId\" IS NULL) <> (\"LeaseAddendumId\" IS NULL)");
+                table.HasCheckConstraint("CK_SignatureRequest_Execution", "(\"ExecutedArtifactId\" IS NULL AND \"CompletedAtUtc\" IS NULL) OR (\"ExecutedArtifactId\" IS NOT NULL AND \"CompletedAtUtc\" IS NOT NULL AND \"Status\" = 'Completed')");
+                table.HasCheckConstraint("CK_SignatureRequest_Claim", "(\"ExecutionClaimOwner\" IS NULL AND \"ExecutionClaimToken\" IS NULL AND \"ExecutionClaimExpiresAtUtc\" IS NULL) OR (\"ExecutionClaimOwner\" IS NOT NULL AND \"ExecutionClaimToken\" IS NOT NULL AND \"ExecutionClaimExpiresAtUtc\" IS NOT NULL)");
+            });
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
-                .WithMany()
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.DocumentTemplate)
-                .WithMany()
-                .HasForeignKey(e => e.DocumentTemplateId)
-                .OnDelete(DeleteBehavior.SetNull);
-            // The stored files outlive the request row; never cascade a file delete back into it.
-            entity.HasOne(e => e.OriginalStoredFile)
-                .WithMany()
-                .HasForeignKey(e => e.OriginalStoredFileId)
                 .OnDelete(DeleteBehavior.Restrict);
-            entity.HasOne(e => e.SignedStoredFile)
+            entity.HasOne(e => e.LeaseAgreement)
                 .WithMany()
-                .HasForeignKey(e => e.SignedStoredFileId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .HasForeignKey(e => new { e.LeaseAgreementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.LeaseAddendum)
+                .WithMany()
+                .HasForeignKey(e => new { e.LeaseAddendumId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.IssuedArtifact)
+                .WithMany()
+                .HasForeignKey(e => new { e.IssuedArtifactId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.ExecutedArtifact)
+                .WithMany()
+                .HasForeignKey(e => new { e.ExecutedArtifactId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CreatedByUser).WithMany().HasForeignKey(e => e.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<SignatureSigner>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.Email).IsRequired().HasMaxLength(256);
-            entity.Property(e => e.Token).IsRequired().HasMaxLength(64);
+            entity.HasAlternateKey(e => new { e.Id, e.SignatureRequestId, e.PortfolioId });
+            entity.Property(e => e.NameSnapshot).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.EmailSnapshot).IsRequired().HasMaxLength(320);
+            entity.Property(e => e.TokenHash).IsRequired().HasColumnType("char(64)");
             entity.Property(e => e.TypedName).HasMaxLength(200);
-            entity.Property(e => e.IpAddress).HasMaxLength(64);
-            entity.Property(e => e.UserAgent).HasMaxLength(512);
-            // Stored as string enum names to match the app-wide string-enum convention.
+            entity.Property(e => e.IpAddress).HasColumnType("inet");
+            entity.Property(e => e.UserAgent).HasMaxLength(1000);
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.SignatureType).HasConversion<string>().HasMaxLength(40);
-            // The public signing endpoints resolve a session by this token only — unique + indexed.
-            entity.HasIndex(e => e.Token).IsUnique();
-            entity.HasIndex(e => e.SignatureRequestId);
+            entity.HasIndex(e => e.TokenHash).IsUnique();
+            entity.HasIndex(e => new { e.SignatureRequestId, e.SigningOrder }).IsUnique();
             entity.HasOne(e => e.SignatureRequest)
                 .WithMany(r => r.Signers)
-                .HasForeignKey(e => e.SignatureRequestId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .HasForeignKey(e => new { e.SignatureRequestId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.AgreementSigner).WithMany()
+                .HasForeignKey(e => new { e.AgreementSignerId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.AddendumSigner).WithMany()
+                .HasForeignKey(e => new { e.AddendumSignerId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.DrawnSignatureStoredFile).WithMany()
+                .HasForeignKey(e => new { e.DrawnSignatureStoredFileId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<SignatureAuditEvent>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Type).HasConversion<string>().HasMaxLength(40);
-            entity.Property(e => e.IpAddress).HasMaxLength(64);
-            entity.Property(e => e.UserAgent).HasMaxLength(512);
+            entity.Property(e => e.IpAddress).HasColumnType("inet");
+            entity.Property(e => e.UserAgent).HasMaxLength(1000);
             entity.Property(e => e.Detail).HasMaxLength(2000);
-            entity.HasIndex(e => e.SignatureRequestId);
+            entity.HasIndex(e => new { e.PortfolioId, e.SignatureRequestId, e.OccurredAtUtc, e.Id });
             entity.HasOne(e => e.SignatureRequest)
                 .WithMany(r => r.AuditEvents)
-                .HasForeignKey(e => e.SignatureRequestId)
-                .OnDelete(DeleteBehavior.Cascade);
-            // The signer link is optional (request-level events carry null) and never cascades.
-            entity.HasOne(e => e.Signer)
+                .HasForeignKey(e => new { e.SignatureRequestId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.SignatureSigner)
                 .WithMany()
-                .HasForeignKey(e => e.SignerId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .HasForeignKey(e => new { e.SignatureSignerId, e.SignatureRequestId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.SignatureRequestId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<OutboxMessage>(entity =>
@@ -2202,7 +2226,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<NoticeDraft>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<SecurityDepositHolding>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
-        modelBuilder.Entity<SignatureRequest>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
 
         // Dependent of Loan (Loan has its own `DeletedAt == null`). The amortization rows disappear
         // when the loan is soft-deleted, so a deleted loan's interest never leaks into a report.
@@ -2246,8 +2269,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<ConversationMessage>().HasQueryFilter(e => e.Conversation!.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<InspectionItem>().HasQueryFilter(e => e.Inspection!.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<PaymentTransaction>().HasQueryFilter(e => e.Payment!.Lease!.DeletedAt == null);
-        modelBuilder.Entity<SignatureAuditEvent>().HasQueryFilter(e => e.SignatureRequest!.Lease!.DeletedAt == null);
-        modelBuilder.Entity<SignatureSigner>().HasQueryFilter(e => e.SignatureRequest!.Lease!.DeletedAt == null);
 
         // Keyless projection over the vw_accounting_transactions view (created in the
         // AddAccountingTransactionsView migration). Read-only; the accounting grid filters, sorts and
