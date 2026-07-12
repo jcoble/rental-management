@@ -77,7 +77,6 @@ internal sealed class AutomationTestDbContext : RentalCommandDbContext
         modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
         modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
         modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<SignatureRequest>().Property(e => e.TemplateFieldSnapshotJson).HasColumnType("TEXT");
         modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
         modelBuilder.Entity<SecurityDepositHolding>().Property(e => e.DeductionsJson).HasColumnType("TEXT");
         modelBuilder.Entity<AccountingConnection>().Property(e => e.LastPulledAtJson).HasColumnType("TEXT");
