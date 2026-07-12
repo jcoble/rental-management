@@ -813,7 +813,7 @@ internal static class LeasePartyAccessCommandSupport
                         && (assignment.RoleProfile!.Capabilities.Any(capability =>
                                 capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
                             || assignment.RoleProfile.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage))))));
+                                capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage)))));
     }
 
     internal static async Task AuthorizeReplayAsync<TCommand>(
