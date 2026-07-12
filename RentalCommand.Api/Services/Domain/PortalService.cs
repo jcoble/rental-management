@@ -329,51 +329,69 @@ public class PortalService : IPortalService
     }
 
     public async Task<AutopayStatusResponse?> GetAutopayStatusAsync(
-        int portfolioId, int tenantId, int? leaseId, CancellationToken ct = default)
+        int portfolioId, int tenantId, int tenantAccountId, CancellationToken ct = default)
     {
-        // Resolve which lease we're reporting on. An explicit leaseId is ownership-checked; a null
-        // one falls back to the tenant's most relevant lease (active-preferred, latest end).
-        var resolvedLeaseId = await ResolveOwnedLeaseIdAsync(portfolioId, tenantId, leaseId, ct);
-        if (resolvedLeaseId == null)
-        {
-            return null;
-        }
-
-        var enrollment = await _db.AutopayEnrollments
+        var businessDate = DateOnly.FromDateTime(_timeProvider.UtcNow());
+        return await OwnedAutopayQuery(portfolioId, tenantId, tenantAccountId, businessDate)
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.LeaseId == resolvedLeaseId.Value && e.Active, ct);
+            .Select(row => new AutopayStatusResponse
+            {
+                TenantAccountId = row.Account.Id,
+                Active = row.Enrollment != null,
+                EnrolledAt = row.Enrollment == null ? null : row.Enrollment.EnrolledAtUtc,
+                OnlinePaymentsAvailable = true,
+            })
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<AutopayStatusResponse?> CancelAutopayAsync(
+        int portfolioId, int tenantId, int tenantAccountId, CancellationToken ct = default)
+    {
+        var businessDate = DateOnly.FromDateTime(_timeProvider.UtcNow());
+        var target = await OwnedAutopayQuery(portfolioId, tenantId, tenantAccountId, businessDate)
+            .FirstOrDefaultAsync(ct);
+        if (target == null) return null;
+        if (target.Enrollment != null)
+        {
+            target.Enrollment.CanceledAtUtc = _timeProvider.UtcNow();
+            target.Enrollment.CancelReason = "Canceled by tenant";
+            await _db.SaveChangesAsync(ct);
+        }
 
         return new AutopayStatusResponse
         {
-            LeaseId = resolvedLeaseId.Value,
-            Active = enrollment != null,
-            EnrolledAt = enrollment?.CreatedAt,
+            TenantAccountId = tenantAccountId,
+            Active = false,
             OnlinePaymentsAvailable = true,
         };
     }
 
-    public async Task<AutopayStatusResponse?> CancelAutopayAsync(
-        int portfolioId, int tenantId, int leaseId, CancellationToken ct = default)
-    {
-        // Ownership: the lease must belong to this tenant or there is nothing to cancel (→ 404).
-        var owns = await _db.Leases
-            .AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId && l.TenantId == tenantId, ct);
-        if (!owns)
-        {
-            return null;
-        }
+    private IQueryable<OwnedAutopayRow> OwnedAutopayQuery(
+        int portfolioId, int tenantId, int tenantAccountId, DateOnly businessDate) =>
+        from account in _db.TenantAccounts
+        join party in _db.LeaseManagementParties
+            on new { account.LeaseManagementId, account.PortfolioId }
+            equals new { party.LeaseManagementId, party.PortfolioId }
+        join access in _db.TenantUserAccesses
+            on new { LeaseManagementPartyId = party.Id, party.PortfolioId }
+            equals new { access.LeaseManagementPartyId, access.PortfolioId }
+        from enrollment in _db.TenantAutopayEnrollments
+            .Where(item => item.TenantAccountId == account.Id
+                && item.PortfolioId == account.PortfolioId
+                && item.CanceledAtUtc == null)
+            .DefaultIfEmpty()
+        where account.Id == tenantAccountId
+            && account.PortfolioId == portfolioId
+            && account.ClosedAtUtc == null
+            && party.TenantId == tenantId
+            && party.EffectiveFrom <= businessDate
+            && (party.EffectiveThrough == null || party.EffectiveThrough >= businessDate)
+            && party.Role != LeaseManagementPartyRole.Occupant
+            && access.RevokedAtUtc == null
+        orderby party.Id
+        select new OwnedAutopayRow(account, enrollment);
 
-        var enrollment = await _db.AutopayEnrollments
-            .FirstOrDefaultAsync(e => e.LeaseId == leaseId && e.Active, ct);
-        if (enrollment != null)
-        {
-            enrollment.Active = false;
-            enrollment.UpdatedAt = _timeProvider.UtcNow();
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return new AutopayStatusResponse { LeaseId = leaseId, Active = false, OnlinePaymentsAvailable = true };
-    }
+    private sealed record OwnedAutopayRow(TenantAccount Account, TenantAutopayEnrollment? Enrollment);
 
     /// <summary>
     /// Validates that <paramref name="leaseId"/> (if given) is the tenant's own lease; when null,

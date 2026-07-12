@@ -54,15 +54,19 @@ public sealed class AutopayChargeService : IAutopayChargeService
         var now = _timeProvider.UtcNow();
         // Eligibility, open-balance filtering, duplicate suppression, ordering, and paging remain
         // in this one translated SQL statement. The bounded materialized rows are remote-work inputs.
-        var candidates = await (
-            from balance in _db.TenantChargeBalanceProjections.AsNoTracking()
-            join charge in _db.TenantLedgerEntries.AsNoTracking()
+        var candidates = await BuildCandidateQuery(_db).ToListAsync(ct);
+        return await ChargeCandidatesAsync(candidates, now, ct);
+    }
+
+    internal static IQueryable<AutopayChargeCandidate> BuildCandidateQuery(RentalCommandDbContext db) =>
+        (from balance in db.TenantChargeBalanceProjections.AsNoTracking()
+            join charge in db.TenantLedgerEntries.AsNoTracking()
                 on new { Id = balance.TenantLedgerEntryId, balance.PortfolioId, balance.TenantAccountId }
                 equals new { charge.Id, charge.PortfolioId, charge.TenantAccountId }
-            join account in _db.TenantAccounts.AsNoTracking()
+            join account in db.TenantAccounts.AsNoTracking()
                 on new { Id = charge.TenantAccountId, charge.PortfolioId }
                 equals new { account.Id, account.PortfolioId }
-            join enrollment in _db.TenantAutopayEnrollments.AsNoTracking()
+            join enrollment in db.TenantAutopayEnrollments.AsNoTracking()
                 on new { Id = account.Id, account.PortfolioId }
                 equals new { Id = enrollment.TenantAccountId, enrollment.PortfolioId }
             where balance.OpenAmount > 0m
@@ -72,21 +76,29 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 && account.ClosedAtUtc == null
                 && enrollment.CanceledAtUtc == null
                 && enrollment.Provider == "stripe"
-                && !_db.TenantPaymentAttempts.Any(paymentAttempt =>
+                && !db.TenantPaymentAttempts.Any(paymentAttempt =>
                     paymentAttempt.Provider == "stripe"
                     && paymentAttempt.IdempotencyKey == "autopay:tenant-charge:" + charge.Id
                     && (paymentAttempt.State == TenantPaymentAttemptState.Submitted
                         || paymentAttempt.State == TenantPaymentAttemptState.Succeeded))
             orderby charge.DueOn, charge.TenantAccountId, charge.Id
-            select new
-            {
+         select new AutopayChargeCandidate(
                 charge.PortfolioId,
                 charge.TenantAccountId,
-                ChargeLedgerEntryId = charge.Id,
-                EnrollmentId = enrollment.Id,
-                ActorUserId = enrollment.CreatedByUserId,
-            }).Take(BatchSize).ToListAsync(ct);
+                charge.Id,
+                enrollment.Id,
+                enrollment.CreatedByUserId)).Take(BatchSize);
 
+    internal sealed record AutopayChargeCandidate(
+        int PortfolioId,
+        int TenantAccountId,
+        long ChargeLedgerEntryId,
+        int EnrollmentId,
+        int ActorUserId);
+
+    private async Task<int> ChargeCandidatesAsync(
+        IReadOnlyList<AutopayChargeCandidate> candidates, DateTime now, CancellationToken ct)
+    {
         var charged = 0;
         foreach (var candidate in candidates)
         {

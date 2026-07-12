@@ -162,14 +162,13 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     }
 
     /// <summary>
-    /// Tenant's autopay enrollment status for a lease (defaults to their most relevant lease when
-    /// <c>leaseId</c> is omitted). Returns Active=false when not enrolled.
+    /// Tenant's autopay enrollment status for one canonical tenant account.
     /// </summary>
-    [HttpGet("autopay")]
+    [HttpGet("tenant-accounts/{tenantAccountId:int}/autopay")]
     [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetAutopay([FromQuery] int? leaseId, CancellationToken ct)
+    public async Task<IActionResult> GetAutopay(int tenantAccountId, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -178,10 +177,10 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         }
 
         var portfolioId = GetPortfolioId();
-        var status = await _service.GetAutopayStatusAsync(portfolioId, tenantId.Value, leaseId, ct);
+        var status = await _service.GetAutopayStatusAsync(portfolioId, tenantId.Value, tenantAccountId, ct);
         if (status == null)
         {
-            return NotFound(new { error = "Lease not found" });
+            return NotFound(new { error = "Tenant account not found" });
         }
 
         status.OnlinePaymentsAvailable = await _stripe.IsOnlinePaymentsAvailableAsync(portfolioId, ct);
@@ -191,15 +190,16 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     /// <summary>
     /// Enrolls one of the tenant's own canonical accounts in autopay: starts setup Checkout that
     /// saves a reusable payment method, and returns <c>{ checkoutUrl }</c>. The enrollment is only
-    /// recorded once the setup session completes (webhook). 404 if the lease isn't the tenant's;
+    /// recorded once the setup session completes (webhook). 404 if the account isn't the tenant's;
     /// 503 when Stripe is off.
     /// </summary>
-    [HttpPost("autopay/enroll")]
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/autopay/enroll")]
     [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> EnrollAutopay([FromBody] AutopayEnrollRequest request, CancellationToken ct)
+    public async Task<IActionResult> EnrollAutopay(
+        int tenantAccountId, [FromBody] AutopayEnrollRequest request, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -208,7 +208,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         }
 
         var result = await _stripe.CreateAutopaySetupSessionAsync(
-            GetPortfolioId(), tenantId.Value, request.TenantAccountId, GetUserId(), request.OperationKey,
+            GetPortfolioId(), tenantId.Value, tenantAccountId, GetUserId(), request.OperationKey,
             request.SuccessUrl, request.CancelUrl, ct);
 
         return result.Result switch
@@ -222,14 +222,13 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     }
 
     /// <summary>
-    /// Cancels autopay on one of the tenant's own leases (deactivates the enrollment so the Engine
-    /// stops charging). 404 if the lease isn't the tenant's. Not Stripe-gated — purely local state.
+    /// Cancels autopay on one of the tenant's own canonical accounts.
     /// </summary>
-    [HttpPost("autopay/cancel")]
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/autopay/cancel")]
     [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> CancelAutopay([FromBody] AutopayCancelRequest request, CancellationToken ct)
+    public async Task<IActionResult> CancelAutopay(int tenantAccountId, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -238,10 +237,10 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         }
 
         var portfolioId = GetPortfolioId();
-        var status = await _service.CancelAutopayAsync(portfolioId, tenantId.Value, request.LeaseId, ct);
+        var status = await _service.CancelAutopayAsync(portfolioId, tenantId.Value, tenantAccountId, ct);
         if (status == null)
         {
-            return NotFound(new { error = "Lease not found" });
+            return NotFound(new { error = "Tenant account not found" });
         }
 
         status.OnlinePaymentsAvailable = await _stripe.IsOnlinePaymentsAvailableAsync(portfolioId, ct);

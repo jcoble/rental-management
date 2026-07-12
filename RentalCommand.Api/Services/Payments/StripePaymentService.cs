@@ -207,6 +207,7 @@ public class StripePaymentService : IStripePaymentService
             Mode = "payment",
             // Card AND ACH bank debit, so a tenant can choose either at the hosted page.
             PaymentMethodTypes = new List<string> { "card", "us_bank_account" },
+            Expand = new List<string> { "payment_intent" },
             LineItems = new List<SessionLineItemOptions>
             {
                 new()
@@ -231,6 +232,16 @@ public class StripePaymentService : IStripePaymentService
                 [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
                 [MetadataPortfolioId] = portfolioId.ToString(),
             },
+            PaymentIntentData = new SessionPaymentIntentDataOptions
+            {
+                Metadata = new Dictionary<string, string>
+                {
+                    [MetadataTenantAccountId] = tenantAccountId.ToString(),
+                    [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
+                    [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
+                    [MetadataPortfolioId] = portfolioId.ToString(),
+                },
+            },
             SuccessUrl = ResolveSuccessUrl(successUrl),
             CancelUrl = ResolveCancelUrl(cancelUrl),
         }, requestOptions, ct);
@@ -243,7 +254,7 @@ public class StripePaymentService : IStripePaymentService
                 prepared.Value.PaymentAttemptId,
                 Provider: "stripe",
                 IdempotencyKey: idempotencyKey,
-                ProviderPaymentId: session.Id,
+                ProviderPaymentId: ResolveCheckoutPaymentObjectId(session),
                 State: TenantPaymentAttemptState.Submitted,
                 FailureReason: null,
                 RecordedAtUtc: _timeProvider.UtcNow()),
@@ -414,7 +425,7 @@ public class StripePaymentService : IStripePaymentService
                         session.PaymentStatus,
                         session.Mode,
                     }),
-                    session.Id,
+                    ResolveCheckoutPaymentObjectId(session),
                     string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase)
                         ? ProviderPaymentEventKind.Succeeded
                         : ProviderPaymentEventKind.Pending,
@@ -495,6 +506,12 @@ public class StripePaymentService : IStripePaymentService
             receivedAtUtc,
             receivedAtUtc);
     }
+
+    internal static string ResolveCheckoutPaymentObjectId(Session session) =>
+        !string.IsNullOrWhiteSpace(session.PaymentIntentId)
+            ? session.PaymentIntentId
+            : throw new InvalidOperationException(
+                $"Stripe Checkout session {session.Id} did not expose its PaymentIntent identity.");
 
     /// <summary>
     /// Resolves the success URL: an explicit request value is honored ONLY when it passes the

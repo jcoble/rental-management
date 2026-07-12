@@ -16,10 +16,12 @@
 	const queryClient = useQueryClient();
 	const paymentsQuery = createQuery(() => ({ queryKey: ['portal-payments-page'], queryFn: () => portal.payments() }));
 
-	// Autopay is enrollment-per-lease; the portal session's default lease is used when
-	// we don't pass an explicit leaseId. We learn the lease from the first payment row.
-	const autopayQuery = createQuery(() => ({ queryKey: ['portal-autopay'], queryFn: () => portal.autopayStatus() }));
-	const leaseId = $derived(autopayQuery.data?.leaseId ?? paymentsQuery.data?.[0]?.leaseId ?? null);
+	const tenantAccountId = $derived(paymentsQuery.data?.[0]?.tenantAccountId ?? null);
+	const autopayQuery = createQuery(() => ({
+		queryKey: ['portal-autopay', tenantAccountId],
+		queryFn: () => portal.autopayStatus(tenantAccountId as number),
+		enabled: tenantAccountId != null
+	}));
 
 	// When Stripe is off the API returns 503; we keep that gentle (not a red error toast).
 	let paymentProviderUnavailable = $state(false);
@@ -46,7 +48,8 @@
 	}
 
 	const payMutation = createMutation(() => ({
-		mutationFn: (paymentId: number) => portal.payCheckout(paymentId, returnUrls()),
+		mutationFn: (payment: PortalPayment) =>
+			portal.payCheckout(payment.tenantAccountId, payment.id, returnUrls()),
 		onSuccess: ({ checkoutUrl }) => {
 			window.location.href = checkoutUrl;
 		},
@@ -59,13 +62,16 @@
 		}
 	}));
 	let payingId = $state<number | null>(null);
-	function payNow(paymentId: number) {
-		payingId = paymentId;
-		payMutation.mutate(paymentId);
+	function payNow(payment: PortalPayment) {
+		payingId = payment.id;
+		payMutation.mutate(payment);
 	}
 
 	const enrollMutation = createMutation(() => ({
-		mutationFn: () => portal.autopayEnroll({ leaseId: leaseId as number, ...returnUrls() }),
+		mutationFn: () => portal.autopayEnroll(tenantAccountId as number, {
+			operationKey: crypto.randomUUID(),
+			...returnUrls()
+		}),
 		onSuccess: ({ checkoutUrl }) => {
 			window.location.href = checkoutUrl;
 		},
@@ -79,7 +85,7 @@
 	}));
 
 	const cancelMutation = createMutation(() => ({
-		mutationFn: () => portal.autopayCancel({ leaseId: leaseId as number }),
+		mutationFn: () => portal.autopayCancel(tenantAccountId as number),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ['portal-autopay'] });
 			showSuccess('Autopay is turned off.');
@@ -171,7 +177,7 @@
 			<Button
 				variant="outline"
 				class="mt-3"
-				disabled={cancelMutation.isPending || leaseId == null}
+				disabled={cancelMutation.isPending || tenantAccountId == null}
 				onclick={() => cancelMutation.mutate()}
 				data-testid="portal-autopay-cancel"
 			>
@@ -190,7 +196,7 @@
 			</p>
 			<Button
 				class="mt-3"
-				disabled={onlinePaymentsUnavailable || enrollMutation.isPending || leaseId == null}
+				disabled={onlinePaymentsUnavailable || enrollMutation.isPending || tenantAccountId == null}
 				onclick={() => enrollMutation.mutate()}
 				data-testid="portal-autopay-enroll"
 			>
@@ -212,7 +218,7 @@
 							<Button
 								size="sm"
 								disabled={onlinePaymentsUnavailable || (payMutation.isPending && payingId === payment.id)}
-								onclick={() => payNow(payment.id)}
+								onclick={() => payNow(payment)}
 								data-testid="portal-payment-pay-now"
 							>
 								{onlinePaymentsUnavailable ? 'Pay unavailable' : payMutation.isPending && payingId === payment.id ? 'Opening…' : 'Pay now'}
