@@ -321,50 +321,56 @@ public class AccountingConnectionService
     public async Task<List<AccountingConnectionStatusResponse>> GetStatusAsync(
         int portfolioId, CancellationToken ct)
     {
-        var conns = await _db.AccountingConnections
+        // One translated statement: the connection projection owns both correlated ledger counts.
+        // Provider configuration/capabilities are deliberately applied only after materialization;
+        // they are process configuration, not a second database result set.
+        var connectedCards = await _db.AccountingConnections
             .Where(c => c.PortfolioId == portfolioId)
+            .Select(c => new AccountingConnectionStatusResponse
+            {
+                Provider = c.Provider,
+                Status = c.Status,
+                CompanyName = c.CompanyName,
+                ConnectedAt = c.ConnectedAt,
+                LastSyncedAt = c.LastSyncedAt,
+                LastError = c.LastError,
+                PullEnabled = c.PullEnabled,
+                PushEnabled = c.PushEnabled,
+                PendingReviewCount = _db.AccountingSyncMaps.Count(m =>
+                    m.PortfolioId == portfolioId
+                    && m.AccountingConnectionId == c.Id
+                    && m.Direction == LedgerDirection.Import
+                    && (m.Status == LedgerStatus.NeedsReview || m.Status == LedgerStatus.Unmatched)),
+                ImportedCount = _db.AccountingSyncMaps.Count(m =>
+                    m.PortfolioId == portfolioId
+                    && m.AccountingConnectionId == c.Id
+                    && m.Direction == LedgerDirection.Import
+                    && m.Status == LedgerStatus.Imported),
+            })
             .ToListAsync(ct);
 
-        // DB-side counts over the ledger (no rows loaded to count): pending-review and imported,
-        // grouped by connection. Empty in Phase 1 since nothing imports yet, but the query is correct.
-        var reviewByConnection = await _db.AccountingSyncMaps
-            .Where(m => m.PortfolioId == portfolioId
-                && m.Direction == "Import"
-                && (m.Status == "NeedsReview" || m.Status == "Unmatched"))
-            .GroupBy(m => m.AccountingConnectionId)
-            .Select(g => new { ConnectionId = g.Key, Count = g.Count() })
-            .ToDictionaryAsync(x => x.ConnectionId, x => x.Count, ct);
-
-        var importedByConnection = await _db.AccountingSyncMaps
-            .Where(m => m.PortfolioId == portfolioId
-                && m.Direction == "Import"
-                && m.Status == "Imported")
-            .GroupBy(m => m.AccountingConnectionId)
-            .Select(g => new { ConnectionId = g.Key, Count = g.Count() })
-            .ToDictionaryAsync(x => x.ConnectionId, x => x.Count, ct);
-
-        var byProvider = conns.ToDictionary(c => c.Provider);
+        var byProvider = connectedCards.ToDictionary(card => card.Provider);
 
         var result = new List<AccountingConnectionStatusResponse>();
         foreach (var provider in Enum.GetValues<AccountingProvider>())
         {
             var settings = TryResolveSettings(provider);
-            byProvider.TryGetValue(provider, out var conn);
+            if (byProvider.TryGetValue(provider, out var card))
+            {
+                card.ProviderName = provider.ToString();
+                card.Configured = settings?.Configured ?? false;
+                card.Capabilities = TryGetCapabilities(provider);
+                result.Add(card);
+                continue;
+            }
 
             result.Add(new AccountingConnectionStatusResponse
             {
                 Provider = provider,
                 ProviderName = provider.ToString(),
                 Configured = settings?.Configured ?? false,
-                Status = conn?.Status,
-                CompanyName = conn?.CompanyName,
-                ConnectedAt = conn?.ConnectedAt,
-                LastSyncedAt = conn?.LastSyncedAt,
-                LastError = conn?.LastError,
-                PullEnabled = conn?.PullEnabled ?? true,
-                PushEnabled = conn?.PushEnabled ?? false,
-                PendingReviewCount = conn != null && reviewByConnection.TryGetValue(conn.Id, out var r) ? r : 0,
-                ImportedCount = conn != null && importedByConnection.TryGetValue(conn.Id, out var i) ? i : 0,
+                PullEnabled = true,
+                PushEnabled = false,
                 Capabilities = TryGetCapabilities(provider),
             });
         }

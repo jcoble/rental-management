@@ -140,6 +140,44 @@ public class AccountingConnectionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetStatusAsync_LoadsConnectionsAndLedgerCountsWithOneDatabaseCommand()
+    {
+        var now = DateTime.UtcNow;
+        var conn = new AccountingConnection
+        {
+            PortfolioId = 1,
+            Provider = AccountingProvider.QuickBooks,
+            Status = AccountingConnectionStatus.Connected,
+            ExternalAccountId = "realm-status",
+            PullEnabled = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.AccountingConnections.Add(conn);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.AccountingSyncMaps.AddRange(
+            Parked(conn, "review-1", LedgerStatus.NeedsReview, now),
+            Parked(conn, "review-2", LedgerStatus.Unmatched, now),
+            Parked(conn, "imported-1", LedgerStatus.Imported, now));
+        await _ctx.Db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeAccountingProvider(
+            AccountingProvider.QuickBooks,
+            new AccountingTokenResult("a", "r", now.AddHours(1), "realm-status", "Status Books")));
+        _commands.Clear();
+
+        var cards = await sut.GetStatusAsync(1, CancellationToken.None);
+
+        var quickBooks = cards.Single(card => card.Provider == AccountingProvider.QuickBooks);
+        quickBooks.PendingReviewCount.Should().Be(2);
+        quickBooks.ImportedCount.Should().Be(1);
+        _commands.Should().ContainSingle("connection rows and both conditional counts must share one SQL command");
+        _commands[0].Should().Contain("AccountingConnections")
+            .And.Contain("AccountingSyncMaps")
+            .And.Contain("COUNT");
+    }
+
+    [Fact]
     public async Task GetReviewQueueAsync_PagesParkedRowsInSql()
     {
         var now = DateTime.UtcNow;
