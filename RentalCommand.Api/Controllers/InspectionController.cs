@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CRUD + smart-checklist workflow for property inspections within the caller's portfolio. Scope comes
 /// from the JWT <c>portfolioId</c> claim; list supports <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort</c>.
-/// Create validates the referenced property/unit/lease are in the portfolio and can materialize a
+/// Create validates the referenced property/unit/lease relationship/agreement are in the portfolio and can materialize a
 /// checklist from a template. Completing an inspection spawns a work order per failed item and generates
 /// a PDF report. Inspections have no soft-delete column, so removal is a hard delete.
 /// </summary>
@@ -102,7 +102,7 @@ public class InspectionController : ManagementControllerBase
     {
         var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
         return created == null
-            ? NotFound(new { error = "Referenced property, unit, lease, or template not found in this portfolio" })
+            ? NotFound(new { error = "Referenced property, unit, lease relationship, agreement, or template not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 

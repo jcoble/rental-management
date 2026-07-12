@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CRUD for showings/move-in/move-out and other appointments within the caller's portfolio. Scope comes
 /// from the JWT <c>portfolioId</c> claim; list supports <c>?propertyId&amp;tenantId&amp;skip&amp;take&amp;search&amp;sort</c>.
-/// Create validates the referenced property/unit/lease/tenant are in the portfolio. Appointments have no
+/// Create validates the referenced property/unit/lease relationship/application/tenant are in the portfolio. Appointments have no
 /// soft-delete column, so removal is a hard delete.
 /// </summary>
 [ApiController]
@@ -56,7 +56,7 @@ public class AppointmentController : ManagementControllerBase
     {
         var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
         return created == null
-            ? NotFound(new { error = "Referenced property, unit, lease, or tenant not found in this portfolio" })
+            ? NotFound(new { error = "Referenced property, unit, lease relationship, application, or tenant not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 

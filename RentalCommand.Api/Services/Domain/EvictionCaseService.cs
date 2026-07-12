@@ -12,127 +12,101 @@ public class EvictionCaseService : IEvictionCaseService
 {
     private const string EntityType = "EvictionCase";
     private const string EventEntityType = "EvictionCaseEvent";
-    private const string LeaseEntityType = "Lease";
-    private const string UnitEntityType = "Unit";
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
 
-    public EvictionCaseService(
-        RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
-        TimeProvider timeProvider)
+    public EvictionCaseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<EvictionCaseResponse>> ListAsync(
-        int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, query, ct);
-        return page.Items;
-    }
+    public async Task<IReadOnlyList<EvictionCaseResponse>> ListAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
+        => (await ListPageAsync(portfolioId, query, ct)).Items;
 
-    public async Task<EvictionCaseListResponse> ListPageAsync(
-        int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
+    public async Task<EvictionCaseListResponse> ListPageAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
     {
-        var filtered = BuildListQuery(portfolioId, query);
+        var filtered = ApplyFilters(BaseQuery(portfolioId), query);
         var totalCount = await filtered.CountAsync(ct);
-        var rows = await ProjectRows(ApplySort(filtered, query))
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
-
+        var ordered = query.SortField switch
+        {
+            "relationshipnumber" => query.SortDescending ? filtered.OrderByDescending(e => e.LeaseManagement!.RelationshipNumber) : filtered.OrderBy(e => e.LeaseManagement!.RelationshipNumber),
+            "propertyname" => query.SortDescending ? filtered.OrderByDescending(e => e.Property!.Name) : filtered.OrderBy(e => e.Property!.Name),
+            "unitnumber" => query.SortDescending ? filtered.OrderByDescending(e => e.Unit!.UnitNumber) : filtered.OrderBy(e => e.Unit!.UnitNumber),
+            "status" => query.SortDescending ? filtered.OrderByDescending(e => e.Status) : filtered.OrderBy(e => e.Status),
+            "hearingdate" => query.SortDescending ? filtered.OrderByDescending(e => e.HearingDate) : filtered.OrderBy(e => e.HearingDate),
+            "updatedat" => query.SortDescending ? filtered.OrderByDescending(e => e.UpdatedAt) : filtered.OrderBy(e => e.UpdatedAt),
+            _ => query.SortDescending ? filtered.OrderByDescending(e => e.FiledOnDate).ThenByDescending(e => e.Id) : filtered.OrderBy(e => e.FiledOnDate).ThenBy(e => e.Id),
+        };
+        var items = await ProjectResponses(ordered, includeEvents: false)
+            .Skip(query.NormalizedSkip).Take(query.NormalizedTake).ToListAsync(ct);
         return new EvictionCaseListResponse
         {
-            Items = rows.Select(ToResponse).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
     }
 
-    public async Task<EvictionCaseResponse?> GetAsync(
-        int portfolioId, int id, CancellationToken ct = default)
+    public async Task<EvictionCaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases
-            .AsNoTracking()
-            .Include(e => e.Lease)
-            .Include(e => e.Property)
-            .Include(e => e.Unit)
-            .Include(e => e.Tenant)
-            .Include(e => e.Events)
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
-
-        return entity is null ? null : EvictionCaseResponse.FromEntity(entity, includeEvents: true);
+        return await ProjectResponses(BaseQuery(portfolioId).Where(e => e.Id == id), includeEvents: true)
+            .FirstOrDefaultAsync(ct);
     }
 
-    public async Task<EvictionCaseResponse?> CreateAsync(
-        int portfolioId, CreateEvictionCaseRequest request, CancellationToken ct = default)
+    public async Task<EvictionCaseResponse?> CreateAsync(int portfolioId, CreateEvictionCaseRequest request, CancellationToken ct = default)
     {
-        var lease = await _db.Leases
-            .Include(l => l.Unit)
-            .FirstOrDefaultAsync(l => l.Id == request.LeaseId && l.PortfolioId == portfolioId, ct);
-        if (lease is null)
+        var context = await _db.LeaseManagements.AsNoTracking()
+            .Where(m => m.Id == request.LeaseManagementId && m.PortfolioId == portfolioId)
+            .Select(m => new
+            {
+                Management = m,
+                AgreementValid = request.LeaseAgreementId == null || _db.LeaseAgreements.Any(a =>
+                    a.Id == request.LeaseAgreementId && a.PortfolioId == portfolioId && a.LeaseManagementId == m.Id),
+                RespondentCount = _db.LeaseManagementParties.Count(p =>
+                    request.RespondentLeaseManagementPartyIds.Contains(p.Id) &&
+                    p.PortfolioId == portfolioId && p.LeaseManagementId == m.Id),
+            })
+            .FirstOrDefaultAsync(ct);
+        var respondentIds = request.RespondentLeaseManagementPartyIds.Distinct().ToArray();
+        if (context is null || !context.AgreementValid || context.RespondentCount != respondentIds.Length)
             return null;
 
         var now = _timeProvider.UtcNow();
-        var eventDate = ResolveInitialEventDate(request, now);
+        var eventDate = request.FiledOnDate?.ToUtc().Date ?? now.Date;
         var entity = new EvictionCase
         {
             PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            PropertyId = lease.PropertyId,
-            UnitId = lease.UnitId,
-            TenantId = lease.TenantId,
+            LeaseManagementId = context.Management.Id,
+            LeaseAgreementId = request.LeaseAgreementId,
+            PropertyId = context.Management.PropertyId,
+            UnitId = context.Management.UnitId,
             Status = request.Status,
             FiledOnDate = request.FiledOnDate?.ToUtc().Date ?? (request.Status >= EvictionCaseStatus.Filed ? eventDate : null),
             HearingDate = request.HearingDate?.ToUtc().Date,
-            CourtName = Normalize(request.CourtName),
-            CaseNumber = Normalize(request.CaseNumber),
-            Notes = Normalize(request.Notes),
-            CreatedAt = now,
-            UpdatedAt = now,
+            CourtName = Normalize(request.CourtName), CaseNumber = Normalize(request.CaseNumber), Notes = Normalize(request.Notes),
+            CreatedAt = now, UpdatedAt = now,
         };
-
-        var initialEvent = InitialEventForStatus(entity.Status);
-        if (initialEvent.HasValue)
-        {
-            entity.Events.Add(new EvictionCaseEvent
-            {
-                PortfolioId = portfolioId,
-                EventType = initialEvent.Value,
-                EventDate = eventDate,
-                Notes = string.IsNullOrWhiteSpace(entity.Notes) ? "Case opened." : entity.Notes,
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        }
-
-        ApplyLeaseWorkflow(entity, lease, now, eventDate);
-
-        await _db.EvictionCases.AddAsync(entity, ct);
+        foreach (var partyId in respondentIds)
+            entity.Respondents.Add(new EvictionCaseRespondent { PortfolioId = portfolioId, LeaseManagementPartyId = partyId });
+        var initialType = InitialEventForStatus(entity.Status);
+        if (initialType.HasValue)
+            entity.Events.Add(new EvictionCaseEvent { PortfolioId = portfolioId, EventType = initialType.Value, EventDate = eventDate, Notes = entity.Notes ?? "Case opened.", CreatedAt = now, UpdatedAt = now });
+        _db.EvictionCases.Add(entity);
         await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? EvictionCaseResponse.FromEntity(entity, includeEvents: true);
-        await BroadcastCaseAndRelatedAsync(portfolioId, entity.Id, response, lease, lease.Unit, ct);
+        var response = await GetAsync(portfolioId, entity.Id, ct);
+        if (response is null) return null;
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
 
-    public async Task<EvictionCaseResponse?> UpdateAsync(
-        int portfolioId, int id, UpdateEvictionCaseRequest request, CancellationToken ct = default)
+    public async Task<EvictionCaseResponse?> UpdateAsync(int portfolioId, int id, UpdateEvictionCaseRequest request, CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases
-            .Include(e => e.Lease)
-                .ThenInclude(l => l!.Unit)
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
-        if (entity is null || entity.Lease is null)
-            return null;
-
-        var now = _timeProvider.UtcNow();
+        var entity = await _db.EvictionCases.FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        if (entity is null) return null;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.FiledOnDate.HasValue) entity.FiledOnDate = request.FiledOnDate.Value.ToUtc().Date;
         if (request.HearingDate.HasValue) entity.HearingDate = request.HearingDate.Value.ToUtc().Date;
@@ -141,145 +115,68 @@ public class EvictionCaseService : IEvictionCaseService
         if (request.CaseNumber != null) entity.CaseNumber = Normalize(request.CaseNumber);
         if (request.Resolution != null) entity.Resolution = Normalize(request.Resolution);
         if (request.Notes != null) entity.Notes = Normalize(request.Notes);
-        entity.UpdatedAt = now;
-
-        ApplyLeaseWorkflow(entity, entity.Lease, now, entity.ResolvedOnDate ?? entity.FiledOnDate ?? now.Date);
+        entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? EvictionCaseResponse.FromEntity(entity, includeEvents: true);
-        await BroadcastCaseAndRelatedAsync(portfolioId, entity.Id, response, entity.Lease, entity.Lease.Unit, ct);
+        var response = await GetAsync(portfolioId, id, ct);
+        if (response != null) await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
         return response;
     }
 
-    public async Task<EvictionCaseResponse?> AddEventAsync(
-        int portfolioId, int id, CreateEvictionCaseEventRequest request, CancellationToken ct = default)
+    public async Task<EvictionCaseResponse?> AddEventAsync(int portfolioId, int id, CreateEvictionCaseEventRequest request, CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases
-            .Include(e => e.Lease)
-                .ThenInclude(l => l!.Unit)
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
-        if (entity is null || entity.Lease is null)
-            return null;
-
+        var entity = await _db.EvictionCases.FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        if (entity is null) return null;
         var now = _timeProvider.UtcNow();
-        var eventDate = request.EventDate.ToUtc().Date;
-        var evt = new EvictionCaseEvent
-        {
-            PortfolioId = portfolioId,
-            EvictionCaseId = entity.Id,
-            EventType = request.EventType,
-            EventDate = eventDate,
-            Notes = Normalize(request.Notes),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
+        var evt = new EvictionCaseEvent { PortfolioId = portfolioId, EvictionCaseId = id, EventType = request.EventType, EventDate = request.EventDate.ToUtc().Date, Notes = Normalize(request.Notes), CreatedAt = now, UpdatedAt = now };
         _db.EvictionCaseEvents.Add(evt);
-
         ApplyEventToCase(entity, evt, now);
-        ApplyLeaseWorkflow(entity, entity.Lease, now, eventDate);
         await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? EvictionCaseResponse.FromEntity(entity, includeEvents: true);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EventEntityType, evt.Id, EvictionCaseEventResponse.FromEntity(evt), ct);
-        await BroadcastCaseAndRelatedAsync(portfolioId, entity.Id, response, entity.Lease, entity.Lease.Unit, ct);
+        var response = await GetAsync(portfolioId, id, ct);
+        if (response != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EventEntityType, evt.Id, EvictionCaseEventResponse.FromEntity(evt), ct);
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
+        }
         return response;
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases
-            .Include(e => e.Events)
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
-        if (entity is null)
-            return false;
-
+        var entity = await _db.EvictionCases.Include(e => e.Events).FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        if (entity is null) return false;
         var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        foreach (var evt in entity.Events)
-        {
-            evt.DeletedAt = now;
-            evt.UpdatedAt = now;
-        }
-
+        entity.DeletedAt = now; entity.UpdatedAt = now;
+        foreach (var evt in entity.Events) { evt.DeletedAt = now; evt.UpdatedAt = now; }
         await _db.SaveChangesAsync(ct);
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
     }
 
-    private IQueryable<EvictionCase> BuildListQuery(int portfolioId, EvictionCaseListQuery query)
-    {
-        var q = _db.EvictionCases
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId);
+    private IQueryable<EvictionCase> BaseQuery(int portfolioId) => _db.EvictionCases.AsNoTracking()
+        .Where(e => e.PortfolioId == portfolioId);
 
-        if (query.LeaseId.HasValue)
-            q = q.Where(e => e.LeaseId == query.LeaseId.Value);
-        if (query.PropertyId.HasValue)
-            q = q.Where(e => e.PropertyId == query.PropertyId.Value);
-        if (query.TenantId.HasValue)
-            q = q.Where(e => e.TenantId == query.TenantId.Value);
-        if (query.Status.HasValue)
-            q = q.Where(e => e.Status == query.Status.Value);
-
-        var (from, to) = ListDateRange.UtcDay(query.From, query.To);
-        if (from is { } fromUtc)
-            q = q.Where(e => (e.FiledOnDate ?? e.CreatedAt) >= fromUtc);
-        if (to is { } toUtcExclusive)
-            q = q.Where(e => (e.FiledOnDate ?? e.CreatedAt) < toUtcExclusive);
-
-        if (!string.IsNullOrWhiteSpace(query.Search))
-        {
-            var term = query.Search.Trim();
-            q = q.Where(e =>
-                EF.Functions.ILike(e.Lease!.LeaseNumber, $"%{term}%") ||
-                EF.Functions.ILike(e.Property!.Name, $"%{term}%") ||
-                EF.Functions.ILike(e.Unit!.UnitNumber, $"%{term}%") ||
-                EF.Functions.ILike(e.Tenant!.FirstName, $"%{term}%") ||
-                EF.Functions.ILike(e.Tenant.LastName, $"%{term}%") ||
-                EF.Functions.ILike(e.Tenant.FirstName + " " + e.Tenant.LastName, $"%{term}%") ||
-                (e.CourtName != null && EF.Functions.ILike(e.CourtName, $"%{term}%")) ||
-                (e.CaseNumber != null && EF.Functions.ILike(e.CaseNumber, $"%{term}%")) ||
-                (e.Notes != null && EF.Functions.ILike(e.Notes, $"%{term}%")));
-        }
-
-        return q;
-    }
-
-    private static IQueryable<EvictionCase> ApplySort(IQueryable<EvictionCase> q, ListQuery query)
-    {
-        var ordered = query.SortField switch
-        {
-            "lease" or "leasenumber" => query.SortDescending ? q.OrderByDescending(e => e.Lease!.LeaseNumber) : q.OrderBy(e => e.Lease!.LeaseNumber),
-            "property" or "propertyname" => query.SortDescending ? q.OrderByDescending(e => e.Property!.Name) : q.OrderBy(e => e.Property!.Name),
-            "unit" or "unitnumber" => query.SortDescending ? q.OrderByDescending(e => e.Unit!.UnitNumber) : q.OrderBy(e => e.Unit!.UnitNumber),
-            "tenant" or "tenantname" => query.SortDescending ? q.OrderByDescending(e => e.Tenant!.LastName).ThenByDescending(e => e.Tenant!.FirstName) : q.OrderBy(e => e.Tenant!.LastName).ThenBy(e => e.Tenant!.FirstName),
-            "status" => query.SortDescending ? q.OrderByDescending(e => e.Status) : q.OrderBy(e => e.Status),
-            "hearingdate" => query.SortDescending ? q.OrderByDescending(e => e.HearingDate) : q.OrderBy(e => e.HearingDate),
-            "resolvedondate" => query.SortDescending ? q.OrderByDescending(e => e.ResolvedOnDate) : q.OrderBy(e => e.ResolvedOnDate),
-            "updatedat" => query.SortDescending ? q.OrderByDescending(e => e.UpdatedAt) : q.OrderBy(e => e.UpdatedAt),
-            "createdat" => query.SortDescending ? q.OrderByDescending(e => e.CreatedAt) : q.OrderBy(e => e.CreatedAt),
-            "filedondate" or "date" => query.SortDescending ? q.OrderByDescending(e => e.FiledOnDate ?? e.CreatedAt) : q.OrderBy(e => e.FiledOnDate ?? e.CreatedAt),
-            _ => q.OrderByDescending(e => e.FiledOnDate ?? e.CreatedAt),
-        };
-
-        return ordered.ThenByDescending(e => e.Id);
-    }
-
-    private static IQueryable<EvictionCaseRow> ProjectRows(IQueryable<EvictionCase> query)
-    {
-        return query.Select(e => new EvictionCaseRow
+    private static IQueryable<EvictionCaseResponse> ProjectResponses(IQueryable<EvictionCase> query, bool includeEvents)
+        => query.Select(e => new EvictionCaseResponse
         {
             Id = e.Id,
             PortfolioId = e.PortfolioId,
-            LeaseId = e.LeaseId,
-            LeaseNumber = e.Lease!.LeaseNumber,
+            LeaseManagementId = e.LeaseManagementId,
+            RelationshipNumber = e.LeaseManagement!.RelationshipNumber,
+            LeaseAgreementId = e.LeaseAgreementId,
+            AgreementNumber = e.LeaseAgreement == null ? null : e.LeaseAgreement.AgreementNumber,
             PropertyId = e.PropertyId,
             PropertyName = e.Property!.Name,
             UnitId = e.UnitId,
             UnitNumber = e.Unit!.UnitNumber,
-            TenantId = e.TenantId,
-            TenantName = (e.Tenant!.FirstName + " " + e.Tenant.LastName).Trim(),
+            Respondents = e.Respondents
+                .OrderBy(r => r.LeaseManagementParty!.Tenant!.LastName)
+                .ThenBy(r => r.LeaseManagementParty!.Tenant!.FirstName)
+                .Select(r => new EvictionCaseRespondentResponse
+                {
+                    LeaseManagementPartyId = r.LeaseManagementPartyId,
+                    TenantId = r.LeaseManagementParty!.TenantId,
+                    TenantName = (r.LeaseManagementParty.Tenant!.FirstName + " " + r.LeaseManagementParty.Tenant.LastName).Trim(),
+                }).ToList(),
             Status = e.Status,
             FiledOnDate = e.FiledOnDate,
             HearingDate = e.HearingDate,
@@ -289,54 +186,38 @@ public class EvictionCaseService : IEvictionCaseService
             Resolution = e.Resolution,
             Notes = e.Notes,
             EventCount = e.Events.Count,
-            LatestEventDate = e.Events
-                .OrderByDescending(evt => evt.EventDate)
-                .Select(evt => (DateTime?)evt.EventDate)
-                .FirstOrDefault(),
+            LatestEventDate = e.Events.Select(evt => (DateTime?)evt.EventDate).Max(),
+            Events = includeEvents
+                ? e.Events.OrderBy(evt => evt.EventDate).ThenBy(evt => evt.Id)
+                    .Select(evt => new EvictionCaseEventResponse
+                    {
+                        Id = evt.Id, PortfolioId = evt.PortfolioId, EvictionCaseId = evt.EvictionCaseId,
+                        EventType = evt.EventType, EventDate = evt.EventDate, Notes = evt.Notes,
+                        CreatedAt = evt.CreatedAt, UpdatedAt = evt.UpdatedAt,
+                    }).ToList()
+                : new List<EvictionCaseEventResponse>(),
             CreatedAt = e.CreatedAt,
             UpdatedAt = e.UpdatedAt,
         });
-    }
 
-    private static EvictionCaseResponse ToResponse(EvictionCaseRow row)
+    private static IQueryable<EvictionCase> ApplyFilters(IQueryable<EvictionCase> q, EvictionCaseListQuery query)
     {
-        return new EvictionCaseResponse
+        if (query.LeaseManagementId.HasValue) q = q.Where(e => e.LeaseManagementId == query.LeaseManagementId.Value);
+        if (query.PropertyId.HasValue) q = q.Where(e => e.PropertyId == query.PropertyId.Value);
+        if (query.LeaseManagementPartyId.HasValue) q = q.Where(e => e.Respondents.Any(r => r.LeaseManagementPartyId == query.LeaseManagementPartyId.Value));
+        if (query.Status.HasValue) q = q.Where(e => e.Status == query.Status.Value);
+        var (from, to) = ListDateRange.UtcDay(query.From, query.To);
+        if (from is { } fromUtc) q = q.Where(e => (e.FiledOnDate ?? e.CreatedAt) >= fromUtc);
+        if (to is { } toUtcExclusive) q = q.Where(e => (e.FiledOnDate ?? e.CreatedAt) < toUtcExclusive);
+        if (!string.IsNullOrWhiteSpace(query.Search))
         {
-            Id = row.Id,
-            PortfolioId = row.PortfolioId,
-            LeaseId = row.LeaseId,
-            LeaseNumber = row.LeaseNumber,
-            PropertyId = row.PropertyId,
-            PropertyName = row.PropertyName,
-            UnitId = row.UnitId,
-            UnitNumber = row.UnitNumber,
-            TenantId = row.TenantId,
-            TenantName = row.TenantName,
-            Status = row.Status,
-            FiledOnDate = row.FiledOnDate,
-            HearingDate = row.HearingDate,
-            ResolvedOnDate = row.ResolvedOnDate,
-            CourtName = row.CourtName,
-            CaseNumber = row.CaseNumber,
-            Resolution = row.Resolution,
-            Notes = row.Notes,
-            EventCount = row.EventCount,
-            LatestEventDate = row.LatestEventDate,
-            CreatedAt = row.CreatedAt,
-            UpdatedAt = row.UpdatedAt,
-        };
+            var term = query.Search.Trim();
+            q = q.Where(e => EF.Functions.ILike(e.LeaseManagement!.RelationshipNumber, $"%{term}%") || (e.CaseNumber != null && EF.Functions.ILike(e.CaseNumber, $"%{term}%")) || e.Respondents.Any(r => EF.Functions.ILike(r.LeaseManagementParty!.Tenant!.FirstName, $"%{term}%") || EF.Functions.ILike(r.LeaseManagementParty!.Tenant!.LastName, $"%{term}%")));
+        }
+        return q;
     }
 
-    private static DateTime ResolveInitialEventDate(CreateEvictionCaseRequest request, DateTime now)
-    {
-        var date = request.Status switch
-        {
-            EvictionCaseStatus.HearingScheduled => request.HearingDate ?? request.FiledOnDate,
-            _ => request.FiledOnDate,
-        };
-        return date?.ToUtc().Date ?? now.Date;
-    }
-
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static EvictionEventType? InitialEventForStatus(EvictionCaseStatus status) => status switch
     {
         EvictionCaseStatus.NoticeServed => EvictionEventType.NoticeServed,
@@ -348,123 +229,21 @@ public class EvictionCaseService : IEvictionCaseService
         EvictionCaseStatus.Dismissed => EvictionEventType.Dismissal,
         _ => null,
     };
-
     private static void ApplyEventToCase(EvictionCase entity, EvictionCaseEvent evt, DateTime now)
     {
         switch (evt.EventType)
         {
-            case EvictionEventType.NoticeServed:
-                entity.Status = EvictionCaseStatus.NoticeServed;
-                break;
-            case EvictionEventType.Filed:
-                entity.Status = EvictionCaseStatus.Filed;
-                entity.FiledOnDate = evt.EventDate;
-                break;
-            case EvictionEventType.HearingScheduled:
-                entity.Status = EvictionCaseStatus.HearingScheduled;
-                entity.HearingDate = evt.EventDate;
-                break;
-            case EvictionEventType.Judgment:
-                entity.Status = EvictionCaseStatus.Judgment;
-                entity.ResolvedOnDate = evt.EventDate;
-                entity.Resolution = Normalize(evt.Notes) ?? "Judgment";
-                break;
-            case EvictionEventType.MoveOut:
-                entity.Status = EvictionCaseStatus.MoveOut;
-                entity.ResolvedOnDate = evt.EventDate;
-                entity.Resolution = Normalize(evt.Notes) ?? "Move-out completed";
-                break;
-            case EvictionEventType.Settlement:
-                entity.Status = EvictionCaseStatus.Settled;
-                entity.ResolvedOnDate = evt.EventDate;
-                entity.Resolution = Normalize(evt.Notes) ?? "Settlement";
-                break;
-            case EvictionEventType.Dismissal:
-                entity.Status = EvictionCaseStatus.Dismissed;
-                entity.ResolvedOnDate = evt.EventDate;
-                entity.Resolution = Normalize(evt.Notes) ?? "Dismissed";
-                break;
+            case EvictionEventType.NoticeServed: entity.Status = EvictionCaseStatus.NoticeServed; break;
+            case EvictionEventType.Filed: entity.Status = EvictionCaseStatus.Filed; entity.FiledOnDate ??= evt.EventDate; break;
+            case EvictionEventType.HearingScheduled: entity.Status = EvictionCaseStatus.HearingScheduled; entity.HearingDate = evt.EventDate; break;
+            case EvictionEventType.Judgment: entity.Status = EvictionCaseStatus.Judgment; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Judgment"; break;
+            case EvictionEventType.MoveOut: entity.Status = EvictionCaseStatus.MoveOut; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Move-out completed"; break;
+            case EvictionEventType.Settlement: entity.Status = EvictionCaseStatus.Settled; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Settlement"; break;
+            case EvictionEventType.Dismissal: entity.Status = EvictionCaseStatus.Dismissed; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Dismissed"; break;
             case EvictionEventType.PaymentPlan:
             case EvictionEventType.Note:
                 break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(evt.EventType), evt.EventType, "Unsupported eviction event type.");
         }
-
         entity.UpdatedAt = now;
-    }
-
-    private static void ApplyLeaseWorkflow(EvictionCase entity, Lease lease, DateTime now, DateTime workflowDate)
-    {
-        if (entity.Status is EvictionCaseStatus.NoticeServed or EvictionCaseStatus.Filed or EvictionCaseStatus.HearingScheduled)
-        {
-            if (lease.Status == LeaseStatus.Active)
-            {
-                lease.Status = LeaseStatus.NoticeGiven;
-                lease.UpdatedAt = now;
-            }
-            return;
-        }
-
-        if (entity.Status == EvictionCaseStatus.MoveOut)
-        {
-            lease.Status = LeaseStatus.Terminated;
-            if (lease.EndDate > workflowDate)
-                lease.EndDate = workflowDate;
-            lease.MoveOutDate = workflowDate;
-            lease.UpdatedAt = now;
-
-            if (lease.Unit is not null)
-            {
-                lease.Unit.Status = UnitStatus.Vacant;
-                lease.Unit.UpdatedAt = now;
-            }
-        }
-    }
-
-    private async Task BroadcastCaseAndRelatedAsync(
-        int portfolioId,
-        int caseId,
-        EvictionCaseResponse response,
-        Lease lease,
-        Unit? unit,
-        CancellationToken ct)
-    {
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, caseId, response, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, LeaseEntityType, lease.Id, LeaseResponse.FromEntity(lease), ct);
-        if (unit is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, UnitEntityType, unit.Id, UnitResponse.FromEntity(unit), ct);
-    }
-
-    private static string? Normalize(string? value)
-    {
-        var trimmed = value?.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
-    }
-
-    private sealed class EvictionCaseRow
-    {
-        public int Id { get; init; }
-        public int PortfolioId { get; init; }
-        public int LeaseId { get; init; }
-        public string? LeaseNumber { get; init; }
-        public int PropertyId { get; init; }
-        public string? PropertyName { get; init; }
-        public int UnitId { get; init; }
-        public string? UnitNumber { get; init; }
-        public int TenantId { get; init; }
-        public string? TenantName { get; init; }
-        public EvictionCaseStatus Status { get; init; }
-        public DateTime? FiledOnDate { get; init; }
-        public DateTime? HearingDate { get; init; }
-        public DateTime? ResolvedOnDate { get; init; }
-        public string? CourtName { get; init; }
-        public string? CaseNumber { get; init; }
-        public string? Resolution { get; init; }
-        public string? Notes { get; init; }
-        public int EventCount { get; init; }
-        public DateTime? LatestEventDate { get; init; }
-        public DateTime CreatedAt { get; init; }
-        public DateTime UpdatedAt { get; init; }
     }
 }

@@ -622,6 +622,7 @@ public class DemoDataSeeder
         _db.DocumentTemplates.Add(demoLeaseTemplate);
 
         var securityDepositAccountsSeeded = 0;
+        var canonicalManagementByLegacyLeaseId = new Dictionary<int, LeaseManagement>();
         foreach (var lease in activeLeasesForPayments.Where(candidate => candidate.SecurityDeposit > 0m))
         {
             var effectiveOn = DateOnly.FromDateTime(lease.StartDate);
@@ -703,6 +704,7 @@ public class DemoDataSeeder
             };
 
             _db.LeaseManagements.Add(management);
+            canonicalManagementByLegacyLeaseId[lease.Id] = management;
             _db.TenantAccounts.Add(account);
             _db.LeaseAgreements.Add(agreement);
             _db.LeaseManagementParties.Add(party);
@@ -930,7 +932,9 @@ public class DemoDataSeeder
                 UnitId        = unit?.Id,
                 VendorId      = vendor.Id,
                 TenantId      = tenant?.Id,
-                LeaseId       = lease?.Id,
+                LeaseManagementId = lease is not null && canonicalManagementByLegacyLeaseId.TryGetValue(lease.Id, out var workOrderManagement)
+                    ? workOrderManagement.Id
+                    : null,
                 Title         = wd.title,
                 Description   = wd.desc,
                 Category      = wd.category,
@@ -1003,7 +1007,9 @@ public class DemoDataSeeder
                 PropertyId     = prop.Id,
                 UnitId         = propUnits2.Count > 0 ? propUnits2[i % propUnits2.Count].Id : null,
                 TenantId       = apptTenant?.Id,
-                LeaseId        = apptLease?.Id,
+                LeaseManagementId = apptLease is not null && canonicalManagementByLegacyLeaseId.TryGetValue(apptLease.Id, out var appointmentManagement)
+                    ? appointmentManagement.Id
+                    : null,
                 Title          = ad.title,
                 Type           = ad.type,
                 Status         = ad.status,
@@ -1074,7 +1080,9 @@ public class DemoDataSeeder
                 PortfolioId  = portfolioId,
                 PropertyId   = prop.Id,
                 UnitId       = propUnits3.Count > 0 ? propUnits3[i % propUnits3.Count].Id : null,
-                LeaseId      = inspLease?.Id,
+                LeaseManagementId = inspLease is not null && canonicalManagementByLegacyLeaseId.TryGetValue(inspLease.Id, out var inspectionManagement)
+                    ? inspectionManagement.Id
+                    : null,
                 Type         = id.type,
                 Status       = id.status,
                 ScheduledFor = scheduled,

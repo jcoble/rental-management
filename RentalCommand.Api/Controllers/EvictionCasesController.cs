@@ -51,7 +51,7 @@ public class EvictionCasesController : ManagementControllerBase
     {
         var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
         return created is null
-            ? NotFound(new { error = "Lease not found in this portfolio" })
+            ? NotFound(new { error = "Lease relationship, agreement, or respondent party not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 

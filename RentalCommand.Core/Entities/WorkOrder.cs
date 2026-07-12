@@ -10,7 +10,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? TenantId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
     public int? VendorId { get; set; }
     public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
@@ -44,7 +44,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
     public Tenant? Tenant { get; set; }
-    public Lease? Lease { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
     public Vendor? Vendor { get; set; }
     public RecurringMaintenanceTask? RecurringMaintenanceTask { get; set; }
     public List<Expense> Expenses { get; set; } = [];

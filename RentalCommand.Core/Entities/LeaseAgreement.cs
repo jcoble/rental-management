@@ -66,4 +66,6 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public List<LeaseAgreementSigner> Signers { get; set; } = [];
     public List<LeaseAddendum> Addenda { get; set; } = [];
     public List<LeaseRenewalAddendumDecision> RenewalAddendumDecisions { get; set; } = [];
+    public List<Inspection> Inspections { get; set; } = [];
+    public List<EvictionCase> EvictionCases { get; set; } = [];
 }

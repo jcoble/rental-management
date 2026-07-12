@@ -64,8 +64,4 @@ public class Lease : IAuditable, IPortfolioScoped
     public List<LeaseTenant> LeaseTenants { get; set; } = [];
     public DocumentTemplate? DocumentTemplate { get; set; }
     public List<Payment> Payments { get; set; } = [];
-    public List<WorkOrder> WorkOrders { get; set; } = [];
-    public List<Appointment> Appointments { get; set; } = [];
-    public List<Inspection> Inspections { get; set; } = [];
-    public List<EvictionCase> EvictionCases { get; set; } = [];
 }

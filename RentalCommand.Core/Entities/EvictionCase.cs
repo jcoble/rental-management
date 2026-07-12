@@ -7,10 +7,10 @@ public class EvictionCase : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int LeaseId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int? LeaseAgreementId { get; set; }
     public int PropertyId { get; set; }
     public int UnitId { get; set; }
-    public int TenantId { get; set; }
     public EvictionCaseStatus Status { get; set; } = EvictionCaseStatus.Draft;
     public DateTime? FiledOnDate { get; set; }
     public DateTime? HearingDate { get; set; }
@@ -24,9 +24,10 @@ public class EvictionCase : IAuditable, IPortfolioScoped
     public DateTime? DeletedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
-    public Lease? Lease { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
+    public LeaseAgreement? LeaseAgreement { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
-    public Tenant? Tenant { get; set; }
+    public List<EvictionCaseRespondent> Respondents { get; set; } = [];
     public List<EvictionCaseEvent> Events { get; set; } = [];
 }

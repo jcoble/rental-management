@@ -92,4 +92,5 @@ public class RentalApplication : IAuditable, IPortfolioScoped
     public Tenant? ApprovedTenant { get; set; }
     public LeaseManagement? PreparedLeaseManagement { get; set; }
     public ApplicationFinancialAccount? FinancialAccount { get; set; }
+    public List<Appointment> Appointments { get; set; } = [];
 }

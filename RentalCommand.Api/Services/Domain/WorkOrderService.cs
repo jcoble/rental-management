@@ -318,15 +318,15 @@ public class WorkOrderService : IWorkOrderService
                 "The selected tenant does not belong to the selected unit or property.");
         }
 
-        if (request.LeaseId.HasValue &&
-            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
+        if (request.LeaseManagementId.HasValue &&
+            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, request.LeaseManagementId.Value, ct))
         {
             return null;
         }
 
-        if (request.LeaseId.HasValue &&
-            !await LeaseMatchesLocationAsync(
-                portfolioId, request.LeaseId.Value, request.PropertyId, request.UnitId, ct))
+        if (request.LeaseManagementId.HasValue &&
+            !await LeaseManagementMatchesLocationAsync(
+                portfolioId, request.LeaseManagementId.Value, request.PropertyId, request.UnitId, ct))
         {
             throw new DomainValidationException(
                 "The selected lease does not belong to the selected unit or property.");
@@ -345,7 +345,7 @@ public class WorkOrderService : IWorkOrderService
             PropertyId = request.PropertyId,
             UnitId = request.UnitId,
             TenantId = request.TenantId,
-            LeaseId = request.LeaseId,
+            LeaseManagementId = request.LeaseManagementId,
             VendorId = request.VendorId,
             Title = request.Title,
             Description = request.Description,
@@ -517,7 +517,7 @@ public class WorkOrderService : IWorkOrderService
 
         var effectiveUnitId = request.ClearUnit ? null : request.UnitId ?? entity.UnitId;
         var effectiveTenantId = request.ClearTenant ? null : request.TenantId ?? entity.TenantId;
-        var effectiveLeaseId = request.ClearLease ? null : request.LeaseId ?? entity.LeaseId;
+        var effectiveLeaseManagementId = request.ClearLeaseManagement ? null : request.LeaseManagementId ?? entity.LeaseManagementId;
         if (request.TenantId.HasValue &&
             !await TenantMatchesLocationAsync(
                 portfolioId, request.TenantId.Value, entity.PropertyId, effectiveUnitId, ct))
@@ -535,24 +535,24 @@ public class WorkOrderService : IWorkOrderService
                 "The selected tenant does not belong to the selected unit or property.");
         }
 
-        if (request.LeaseId.HasValue &&
-            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
+        if (request.LeaseManagementId.HasValue &&
+            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, request.LeaseManagementId.Value, ct))
         {
             return null;
         }
 
-        if (request.LeaseId.HasValue &&
-            !await LeaseMatchesLocationAsync(
-                portfolioId, request.LeaseId.Value, entity.PropertyId, effectiveUnitId, ct))
+        if (request.LeaseManagementId.HasValue &&
+            !await LeaseManagementMatchesLocationAsync(
+                portfolioId, request.LeaseManagementId.Value, entity.PropertyId, effectiveUnitId, ct))
         {
             throw new DomainValidationException(
                 "The selected lease does not belong to the selected unit or property.");
         }
 
-        if ((request.UnitId.HasValue || request.ClearUnit || request.ClearLease) &&
-            effectiveLeaseId.HasValue &&
-            !await LeaseMatchesLocationAsync(
-                portfolioId, effectiveLeaseId.Value, entity.PropertyId, effectiveUnitId, ct))
+        if ((request.UnitId.HasValue || request.ClearUnit || request.ClearLeaseManagement) &&
+            effectiveLeaseManagementId.HasValue &&
+            !await LeaseManagementMatchesLocationAsync(
+                portfolioId, effectiveLeaseManagementId.Value, entity.PropertyId, effectiveUnitId, ct))
         {
             throw new DomainValidationException(
                 "The selected lease does not belong to the selected unit or property.");
@@ -572,10 +572,10 @@ public class WorkOrderService : IWorkOrderService
         var detailsChanged =
             (request.ClearUnit && entity.UnitId.HasValue) ||
             (request.ClearTenant && entity.TenantId.HasValue) ||
-            (request.ClearLease && entity.LeaseId.HasValue) ||
+            (request.ClearLeaseManagement && entity.LeaseManagementId.HasValue) ||
             (request.UnitId.HasValue && request.UnitId != entity.UnitId) ||
             (request.TenantId.HasValue && request.TenantId != entity.TenantId) ||
-            (request.LeaseId.HasValue && request.LeaseId != entity.LeaseId) ||
+            (request.LeaseManagementId.HasValue && request.LeaseManagementId != entity.LeaseManagementId) ||
             (request.VendorId.HasValue && request.VendorId != entity.VendorId) ||
             (request.Title != null && request.Title != entity.Title) ||
             (request.Description != null && request.Description != entity.Description) ||
@@ -588,8 +588,8 @@ public class WorkOrderService : IWorkOrderService
         else if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
         if (request.ClearTenant) entity.TenantId = null;
         else if (request.TenantId.HasValue) entity.TenantId = request.TenantId;
-        if (request.ClearLease) entity.LeaseId = null;
-        else if (request.LeaseId.HasValue) entity.LeaseId = request.LeaseId;
+        if (request.ClearLeaseManagement) entity.LeaseManagementId = null;
+        else if (request.LeaseManagementId.HasValue) entity.LeaseManagementId = request.LeaseManagementId;
         if (request.VendorId.HasValue) entity.VendorId = request.VendorId;
         if (request.Title != null) entity.Title = request.Title;
         if (request.Description != null) entity.Description = request.Description;
@@ -712,57 +712,35 @@ public class WorkOrderService : IWorkOrderService
         int? unitId,
         CancellationToken ct)
     {
-        var tenants = _db.Tenants
-            .AsNoTracking()
-            .Where(t => t.Id == tenantId && t.PortfolioId == portfolioId);
-
-        if (unitId.HasValue)
-        {
-            var selectedUnitId = unitId.Value;
-            return tenants.AnyAsync(t =>
-                t.Leases.Any(l => l.PortfolioId == portfolioId
-                    && l.UnitId == selectedUnitId
-                    && (l.Status == LeaseStatus.Active ||
-                        l.Status == LeaseStatus.NoticeGiven)) ||
-                t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
-                    && lt.Lease != null
-                    && lt.Lease.PortfolioId == portfolioId
-                    && lt.Lease.UnitId == selectedUnitId
-                    && (lt.Lease.Status == LeaseStatus.Active ||
-                        lt.Lease.Status == LeaseStatus.NoticeGiven)), ct);
-        }
-
-        return tenants.AnyAsync(t =>
-            t.Leases.Any(l => l.PortfolioId == portfolioId
-                && l.PropertyId == propertyId
-                && (l.Status == LeaseStatus.Active ||
-                    l.Status == LeaseStatus.NoticeGiven)) ||
-            t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
-                && lt.Lease != null
-                && lt.Lease.PortfolioId == portfolioId
-                && lt.Lease.PropertyId == propertyId
-                && (lt.Lease.Status == LeaseStatus.Active ||
-                    lt.Lease.Status == LeaseStatus.NoticeGiven)), ct);
+        return _db.LeaseManagementParties.AsNoTracking().AnyAsync(party =>
+            party.PortfolioId == portfolioId &&
+            party.TenantId == tenantId &&
+            party.LeaseManagement != null &&
+            party.LeaseManagement.PropertyId == propertyId &&
+            (!unitId.HasValue || party.LeaseManagement.UnitId == unitId.Value) &&
+            party.LeaseManagement.CanceledAtUtc == null &&
+            party.LeaseManagement.PossessionReturnedAtUtc == null,
+            ct);
     }
 
-    private Task<bool> LeaseMatchesLocationAsync(
+    private Task<bool> LeaseManagementMatchesLocationAsync(
         int portfolioId,
-        int leaseId,
+        int leaseManagementId,
         int propertyId,
         int? unitId,
         CancellationToken ct)
     {
-        var leases = _db.Leases
+        var relationships = _db.LeaseManagements
             .AsNoTracking()
-            .Where(l => l.Id == leaseId && l.PortfolioId == portfolioId && l.PropertyId == propertyId);
+            .Where(l => l.Id == leaseManagementId && l.PortfolioId == portfolioId && l.PropertyId == propertyId);
 
         if (unitId.HasValue)
         {
             var selectedUnitId = unitId.Value;
-            leases = leases.Where(l => l.UnitId == selectedUnitId);
+            relationships = relationships.Where(l => l.UnitId == selectedUnitId);
         }
 
-        return leases.AnyAsync(ct);
+        return relationships.AnyAsync(ct);
     }
 
     // Validates the (RequestedAt, ScheduledFor, CompletedAt) timing on an update. A supplied CompletedAt

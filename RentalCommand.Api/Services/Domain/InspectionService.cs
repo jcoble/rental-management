@@ -229,8 +229,14 @@ public class InspectionService : IInspectionService
             return null;
         }
 
-        if (request.LeaseId.HasValue &&
-            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
+        if (request.LeaseManagementId.HasValue &&
+            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, request.LeaseManagementId.Value, ct))
+        {
+            return null;
+        }
+        if (request.LeaseAgreementId.HasValue &&
+            (!request.LeaseManagementId.HasValue ||
+             !await _db.EnsureLeaseAgreementInManagementAsync(portfolioId, request.LeaseManagementId.Value, request.LeaseAgreementId.Value, ct)))
         {
             return null;
         }
@@ -254,7 +260,8 @@ public class InspectionService : IInspectionService
             PortfolioId = portfolioId,
             PropertyId = request.PropertyId,
             UnitId = request.UnitId,
-            LeaseId = request.LeaseId,
+            LeaseManagementId = request.LeaseManagementId,
+            LeaseAgreementId = request.LeaseAgreementId,
             Type = request.Type,
             Status = request.Status,
             ScheduledFor = request.ScheduledFor.ToUtc(),
@@ -302,8 +309,15 @@ public class InspectionService : IInspectionService
             return null;
         }
 
-        if (request.LeaseId.HasValue &&
-            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
+        var effectiveLeaseManagementId = request.LeaseManagementId ?? entity.LeaseManagementId;
+        if (request.LeaseManagementId.HasValue &&
+            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, request.LeaseManagementId.Value, ct))
+        {
+            return null;
+        }
+        if (request.LeaseAgreementId.HasValue &&
+            (!effectiveLeaseManagementId.HasValue ||
+             !await _db.EnsureLeaseAgreementInManagementAsync(portfolioId, effectiveLeaseManagementId.Value, request.LeaseAgreementId.Value, ct)))
         {
             return null;
         }
@@ -322,7 +336,8 @@ public class InspectionService : IInspectionService
         }
 
         if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
-        if (request.LeaseId.HasValue) entity.LeaseId = request.LeaseId;
+        if (request.LeaseManagementId.HasValue) entity.LeaseManagementId = request.LeaseManagementId;
+        if (request.LeaseAgreementId.HasValue) entity.LeaseAgreementId = request.LeaseAgreementId;
         if (request.Type.HasValue) entity.Type = request.Type.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.Value.ToUtc();

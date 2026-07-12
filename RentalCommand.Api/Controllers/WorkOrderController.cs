@@ -10,7 +10,7 @@ namespace RentalCommand.Api.Controllers;
 /// CRUD for maintenance work orders within the caller's portfolio. Scope comes from the JWT
 /// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>
 /// plus requested/scheduled/completed date windows.
-/// Create validates the referenced property/unit/tenant/lease/vendor are in the portfolio. Work orders
+/// Create validates the referenced property/unit/tenant/lease relationship/vendor are in the portfolio. Work orders
 /// have no soft-delete column, so removal is a hard delete.
 /// </summary>
 [ApiController]
@@ -78,7 +78,7 @@ public class WorkOrderController : ManagementControllerBase
 
         var created = await _service.CreateAsync(GetPortfolioId(), request, GetUserId(), "Staff", ct);
         return created == null
-            ? NotFound(new { error = "Referenced property, unit, tenant, lease, or vendor not found in this portfolio" })
+            ? NotFound(new { error = "Referenced property, unit, tenant, lease relationship, or vendor not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
