@@ -12,17 +12,20 @@ public enum NativeSignerActionOutcome
 
 /// <summary>Captures one signer's legally significant signature and consent.</summary>
 public sealed record RecordNativeSignatureCommand(
-    string Token,
+    string TokenHash,
     SignatureSignatureType SignatureType,
     string? TypedName,
-    byte[]? DrawnSignatureImage,
+    Guid? DrawnSignaturePendingUploadId,
+    string? DrawnSignatureRequestFingerprint,
+    string? DrawnSignatureStorageKey,
+    long? DrawnSignatureFileSize,
     string? IpAddress,
     string? UserAgent,
     DateTime OccurredAtUtc) : IAtomicCommandData;
 
 /// <summary>Captures one signer's refusal and closes the request and lease workflow.</summary>
 public sealed record RecordNativeDeclineCommand(
-    string Token,
+    string TokenHash,
     string? Reason,
     string? IpAddress,
     string? UserAgent,
@@ -33,8 +36,8 @@ public sealed record NativeSignerActionResult(
     NativeSignerActionOutcome Outcome,
     string? Error,
     int SignatureRequestId,
-    string? PublicId,
-    int LeaseId,
+    Guid? PublicId,
+    int LeaseAgreementId,
     SignatureSignerStatus SignerStatus,
     SignatureRequestStatus RequestStatus,
     bool ExecutionRequired) : IAtomicResultData;

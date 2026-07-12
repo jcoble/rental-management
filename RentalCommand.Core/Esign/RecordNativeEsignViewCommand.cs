@@ -14,7 +14,7 @@ public enum NativeEsignViewOutcome
 /// command input only; callers must use a one-way token digest for the durable command identity.
 /// </summary>
 public sealed record RecordNativeEsignViewCommand(
-    string Token,
+    string TokenHash,
     string? IpAddress,
     string? UserAgent,
     DateTime OccurredAtUtc) : IAtomicCommandData;

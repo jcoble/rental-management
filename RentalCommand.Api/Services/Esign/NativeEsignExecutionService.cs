@@ -6,7 +6,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Documents;
@@ -25,7 +24,6 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     private readonly INativeEsignExecutionClaimStore _claims;
     private readonly IFileStorage _storage;
     private readonly IExecutedLeasePdfGenerator _executedPdf;
-    private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeEsignExecutionService> _logger;
     private readonly IPendingFileUploadStore _pendingUploads;
 
@@ -35,7 +33,6 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         INativeEsignExecutionClaimStore claims,
         IFileStorage storage,
         IExecutedLeasePdfGenerator executedPdf,
-        TimeProvider timeProvider,
         IPendingFileUploadStore pendingUploads,
         ILogger<NativeEsignExecutionService> logger)
     {
@@ -44,7 +41,6 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         _claims = claims;
         _storage = storage;
         _executedPdf = executedPdf;
-        _timeProvider = timeProvider;
         _pendingUploads = pendingUploads;
         _logger = logger;
     }
@@ -54,7 +50,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         var completed = await _db.SignatureRequests.AsNoTracking()
             .AnyAsync(request => request.Id == signatureRequestId
                 && request.Status == SignatureRequestStatus.Completed
-                && request.SignedStoredFileId != null, ct);
+                && request.ExecutedArtifactId != null, ct);
         if (completed)
         {
             return true;
@@ -78,7 +74,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             return false;
         }
 
-        if (sigRequest.Status == SignatureRequestStatus.Completed && sigRequest.SignedStoredFileId.HasValue)
+        if (sigRequest.Status == SignatureRequestStatus.Completed && sigRequest.ExecutedArtifactId.HasValue)
         {
             return true;
         }
@@ -108,17 +104,17 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
             var executedBytes = _executedPdf.Generate(data, contentSha256: string.Empty);
             var sha256 = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
-            var fileName = $"lease-{sigRequest.LeaseId}-executed.pdf";
+            var fileName = $"lease-agreement-{sigRequest.LeaseAgreementId}-executed.pdf";
             var admission = await _pendingUploads.PrepareAsync(
                 sigRequest.PortfolioId,
                 actorScopeId: 0,
                 purpose: "native-esign-executed",
-                clientOperationId: sigRequest.PublicId,
+                clientOperationId: sigRequest.PublicId.ToString("N"),
                 requestFingerprint: sha256,
                 fileName,
                 contentType: "application/pdf",
                 sizeBytes: executedBytes.LongLength,
-                nowUtc: _timeProvider.UtcNow(),
+                nowUtc: DateTime.UtcNow,
                 ct);
             storageKey = admission.StoragePath;
             await using (var stream = new MemoryStream(executedBytes))
@@ -127,7 +123,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             }
 
             await _atomic.ExecuteAsync(
-                new AtomicCommandIdentity("native-esign.finalize", TokenIdentity(sigRequest.PublicId)),
+                new AtomicCommandIdentity("native-esign.finalize", TokenIdentity(sigRequest.PublicId.ToString("N"))),
                 new FinalizeNativeEsignRequestCommand(
                     admission.Id,
                     sha256,
@@ -137,8 +133,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                     storageKey!,
                     fileName,
                     executedBytes.LongLength,
-                    sha256,
-                    now),
+                    sha256),
                 new AtomicJsonResultCodec<FinalizeNativeEsignRequestResult>("native-esign.finalize.v1"),
                 ct);
 
@@ -172,15 +167,14 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         DateTime now,
         CancellationToken ct)
     {
-        var lease = await _db.Leases.AsNoTracking()
-            .Include(candidate => candidate.Tenant)
-            .Include(candidate => candidate.Unit)
-            .Include(candidate => candidate.Property)
+        var agreement = await _db.LeaseAgreements.AsNoTracking()
+            .Include(candidate => candidate.LeaseManagement!).ThenInclude(relationship => relationship.Property)
+            .Include(candidate => candidate.LeaseManagement!).ThenInclude(relationship => relationship.Unit)
             .SingleOrDefaultAsync(
-                candidate => candidate.Id == sigRequest.LeaseId
+                candidate => candidate.Id == sigRequest.LeaseAgreementId
                     && candidate.PortfolioId == sigRequest.PortfolioId,
                 ct);
-        if (lease is null)
+        if (agreement?.LeaseManagement?.Property is null)
         {
             return null;
         }
@@ -190,46 +184,60 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
             ? portfolio.ManagementCompanyName
             : portfolio?.Name ?? "Landlord";
-        var tenantName = lease.Tenant is null
-            ? string.Empty
-            : $"{lease.Tenant.FirstName} {lease.Tenant.LastName}".Trim();
-        var property = lease.Property;
-        var propertyAddress = property is null
-            ? string.Empty
-            : string.Join(", ", new[]
+        var primarySigner = await _db.LeaseAgreementSigners.AsNoTracking()
+            .Where(signer => signer.LeaseAgreementId == agreement.Id
+                && signer.PortfolioId == agreement.PortfolioId
+                && signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
+            .Select(signer => new { signer.NameSnapshot, signer.EmailSnapshot })
+            .FirstOrDefaultAsync(ct);
+        var tenantName = primarySigner?.NameSnapshot ?? string.Empty;
+        var property = agreement.LeaseManagement.Property;
+        var propertyAddress = string.Join(", ", new[]
             {
                 property.AddressLine1,
                 property.AddressLine2,
                 $"{property.City}, {property.State} {property.PostalCode}".Trim(),
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
 
-        var originalDocumentBytes = sigRequest.DocumentTemplateId.HasValue
-            ? await TryLoadOriginalDocumentBytesAsync(sigRequest, ct)
-            : null;
+        var originalDocumentBytes = await TryLoadOriginalDocumentBytesAsync(sigRequest, ct);
         var signerRows = await _db.SignatureSigners.AsNoTracking()
             .Where(signer => signer.SignatureRequestId == sigRequest.Id)
-            .OrderBy(signer => signer.Id)
+            .OrderBy(signer => signer.SigningOrder)
             .ToListAsync(ct);
+
+        // The executed renderer still accepts its historical presentation DTO. This transient object
+        // is never tracked or persisted; every authoritative term comes from LeaseAgreement.
+        var presentation = new Lease
+        {
+            LeaseNumber = agreement.AgreementNumber,
+            StartDate = agreement.TermStartOn.ToDateTime(TimeOnly.MinValue),
+            EndDate = (agreement.TermEndOn ?? agreement.TermStartOn).ToDateTime(TimeOnly.MinValue),
+            MonthlyRent = agreement.BaseRentAmount,
+            SecurityDeposit = agreement.SecurityDepositObligation,
+            LateFeeAmount = agreement.LateFeeAmount,
+            RentDueDay = agreement.RentDueDay,
+        };
 
         return new ExecutedLeaseData
         {
             Agreement = new LeaseAgreementData
             {
-                Lease = lease,
+                Lease = presentation,
                 LandlordName = landlordName,
                 TenantName = tenantName,
                 PropertyName = property?.Name ?? string.Empty,
                 PropertyAddress = propertyAddress,
-                UnitNumber = lease.Unit?.UnitNumber,
-                State = property?.State ?? string.Empty,
-                YearBuilt = property?.YearBuilt,
+                UnitNumber = agreement.LeaseManagement.Unit?.UnitNumber,
+                State = property.State,
+                YearBuilt = property.YearBuilt,
             },
-            Signers = BuildExecutedSigners(signerRows, tenantName, lease.Tenant?.Email),
+            Signers = await BuildExecutedSignersAsync(
+                sigRequest.PortfolioId, signerRows, tenantName, primarySigner?.EmailSnapshot, ct),
             LandlordName = landlordName,
             EnvelopeId = sigRequest.PublicId,
-            DocumentName = sigRequest.DocumentName,
+            DocumentName = sigRequest.IssuedArtifact?.FileName ?? $"agreement-{agreement.Id}.pdf",
             OriginalDocumentBytes = originalDocumentBytes,
-            TemplateFieldSnapshotJson = sigRequest.TemplateFieldSnapshotJson,
+            TemplateFieldSnapshotJson = null,
             CompletedAtUtc = now,
         };
     }
@@ -239,9 +247,10 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         CancellationToken ct)
     {
         var file = await _db.StoredFiles.AsNoTracking()
-            .SingleOrDefaultAsync(candidate => candidate.Id == sigRequest.OriginalStoredFileId
-                && candidate.PortfolioId == sigRequest.PortfolioId
-                && candidate.DeletedAt == null, ct);
+            .Where(candidate => candidate.PortfolioId == sigRequest.PortfolioId && candidate.DeletedAt == null)
+            .Join(_db.LegalDocumentArtifacts.AsNoTracking().Where(artifact => artifact.Id == sigRequest.IssuedArtifactId),
+                file => file.Id, artifact => artifact.StoredFileId, (file, _) => file)
+            .SingleOrDefaultAsync(ct);
         if (file is null)
         {
             return null;
@@ -264,11 +273,34 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         }
     }
 
-    private static List<ExecutedSigner> BuildExecutedSigners(
+    private async Task<List<ExecutedSigner>> BuildExecutedSignersAsync(
+        int portfolioId,
         IReadOnlyList<SignatureSigner> source,
         string tenantName,
-        string? tenantEmail)
+        string? tenantEmail,
+        CancellationToken ct)
     {
+        var drawnFileIds = source.Where(signer => signer.DrawnSignatureStoredFileId.HasValue)
+            .Select(signer => signer.DrawnSignatureStoredFileId!.Value).Distinct().ToArray();
+        var drawnFiles = await _db.StoredFiles.AsNoTracking()
+            .Where(file => file.PortfolioId == portfolioId && drawnFileIds.Contains(file.Id) && file.DeletedAt == null)
+            .Select(file => new { file.Id, file.FilePath })
+            .ToDictionaryAsync(file => file.Id, file => file.FilePath, ct);
+        var drawnImages = new Dictionary<int, byte[]>();
+        foreach (var file in drawnFiles)
+        {
+            try
+            {
+                await using var stream = await _storage.DownloadAsync(file.Value, ct);
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, ct);
+                drawnImages[file.Key] = buffer.ToArray();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw new InvalidOperationException($"Drawn signature evidence file {file.Key} is unavailable.", exception);
+            }
+        }
         var roles = new DocumentTemplateSignerRole[source.Count];
         var signers = new List<ExecutedSigner>(source.Count);
         var tenantAssigned = false;
@@ -304,19 +336,26 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         for (var index = 0; index < source.Count; index++)
         {
             var signer = source[index];
+            if (signer.SignatureType == SignatureSignatureType.Drawn
+                && (!signer.DrawnSignatureStoredFileId.HasValue
+                    || !drawnImages.ContainsKey(signer.DrawnSignatureStoredFileId.Value)))
+            {
+                throw new InvalidOperationException($"Drawn signature evidence for signer {signer.Id} is unavailable.");
+            }
             signers.Add(new ExecutedSigner
             {
-                Name = signer.Name,
-                Email = signer.Email,
+                Name = signer.NameSnapshot,
+                Email = signer.EmailSnapshot,
                 SignerRole = roles[index],
                 SignatureType = signer.SignatureType,
                 TypedName = signer.TypedName,
-                DrawnSignatureImage = signer.DrawnSignatureImage,
+                DrawnSignatureImage = signer.DrawnSignatureStoredFileId is { } fileId
+                    && drawnImages.TryGetValue(fileId, out var image) ? image : null,
                 SignedAtUtc = signer.SignedAtUtc,
                 IpAddress = signer.IpAddress,
                 UserAgent = signer.UserAgent,
                 ViewedAtUtc = signer.ViewedAtUtc,
-                ConsentGiven = signer.ConsentGiven,
+                ConsentGiven = signer.ConsentGivenAtUtc.HasValue,
             });
         }
 
@@ -326,13 +365,13 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     private static bool IsTenantSigner(SignatureSigner signer, string tenantName, string? tenantEmail)
     {
         if (!string.IsNullOrWhiteSpace(tenantEmail)
-            && string.Equals(signer.Email.Trim(), tenantEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+            && string.Equals(signer.EmailSnapshot.Trim(), tenantEmail.Trim(), StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
         return !string.IsNullOrWhiteSpace(tenantName)
-            && string.Equals(signer.Name.Trim(), tenantName.Trim(), StringComparison.OrdinalIgnoreCase);
+            && string.Equals(signer.NameSnapshot.Trim(), tenantName.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string TokenIdentity(string token) =>

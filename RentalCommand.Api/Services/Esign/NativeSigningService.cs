@@ -7,8 +7,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -19,22 +19,22 @@ public sealed class NativeSigningService : INativeSigningService
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IFileStorage _storage;
     private readonly INativeEsignExecutionService _execution;
-    private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeSigningService> _logger;
+    private readonly IPendingFileUploadStore _pendingUploads;
 
     public NativeSigningService(
         RentalCommandDbContext db,
         IAtomicUnitOfWork atomic,
         IFileStorage storage,
         INativeEsignExecutionService execution,
-        TimeProvider timeProvider,
+        IPendingFileUploadStore pendingUploads,
         ILogger<NativeSigningService> logger)
     {
         _db = db;
         _atomic = atomic;
         _storage = storage;
         _execution = execution;
-        _timeProvider = timeProvider;
+        _pendingUploads = pendingUploads;
         _logger = logger;
     }
 
@@ -46,13 +46,13 @@ public sealed class NativeSigningService : INativeSigningService
             return SignTokenResult<SignPackageResponse>.NotFound();
         }
 
-        var now = _timeProvider.UtcNow();
+        var now = DateTime.UtcNow;
         // Public tokens are attacker-controlled. Reject unknown tokens with one indexed DB query
         // before entering the atomic kernel so random probes cannot create durable receipts or
         // audit rows. The handler still resolves the request and rechecks state under its aggregate
         // lock; this preflight is only an admission boundary and does not replace that protection.
         var tokenExists = await _db.SignatureSigners.AsNoTracking()
-            .AnyAsync(signer => signer.Token == token, ct);
+            .AnyAsync(signer => signer.TokenHash == TokenHash(token), ct);
         if (!tokenExists)
         {
             return SignTokenResult<SignPackageResponse>.NotFound();
@@ -60,22 +60,22 @@ public sealed class NativeSigningService : INativeSigningService
 
         await _atomic.ExecuteAsync(
             new AtomicCommandIdentity("native-esign.view", TokenIdentity(token)),
-            new RecordNativeEsignViewCommand(token, ipAddress, userAgent, now),
+            new RecordNativeEsignViewCommand(TokenHash(token), ipAddress, userAgent, now),
             new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1"),
             ct);
         // The durable receipt proves only that the first-view command ran. Always project current state
         // after commit so later opens never replay stale status or stale expiry decisions.
         var current = await _db.SignatureSigners.AsNoTracking()
-            .Where(signer => signer.Token == token)
+            .Where(signer => signer.TokenHash == TokenHash(token))
             .Select(signer => new
             {
-                signer.Name,
-                signer.Email,
-                signer.ExpiresAtUtc,
+                signer.NameSnapshot,
+                signer.EmailSnapshot,
+                signer.TokenExpiresAtUtc,
                 SignerStatus = signer.Status,
                 RequestStatus = signer.SignatureRequest!.Status,
                 signer.SignatureRequest.Subject,
-                signer.SignatureRequest.DocumentName,
+                DocumentName = signer.SignatureRequest.IssuedArtifact!.FileName,
                 SenderName = signer.SignatureRequest.Portfolio!.ManagementCompanyName
                     ?? signer.SignatureRequest.Portfolio.Name,
             })
@@ -84,7 +84,7 @@ public sealed class NativeSigningService : INativeSigningService
         {
             return SignTokenResult<SignPackageResponse>.NotFound();
         }
-        if (current.ExpiresAtUtc <= now
+        if (current.TokenExpiresAtUtc <= now
             && current.SignerStatus is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
             && current.RequestStatus is not (SignatureRequestStatus.Completed
                 or SignatureRequestStatus.Declined
@@ -96,8 +96,8 @@ public sealed class NativeSigningService : INativeSigningService
 
         var package = new SignPackageResponse
         {
-            SignerName = current.Name,
-            SignerEmail = current.Email,
+            SignerName = current.NameSnapshot,
+            SignerEmail = current.EmailSnapshot,
             Subject = current.Subject,
             DocumentName = current.DocumentName,
             SenderName = current.SenderName ?? "Rental Command",
@@ -122,7 +122,11 @@ public sealed class NativeSigningService : INativeSigningService
         }
 
         // Once executed, show the signed document; otherwise the original under review.
-        var fileId = request!.SignedStoredFileId ?? request.OriginalStoredFileId;
+        var artifactId = request!.ExecutedArtifactId ?? request.IssuedArtifactId;
+        var fileId = await _db.LegalDocumentArtifacts.AsNoTracking()
+            .Where(artifact => artifact.Id == artifactId && artifact.PortfolioId == request.PortfolioId)
+            .Select(artifact => artifact.StoredFileId)
+            .SingleAsync(ct);
         var file = await _db.StoredFiles.AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == fileId && f.PortfolioId == request.PortfolioId && f.DeletedAt == null, ct);
         if (file is null)
@@ -174,17 +178,44 @@ public sealed class NativeSigningService : INativeSigningService
             }
         }
 
-        var now = _timeProvider.UtcNow();
+        var now = DateTime.UtcNow;
         var operationKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
             ? Guid.NewGuid().ToString("N")
             : request.IdempotencyKey;
+        Guid? drawnAdmissionId = null;
+        string? drawnFingerprint = null;
+        string? drawnStorageKey = null;
+        long? drawnFileSize = null;
+        if (drawnBytes is not null)
+        {
+            var portfolioId = await _db.SignatureSigners.AsNoTracking()
+                .Where(signer => signer.TokenHash == TokenHash(token))
+                .Select(signer => (int?)signer.PortfolioId)
+                .SingleOrDefaultAsync(ct);
+            if (!portfolioId.HasValue) return SignTokenResult<SignActionResponse>.NotFound();
+            drawnFingerprint = Convert.ToHexString(SHA256.HashData(drawnBytes)).ToLowerInvariant();
+            var admission = await _pendingUploads.PrepareAsync(portfolioId.Value, 0,
+                "native-esign-drawn-signature", $"{TokenHash(token)}:{operationKey}", drawnFingerprint,
+                "drawn-signature.png", "image/png", drawnBytes.LongLength, now, ct);
+            drawnAdmissionId = admission.Id;
+            drawnStorageKey = admission.StoragePath;
+            drawnFileSize = drawnBytes.LongLength;
+            if (admission.State == PendingFileUploadState.Prepared)
+            {
+                await using var stream = new MemoryStream(drawnBytes);
+                await _storage.UploadAtAsync(stream, admission.StoragePath, "drawn-signature.png", "image/png", ct);
+            }
+        }
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity("native-esign.sign", OperationIdentity(token, operationKey)),
             new RecordNativeSignatureCommand(
-                token,
+                TokenHash(token),
                 typed ? SignatureSignatureType.Typed : SignatureSignatureType.Drawn,
                 typed ? request.TypedName!.Trim() : null,
-                drawnBytes,
+                drawnAdmissionId,
+                drawnFingerprint,
+                drawnStorageKey,
+                drawnFileSize,
                 ipAddress,
                 userAgent,
                 now),
@@ -214,13 +245,13 @@ public sealed class NativeSigningService : INativeSigningService
     public async Task<SignTokenResult<SignActionResponse>> DeclineAsync(
         string token, DeclineSignatureRequest request, string? ipAddress, string? userAgent, CancellationToken ct = default)
     {
-        var now = _timeProvider.UtcNow();
+        var now = DateTime.UtcNow;
         var operationKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
             ? Guid.NewGuid().ToString("N")
             : request.IdempotencyKey;
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity("native-esign.decline", OperationIdentity(token, operationKey)),
-            new RecordNativeDeclineCommand(token, request.Reason?.Trim(), ipAddress, userAgent, now),
+            new RecordNativeDeclineCommand(TokenHash(token), request.Reason?.Trim(), ipAddress, userAgent, now),
             new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.decline.v1"),
             ct);
         if (outcome.Value.Outcome != NativeSignerActionOutcome.Applied)
@@ -255,7 +286,7 @@ public sealed class NativeSigningService : INativeSigningService
 
         var signer = await _db.SignatureSigners.AsNoTracking()
             .Include(s => s.SignatureRequest!)
-            .FirstOrDefaultAsync(s => s.Token == token, ct);
+            .FirstOrDefaultAsync(s => s.TokenHash == TokenHash(token), ct);
         if (signer?.SignatureRequest is null)
         {
             return (null, null, SignTokenError.NotFound());
@@ -263,7 +294,7 @@ public sealed class NativeSigningService : INativeSigningService
 
         var request = signer.SignatureRequest;
 
-        if (signer.ExpiresAtUtc <= DateTime.UtcNow
+        if (signer.TokenExpiresAtUtc <= DateTime.UtcNow
             && signer.Status is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
             && request.Status is not (SignatureRequestStatus.Completed or SignatureRequestStatus.Declined or SignatureRequestStatus.Voided))
         {
@@ -319,6 +350,8 @@ public sealed class NativeSigningService : INativeSigningService
 
     private static string TokenIdentity(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+    private static string TokenHash(string token) => TokenIdentity(token);
 
     private static SignTokenResult<SignActionResponse> MapSignerActionError(NativeSignerActionResult result) =>
         result.Outcome switch

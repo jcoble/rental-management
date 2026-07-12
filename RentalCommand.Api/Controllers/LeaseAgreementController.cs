@@ -3,9 +3,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Esign;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -18,9 +22,18 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         new("lease-agreement.draft.edit.v1");
     private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> SuccessorCodec =
         new("lease-agreement.successor-draft.create.v1");
+    private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
+        new("lease-agreement.issue.v1");
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly string _webBaseUrl;
 
-    public LeaseAgreementController(IAtomicUnitOfWork atomic) => _atomic = atomic;
+    public LeaseAgreementController(IAtomicUnitOfWork atomic, RentalCommandDbContext db, IConfiguration configuration)
+    {
+        _atomic = atomic;
+        _db = db;
+        _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
+    }
 
     [HttpPatch("{leaseAgreementId:int}/draft")]
     [ProducesResponseType(typeof(LeaseAgreementDraftMutationResponse), StatusCodes.Status200OK)]
@@ -59,6 +72,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     }
 
     [HttpPost("{sourceAgreementId:int}/successor-drafts")]
+    [HttpPost("{sourceAgreementId:int}/{operation:regex(^(correct|restatement|renew|month-to-month)$)}")]
     [ProducesResponseType(typeof(LeaseAgreementDraftMutationResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -67,11 +81,21 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     public async Task<IActionResult> CreateSuccessorDraft(
         int leaseManagementId,
         int sourceAgreementId,
+        string? operation,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] CreateLeaseAgreementSuccessorDraftRequest request,
         CancellationToken ct)
     {
         if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        var routeChangeType = operation switch
+        {
+            "correct" => RentalCommand.Core.Enums.LeaseAgreementChangeType.Correction,
+            "restatement" => RentalCommand.Core.Enums.LeaseAgreementChangeType.Restatement,
+            "renew" => RentalCommand.Core.Enums.LeaseAgreementChangeType.Renewal,
+            "month-to-month" => RentalCommand.Core.Enums.LeaseAgreementChangeType.MonthToMonth,
+            _ => request.ChangeType,
+        };
+        request.ChangeType = routeChangeType;
         if (request.ChangeType is null || request.AddendumDecisions.Any(item => item.Decision is null))
         {
             return BadRequest(new { error = "ChangeType and every Addendum decision are required." });
@@ -87,6 +111,45 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         return await Execute("lease-agreement.successor-draft.create",
             $"{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}",
             command, SuccessorCodec, StatusCodes.Status201Created, ct);
+    }
+
+    [HttpPost("{leaseAgreementId:int}/issue")]
+    [ProducesResponseType(typeof(IssueLeaseAgreementResponse), StatusCodes.Status201Created)]
+    public async Task<IActionResult> Issue(
+        int leaseManagementId,
+        int leaseAgreementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] IssueLeaseAgreementRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        var signerIds = await _db.LeaseAgreementSigners.AsNoTracking()
+            .Where(signer => signer.PortfolioId == envelope.PortfolioId
+                && signer.LeaseAgreementId == leaseAgreementId)
+            .OrderBy(signer => signer.SigningOrder)
+            .Select(signer => signer.Id)
+            .ToArrayAsync(ct);
+        if (signerIds.Length == 0) return UnprocessableEntity(new { error = "The Agreement has no signer snapshot." });
+        var command = new IssueLeaseAgreementCommand(
+            request.PendingUploadId, request.RequestFingerprint, envelope.PortfolioId,
+            leaseManagementId, leaseAgreementId, request.DraftRevision, envelope.KeyDigest,
+            request.Subject, request.StorageKey, request.FileName, request.FileSize,
+            request.ContentSha256.ToLowerInvariant(), _webBaseUrl,
+            signerIds.Select(id => new NativeEsignSignerCommand(id)).ToArray(), envelope.UserId,
+            envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity("lease-agreement.issue",
+                    $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}"),
+                command, IssueCodec, ct);
+            return StatusCode(StatusCodes.Status201Created, new IssueLeaseAgreementResponse(
+                outcome.Value.PublicId, outcome.Value.LeaseManagementId, outcome.Value.LeaseAgreementId,
+                outcome.Value.SignatureRequestId, outcome.Value.IssuedArtifactId,
+                outcome.Disposition == AtomicCommandDisposition.Replayed));
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
     }
 
     private async Task<IActionResult> Execute<TCommand>(

@@ -5,7 +5,7 @@ using NpgsqlTypes;
 
 namespace RentalCommand.Data.Esign;
 
-public sealed record NativeEsignExecutionClaim(int Id, string PublicId, Guid ClaimToken);
+public sealed record NativeEsignExecutionClaim(int Id, Guid PublicId, Guid ClaimToken);
 
 public interface INativeEsignExecutionClaimStore
 {
@@ -37,10 +37,10 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         ), candidates AS (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
-            INNER JOIN "Leases" AS lease ON lease."Id" = request."LeaseId"
+            INNER JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
             CROSS JOIN clock
             WHERE request."Status" = 'ExecutionPending'
-              AND lease."DeletedAt" IS NULL
+              AND agreement."VoidedAtUtc" IS NULL
               AND (request."ExecutionClaimToken" IS NULL
                    OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
               AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")
@@ -49,7 +49,7 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
                   FROM "SignatureSigners" AS signer
                   WHERE signer."SignatureRequestId" = request."Id"
                     AND signer."Status" <> 'Signed')
-            ORDER BY request."CreatedAtUtc", request."Id"
+            ORDER BY request."PreparedAtUtc", request."Id"
             FOR UPDATE OF request SKIP LOCKED
             LIMIT @batchSize
         )
@@ -59,7 +59,7 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
             "ExecutionClaimExpiresAtUtc" = clock.now_utc + @leaseDuration,
             "ExecutionAttemptCount" = request."ExecutionAttemptCount" + 1,
             "ExecutionLastAttemptAtUtc" = clock.now_utc,
-            "ExecutionLastError" = NULL
+            "LastError" = NULL
         FROM candidates, clock
         WHERE request."Id" = candidates."Id"
         RETURNING request."Id", request."PublicId", request."ExecutionClaimToken";
@@ -71,11 +71,11 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         ), candidate AS (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
-            INNER JOIN "Leases" AS lease ON lease."Id" = request."LeaseId"
+            INNER JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
             CROSS JOIN clock
             WHERE request."Id" = @signatureRequestId
               AND request."Status" = 'ExecutionPending'
-              AND lease."DeletedAt" IS NULL
+              AND agreement."VoidedAtUtc" IS NULL
               AND (request."ExecutionClaimToken" IS NULL
                    OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
               AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")
@@ -92,7 +92,7 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
             "ExecutionClaimExpiresAtUtc" = clock.now_utc + @leaseDuration,
             "ExecutionAttemptCount" = request."ExecutionAttemptCount" + 1,
             "ExecutionLastAttemptAtUtc" = clock.now_utc,
-            "ExecutionLastError" = NULL
+            "LastError" = NULL
         FROM candidate, clock
         WHERE request."Id" = candidate."Id"
         RETURNING request."Id", request."PublicId", request."ExecutionClaimToken";
@@ -101,7 +101,7 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
     private const string ReleaseForRetrySql = """
         WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
         UPDATE "SignatureRequests" AS request
-        SET "ExecutionLastError" = @error,
+        SET "LastError" = @error,
             "ExecutionClaimOwner" = NULL,
             "ExecutionClaimToken" = NULL,
             "ExecutionClaimExpiresAtUtc" = NULL
@@ -205,7 +205,7 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
             while (await reader.ReadAsync(ct))
             {
                 claims.Add(new NativeEsignExecutionClaim(
-                    reader.GetInt32(0), reader.GetString(1), reader.GetGuid(2)));
+                    reader.GetInt32(0), reader.GetGuid(1), reader.GetGuid(2)));
             }
 
             return claims;
