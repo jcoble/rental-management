@@ -98,7 +98,6 @@ public sealed class AccountingTokenService
         try
         {
             var result = await provider.RefreshTokenAsync(settings, refreshToken, ct);
-            var completedAt = _timeProvider.UtcNow();
             var accessCipherText = ProtectNullable(result.AccessToken)!;
             var refreshCipherText = ProtectNullable(result.RefreshToken)!;
             int completed;
@@ -107,7 +106,7 @@ public sealed class AccountingTokenService
                 completed = await _claims.CompleteTokenRotationAsync(
                     connection.Id, rotationFence.ClaimToken, rotationFence.ParentPullClaimToken,
                     accessCipherText, refreshCipherText,
-                    result.ExpiresAtUtc, completedAt, ct);
+                    result.ExpiresAtUtc, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -135,7 +134,7 @@ public sealed class AccountingTokenService
             connection.TokenRotationClaimToken = null;
             connection.TokenRotationClaimExpiresAtUtc = null;
             connection.LastError = null;
-            connection.UpdatedAt = completedAt;
+            connection.UpdatedAt = _timeProvider.UtcNow();
 
             _logger.LogInformation(
                 "Refreshed tokens for AccountingConnection {ConnectionId} ({Provider})",
@@ -167,7 +166,7 @@ public sealed class AccountingTokenService
         CancellationToken ct)
     {
         var updated = await _claims.MarkTokenRotationRecoveryRequiredAsync(
-            connection.Id, rotationFence.ClaimToken, _timeProvider.UtcNow(), reason, ct);
+            connection.Id, rotationFence.ClaimToken, reason, ct);
         if (updated == 0) return; // Disconnect/revocation already established a safer terminal state.
         connection.Status = AccountingConnectionStatus.NeedsReconnect;
         connection.AccessTokenCipherText = null;

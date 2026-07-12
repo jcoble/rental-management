@@ -20,14 +20,14 @@ public sealed record OutboxClaim(
 public interface IOutboxClaimStore
 {
     Task<IReadOnlyList<OutboxClaim>> ClaimAsync(
-        string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize, CancellationToken ct = default);
+        string claimOwner, TimeSpan leaseDuration, int batchSize, CancellationToken ct = default);
     Task<int> MarkAcceptedAsync(
-        long id, Guid claimToken, DateTime acceptedAtUtc, string provider, string? providerMessageId,
+        long id, Guid claimToken, string provider, string? providerMessageId,
         CancellationToken ct = default);
     Task<int> MarkRetryableAsync(
-        long id, Guid claimToken, DateTime nextAttemptAtUtc, string error, CancellationToken ct = default);
+        long id, Guid claimToken, TimeSpan retryDelay, string error, CancellationToken ct = default);
     Task<int> MarkDeadLetteredAsync(
-        long id, Guid claimToken, DateTime deadLetteredAtUtc, OutboxFailureKind failureKind, string error,
+        long id, Guid claimToken, OutboxFailureKind failureKind, string error,
         CancellationToken ct = default);
 }
 
@@ -39,26 +39,29 @@ public interface IOutboxClaimStore
 public sealed class OutboxClaimStore : IOutboxClaimStore
 {
     private const string ClaimSql = """
-        WITH candidates AS (
-            SELECT "Id"
-            FROM "OutboxMessages"
-            WHERE "AcceptedAtUtc" IS NULL
-              AND "DeadLetteredAtUtc" IS NULL
-              AND "NextAttemptAtUtc" <= @now
-              AND ("ClaimExpiresAtUtc" IS NULL OR "ClaimExpiresAtUtc" <= @now)
-            ORDER BY "NextAttemptAtUtc", "CreatedAtUtc", "Id"
-            FOR UPDATE SKIP LOCKED
+        WITH clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_utc
+        ), candidates AS (
+            SELECT candidate."Id"
+            FROM "OutboxMessages" AS candidate
+            CROSS JOIN clock
+            WHERE candidate."AcceptedAtUtc" IS NULL
+              AND candidate."DeadLetteredAtUtc" IS NULL
+              AND candidate."NextAttemptAtUtc" <= clock.now_utc
+              AND (candidate."ClaimExpiresAtUtc" IS NULL OR candidate."ClaimExpiresAtUtc" <= clock.now_utc)
+            ORDER BY candidate."NextAttemptAtUtc", candidate."CreatedAtUtc", candidate."Id"
+            FOR UPDATE OF candidate SKIP LOCKED
             LIMIT @batchSize
         )
         UPDATE "OutboxMessages" AS message
         SET "ClaimOwner" = @claimOwner,
-            "ClaimToken" = @claimToken,
-            "ClaimExpiresAtUtc" = @claimExpiresAtUtc,
+            "ClaimToken" = gen_random_uuid(),
+            "ClaimExpiresAtUtc" = clock.now_utc + @leaseDuration,
             "AttemptCount" = message."AttemptCount" + 1,
-            "LastAttemptAtUtc" = @now,
+            "LastAttemptAtUtc" = clock.now_utc,
             "FailureKind" = NULL,
             "LastError" = NULL
-        FROM candidates
+        FROM candidates, clock
         WHERE message."Id" = candidates."Id"
         RETURNING message."Id",
                   message."PortfolioId",
@@ -70,13 +73,59 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
                   message."ClaimToken";
         """;
 
+    private const string MarkAcceptedSql = """
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        UPDATE "OutboxMessages" AS message
+        SET "AcceptedAtUtc" = clock.now_utc,
+            "Provider" = @provider,
+            "ProviderMessageId" = @providerMessageId,
+            "FailureKind" = NULL,
+            "LastError" = NULL,
+            "ClaimOwner" = NULL,
+            "ClaimToken" = NULL,
+            "ClaimExpiresAtUtc" = NULL
+        FROM clock
+        WHERE message."Id" = @id
+          AND message."ClaimToken" = @claimToken
+          AND message."ClaimExpiresAtUtc" > clock.now_utc;
+        """;
+
+    private const string MarkRetryableSql = """
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        UPDATE "OutboxMessages" AS message
+        SET "NextAttemptAtUtc" = clock.now_utc + @retryDelay,
+            "FailureKind" = @failureKind,
+            "LastError" = @error,
+            "ClaimOwner" = NULL,
+            "ClaimToken" = NULL,
+            "ClaimExpiresAtUtc" = NULL
+        FROM clock
+        WHERE message."Id" = @id
+          AND message."ClaimToken" = @claimToken
+          AND message."ClaimExpiresAtUtc" > clock.now_utc;
+        """;
+
+    private const string MarkDeadLetteredSql = """
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        UPDATE "OutboxMessages" AS message
+        SET "DeadLetteredAtUtc" = clock.now_utc,
+            "FailureKind" = @failureKind,
+            "LastError" = @error,
+            "ClaimOwner" = NULL,
+            "ClaimToken" = NULL,
+            "ClaimExpiresAtUtc" = NULL
+        FROM clock
+        WHERE message."Id" = @id
+          AND message."ClaimToken" = @claimToken
+          AND message."ClaimExpiresAtUtc" > clock.now_utc;
+        """;
+
     private readonly RentalCommandDbContext _db;
 
     public OutboxClaimStore(RentalCommandDbContext db) => _db = db;
 
     public async Task<IReadOnlyList<OutboxClaim>> ClaimAsync(
         string claimOwner,
-        DateTime nowUtc,
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct = default)
@@ -94,13 +143,8 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         {
             await using var command = connection.CreateCommand();
             command.CommandText = ClaimSql;
-            command.Parameters.Add(new NpgsqlParameter("now", NpgsqlDbType.TimestampTz) { Value = AsUtc(nowUtc) });
             command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
-            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
-            command.Parameters.Add(new NpgsqlParameter("claimExpiresAtUtc", NpgsqlDbType.TimestampTz)
-            {
-                Value = AsUtc(nowUtc).Add(leaseDuration),
-            });
+            command.Parameters.Add(new NpgsqlParameter("leaseDuration", NpgsqlDbType.Interval) { Value = leaseDuration });
             command.Parameters.Add(new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize });
 
             var claims = new List<OutboxClaim>();
@@ -129,41 +173,34 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
     public Task<int> MarkAcceptedAsync(
         long id,
         Guid claimToken,
-        DateTime acceptedAtUtc,
         string provider,
         string? providerMessageId,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(provider);
-        return Owned(id, claimToken).ExecuteUpdateAsync(setters => setters
-            .SetProperty(row => row.AcceptedAtUtc, AsUtc(acceptedAtUtc))
-            .SetProperty(row => row.Provider, provider)
-            .SetProperty(row => row.ProviderMessageId, providerMessageId)
-            .SetProperty(row => row.FailureKind, (OutboxFailureKind?)null)
-            .SetProperty(row => row.LastError, (string?)null)
-            .SetProperty(row => row.ClaimOwner, (string?)null)
-            .SetProperty(row => row.ClaimToken, (Guid?)null)
-            .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct);
+        return ExecuteMutationAsync(MarkAcceptedSql, id, claimToken, ct,
+            new NpgsqlParameter("provider", NpgsqlDbType.Text) { Value = provider },
+            new NpgsqlParameter("providerMessageId", NpgsqlDbType.Text)
+                { Value = providerMessageId is null ? DBNull.Value : providerMessageId });
     }
 
     public Task<int> MarkRetryableAsync(
         long id,
         Guid claimToken,
-        DateTime nextAttemptAtUtc,
+        TimeSpan retryDelay,
         string error,
-        CancellationToken ct = default) =>
-        Owned(id, claimToken).ExecuteUpdateAsync(setters => setters
-            .SetProperty(row => row.NextAttemptAtUtc, AsUtc(nextAttemptAtUtc))
-            .SetProperty(row => row.FailureKind, OutboxFailureKind.Retryable)
-            .SetProperty(row => row.LastError, LimitError(error))
-            .SetProperty(row => row.ClaimOwner, (string?)null)
-            .SetProperty(row => row.ClaimToken, (Guid?)null)
-            .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct);
+        CancellationToken ct = default)
+    {
+        if (retryDelay < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(retryDelay));
+        return ExecuteMutationAsync(MarkRetryableSql, id, claimToken, ct,
+            new NpgsqlParameter("retryDelay", NpgsqlDbType.Interval) { Value = retryDelay },
+            new NpgsqlParameter("failureKind", NpgsqlDbType.Integer) { Value = (int)OutboxFailureKind.Retryable },
+            new NpgsqlParameter("error", NpgsqlDbType.Text) { Value = LimitError(error) });
+    }
 
     public Task<int> MarkDeadLetteredAsync(
         long id,
         Guid claimToken,
-        DateTime deadLetteredAtUtc,
         OutboxFailureKind failureKind,
         string error,
         CancellationToken ct = default)
@@ -171,24 +208,31 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         if (failureKind == OutboxFailureKind.Retryable)
             throw new ArgumentException("A dead-letter reason must be terminal.", nameof(failureKind));
 
-        return Owned(id, claimToken).ExecuteUpdateAsync(setters => setters
-            .SetProperty(row => row.DeadLetteredAtUtc, AsUtc(deadLetteredAtUtc))
-            .SetProperty(row => row.FailureKind, failureKind)
-            .SetProperty(row => row.LastError, LimitError(error))
-            .SetProperty(row => row.ClaimOwner, (string?)null)
-            .SetProperty(row => row.ClaimToken, (Guid?)null)
-            .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct);
+        return ExecuteMutationAsync(MarkDeadLetteredSql, id, claimToken, ct,
+            new NpgsqlParameter("failureKind", NpgsqlDbType.Integer) { Value = (int)failureKind },
+            new NpgsqlParameter("error", NpgsqlDbType.Text) { Value = LimitError(error) });
     }
 
-    private IQueryable<Core.Entities.OutboxMessage> Owned(long id, Guid claimToken) =>
-        _db.OutboxMessages.Where(row => row.Id == id && row.ClaimToken == claimToken);
-
-    private static DateTime AsUtc(DateTime value) => value.Kind switch
+    private async Task<int> ExecuteMutationAsync(
+        string sql, long id, Guid claimToken, CancellationToken ct, params NpgsqlParameter[] parameters)
     {
-        DateTimeKind.Utc => value,
-        DateTimeKind.Local => value.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
-    };
+        var connection = _db.Database.GetDbConnection();
+        var closeWhenDone = connection.State != ConnectionState.Open;
+        if (closeWhenDone) await _db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.Add(new NpgsqlParameter("id", NpgsqlDbType.Bigint) { Value = id });
+            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken });
+            foreach (var parameter in parameters) command.Parameters.Add(parameter);
+            return await command.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (closeWhenDone) await _db.Database.CloseConnectionAsync();
+        }
+    }
 
     private static string LimitError(string error) =>
         string.IsNullOrWhiteSpace(error)

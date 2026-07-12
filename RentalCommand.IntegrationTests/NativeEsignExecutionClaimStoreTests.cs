@@ -54,20 +54,21 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         await using var dbB = NewContext();
         var batches = await Task.WhenAll(
             new NativeEsignExecutionClaimStore(dbA)
-                .ClaimBatchAsync("engine-a", now, TimeSpan.FromMinutes(10), 2),
+                .ClaimBatchAsync("engine-a", TimeSpan.FromMinutes(10), 2),
             new NativeEsignExecutionClaimStore(dbB)
-                .ClaimBatchAsync("engine-b", now, TimeSpan.FromMinutes(10), 2));
+                .ClaimBatchAsync("engine-b", TimeSpan.FromMinutes(10), 2));
 
         var claims = batches.SelectMany(batch => batch).ToArray();
         claims.Should().HaveCount(4);
         claims.Select(claim => claim.Id).Should().OnlyHaveUniqueItems();
+        claims.Select(claim => claim.ClaimToken).Should().OnlyHaveUniqueItems();
         dbA.Database.CurrentTransaction.Should().BeNull("blob work must start after claim commit");
         dbB.Database.CurrentTransaction.Should().BeNull();
 
         await using (var cannotSteal = NewContext())
         {
             (await new NativeEsignExecutionClaimStore(cannotSteal)
-                .ClaimBatchAsync("engine-c", now.AddMinutes(9), TimeSpan.FromMinutes(10), 4))
+                .ClaimBatchAsync("engine-c", TimeSpan.FromMinutes(10), 4))
                 .Should().BeEmpty("unexpired execution leases cannot be stolen");
         }
 
@@ -83,7 +84,7 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         await using (var reclaim = NewContext())
         {
             replacement = (await new NativeEsignExecutionClaimStore(reclaim)
-                .ClaimBatchAsync("replacement", now, TimeSpan.FromMinutes(10), 1)).Single();
+                .ClaimBatchAsync("replacement", TimeSpan.FromMinutes(10), 1)).Single();
         }
         replacement.Id.Should().Be(stale.Id);
         replacement.ClaimToken.Should().NotBe(stale.ClaimToken);
@@ -112,7 +113,7 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
 
         await using var db = NewContext();
         var claims = await new NativeEsignExecutionClaimStore(db)
-            .ClaimBatchAsync("engine", now, TimeSpan.FromMinutes(10), 10);
+            .ClaimBatchAsync("engine", TimeSpan.FromMinutes(10), 10);
         claims.Should().ContainSingle();
         claims.Single().Id.Should().Be(ids[0]);
     }

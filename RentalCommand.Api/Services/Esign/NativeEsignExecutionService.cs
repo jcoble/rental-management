@@ -61,7 +61,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         }
 
         var claim = await _claims.TryClaimAsync(
-            signatureRequestId, _claimOwner, _timeProvider.UtcNow(), ExecutionLease, ct);
+            signatureRequestId, _claimOwner, ExecutionLease, ct);
         return claim is not null
             && await FinalizeClaimedAsync(claim.Id, claim.ClaimToken, ct);
     }
@@ -71,7 +71,8 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     {
         var sigRequest = await _db.SignatureRequests.AsNoTracking()
             .SingleOrDefaultAsync(request => request.Id == signatureRequestId
-                && request.ExecutionClaimToken == claimToken, ct);
+                && request.ExecutionClaimToken == claimToken
+                && request.ExecutionClaimExpiresAtUtc > DateTime.UtcNow, ct);
         if (sigRequest is null)
         {
             return false;
@@ -137,7 +138,6 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                     fileName,
                     executedBytes.LongLength,
                     sha256,
-                    _timeProvider.UtcNow(),
                     now),
                 new AtomicJsonResultCodec<FinalizeNativeEsignRequestResult>("native-esign.finalize.v1"),
                 ct);

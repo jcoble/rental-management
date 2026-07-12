@@ -49,13 +49,13 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     public async Task Deferred_old_row_does_not_hide_later_eligible_row()
     {
         SkipIfDockerUnavailable();
-        var now = Utc(2026, 7, 10, 20, 0);
+        var now = DateTime.UtcNow;
         await SeedAsync(
             Message("deferred", now.AddHours(-2), now.AddHours(1)),
             Message("ready", now.AddHours(-1), now));
 
         await using var db = NewContext();
-        var claims = await new OutboxClaimStore(db).ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), 10);
+        var claims = await new OutboxClaimStore(db).ClaimAsync("worker-a", TimeSpan.FromMinutes(2), 10);
 
         claims.Should().ContainSingle().Which.IdempotencyKey.Should().Be("ready");
     }
@@ -72,12 +72,14 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         await using var dbA = NewContext();
         await using var dbB = NewContext();
         var results = await Task.WhenAll(
-            new OutboxClaimStore(dbA).ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), 12),
-            new OutboxClaimStore(dbB).ClaimAsync("worker-b", now, TimeSpan.FromMinutes(2), 12));
+            new OutboxClaimStore(dbA).ClaimAsync("worker-a", TimeSpan.FromMinutes(2), 12),
+            new OutboxClaimStore(dbB).ClaimAsync("worker-b", TimeSpan.FromMinutes(2), 12));
 
         var all = results.SelectMany(rows => rows).ToArray();
         all.Should().HaveCount(12);
         all.Select(row => row.Id).Should().OnlyHaveUniqueItems();
+        all.Select(row => row.ClaimToken).Should().OnlyHaveUniqueItems(
+            "each claimed row receives its own opaque fencing token");
     }
 
     [SkippableFact]
@@ -94,7 +96,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
 
         await using var db = NewContext();
         var claim = (await new OutboxClaimStore(db)
-            .ClaimAsync("replacement-worker", now, TimeSpan.FromMinutes(2), 1)).Single();
+            .ClaimAsync("replacement-worker", TimeSpan.FromMinutes(2), 1)).Single();
 
         claim.ClaimToken.Should().NotBe(oldToken!.Value);
         claim.AttemptCount.Should().Be(1);
@@ -112,18 +114,21 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         await using (var firstDb = NewContext())
         {
             var first = (await new OutboxClaimStore(firstDb)
-                .ClaimAsync("worker-a", now, TimeSpan.FromSeconds(1), 1)).Single();
+                .ClaimAsync("worker-a", TimeSpan.FromSeconds(1), 1)).Single();
             staleToken = first.ClaimToken;
             id = first.Id;
         }
 
         await using var secondDb = NewContext();
         var store = new OutboxClaimStore(secondDb);
-        var current = (await store.ClaimAsync("worker-b", now.AddSeconds(2), TimeSpan.FromMinutes(2), 1)).Single();
+        await secondDb.OutboxMessages.Where(message => message.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(message => message.ClaimExpiresAtUtc, DateTime.UtcNow.AddSeconds(-1)));
+        var current = (await store.ClaimAsync("worker-b", TimeSpan.FromMinutes(2), 1)).Single();
 
-        (await store.MarkAcceptedAsync(id, staleToken, now.AddSeconds(3), "fake", "stale"))
+        (await store.MarkAcceptedAsync(id, staleToken, "fake", "stale"))
             .Should().Be(0);
-        (await store.MarkAcceptedAsync(id, current.ClaimToken, now.AddSeconds(3), "fake", "current"))
+        (await store.MarkAcceptedAsync(id, current.ClaimToken, "fake", "current"))
             .Should().Be(1);
     }
 
@@ -136,16 +141,15 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
 
         await using var db = NewContext();
         var store = new OutboxClaimStore(db);
-        var claim = (await store.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), 1)).Single();
+        var claim = (await store.ClaimAsync("worker-a", TimeSpan.FromMinutes(2), 1)).Single();
         (await store.MarkDeadLetteredAsync(
             claim.Id,
             claim.ClaimToken,
-            now,
             OutboxFailureKind.ConfigurationBlocked,
             "Provider is not configured."))
             .Should().Be(1);
 
-        (await store.ClaimAsync("worker-b", now.AddHours(1), TimeSpan.FromMinutes(2), 1))
+        (await store.ClaimAsync("worker-b", TimeSpan.FromMinutes(2), 1))
             .Should().BeEmpty();
     }
 

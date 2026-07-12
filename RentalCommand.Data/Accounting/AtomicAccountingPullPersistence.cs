@@ -80,13 +80,17 @@ internal sealed class AtomicAccountingPullPersistence : IAtomicAccountingPersist
     // payload before any join. PostgreSQL enum-backed columns use their persisted integer ordinals.
     private const string Sql = """
         WITH
+        clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_utc
+        ),
         claim AS MATERIALIZED (
             SELECT c."Id"
             FROM "AccountingConnections" c
+            CROSS JOIN clock
             WHERE c."Id" = @connectionId
               AND c."PortfolioId" = @portfolioId
               AND c."PullClaimToken" = @claimToken
-              AND c."PullClaimExpiresAtUtc" > @appliedAt
+              AND c."PullClaimExpiresAtUtc" > clock.now_utc
               AND c."Status" = 1
               AND c."PullEnabled"
             FOR UPDATE

@@ -163,7 +163,6 @@ public sealed class AccountingImportService
                     conn.Id,
                     workerFence.ClaimToken,
                     $"inline-pull:{Environment.MachineName}:{Guid.NewGuid():N}",
-                    _timeProvider.UtcNow(),
                     TimeSpan.FromMinutes(3),
                     token)
                     ?? throw new DbUpdateConcurrencyException(

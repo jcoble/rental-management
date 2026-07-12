@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Time;
 using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Engine.Workers;
@@ -33,10 +32,8 @@ public sealed class AccountingTokenRefreshWorker : EngineWorkerBase
         var tokenService = scoped.GetRequiredService<AccountingTokenService>();
         var claims = scoped.GetRequiredService<IAccountingConnectionClaimStore>();
         var logger = scoped.GetRequiredService<ILogger<AccountingTokenRefreshWorker>>();
-        var now = scoped.GetRequiredService<TimeProvider>().UtcNow();
-
         var batch = await claims.ClaimTokenRefreshAsync(
-            _claimOwner, now, now.Add(RefreshHorizon), ClaimLease, BatchSize, ct);
+            _claimOwner, RefreshHorizon, ClaimLease, BatchSize, ct);
         var refreshed = 0;
         foreach (var claim in batch)
         {
@@ -58,8 +55,7 @@ public sealed class AccountingTokenRefreshWorker : EngineWorkerBase
             {
                 logger.LogError(ex, "Accounting token refresh failed for connection {ConnectionId}", claim.Connection.Id);
                 await claims.MarkTokenRotationRecoveryRequiredAsync(
-                    claim.Connection.Id, claim.Fence.ClaimToken,
-                    scoped.GetRequiredService<TimeProvider>().UtcNow(), ex.Message, ct);
+                    claim.Connection.Id, claim.Fence.ClaimToken, ex.Message, ct);
             }
         }
 

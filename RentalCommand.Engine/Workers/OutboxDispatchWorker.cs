@@ -40,9 +40,8 @@ public class OutboxDispatchWorker : EngineWorkerBase
         var dataUpdate = scopedProvider.GetRequiredService<IDataUpdateService>();
         var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
-        var now = DateTime.UtcNow;
         var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
-        var claims = await store.ClaimAsync(owner, now, ClaimLease, BatchSize, cancellationToken);
+        var claims = await store.ClaimAsync(owner, ClaimLease, BatchSize, cancellationToken);
         var accepted = 0;
 
         foreach (var claim in claims)
@@ -56,7 +55,6 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 var changed = await store.MarkAcceptedAsync(
                     claim.Id,
                     claim.ClaimToken,
-                    DateTime.UtcNow,
                     receipt.Provider,
                     receipt.ProviderMessageId,
                     CancellationToken.None);
@@ -98,15 +96,15 @@ public class OutboxDispatchWorker : EngineWorkerBase
                     continue;
                 }
 
-                var next = DateTime.UtcNow.Add(Backoff(claim.AttemptCount));
+                var retryDelay = Backoff(claim.AttemptCount);
                 var changed = await store.MarkRetryableAsync(
-                    claim.Id, claim.ClaimToken, next, ex.Message, CancellationToken.None);
+                    claim.Id, claim.ClaimToken, retryDelay, ex.Message, CancellationToken.None);
                 if (changed == 1)
                 {
                     logger.LogWarning(
                         ex,
-                        "Outbox delivery {MessageId} failed on attempt {Attempt}; retry at {NextAttemptAtUtc}.",
-                        claim.Id, claim.AttemptCount, next);
+                        "Outbox delivery {MessageId} failed on attempt {Attempt}; retry after {RetryDelay}.",
+                        claim.Id, claim.AttemptCount, retryDelay);
                 }
                 else
                 {
@@ -234,7 +232,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
         ILogger logger)
     {
         var changed = await store.MarkDeadLetteredAsync(
-            claim.Id, claim.ClaimToken, DateTime.UtcNow, failureKind, error, CancellationToken.None);
+            claim.Id, claim.ClaimToken, failureKind, error, CancellationToken.None);
         if (changed == 1)
         {
             logger.LogError(
