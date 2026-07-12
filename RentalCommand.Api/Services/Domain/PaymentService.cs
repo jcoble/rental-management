@@ -148,83 +148,101 @@ public class PaymentService : IPaymentService
         return periodKey;
     }
 
-    public async Task<IReadOnlyList<PaymentResponse>> ListAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<PaymentReceiptResponse>> ListAsync(int portfolioId, PaymentListQuery query, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, leaseId, query, ct);
+        var page = await ListPageAsync(portfolioId, query, ct);
         return page.Items;
     }
 
-    public async Task<PaymentListResponse> ListPageAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
+    public async Task<PaymentListResponse> ListPageAsync(int portfolioId, PaymentListQuery query, CancellationToken ct = default)
     {
-        var filtered = BuildListQuery(portfolioId, leaseId, query);
+        var filtered = BuildReceiptQuery(portfolioId, query);
         var totalCount = await filtered.CountAsync(ct);
 
-        var items = await ApplySort(filtered, query)
-            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
-            .Include(p => p.Lease!).ThenInclude(l => l.Property)
-            .Include(p => p.Lease!).ThenInclude(l => l.Unit)
+        var items = await ApplyReceiptSort(filtered, query)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
         return new PaymentListResponse
         {
-            Items = items.Select(PaymentResponse.FromEntity).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
     }
 
-    private IQueryable<Payment> BuildListQuery(int portfolioId, int? leaseId, ListQuery query)
+    internal IQueryable<PaymentReceiptResponse> BuildReceiptQuery(int portfolioId, PaymentListQuery query)
     {
-        var q = _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId);
+        var q =
+            from entry in _db.TenantLedgerEntries.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { entry.PortfolioId, Id = entry.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            where entry.PortfolioId == portfolioId
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+            select new PaymentReceiptResponse
+            {
+                Id = entry.Id,
+                PublicId = entry.PublicId,
+                PortfolioId = entry.PortfolioId,
+                TenantAccountId = account.Id,
+                LeaseManagementId = management.Id,
+                PropertyId = management.PropertyId,
+                UnitId = management.UnitId,
+                AccountNumber = account.AccountNumber,
+                RelationshipNumber = management.RelationshipNumber,
+                TenantName = lifecycle.CurrentPrimaryTenantName,
+                PropertyName = management.Property!.Name,
+                UnitNumber = management.Unit!.UnitNumber,
+                Amount = entry.Amount,
+                Currency = entry.Currency,
+                ReceivedOn = entry.EffectiveOn,
+                PostedAtUtc = entry.PostedAtUtc,
+                Description = entry.Description,
+                Provider = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.Provider,
+                ProviderReference = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.ProviderObjectId,
+                ProviderState = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.State,
+                PaymentMethodSummary = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.PaymentMethodSummary,
+                PayerName = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.PayerName,
+                CheckNumber = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.CheckNumber,
+                BankName = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.BankName,
+                SourceStoredFileId = entry.SourceStoredFileId,
+            };
 
-        if (leaseId.HasValue)
-        {
-            q = q.Where(p => p.LeaseId == leaseId.Value);
-        }
+        if (query.TenantAccountId is int tenantAccountId)
+            q = q.Where(row => row.TenantAccountId == tenantAccountId);
+        if (query.LeaseManagementId is int leaseManagementId)
+            q = q.Where(row => row.LeaseManagementId == leaseManagementId);
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
-            q = q.Where(p =>
-                (p.Method != null && EF.Functions.ILike(p.Method, $"%{term}%")) ||
-                (p.ExternalReference != null && EF.Functions.ILike(p.ExternalReference, $"%{term}%")));
+            q = q.Where(row =>
+                EF.Functions.ILike(row.Description, $"%{term}%") ||
+                EF.Functions.ILike(row.AccountNumber, $"%{term}%") ||
+                EF.Functions.ILike(row.RelationshipNumber, $"%{term}%") ||
+                (row.ProviderReference != null && EF.Functions.ILike(row.ProviderReference, $"%{term}%")) ||
+                (row.PayerName != null && EF.Functions.ILike(row.PayerName, $"%{term}%")) ||
+                (row.CheckNumber != null && EF.Functions.ILike(row.CheckNumber, $"%{term}%")));
         }
 
-        if (query is PaymentListQuery paymentQuery)
+        if (query.PaidFrom.HasValue)
         {
-            if (paymentQuery.ApplicationId.HasValue)
-            {
-                q = q.Where(p => p.ApplicationId == paymentQuery.ApplicationId.Value);
-            }
-
-            if (paymentQuery.DueFrom.HasValue)
-            {
-                var dueFrom = paymentQuery.DueFrom.Value.ToUtc();
-                q = q.Where(p => p.DueDate >= dueFrom);
-            }
-
-            if (paymentQuery.DueTo.HasValue)
-            {
-                var dueToExclusive = ToExclusiveUpperBound(paymentQuery.DueTo.Value);
-                q = q.Where(p => p.DueDate < dueToExclusive);
-            }
-
-            if (paymentQuery.PaidFrom.HasValue)
-            {
-                var paidFrom = paymentQuery.PaidFrom.Value.ToUtc();
-                q = q.Where(p => p.PaidDate != null && p.PaidDate >= paidFrom);
-            }
-
-            if (paymentQuery.PaidTo.HasValue)
-            {
-                var paidToExclusive = ToExclusiveUpperBound(paymentQuery.PaidTo.Value);
-                q = q.Where(p => p.PaidDate != null && p.PaidDate < paidToExclusive);
-            }
+            var paidFrom = DateOnly.FromDateTime(query.PaidFrom.Value.ToUtc());
+            q = q.Where(row => row.ReceivedOn >= paidFrom);
+        }
+        if (query.PaidTo.HasValue)
+        {
+            var paidToExclusive = DateOnly.FromDateTime(ToExclusiveUpperBound(query.PaidTo.Value));
+            q = q.Where(row => row.ReceivedOn < paidToExclusive);
         }
 
         return q;
@@ -236,40 +254,23 @@ public class PaymentService : IPaymentService
         return value.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1) : utc;
     }
 
-    private static IQueryable<Payment> ApplySort(IQueryable<Payment> q, ListQuery query) =>
+    private static IQueryable<PaymentReceiptResponse> ApplyReceiptSort(
+        IQueryable<PaymentReceiptResponse> q,
+        ListQuery query) =>
         query.SortField switch
         {
-            "amount" => query.SortDescending ? q.OrderByDescending(p => p.Amount) : q.OrderBy(p => p.Amount),
-            "duedate" => query.SortDescending ? q.OrderByDescending(p => p.DueDate) : q.OrderBy(p => p.DueDate),
-            "paiddate" => query.SortDescending ? q.OrderByDescending(p => p.PaidDate) : q.OrderBy(p => p.PaidDate),
-            "status" => query.SortDescending ? q.OrderByDescending(p => p.Status) : q.OrderBy(p => p.Status),
-            "updatedat" => query.SortDescending ? q.OrderByDescending(p => p.UpdatedAt) : q.OrderBy(p => p.UpdatedAt),
-            _ => query.SortDescending ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt),
+            "amount" => query.SortDescending ? q.OrderByDescending(row => row.Amount) : q.OrderBy(row => row.Amount),
+            "receivedon" or "paiddate" => query.SortDescending ? q.OrderByDescending(row => row.ReceivedOn) : q.OrderBy(row => row.ReceivedOn),
+            "tenant" => query.SortDescending ? q.OrderByDescending(row => row.TenantName) : q.OrderBy(row => row.TenantName),
+            _ => query.SortDescending
+                ? q.OrderByDescending(row => row.PostedAtUtc).ThenByDescending(row => row.Id)
+                : q.OrderBy(row => row.PostedAtUtc).ThenBy(row => row.Id),
         };
 
-    public async Task<PaymentResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<PaymentReceiptResponse?> GetAsync(int portfolioId, long id, CancellationToken ct = default)
     {
-        var entity = await _db.Payments
-            .AsNoTracking()
-            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
-            .Include(p => p.Lease!).ThenInclude(l => l.Property)
-            .Include(p => p.Lease!).ThenInclude(l => l.Unit)
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
-
-        if (entity == null)
-        {
-            return null;
-        }
-
-        var response = PaymentResponse.FromEntity(entity);
-        var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, id, ct);
-        if (scan is not null)
-        {
-            response.HasScan = true;
-            response.ScanIsImage = scan.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
-        }
-
-        return response;
+        return BuildReceiptQuery(portfolioId, new PaymentListQuery())
+            .SingleOrDefaultAsync(row => row.Id == id, ct);
     }
 
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)

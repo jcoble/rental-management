@@ -207,7 +207,7 @@ public class ReportsServiceTests : IDisposable
         var report = await _sut.GetDelinquencyAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
 
         report.Rows.Should().ContainSingle();
-        report.Rows[0].LeaseId.Should().Be(current.Id);
+        report.Rows[0].LeaseManagementId.Should().Be(current.Id);
         report.TotalOutstanding.Should().Be(900m);
     }
 
@@ -1061,7 +1061,7 @@ public class ReportsServiceTests : IDisposable
 
         report.WindowDays.Should().Be(90);
         report.Rows.Should().ContainSingle();
-        report.Rows[0].LeaseId.Should().Be(soon.Id);
+        report.Rows[0].AgreementId.Should().Be(soon.Id);
         report.Rows[0].DaysUntilExpiry.Should().BeInRange(19, 21);
         report.TotalMonthlyRent.Should().Be(1000m);
 

@@ -137,19 +137,21 @@ public class RentRollResponse
 
 public class RentRollRow
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int AgreementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
+    public string AgreementNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public int UnitId { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
-    public int TenantId { get; set; }
+    public int? TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
     public decimal MonthlyRent { get; set; }
     public decimal SecurityDeposit { get; set; }
-    public DateTime StartDate { get; set; }
-    public DateTime EndDate { get; set; }
-    public LeaseStatus Status { get; set; }
+    public DateOnly StartOn { get; set; }
+    public DateOnly? EndOn { get; set; }
     public string StatusName { get; set; } = string.Empty;
 }
 
@@ -386,7 +388,7 @@ public class OccupancyRow
 /// <summary>Active/under-notice leases whose end date falls within the next N days.</summary>
 public class LeaseExpirationsResponse
 {
-    public DateTime AsOf { get; set; }
+    public DateOnly AsOf { get; set; }
 
     /// <summary>The forward-looking window in days that was applied.</summary>
     public int WindowDays { get; set; }
@@ -398,20 +400,21 @@ public class LeaseExpirationsResponse
 
 public class LeaseExpirationRow
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public int AgreementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
+    public string AgreementNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
-    public int TenantId { get; set; }
+    public int? TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
     public decimal MonthlyRent { get; set; }
-    public DateTime EndDate { get; set; }
+    public DateOnly EndOn { get; set; }
 
     /// <summary>Days from "now" until the lease ends (negative if already past, which can happen for NoticeGiven leases).</summary>
     public int DaysUntilExpiry { get; set; }
 
-    public LeaseStatus Status { get; set; }
     public string StatusName { get; set; } = string.Empty;
 }
 

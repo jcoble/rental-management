@@ -214,47 +214,97 @@ public class ReportsService : IReportsService
 
     public async Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var today = _timeProvider.UtcNow().Date;
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        var q = _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId &&
-                        ((l.Status == LeaseStatus.Active && l.EndDate >= today) ||
-                         (l.Status == LeaseStatus.NoticeGiven && (l.MoveOutDate ?? l.EndDate) >= today)));
+        var q =
+            from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { lifecycle.PortfolioId, LeaseManagementId = lifecycle.LeaseManagementId }
+                equals new { account.PortfolioId, account.LeaseManagementId }
+            join agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
+                equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
+            where lifecycle.PortfolioId == portfolioId
+                && agreementStatus.IsGoverning
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+            select new { lifecycle, management, agreement, account, agreementStatus };
 
         if (propertyFilter is not null)
-            q = q.Where(l => propertyFilter.Contains(l.PropertyId));
+            q = q.Where(row => propertyFilter.Contains(row.management.PropertyId));
 
         var totals = await q
             .GroupBy(_ => 1)
             .Select(g => new
             {
                 LeaseCount = g.Count(),
-                TotalMonthlyRent = g.Sum(l => l.MonthlyRent),
-                TotalSecurityDeposit = g.Sum(l => l.SecurityDeposit),
+                TotalMonthlyRent = g.Sum(row => row.agreement.BaseRentAmount +
+                    (_db.LeaseAddendumFinancialEffects
+                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
+                            && effect.EffectType == LeaseAddendumFinancialEffectType.RecurringRentDelta
+                            && _db.LeaseAddendumStatusProjections.Any(status =>
+                                status.PortfolioId == effect.PortfolioId
+                                && status.LeaseAddendumId == effect.LeaseAddendumId
+                                && status.LeaseManagementId == row.management.Id
+                                && status.AddendumStatus == "Active"))
+                        .Sum(effect => (decimal?)effect.Amount) ?? 0m)),
+                TotalSecurityDeposit = g.Sum(row => row.agreement.SecurityDepositObligation +
+                    (_db.LeaseAddendumFinancialEffects
+                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
+                            && effect.EffectType == LeaseAddendumFinancialEffectType.DepositObligationDelta
+                            && _db.LeaseAddendumStatusProjections.Any(status =>
+                                status.PortfolioId == effect.PortfolioId
+                                && status.LeaseAddendumId == effect.LeaseAddendumId
+                                && status.LeaseManagementId == row.management.Id
+                                && status.AddendumStatus == "Active"))
+                        .Sum(effect => (decimal?)effect.Amount) ?? 0m)),
             })
             .SingleOrDefaultAsync(ct);
 
         var rows = await q
-            .OrderBy(l => l.Property!.Name)
-            .ThenBy(l => l.Unit!.UnitNumber)
-            .Select(l => new RentRollRow
+            .OrderBy(row => row.management.Property!.Name)
+            .ThenBy(row => row.management.Unit!.UnitNumber)
+            .Select(row => new RentRollRow
             {
-                LeaseId = l.Id,
-                LeaseNumber = l.LeaseNumber,
-                PropertyId = l.PropertyId,
-                PropertyName = l.Property!.Name,
-                UnitId = l.UnitId,
-                UnitNumber = l.Unit!.UnitNumber,
-                TenantId = l.TenantId,
-                TenantName = (l.Tenant!.FirstName + " " + l.Tenant!.LastName).Trim(),
-                MonthlyRent = l.MonthlyRent,
-                SecurityDeposit = l.SecurityDeposit,
-                StartDate = l.StartDate,
-                EndDate = l.EndDate,
-                Status = l.Status,
-                StatusName = l.Status.ToString(),
+                LeaseManagementId = row.management.Id,
+                TenantAccountId = row.account.Id,
+                AgreementId = row.agreement.Id,
+                RelationshipNumber = row.management.RelationshipNumber,
+                AgreementNumber = row.agreement.AgreementNumber,
+                PropertyId = row.management.PropertyId,
+                PropertyName = row.management.Property!.Name,
+                UnitId = row.management.UnitId,
+                UnitNumber = row.management.Unit!.UnitNumber,
+                TenantId = row.lifecycle.CurrentPrimaryTenantId,
+                TenantName = row.lifecycle.CurrentPrimaryTenantName ?? "Tenant",
+                MonthlyRent = row.agreement.BaseRentAmount +
+                    (_db.LeaseAddendumFinancialEffects
+                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
+                            && effect.EffectType == LeaseAddendumFinancialEffectType.RecurringRentDelta
+                            && _db.LeaseAddendumStatusProjections.Any(status =>
+                                status.PortfolioId == effect.PortfolioId
+                                && status.LeaseAddendumId == effect.LeaseAddendumId
+                                && status.LeaseManagementId == row.management.Id
+                                && status.AddendumStatus == "Active"))
+                        .Sum(effect => (decimal?)effect.Amount) ?? 0m),
+                SecurityDeposit = row.agreement.SecurityDepositObligation +
+                    (_db.LeaseAddendumFinancialEffects
+                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
+                            && effect.EffectType == LeaseAddendumFinancialEffectType.DepositObligationDelta
+                            && _db.LeaseAddendumStatusProjections.Any(status =>
+                                status.PortfolioId == effect.PortfolioId
+                                && status.LeaseAddendumId == effect.LeaseAddendumId
+                                && status.LeaseManagementId == row.management.Id
+                                && status.AddendumStatus == "Active"))
+                        .Sum(effect => (decimal?)effect.Amount) ?? 0m),
+                StartOn = row.agreement.TermStartOn,
+                EndOn = row.agreement.TermEndOn,
+                StatusName = row.agreementStatus.AgreementStatus,
             })
             .ToListAsync(ct);
 
@@ -840,44 +890,45 @@ public class ReportsService : IReportsService
     }
 
     /// <summary>
-    /// Rent roll: current leases (active or under notice) with each lease's past-due balance, computed
-    /// DB-side (the owed-and-overdue sum is projected as a correlated SQL aggregate with each lease row).
+    /// Rent roll over canonical lease-management lifecycle and tenant-account balance projections.
     /// </summary>
     private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, int? propertyId, CancellationToken ct)
     {
-        var now = _timeProvider.UtcNow();
+        var query =
+            from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+            join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
+                equals new { status.PortfolioId, status.AgreementId }
+            join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                equals new { balance.PortfolioId, balance.LeaseManagementId }
+            where lifecycle.PortfolioId == portfolioId
+                && status.IsGoverning
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+            select new { lifecycle, management, agreement, status, balance };
 
-        var leaseQuery = _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven));
         if (propertyId.HasValue)
-            leaseQuery = leaseQuery.Where(l => l.PropertyId == propertyId.Value);
+            query = query.Where(row => row.management.PropertyId == propertyId.Value);
 
-        var rows = await leaseQuery
-            .OrderBy(l => l.Property!.Name)
-            .ThenBy(l => l.Unit!.UnitNumber)
-            .Select(l => new
+        var rows = await query
+            .OrderBy(row => row.management.Property!.Name)
+            .ThenBy(row => row.management.Unit!.UnitNumber)
+            .Select(row => new
             {
-                PropertyName = l.Property!.Name,
-                UnitNumber = l.Unit!.UnitNumber,
-                TenantFirstName = l.Tenant!.FirstName,
-                TenantLastName = l.Tenant!.LastName,
-                l.MonthlyRent,
-                l.StartDate,
-                l.EndDate,
-                l.Status,
-                PastDueBalance = _db.Payments
-                    .AsNoTracking()
-                    .Where(p => p.PortfolioId == portfolioId &&
-                                p.LeaseId == l.Id &&
-                                (p.Status == PaymentStatus.Scheduled ||
-                                 p.Status == PaymentStatus.Partial ||
-                                 p.Status == PaymentStatus.Late) &&
-                                (p.Status == PaymentStatus.Late || p.DueDate < now))
-                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
-                        ? p.Amount - (p.AmountPaid ?? 0m)
-                        : p.Amount)) ?? 0m,
+                PropertyName = row.management.Property!.Name,
+                UnitNumber = row.management.Unit!.UnitNumber,
+                TenantName = row.lifecycle.CurrentPrimaryTenantName ?? "Tenant",
+                MonthlyRent = row.agreement.BaseRentAmount,
+                row.agreement.TermStartOn,
+                row.agreement.TermEndOn,
+                row.status.AgreementStatus,
+                PastDueBalance = row.balance.PastDueAmount,
             })
             .ToListAsync(ct);
 
@@ -886,13 +937,11 @@ public class ReportsService : IReportsService
             {
                 PropertyName = l.PropertyName,
                 UnitNumber = l.UnitNumber,
-                TenantName = string.IsNullOrWhiteSpace($"{l.TenantFirstName} {l.TenantLastName}".Trim())
-                    ? "Tenant"
-                    : $"{l.TenantFirstName} {l.TenantLastName}".Trim(),
+                TenantName = l.TenantName,
                 MonthlyRent = l.MonthlyRent,
-                LeaseStart = l.StartDate,
-                LeaseEnd = l.EndDate,
-                LeaseStatus = l.Status.ToString(),
+                LeaseStart = l.TermStartOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                LeaseEnd = (l.TermEndOn ?? l.TermStartOn).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                LeaseStatus = l.AgreementStatus,
                 PastDueBalance = l.PastDueBalance,
             })
             .ToList();
@@ -1160,69 +1209,69 @@ public class ReportsService : IReportsService
     public async Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(int portfolioId, ReportRangeQuery query, int days, CancellationToken ct = default)
     {
         var window = days > 0 ? days : DefaultExpirationWindowDays;
-        var asOf = _timeProvider.UtcNow();
+        var asOf = DateOnly.FromDateTime(_timeProvider.UtcNow());
         var cutoff = asOf.AddDays(window);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        var q = _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) &&
-                        l.EndDate <= cutoff);
+        var q =
+            from status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { status.PortfolioId, Id = status.AgreementId }
+                equals new { agreement.PortfolioId, agreement.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { agreement.PortfolioId, Id = agreement.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            where status.PortfolioId == portfolioId
+                && status.IsGoverning
+                && agreement.TermEndOn != null
+                && agreement.TermEndOn <= cutoff
+            select new { status, agreement, management, lifecycle };
 
         if (propertyFilter is not null)
-            q = q.Where(l => propertyFilter.Contains(l.PropertyId));
+            q = q.Where(row => propertyFilter.Contains(row.management.PropertyId));
 
         var summary = await q
             .GroupBy(_ => 1)
             .Select(g => new
             {
                 LeaseCount = g.Count(),
-                TotalMonthlyRent = g.Sum(l => l.MonthlyRent),
+                TotalMonthlyRent = g.Sum(row => row.agreement.BaseRentAmount),
             })
             .FirstOrDefaultAsync(ct);
 
         var leases = await q
-            .OrderBy(l => l.EndDate)
-            .Select(l => new
+            .OrderBy(row => row.agreement.TermEndOn)
+            .Select(row => new LeaseExpirationRow
             {
-                l.Id,
-                l.LeaseNumber,
-                l.PropertyId,
-                PropertyName = l.Property!.Name,
-                UnitNumber = l.Unit!.UnitNumber,
-                l.TenantId,
-                TenantFirst = l.Tenant!.FirstName,
-                TenantLast = l.Tenant!.LastName,
-                l.MonthlyRent,
-                l.EndDate,
-                l.Status,
+                LeaseManagementId = row.management.Id,
+                AgreementId = row.agreement.Id,
+                RelationshipNumber = row.management.RelationshipNumber,
+                AgreementNumber = row.agreement.AgreementNumber,
+                PropertyId = row.management.PropertyId,
+                PropertyName = row.management.Property!.Name,
+                UnitNumber = row.management.Unit!.UnitNumber,
+                TenantId = row.lifecycle.CurrentPrimaryTenantId,
+                TenantName = row.lifecycle.CurrentPrimaryTenantName ?? "Tenant",
+                MonthlyRent = row.agreement.BaseRentAmount,
+                EndOn = row.agreement.TermEndOn!.Value,
+                // Date arithmetic is finalized after the filtered/sorted SQL query; Npgsql does not
+                // translate DateOnly.DayNumber reliably across supported provider versions.
+                DaysUntilExpiry = 0,
+                StatusName = row.status.AgreementStatus,
             })
             .ToListAsync(ct);
 
-        var rows = leases
-            .Select(l => new LeaseExpirationRow
-            {
-                LeaseId = l.Id,
-                LeaseNumber = l.LeaseNumber,
-                PropertyId = l.PropertyId,
-                PropertyName = l.PropertyName,
-                UnitNumber = l.UnitNumber,
-                TenantId = l.TenantId,
-                TenantName = $"{l.TenantFirst} {l.TenantLast}".Trim(),
-                MonthlyRent = l.MonthlyRent,
-                EndDate = l.EndDate,
-                DaysUntilExpiry = (int)Math.Ceiling((l.EndDate - asOf).TotalDays),
-                Status = l.Status,
-                StatusName = l.Status.ToString(),
-            })
-            .ToList();
+        foreach (var lease in leases)
+            lease.DaysUntilExpiry = lease.EndOn.DayNumber - asOf.DayNumber;
 
         return new LeaseExpirationsResponse
         {
             AsOf = asOf,
             WindowDays = window,
-            Rows = rows,
+            Rows = leases,
             LeaseCount = summary?.LeaseCount ?? 0,
             TotalMonthlyRent = summary?.TotalMonthlyRent ?? 0m,
         };

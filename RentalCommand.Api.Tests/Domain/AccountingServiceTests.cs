@@ -310,12 +310,12 @@ public class AccountingServiceTests : IDisposable
         pastDue.TotalPastDueAmount.Should().Be(snapshot.PastDueAmount);
 
         // Lease A's row rolls up both of its past-due payments into one tenant.
-        var rowA = pastDue.Items.Single(i => i.LeaseId == leaseA.Id);
+        var rowA = pastDue.Items.Single(i => i.LeaseManagementId == leaseA.Id);
         rowA.OverduePaymentCount.Should().Be(2);
         rowA.PastDueAmount.Should().Be(1200m);
 
         // Ordered by who's waited longest (oldest due date first) → Lease A leads.
-        pastDue.Items.First().LeaseId.Should().Be(leaseA.Id);
+        pastDue.Items.First().LeaseManagementId.Should().Be(leaseA.Id);
 
         var sql = string.Join("\n---\n", _commands);
         sql.Should().Contain("COUNT", "past-due tenant counts must be aggregated in SQL");
@@ -361,15 +361,15 @@ public class AccountingServiceTests : IDisposable
         var pastDue = await _sut.GetPastDueAsync(PortfolioId, CancellationToken.None);
 
         var row = pastDue.Items.Should().ContainSingle().Subject;
-        row.LeaseId.Should().Be(lease.Id);
+        row.LeaseManagementId.Should().Be(lease.Id);
         row.TenantName.Should().Be("Maria Tenant");
         row.TenantPhone.Should().Be("614-555-0130");
-        row.LeaseNumber.Should().Be("L-001");
+        row.RelationshipNumber.Should().Be("L-001");
         row.PropertyName.Should().Be("General");
         row.UnitNumber.Should().Be("12");
         row.UnitId.Should().Be(lease.UnitId, "the row carries the lease's unit so the oldest-payment link folds into the unit's Rent tab");
-        row.OldestPaymentId.Should().Be(oldest.Id);
-        row.OldestDueDate.Should().Be(oldest.DueDate);
+        row.OldestLedgerEntryId.Should().Be(oldest.Id);
+        row.OldestDueOn.Should().Be(DateOnly.FromDateTime(oldest.DueDate));
         row.PastDueAmount.Should().Be(1275m);
         row.OverduePaymentCount.Should().Be(2);
 
@@ -428,8 +428,8 @@ public class AccountingServiceTests : IDisposable
         snapshot.PastDueAmount.Should().Be(975m);
         pastDue.TotalCount.Should().Be(1);
         pastDue.TotalPastDueAmount.Should().Be(975m);
-        pastDue.Items.Should().ContainSingle(i => i.LeaseId == currentLease.Id);
-        pastDue.Items.Should().NotContain(i => i.LeaseId == endedLease.Id,
+        pastDue.Items.Should().ContainSingle(i => i.LeaseManagementId == currentLease.Id);
+        pastDue.Items.Should().NotContain(i => i.LeaseManagementId == endedLease.Id,
             "an ended fixed-term lease can keep historical ledger rows, but it should not be an active dashboard/Money TODO");
     }
 

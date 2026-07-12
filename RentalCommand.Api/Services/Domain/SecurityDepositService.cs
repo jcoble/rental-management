@@ -53,30 +53,25 @@ public class SecurityDepositService : ISecurityDepositService
             userId: _actor.UserId, actorLabel: _actor.ActorLabel, ipAddress: _actor.IpAddress,
             oldValues: oldValues, newValues: newValues, changeReason: changeReason, ct: ct);
 
-    public async Task<IReadOnlyList<SecurityDepositResponse>> ListAsync(int portfolioId, int? leaseId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SecurityDepositAccountResponse>> ListAsync(int portfolioId, int? leaseManagementId, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, leaseId, new ListQuery(), ct);
+        var page = await ListPageAsync(portfolioId, leaseManagementId, new ListQuery(), ct);
         return page.Items;
     }
 
-    public async Task<SecurityDepositListResponse> ListPageAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
+    public async Task<SecurityDepositListResponse> ListPageAsync(int portfolioId, int? leaseManagementId, ListQuery query, CancellationToken ct = default)
     {
-        var q = _db.SecurityDepositHoldings
-            .AsNoTracking()
-            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
-            .Where(h => h.PortfolioId == portfolioId);
+        var q = BuildAccountQuery(portfolioId);
 
-        if (leaseId.HasValue)
-            q = q.Where(h => h.LeaseId == leaseId.Value);
+        if (leaseManagementId.HasValue)
+            q = q.Where(row => row.LeaseManagementId == leaseManagementId.Value);
 
         q = query.SortField switch
         {
-            "lease" => query.SortDescending ? q.OrderByDescending(h => h.Lease!.LeaseNumber) : q.OrderBy(h => h.Lease!.LeaseNumber),
-            "leasenumber" => query.SortDescending ? q.OrderByDescending(h => h.Lease!.LeaseNumber) : q.OrderBy(h => h.Lease!.LeaseNumber),
-            "amount" => query.SortDescending ? q.OrderByDescending(h => h.Amount) : q.OrderBy(h => h.Amount),
-            "heldat" => query.SortDescending ? q.OrderByDescending(h => h.HeldAt) : q.OrderBy(h => h.HeldAt),
-            "createdat" => query.SortDescending ? q.OrderByDescending(h => h.CreatedAt) : q.OrderBy(h => h.CreatedAt),
-            _ => query.SortDescending ? q.OrderBy(h => h.CreatedAt) : q.OrderByDescending(h => h.CreatedAt),
+            "account" => query.SortDescending ? q.OrderByDescending(row => row.AccountNumber) : q.OrderBy(row => row.AccountNumber),
+            "amount" => query.SortDescending ? q.OrderByDescending(row => row.HeldBalance) : q.OrderBy(row => row.HeldBalance),
+            "createdat" => query.SortDescending ? q.OrderByDescending(row => row.CreatedAtUtc) : q.OrderBy(row => row.CreatedAtUtc),
+            _ => query.SortDescending ? q.OrderBy(row => row.CreatedAtUtc) : q.OrderByDescending(row => row.CreatedAtUtc),
         };
 
         var totalCount = await q.CountAsync(ct);
@@ -88,21 +83,57 @@ public class SecurityDepositService : ISecurityDepositService
 
         return new SecurityDepositListResponse
         {
-            Items = items.Select(SecurityDepositResponse.FromEntity).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
     }
 
-    public async Task<SecurityDepositResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<SecurityDepositAccountResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.SecurityDepositHoldings
-            .AsNoTracking()
-            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
-            .FirstOrDefaultAsync(h => h.Id == id && h.PortfolioId == portfolioId, ct);
+        return BuildAccountQuery(portfolioId).SingleOrDefaultAsync(row => row.Id == id, ct);
+    }
 
-        return entity == null ? null : SecurityDepositResponse.FromEntity(entity);
+    internal IQueryable<SecurityDepositAccountResponse> BuildAccountQuery(int portfolioId)
+    {
+        return
+            from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { balance.PortfolioId, Id = balance.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join deposit in _db.SecurityDepositAccounts.AsNoTracking()
+                on new { balance.PortfolioId, Id = balance.SecurityDepositAccountId }
+                equals new { deposit.PortfolioId, deposit.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            where balance.PortfolioId == portfolioId
+            select new SecurityDepositAccountResponse
+            {
+                Id = deposit.Id,
+                PortfolioId = deposit.PortfolioId,
+                TenantAccountId = account.Id,
+                LeaseManagementId = management.Id,
+                OriginatingAgreementId = deposit.OriginatingAgreementId,
+                PropertyId = management.PropertyId,
+                UnitId = management.UnitId,
+                AccountNumber = account.AccountNumber,
+                RelationshipNumber = management.RelationshipNumber,
+                TenantName = lifecycle.CurrentPrimaryTenantName,
+                PropertyName = management.Property!.Name,
+                UnitNumber = management.Unit!.UnitNumber,
+                Currency = balance.Currency,
+                TotalReceived = balance.TotalReceived,
+                TotalDeductions = balance.TotalDeductions,
+                TotalRefunded = balance.TotalRefunded,
+                HeldBalance = balance.HeldBalance,
+                Status = balance.DepositStatus,
+                CreatedAtUtc = deposit.CreatedAtUtc,
+            };
     }
 
     public async Task<SecurityDepositResponse?> CreateAsync(int portfolioId, CreateDepositRequest request, CancellationToken ct = default)

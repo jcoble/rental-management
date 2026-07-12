@@ -31,27 +31,27 @@ public class PaymentController : ManagementControllerBase
     }
 
     [HttpGet]
-    [ProducesResponseType(typeof(IReadOnlyList<PaymentResponse>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<PaymentResponse>>> List(
-        [FromQuery] PaymentListQuery query, [FromQuery] int? leaseId, CancellationToken ct)
+    [ProducesResponseType(typeof(IReadOnlyList<PaymentReceiptResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<PaymentReceiptResponse>>> List(
+        [FromQuery] PaymentListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), leaseId, query, ct);
+        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
         return Ok(items);
     }
 
     [HttpGet("page")]
     [ProducesResponseType(typeof(PaymentListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<PaymentListResponse>> ListPage(
-        [FromQuery] PaymentListQuery query, [FromQuery] int? leaseId, CancellationToken ct)
+        [FromQuery] PaymentListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), leaseId, query, ct);
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
         return Ok(page);
     }
 
-    [HttpGet("{id:int}")]
-    [ProducesResponseType(typeof(PaymentResponse), StatusCodes.Status200OK)]
+    [HttpGet("{id:long}")]
+    [ProducesResponseType(typeof(PaymentReceiptResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PaymentResponse>> Get(int id, CancellationToken ct)
+    public async Task<ActionResult<PaymentReceiptResponse>> Get(long id, CancellationToken ct)
     {
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Payment not found" }) : Ok(item);

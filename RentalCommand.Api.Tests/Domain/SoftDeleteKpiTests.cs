@@ -104,8 +104,8 @@ public sealed class SoftDeleteKpiTests : IDisposable
 
         var pastDue = await _accounting.GetPastDueAsync(PortfolioId);
         pastDue.TotalCount.Should().Be(1);
-        pastDue.Items.Should().ContainSingle().Which.LeaseId.Should().Be(live.Id);
-        pastDue.Items.Should().NotContain(i => i.LeaseId == doomed.Id,
+        pastDue.Items.Should().ContainSingle().Which.LeaseManagementId.Should().Be(live.Id);
+        pastDue.Items.Should().NotContain(i => i.LeaseManagementId == doomed.Id,
             "a soft-deleted lease must never appear as a ghost 'who's behind' row");
         pastDue.TotalPastDueAmount.Should().Be(900m);
 
