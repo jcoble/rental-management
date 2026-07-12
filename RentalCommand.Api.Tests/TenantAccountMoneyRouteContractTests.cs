@@ -1,6 +1,7 @@
 using System.Reflection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Routing;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
