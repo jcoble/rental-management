@@ -86,6 +86,48 @@ public sealed record BankTransactionInput(
     string? Category,
     string? RawData) : IAtomicCommandData;
 
+/// <summary>
+/// Narrow kernel-owned set merge used by banking atomic handlers. The implementation owns the
+/// PostgreSQL statement; handlers cannot obtain a DbContext, connection, or raw-SQL capability.
+/// </summary>
+public interface IAtomicBankingPersistence
+{
+    Task<AtomicBankTransactionMergeResult> ApplyPlaidSyncAsync(
+        int portfolioId,
+        int connectionId,
+        IReadOnlyList<BankTransactionInput> added,
+        int addedInputCount,
+        IReadOnlyList<BankTransactionInput> modified,
+        int modifiedInputCount,
+        IReadOnlyList<string> removedProviderTransactionIds,
+        DateTime appliedAtUtc,
+        CancellationToken ct = default);
+
+    Task<AtomicBankTransactionMergeResult> ImportAsync(
+        int portfolioId,
+        int connectionId,
+        IReadOnlyList<BankTransactionInput> transactions,
+        int inputCount,
+        DateTime importedAtUtc,
+        CancellationToken ct = default);
+}
+
+public sealed record AtomicBankTransactionMutation(
+    int TransactionId,
+    string Operation,
+    string? OldValues,
+    string NewValues,
+    string Reason);
+
+public sealed record AtomicBankTransactionMergeResult(
+    int ImportedCount,
+    int ModifiedCount,
+    int RemovedCount,
+    int ChangedEventCount,
+    int SkippedCount,
+    IReadOnlyList<int> AffectedTransactionIds,
+    IReadOnlyList<AtomicBankTransactionMutation> Mutations);
+
 public sealed record ApplyPlaidSyncCommand(
     int PortfolioId,
     int ConnectionId,

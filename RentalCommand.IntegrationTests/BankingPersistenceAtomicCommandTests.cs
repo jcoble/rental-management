@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -294,8 +295,12 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         (await db.AtomicAuditLogs.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(41);
         (await db.Notifications.CountAsync(row => row.Type == "BankImportCompleted")).Should().Be(1);
 
-        Recorder.Commands.Count(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.Ordinal))
-            .Should().BeLessThanOrEqualTo(1, "import duplicate eligibility is one bounded SQL query, not one query per input row");
+        var mergeCommands = Recorder.Commands
+            .Where(sql => sql.Contains("jsonb_array_elements(@transactions::jsonb)", StringComparison.Ordinal))
+            .ToArray();
+        mergeCommands.Should().ContainSingle("the import is one DB-side dedupe/filter/insert/result statement");
+        mergeCommands[0].Should().Contain("ON CONFLICT (\"BankConnectionId\", \"ProviderTransactionId\") DO NOTHING");
+        mergeCommands[0].Should().Contain("jsonb_agg", "generated ids and semantic audit rows are shaped by PostgreSQL");
     }
 
     [SkippableFact]
@@ -305,7 +310,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         var input = Transaction("duplicate-provider-id", 10m);
         var command = new ImportBankTransactionsCommand(
             _portfolioId, "Manual", "Duplicate bank", "Checking", "1000", null, null,
-            [input], 3, "duplicate-input", _now);
+            [input, input, input], 3, "duplicate-input", _now);
 
         var result = await Atomic.ExecuteAsync(
             new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:duplicate-input"),
@@ -316,6 +321,43 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         result.Value.SkippedCount.Should().Be(2);
         await using var db = NewContext();
         (await db.BankTransactions.CountAsync(row => row.ProviderTransactionId == input.ProviderTransactionId)).Should().Be(1);
+        var audit = await db.AtomicAuditLogs.SingleAsync(row =>
+            row.CommandIdempotencyKey.EndsWith("duplicate-input")
+            && row.EntityType == nameof(BankTransaction));
+        audit.Operation.Should().Be(AuditLogOperation.Created);
+        audit.OldValues.Should().BeNull();
+        audit.NewValues.Should().Contain("duplicate-provider-id");
+    }
+
+    [SkippableFact]
+    public async Task Import_NewReceiptForPersistedProviderIds_ReturnsDatabaseShapedSkipsWithoutNewAuditOrNotification()
+    {
+        SkipIfNoDocker();
+        var first = Import("persisted-duplicate", 2);
+        await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:persisted-duplicate:first"),
+            first,
+            ImportCodec);
+
+        var replayUnderNewReceipt = first with { RequestIdentity = "persisted-duplicate-second" };
+        var result = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:persisted-duplicate:second"),
+            replayUnderNewReceipt,
+            ImportCodec);
+
+        result.Value.ImportedCount.Should().Be(0);
+        result.Value.SkippedCount.Should().Be(2);
+        result.Value.ImportedTransactionIds.Should().BeEmpty();
+        await using var db = NewContext();
+        (await db.BankTransactions.CountAsync(row => row.ProviderTransactionId.StartsWith("persisted-duplicate-")))
+            .Should().Be(2);
+        (await db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandIdempotencyKey.EndsWith("persisted-duplicate:second")
+            && row.EntityType == nameof(BankTransaction))).Should().Be(0);
+        (await db.Notifications.CountAsync(row =>
+            row.Type == "BankImportCompleted"
+            && row.CreatedAt == replayUnderNewReceipt.ImportedAtUtc)).Should().Be(1,
+                "only the first receipt imported rows");
     }
 
     [SkippableFact]
@@ -401,6 +443,89 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         (await verify.BankTransactions.CountAsync(row => row.BankConnectionId == connectionId)).Should().Be(1);
         (await verify.BankConnections.SingleAsync(row => row.Id == connectionId)).SyncCursorCipherText
             .Should().BeOneOf("cursor-a", "cursor-b");
+    }
+
+    [SkippableFact]
+    public async Task PlaidSync_SetMergeReturnsCreatedAndModifiedIds_AndAuditsFinalRemovedState()
+    {
+        SkipIfNoDocker();
+        int connectionId;
+        int existingId;
+        await using (var db = NewContext())
+        {
+            var connection = new BankConnection
+            {
+                PortfolioId = _portfolioId,
+                Provider = "Plaid",
+                InstitutionName = "Set merge bank",
+                AccountName = "Checking",
+                Status = "Active",
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            db.BankConnections.Add(connection);
+            await db.SaveChangesAsync();
+            connectionId = connection.Id;
+            var existing = new BankTransaction
+            {
+                PortfolioId = _portfolioId,
+                BankConnectionId = connectionId,
+                ProviderTransactionId = "set-merge-existing",
+                PostedAt = _now,
+                Description = "Before merge",
+                Amount = 10m,
+                IsoCurrencyCode = "USD",
+                MatchStatus = "Matched",
+                MatchConfidence = 1m,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            db.BankTransactions.Add(existing);
+            await db.SaveChangesAsync();
+            existingId = existing.Id;
+        }
+
+        var created = Transaction("set-merge-created", 20m);
+        var modified = Transaction("set-merge-existing", 30m) with { Description = "After merge" };
+        var command = new ApplyPlaidSyncCommand(
+            _portfolioId, connectionId, null, "set-merge-cursor",
+            [created, created], 2,
+            [modified], 1,
+            ["set-merge-existing", "set-merge-existing"],
+            "set-merge-request", _now.AddMinutes(2));
+        Recorder.Clear();
+
+        var result = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("banking.plaid.sync.apply", $"{_portfolioId}:{connectionId}:set-merge"),
+            command,
+            SyncCodec);
+
+        result.Value.ImportedCount.Should().Be(1);
+        result.Value.SkippedCount.Should().Be(1);
+        result.Value.AffectedTransactionIds.Should().Contain(existingId);
+        result.Value.AffectedTransactionIds.Should().HaveCount(2);
+        var mergeCommands = Recorder.Commands
+            .Where(sql => sql.Contains("jsonb_array_elements(@added::jsonb)", StringComparison.Ordinal))
+            .ToArray();
+        mergeCommands.Should().ContainSingle("Plaid reconciliation is one PostgreSQL merge statement");
+        mergeCommands[0].Should().Contain("existing AS MATERIALIZED");
+        mergeCommands[0].Should().Contain("jsonb_agg");
+
+        await using var verify = NewContext();
+        var final = await verify.BankTransactions.SingleAsync(row => row.Id == existingId);
+        final.Description.Should().Be("After merge");
+        final.Amount.Should().Be(30m);
+        final.MatchStatus.Should().Be("Removed");
+        final.MatchedPaymentId.Should().BeNull();
+        final.MatchConfidence.Should().BeNull();
+        var audit = await verify.AtomicAuditLogs.SingleAsync(row =>
+            row.CommandIdempotencyKey.EndsWith(":set-merge")
+            && row.EntityType == nameof(BankTransaction)
+            && row.EntityId == existingId);
+        audit.Operation.Should().Be(AuditLogOperation.Updated);
+        audit.OldValues.Should().Contain("Before merge");
+        audit.NewValues.Should().Contain("After merge");
+        audit.NewValues.Should().Contain("Removed");
     }
 
     [SkippableFact]

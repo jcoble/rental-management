@@ -39,6 +39,25 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
         return ValueTask.FromResult(result);
     }
 
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        Guard(command, eventData);
+        return result;
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        Guard(command, eventData);
+        return ValueTask.FromResult(result);
+    }
+
     private void Guard(DbCommand command, CommandEventData eventData)
     {
         if (!_scope.IsActive && _scope.AllowsUnconvertedWrites)
@@ -46,7 +65,7 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
             return;
         }
 
-        if (eventData.CommandSource == CommandSource.ExecuteSqlRaw)
+        if (eventData.CommandSource is CommandSource.ExecuteSqlRaw or CommandSource.FromSqlQuery)
         {
             var match = RawDml.Match(command.CommandText);
             if (match.Success)
