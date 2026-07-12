@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
 
