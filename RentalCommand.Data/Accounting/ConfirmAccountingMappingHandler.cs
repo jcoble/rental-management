@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Accounting;
@@ -22,7 +24,6 @@ public sealed class ConfirmAccountingMappingHandler
 {
     internal const int PromotionBatchSize = 256;
     private const int MaxPushDevices = 32;
-    private static readonly LeaseStatus[] LiveLeaseStatuses = [LeaseStatus.Active, LeaseStatus.NoticeGiven];
     private static readonly string[] ImportableCategoryNames = Enum.GetNames<ScheduleECategory>()
         .Where(name => name != nameof(ScheduleECategory.Depreciation))
         .ToArray();
@@ -193,12 +194,43 @@ public sealed class ConfirmAccountingMappingHandler
         var ledgers = attempt.Persistence.Query<AccountingSyncMap>();
         var parked = attempt.Persistence.Query<AccountingParkedTransaction>();
         var mappings = attempt.Persistence.Query<AccountingEntityMapping>();
-        var leases = attempt.Persistence.Query<Lease>();
+        var parties = attempt.Persistence.Query<LeaseManagementParty>();
+        var managements = attempt.Persistence.Query<LeaseManagement>();
+        var accounts = attempt.Persistence.Query<TenantAccount>();
+        var depositAccounts = attempt.Persistence.Query<SecurityDepositAccount>();
+        var chargeBalances = attempt.Persistence.Query<TenantChargeBalanceProjection>();
+        var openAccountLinks = (
+            from party in parties
+            join management in managements
+                on new { party.LeaseManagementId, party.PortfolioId }
+                equals new { LeaseManagementId = management.Id, management.PortfolioId }
+            join account in accounts
+                on new { LeaseManagementId = management.Id, management.PortfolioId }
+                equals new { account.LeaseManagementId, account.PortfolioId }
+            where party.PortfolioId == command.PortfolioId
+                && management.CanceledAtUtc == null
+                && account.ClosedAtUtc == null
+            select new
+            {
+                party.TenantId,
+                AccountId = account.Id,
+                account.Currency,
+            }).Distinct();
+        var uniqueOpenAccounts =
+            from link in openAccountLinks
+            group link by link.TenantId into grouped
+            where grouped.Count() == 1
+            select new
+            {
+                TenantId = grouped.Key,
+                AccountId = grouped.Max(row => row.AccountId),
+                Currency = grouped.Max(row => row.Currency),
+            };
         var candidates =
             from ledger in ledgers
             join payload in parked on ledger.Id equals payload.Id
             join customer in mappings on payload.CustomerExternalId equals customer.ExternalId
-            join lease in leases on customer.LocalEntityId equals (int?)lease.TenantId
+            join account in uniqueOpenAccounts on customer.LocalEntityId equals (int?)account.TenantId
             where ledger.PortfolioId == command.PortfolioId
                 && ledger.AccountingConnectionId == command.AccountingConnectionId
                 && ledger.Direction == LedgerDirection.Import
@@ -211,19 +243,12 @@ public sealed class ConfirmAccountingMappingHandler
                 && customer.LocalEntityType == LocalEntityKind.Tenant
                 && customer.ConfirmedAt != null
                 && customer.LocalEntityId != null
-                && lease.PortfolioId == command.PortfolioId
-                && lease.DeletedAt == null
-                && LiveLeaseStatuses.Contains(lease.Status)
-                && !leases.Any(other => other.PortfolioId == command.PortfolioId
-                    && other.DeletedAt == null
-                    && other.TenantId == lease.TenantId
-                    && LiveLeaseStatuses.Contains(other.Status)
-                    && (other.StartDate > lease.StartDate
-                        || (other.StartDate == lease.StartDate && other.Id > lease.Id)))
+                && payload.Amount > 0
             select new
             {
                 Ledger = ledger,
-                LeaseId = lease.Id,
+                TenantAccountId = account.AccountId,
+                account.Currency,
                 payload.Amount,
                 payload.TxnDateUtc,
                 payload.PaymentMethod,
@@ -237,49 +262,112 @@ public sealed class ConfirmAccountingMappingHandler
                     && (account.ExternalDisplayName.ToLower().Contains("security deposit")
                         || account.ExternalDisplayName.ToLower().Contains("deposit held")
                         || account.ExternalDisplayName.ToLower().Contains("tenant deposit"))),
+                SecurityDepositAccountId = depositAccounts
+                    .Where(deposit => deposit.PortfolioId == command.PortfolioId
+                        && deposit.TenantAccountId == account.AccountId)
+                    .Select(deposit => (int?)deposit.Id)
+                    .SingleOrDefault(),
+                OpenDepositAmount = chargeBalances
+                    .Where(balance => balance.PortfolioId == command.PortfolioId
+                        && balance.TenantAccountId == account.AccountId
+                        && balance.EntryType == nameof(TenantLedgerEntryType.DepositCharge)
+                        && balance.OpenAmount > 0)
+                    .Sum(balance => (decimal?)balance.OpenAmount) ?? 0m,
             };
-        var batch = await candidates
+        var eligible = candidates.Where(row => !row.IsDeposit
+            || (row.SecurityDepositAccountId != null && row.OpenDepositAmount >= row.Amount));
+        var batch = await eligible
             .OrderBy(row => row.Ledger.Id)
             .Select(row => new
             {
                 row.Ledger,
-                row.LeaseId,
+                row.TenantAccountId,
+                row.Currency,
                 row.Amount,
                 row.TxnDateUtc,
                 row.PaymentMethod,
                 row.ReferenceNumber,
                 row.ExternalId,
                 row.IsDeposit,
-                HasFollowing = candidates.Any(other => other.Ledger.Id > row.Ledger.Id),
+                row.SecurityDepositAccountId,
+                HasFollowing = eligible.Any(other => other.Ledger.Id > row.Ledger.Id),
             })
             .Take(take)
             .ToListAsync(ct);
-        var hasMore = batch.Count == take && batch[^1].HasFollowing;
+        var hasMore = batch.Count != 0 && batch.Count == take && batch[^1].HasFollowing;
 
-        var pairs = batch.Select(row => new
+        var pairs = batch.Select(row =>
         {
-            row.Ledger,
-            Payment = new Payment
+            var businessKey = ImportedPaymentBusinessKey(command.AccountingConnectionId, row.ExternalId);
+            var paymentAttempt = new TenantPaymentAttempt
             {
                 PortfolioId = command.PortfolioId,
-                LeaseId = row.LeaseId,
-                PaymentType = row.IsDeposit ? PaymentType.SecurityDeposit : PaymentType.Rent,
-                Status = PaymentStatus.Paid,
+                TenantAccountId = row.TenantAccountId,
+                Provider = $"Accounting:{command.AccountingConnectionId}",
+                ProviderObjectId = row.ExternalId,
+                IdempotencyKey = businessKey,
+                AttemptType = TenantPaymentAttemptType.Charge,
+                State = TenantPaymentAttemptState.Succeeded,
                 Amount = row.Amount,
-                DueDate = row.TxnDateUtc,
-                PaidDate = row.TxnDateUtc,
-                Method = row.PaymentMethod,
-                ExternalReference = row.ReferenceNumber ?? row.ExternalId,
-                CreatedAt = command.OccurredAtUtc,
-                UpdatedAt = command.OccurredAtUtc,
-            },
+                Currency = row.Currency,
+                PaymentMethodSummary = row.PaymentMethod,
+                PreparedAtUtc = row.TxnDateUtc,
+                SubmittedAtUtc = row.TxnDateUtc,
+                SettledAtUtc = row.TxnDateUtc,
+                UpdatedAtUtc = command.OccurredAtUtc,
+                CreatedByUserId = command.UserId,
+            };
+            var receipt = new TenantLedgerEntry
+            {
+                PortfolioId = command.PortfolioId,
+                TenantAccountId = row.TenantAccountId,
+                EntryType = TenantLedgerEntryType.PaymentReceipt,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = row.Amount,
+                Currency = row.Currency,
+                EffectiveOn = DateOnly.FromDateTime(row.TxnDateUtc),
+                PostedAtUtc = command.OccurredAtUtc,
+                Description = ImportedPaymentDescription(row.ReferenceNumber, row.ExternalId),
+                BusinessKey = businessKey,
+                ProviderPaymentAttempt = paymentAttempt,
+                CreatedByUserId = command.UserId,
+            };
+            SecurityDepositEntry? deposit = null;
+            if (row.IsDeposit && row.SecurityDepositAccountId is { } depositAccountId)
+            {
+                deposit = new SecurityDepositEntry
+                {
+                    PortfolioId = command.PortfolioId,
+                    SecurityDepositAccountId = depositAccountId,
+                    EntryType = SecurityDepositEntryType.Receipt,
+                    Direction = SecurityDepositDirection.Increase,
+                    Amount = row.Amount,
+                    Currency = row.Currency,
+                    EffectiveOn = receipt.EffectiveOn,
+                    PostedAtUtc = command.OccurredAtUtc,
+                    BusinessKey = $"{businessKey}:deposit",
+                    Description = receipt.Description,
+                    TenantLedgerEntry = receipt,
+                    CreatedByUserId = command.UserId,
+                };
+            }
+            return new { row.Ledger, Receipt = receipt, PaymentAttempt = paymentAttempt, Deposit = deposit };
         }).ToList();
-        attempt.Persistence.AddRange(pairs.Select(pair => pair.Payment));
+        attempt.Persistence.AddRange(pairs.Select(pair => pair.PaymentAttempt));
+        attempt.Persistence.AddRange(pairs.Select(pair => pair.Receipt));
+        attempt.Persistence.AddRange(pairs.Where(pair => pair.Deposit is not null)
+            .Select(pair => pair.Deposit!));
         if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
+        if (pairs.Count != 0)
+        {
+            await attempt.TenantMoney.AllocateImportedReceiptsAsync(
+                pairs.Select(pair => pair.Receipt.Id).ToArray(), command.OccurredAtUtc, ct);
+        }
         foreach (var pair in pairs)
         {
-            MarkImported(pair.Ledger, LocalEntityKind.Payment, pair.Payment.Id, command.OccurredAtUtc);
-            attempt.StageSemanticEvent(PromotionAudit(command, pair.Ledger, LocalEntityKind.Payment, pair.Payment.Id));
+            MarkImported(pair.Ledger, LocalEntityKind.TenantLedgerEntry, pair.Receipt.Id, command.OccurredAtUtc);
+            attempt.StageSemanticEvent(PromotionAudit(
+                command, pair.Ledger, LocalEntityKind.TenantLedgerEntry, pair.Receipt.Id));
         }
         if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
         return new AccountingPromotionBatchResult(pairs.Count, hasMore);
@@ -449,7 +537,7 @@ public sealed class ConfirmAccountingMappingHandler
         }
     }
 
-    private static void MarkImported(AccountingSyncMap ledger, string localType, int localId, DateTime occurredAt)
+    private static void MarkImported(AccountingSyncMap ledger, string localType, long localId, DateTime occurredAt)
     {
         ledger.Status = LedgerStatus.Imported;
         ledger.LocalEntityType = localType;
@@ -498,7 +586,7 @@ public sealed class ConfirmAccountingMappingHandler
         AccountingPromotionContext command,
         AccountingSyncMap ledger,
         string localType,
-        int localId) => new(
+        long localId) => new(
             command.PortfolioId,
             nameof(AccountingSyncMap),
             ledger.Id,
@@ -514,6 +602,20 @@ public sealed class ConfirmAccountingMappingHandler
                 command.ClientOperationId,
             }),
             ChangeReason: "Parked accounting transaction promoted after mapping confirmation.");
+
+    private static string ImportedPaymentBusinessKey(int connectionId, string externalId)
+    {
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(externalId)));
+        return $"accounting-import:{connectionId}:{digest}";
+    }
+
+    private static string ImportedPaymentDescription(string? referenceNumber, string externalId)
+    {
+        var description = !string.IsNullOrWhiteSpace(referenceNumber)
+            ? $"Imported payment {referenceNumber}"
+            : $"Imported payment {externalId}";
+        return description.Length <= 500 ? description : description[..500];
+    }
 
     private static ConfirmAccountingMappingResult Empty(
         ConfirmAccountingMappingOutcome outcome,

@@ -196,6 +196,16 @@ public interface IAtomicTenantMoneyPersistence
         string? entryType = null,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Allocates a bounded imported-receipt batch in one PostgreSQL statement. Deposit receipts
+    /// settle deposit charges; ordinary receipts settle non-deposit charges. Ordering and all
+    /// open-balance arithmetic stay database-side.
+    /// </summary>
+    Task<AtomicLedgerAllocationSummary> AllocateImportedReceiptsAsync(
+        long[] creditEntryIds,
+        DateTime allocatedAtUtc,
+        CancellationToken ct = default);
+
     Task<AtomicLedgerAllocationSummary> ReverseChargeAllocationsAsync(
         int portfolioId,
         int tenantAccountId,

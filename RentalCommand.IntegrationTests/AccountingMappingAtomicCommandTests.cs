@@ -31,6 +31,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     private int _otherPortfolioId;
     private int _connectionId;
     private int _tenantId;
+    private int _tenantAccountId;
     private int _secondTenantId;
     private int _otherTenantId;
 
@@ -113,7 +114,12 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             && mapping.AccountingConnectionId == _connectionId
             && mapping.ExternalType == ExternalKind.Customer
             && mapping.ExternalId == "customer-main")).Should().Be(1);
-        (await db.Payments.CountAsync(payment => payment.PortfolioId == _portfolioId)).Should().Be(1);
+        (await db.TenantLedgerEntries.CountAsync(entry => entry.PortfolioId == _portfolioId
+            && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
+        (await db.TenantPaymentAttempts.CountAsync(payment => payment.PortfolioId == _portfolioId
+            && payment.State == TenantPaymentAttemptState.Succeeded)).Should().Be(1);
+        (await db.TenantLedgerAllocations.CountAsync(allocation =>
+            allocation.TenantAccountId == _tenantAccountId)).Should().Be(1);
         (await db.Expenses.CountAsync(expense => expense.PortfolioId == _portfolioId)).Should().Be(1);
         (await db.AccountingSyncMaps.CountAsync(ledger =>
             ledger.PortfolioId == _portfolioId
@@ -204,7 +210,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         (await db.AccountingEntityMappings.CountAsync(mapping =>
             mapping.AccountingConnectionId == _connectionId
             && mapping.ExternalId == "customer-cross")).Should().Be(0);
-        (await db.Payments.CountAsync(payment => payment.PortfolioId == _portfolioId)).Should().Be(0);
+        (await db.TenantLedgerEntries.CountAsync(entry => entry.PortfolioId == _portfolioId
+            && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(0);
         (await db.Expenses.CountAsync(expense => expense.PortfolioId == _portfolioId)).Should().Be(0);
         (await db.AccountingSyncMaps.CountAsync(ledger =>
             ledger.AccountingConnectionId == _connectionId
@@ -238,7 +245,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().BeEquivalentTo(corrected.Value);
         await using var db = NewContext();
-        (await db.Payments.CountAsync(payment => payment.PortfolioId == _portfolioId)).Should().Be(1);
+        (await db.TenantLedgerEntries.CountAsync(entry => entry.PortfolioId == _portfolioId
+            && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
         (await db.Expenses.CountAsync(expense => expense.PortfolioId == _portfolioId)).Should().Be(1);
         (await db.AccountingSyncMaps.CountAsync(ledger =>
             ledger.AccountingConnectionId == _connectionId
@@ -306,7 +314,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         outcomes[0].Value.PromotedCount.Should().Be(44);
         outcomes[0].Value.HasMore.Should().BeFalse();
         await using var db = NewContext();
-        (await db.Payments.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(300);
+        (await db.TenantLedgerEntries.CountAsync(row => row.PortfolioId == _portfolioId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(300);
         (await db.AccountingSyncMaps.CountAsync(row => row.PortfolioId == _portfolioId
             && row.Status == LedgerStatus.Imported)).Should().Be(300);
         (await db.AccountingMappingPromotionJobs.SingleAsync(row => row.Id == continuationId))
@@ -427,6 +436,20 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
         _otherPortfolioId = other.Id;
+        db.Users.Add(new ApplicationUser
+        {
+            Id = 701,
+            PortfolioId = _portfolioId,
+            UserName = "accounting-test@rentalcommand.local",
+            NormalizedUserName = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
+            Email = "accounting-test@rentalcommand.local",
+            NormalizedEmail = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
+            DisplayName = "Accounting test actor",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = _now,
+        });
+        await db.SaveChangesAsync();
 
         var property = Property(_portfolioId, "Primary property");
         var otherProperty = Property(_otherPortfolioId, "Other property");
@@ -446,23 +469,68 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         _secondTenantId = secondTenant.Id;
         _otherTenantId = otherTenant.Id;
 
-        var unit = new Unit { PropertyId = property.Id, UnitNumber = "1", CreatedAt = _now, UpdatedAt = _now };
+        var unit = new Unit
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = property.Id,
+            UnitNumber = "1",
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
         db.Units.Add(unit);
         await db.SaveChangesAsync();
-        db.Leases.Add(new Lease
+        var management = new LeaseManagement
         {
             PortfolioId = _portfolioId,
             PropertyId = property.Id,
             UnitId = unit.Id,
+            RelationshipNumber = "LM-ATOMIC",
+            PlannedPossessionAtUtc = _now.AddMonths(-1),
+            CreatedAtUtc = _now,
+            CreatedByUserId = 701,
+            UpdatedAtUtc = _now,
+            RowVersion = Guid.NewGuid(),
+        };
+        db.LeaseManagements.Add(management);
+        await db.SaveChangesAsync();
+        db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = _portfolioId,
+            LeaseManagementId = management.Id,
             TenantId = tenant.Id,
-            LeaseNumber = "L-ATOMIC",
-            Status = LeaseStatus.Active,
-            StartDate = _now.AddMonths(-1),
-            EndDate = _now.AddYears(1),
-            MonthlyRent = 1500m,
-            RentDueDay = 1,
-            CreatedAt = _now,
-            UpdatedAt = _now,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(_now.AddMonths(-1)),
+            ChangeReason = "Accounting promotion test",
+            CreatedAtUtc = _now,
+            CreatedByUserId = 701,
+        });
+        var account = new TenantAccount
+        {
+            PortfolioId = _portfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = "TA-ATOMIC",
+            Currency = "USD",
+            OpenedAtUtc = _now.AddMonths(-1),
+            CreatedAtUtc = _now,
+            CreatedByUserId = 701,
+        };
+        db.TenantAccounts.Add(account);
+        await db.SaveChangesAsync();
+        _tenantAccountId = account.Id;
+        db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PortfolioId = _portfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 1500m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(_now),
+            DueOn = DateOnly.FromDateTime(_now),
+            PostedAtUtc = _now,
+            Description = "Test rent charge",
+            BusinessKey = "test:accounting-charge",
+            CreatedByUserId = 701,
         });
         var connection = new AccountingConnection
         {
