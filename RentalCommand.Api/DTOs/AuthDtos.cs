@@ -170,8 +170,6 @@ public class UserDto
     public string Email { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public int? PortfolioId { get; set; }
-    public int? OwnerEntityId { get; set; }
-    public int? TenantId { get; set; }
     public List<string> Roles { get; set; } = new();
     public bool EmailVerified { get; set; }
 }

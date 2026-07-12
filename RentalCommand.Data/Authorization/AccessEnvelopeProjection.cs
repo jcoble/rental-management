@@ -70,12 +70,28 @@ internal static class AccessEnvelopeViewSql
             FROM "WorkspaceAccessContexts" c
             JOIN "AspNetUsers" u ON u."Id" = c."UserId"
             JOIN "Portfolios" p ON p."Id" = c."PortfolioId" AND p."DeletedAt" IS NULL
-            JOIN "WorkspaceMemberships" m
+            LEFT JOIN "WorkspaceMemberships" m
               ON m."AccessContextId" = c."Id" AND m."PortfolioId" = c."PortfolioId"
+             AND m."Status" = 'Active' AND m."SuspendedAtUtc" IS NULL AND m."RevokedAtUtc" IS NULL
+             AND m."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+             AND (m."EffectiveToUtc" IS NULL OR m."EffectiveToUtc" > CURRENT_TIMESTAMP)
             WHERE c."Status" = 'Active' AND c."SuspendedAtUtc" IS NULL AND c."RevokedAtUtc" IS NULL
-              AND m."Status" = 'Active' AND m."SuspendedAtUtc" IS NULL AND m."RevokedAtUtc" IS NULL
-              AND m."EffectiveFromUtc" <= CURRENT_TIMESTAMP
-              AND (m."EffectiveToUtc" IS NULL OR m."EffectiveToUtc" > CURRENT_TIMESTAMP)
+              AND (m."Id" IS NOT NULL
+                OR EXISTS (
+                  SELECT 1 FROM "OwnerUserAccesses" oa
+                  WHERE oa."AccessContextId" = c."Id" AND oa."ApplicationUserId" = c."UserId"
+                    AND oa."PortfolioId" = c."PortfolioId" AND oa."RevokedAtUtc" IS NULL
+                    AND oa."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                    AND (oa."EffectiveToUtc" IS NULL OR oa."EffectiveToUtc" > CURRENT_TIMESTAMP))
+                OR EXISTS (
+                  SELECT 1 FROM "TenantUserAccesses" ta
+                  JOIN "LeaseManagementParties" lp
+                    ON lp."Id" = ta."LeaseManagementPartyId" AND lp."PortfolioId" = ta."PortfolioId"
+                  WHERE ta."AccessContextId" = c."Id" AND ta."ApplicationUserId" = c."UserId"
+                    AND ta."PortfolioId" = c."PortfolioId" AND ta."RevokedAtUtc" IS NULL
+                    AND lp."EffectiveFrom" <= rc_business_date(c."PortfolioId")
+                    AND (lp."EffectiveThrough" IS NULL
+                         OR lp."EffectiveThrough" >= rc_business_date(c."PortfolioId"))))
         ), effective_assignments AS (
             SELECT a."Id", a."WorkspaceMembershipId", a."PortfolioId", a."RoleProfileId",
                    a."Status", a."ScopeKind", r."Key" AS "RoleKey",
@@ -110,16 +126,42 @@ internal static class AccessEnvelopeViewSql
               WHERE ap."MembershipRoleAssignmentId" = a."Id" AND ap."PortfolioId" = a."PortfolioId"
             ) props ON TRUE
             GROUP BY ec."Id"
+        ), context_experiences AS (
+            SELECT ec."Id" AS "AccessContextId", a."DefaultExperience" AS "Experience"
+            FROM effective_contexts ec
+            JOIN effective_assignments a
+              ON a."WorkspaceMembershipId" = ec."MembershipId" AND a."PortfolioId" = ec."PortfolioId"
+            UNION
+            SELECT ec."Id", 'Owner'
+            FROM effective_contexts ec
+            WHERE EXISTS (
+              SELECT 1 FROM "OwnerUserAccesses" oa
+              WHERE oa."AccessContextId" = ec."Id" AND oa."ApplicationUserId" = ec."UserId"
+                AND oa."PortfolioId" = ec."PortfolioId" AND oa."RevokedAtUtc" IS NULL
+                AND oa."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (oa."EffectiveToUtc" IS NULL OR oa."EffectiveToUtc" > CURRENT_TIMESTAMP))
+            UNION
+            SELECT ec."Id", 'Tenant'
+            FROM effective_contexts ec
+            WHERE EXISTS (
+              SELECT 1 FROM "TenantUserAccesses" ta
+              JOIN "LeaseManagementParties" lp
+                ON lp."Id" = ta."LeaseManagementPartyId" AND lp."PortfolioId" = ta."PortfolioId"
+              WHERE ta."AccessContextId" = ec."Id" AND ta."ApplicationUserId" = ec."UserId"
+                AND ta."PortfolioId" = ec."PortfolioId" AND ta."RevokedAtUtc" IS NULL
+                AND lp."EffectiveFrom" <= rc_business_date(ec."PortfolioId")
+                AND (lp."EffectiveThrough" IS NULL
+                     OR lp."EffectiveThrough" >= rc_business_date(ec."PortfolioId")))
         ), experience_json AS (
             SELECT ec."Id" AS "AccessContextId",
                    jsonb_agg(x."Experience" ORDER BY x."SortOrder") AS "Experiences"
             FROM effective_contexts ec
             JOIN LATERAL (
-              SELECT DISTINCT a."DefaultExperience" AS "Experience",
-                     CASE a."DefaultExperience" WHEN 'Management' THEN 1 WHEN 'Leasing' THEN 2
+              SELECT ce."Experience",
+                     CASE ce."Experience" WHEN 'Management' THEN 1 WHEN 'Leasing' THEN 2
                        WHEN 'Maintenance' THEN 3 WHEN 'Owner' THEN 4 ELSE 5 END AS "SortOrder"
-              FROM effective_assignments a
-              WHERE a."WorkspaceMembershipId" = ec."MembershipId" AND a."PortfolioId" = ec."PortfolioId"
+              FROM context_experiences ce
+              WHERE ce."AccessContextId" = ec."Id"
             ) x ON TRUE
             GROUP BY ec."Id"
         ), navigation_json AS (
@@ -138,6 +180,12 @@ internal static class AccessEnvelopeViewSql
               JOIN "CapabilityDefinitions" cd ON cd."Id" = rpc."CapabilityDefinitionId"
               WHERE a."WorkspaceMembershipId" = ec."MembershipId" AND a."PortfolioId" = ec."PortfolioId"
               GROUP BY a."DefaultExperience"
+              UNION ALL
+              SELECT ce."Experience",
+                     CASE ce."Experience" WHEN 'Owner' THEN 4 ELSE 5 END,
+                     '[]'::jsonb
+              FROM context_experiences ce
+              WHERE ce."AccessContextId" = ec."Id" AND ce."Experience" IN ('Owner', 'Tenant')
             ) nav ON TRUE
             GROUP BY ec."Id"
         )
@@ -156,10 +204,10 @@ internal static class AccessEnvelopeViewSql
                    WHEN ex."Experiences" ? ec."DefaultExperience" THEN ec."DefaultExperience"
                    ELSE ex."Experiences"->>0 END,
                  'availableExperiences', ex."Experiences",
-                 'assignments', assignments."Assignments",
+                 'assignments', COALESCE(assignments."Assignments", '[]'::jsonb),
                  'navigation', navigation."Navigation")::text AS "EnvelopeJson"
         FROM effective_contexts ec
-        JOIN assignment_json assignments ON assignments."AccessContextId" = ec."Id"
+        LEFT JOIN assignment_json assignments ON assignments."AccessContextId" = ec."Id"
         JOIN experience_json ex ON ex."AccessContextId" = ec."Id"
         JOIN navigation_json navigation ON navigation."AccessContextId" = ec."Id";
         """;

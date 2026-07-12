@@ -136,7 +136,13 @@ public sealed class SendConversationMessageHandler
             StageDestinationIntents(attempt, command, tenant, conversation, message, channels);
         }
         var notifications = command.SenderRole == ConversationSenderRole.Landlord
-            ? await CreatePortalNotificationsAsync(attempt, command, conversation, channels, ct)
+            ? await CreatePortalNotificationsAsync(
+                attempt,
+                command,
+                conversation,
+                channels,
+                DateOnly.FromDateTime(command.OccurredAtUtc),
+                ct)
             : await CreateStaffNotificationsAsync(attempt, command, conversation, tenant, ct);
         if (notifications.Count > 0)
         {
@@ -208,6 +214,7 @@ public sealed class SendConversationMessageHandler
         SendConversationMessageCommand command,
         Conversation conversation,
         IReadOnlyCollection<string> channels,
+        DateOnly businessDate,
         CancellationToken ct)
     {
         if (!channels.Contains("Portal", StringComparer.Ordinal))
@@ -215,10 +222,18 @@ public sealed class SendConversationMessageHandler
             return [];
         }
 
-        var tenantUserId = await attempt.Persistence.Query<ApplicationUser>()
-            .Where(user => user.PortfolioId == command.PortfolioId && user.TenantId == conversation.TenantId)
-            .OrderBy(user => user.Id)
-            .Select(user => (int?)user.Id)
+        var tenantUserId = await attempt.Persistence.Query<TenantUserAccess>()
+            .Where(access => access.PortfolioId == command.PortfolioId
+                && access.RevokedAtUtc == null
+                && access.AccessContext!.Status == WorkspaceAccessContextStatus.Active
+                && access.AccessContext.SuspendedAtUtc == null
+                && access.AccessContext.RevokedAtUtc == null
+                && access.LeaseManagementParty!.TenantId == conversation.TenantId
+                && access.LeaseManagementParty.EffectiveFrom <= businessDate
+                && (access.LeaseManagementParty.EffectiveThrough == null
+                    || access.LeaseManagementParty.EffectiveThrough >= businessDate))
+            .OrderBy(access => access.ApplicationUserId)
+            .Select(access => (int?)access.ApplicationUserId)
             .FirstOrDefaultAsync(ct);
         if (tenantUserId is null)
         {

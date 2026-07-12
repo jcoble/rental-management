@@ -146,12 +146,24 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
-        _db.AddRange(owner, administratorAssignment);
+        var ownerAccess = new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            AccessContext = context,
+            ApplicationUser = user,
+            OwnerEntity = owner,
+            EffectiveFromUtc = now,
+            GrantedAtUtc = now,
+            GrantedByUser = user,
+            Reason = "Initial workspace owner relationship",
+        };
+        _db.AddRange(owner, administratorAssignment, ownerAccess);
         await _db.SaveChangesAsync(ct);
 
-        // Convenience identity links only. No canonical Owner-user access relationship exists yet.
+        // PortfolioId remains a non-authoritative presentation hint. Owner authority comes only from
+        // the explicit context-scoped OwnerUserAccess created above.
         user.PortfolioId = portfolio.Id;
-        user.OwnerEntityId = owner.Id;
         await _db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
         return new CanonicalAccountBootstrapResult(user, []);

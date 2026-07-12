@@ -51,7 +51,8 @@ public sealed class SelfOwnerBackfillService
         {
             // The administering (non-tenant) user for the portfolio supplies the owner's name/email.
             var user = await _db.Users
-                .Where(u => u.PortfolioId == portfolioId && u.TenantId == null)
+                .Where(u => u.WorkspaceAccessContexts.Any(context =>
+                    context.PortfolioId == portfolioId && context.Membership != null))
                 .OrderBy(u => u.Id)
                 .FirstOrDefaultAsync(ct);
 

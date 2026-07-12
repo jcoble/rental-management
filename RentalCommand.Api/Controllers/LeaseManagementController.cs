@@ -64,7 +64,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         [FromQuery] int? take = null)
     {
         var ledger = await _leaseService.GetLedgerAsync(
-            GetPortfolioId(), leaseManagementId, GetTenantIdOrNull(), skip, take, ct);
+            GetPortfolioId(), leaseManagementId, null, skip, take, ct);
         return ledger == null ? NotFound(new { error = "Tenant account not found" }) : Ok(ledger);
     }
 

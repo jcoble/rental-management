@@ -23,9 +23,11 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
 
         var effectiveContexts = _db.WorkspaceAccessContexts
             .AsNoTracking()
-            .WhereEffectiveTeamAccess(
+            .WhereEffectiveAccess(
                 _db.WorkspaceMemberships.AsNoTracking(),
                 _db.MembershipRoleAssignments.AsNoTracking(),
+                _db.OwnerUserAccesses.AsNoTracking(),
+                _db.EffectiveTenantAccess.AsNoTracking(),
                 userId,
                 utcNow);
         var effectiveAssignments = _db.MembershipRoleAssignments
@@ -40,7 +42,7 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
                 context.PortfolioId,
                 context.Portfolio!.Name,
                 context.AccessRevision,
-                effectiveAssignments
+                context.Membership != null && effectiveAssignments
                     .Where(assignment =>
                         assignment.WorkspaceMembershipId == context.Membership!.Id &&
                         assignment.PortfolioId == context.PortfolioId)
@@ -48,18 +50,27 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
                     .Distinct()
                     .Contains(context.Membership!.DefaultExperience)
                     ? context.Membership.DefaultExperience
-                    : effectiveAssignments
-                        .Where(assignment =>
-                            assignment.WorkspaceMembershipId == context.Membership!.Id &&
-                            assignment.PortfolioId == context.PortfolioId)
-                        .Select(assignment => assignment.RoleProfile!.DefaultExperience)
-                        .Distinct()
-                        .OrderBy(experience =>
-                            experience == WorkspaceExperience.Management ? 1 :
-                            experience == WorkspaceExperience.Leasing ? 2 :
-                            experience == WorkspaceExperience.Maintenance ? 3 :
-                            experience == WorkspaceExperience.Owner ? 4 : 5)
-                        .First(),
+                    : context.Membership != null && effectiveAssignments.Any(assignment =>
+                        assignment.WorkspaceMembershipId == context.Membership.Id &&
+                        assignment.PortfolioId == context.PortfolioId)
+                        ? effectiveAssignments
+                            .Where(assignment =>
+                                assignment.WorkspaceMembershipId == context.Membership!.Id &&
+                                assignment.PortfolioId == context.PortfolioId)
+                            .Select(assignment => assignment.RoleProfile!.DefaultExperience)
+                            .Distinct()
+                            .OrderBy(experience =>
+                                experience == WorkspaceExperience.Management ? 1 :
+                                experience == WorkspaceExperience.Leasing ? 2 :
+                                experience == WorkspaceExperience.Maintenance ? 3 :
+                                experience == WorkspaceExperience.Owner ? 4 : 5)
+                            .First()
+                        : _db.OwnerUserAccesses.Any(access =>
+                            access.AccessContextId == context.Id && access.PortfolioId == context.PortfolioId &&
+                            access.RevokedAtUtc == null && access.EffectiveFromUtc <= utcNow &&
+                            (access.EffectiveToUtc == null || access.EffectiveToUtc > utcNow))
+                            ? WorkspaceExperience.Owner
+                            : WorkspaceExperience.Tenant,
                 effectiveContexts.Count()))
             .ToListAsync(cancellationToken);
     }

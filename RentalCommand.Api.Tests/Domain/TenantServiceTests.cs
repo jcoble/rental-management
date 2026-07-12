@@ -65,15 +65,11 @@ public class TenantServiceTests : IDisposable
 
         var identityUser = await _userManager.FindByEmailAsync("portal.tenant@example.local");
         identityUser.Should().NotBeNull("creating a tenant with an email provisions their portal login");
-        identityUser!.TenantId.Should().Be(response.Id);
-        identityUser.PortfolioId.Should().Be(PortfolioId);
+        identityUser!.PortfolioId.Should().Be(PortfolioId);
         identityUser.EmailConfirmed.Should().BeTrue();
-        (await _userManager.IsInRoleAsync(identityUser, nameof(UserRole.Tenant))).Should().BeTrue();
-
-        _ctx.Db.UserAccounts.Should().ContainSingle(u =>
-            u.Email == "portal.tenant@example.local" &&
-            u.TenantId == response.Id &&
-            u.Role == UserRole.Tenant);
+        (await _userManager.GetRolesAsync(identityUser)).Should().BeEmpty();
+        _ctx.Db.TenantUserAccesses.Should().BeEmpty(
+            "a tenant record alone is not an effective lease-party relationship");
     }
 
     [Fact]

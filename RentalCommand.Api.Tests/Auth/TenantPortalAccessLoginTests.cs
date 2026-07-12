@@ -67,16 +67,16 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
         baseline.Success.Should().BeFalse();
         baseline.Error.Should().Contain("no active workspace access");
 
-        // Disable → the login is rejected with a "portal access off" message.
+        // With no effective lease party there is no relationship grant to revoke.
         (await _provisioning.SetPortalAccessAsync(tenant.Id, PortfolioId, enabled: false)).Access
-            .Should().Be(TenantPortalAccess.Disabled);
+            .Should().Be(TenantPortalAccess.None);
         var blocked = await auth.LoginAsync(Email, password);
-        blocked.Success.Should().BeFalse("a tenant whose portal access is turned off cannot sign in");
-        blocked.Error.Should().Contain("portal access");
+        blocked.Success.Should().BeFalse("a login without an effective relationship cannot sign in");
+        blocked.Error.Should().Contain("no active workspace access");
 
-        // Re-enabling the legacy toggle cannot manufacture canonical relationship access.
+        // Enabling cannot manufacture a relationship when no effective lease party exists.
         (await _provisioning.SetPortalAccessAsync(tenant.Id, PortfolioId, enabled: true)).Access
-            .Should().Be(TenantPortalAccess.Active);
+            .Should().Be(TenantPortalAccess.None);
         var reenabled = await auth.LoginAsync(Email, password);
         reenabled.Success.Should().BeFalse();
         reenabled.Error.Should().Contain("no active workspace access");

@@ -46,6 +46,7 @@ public class Portfolio
     public List<LeaseManagement> LeaseManagements { get; set; } = [];
     public List<LeaseManagementParty> LeaseManagementParties { get; set; } = [];
     public List<TenantUserAccess> TenantUserAccesses { get; set; } = [];
+    public List<OwnerUserAccess> OwnerUserAccesses { get; set; } = [];
     public List<UnitOperationalPeriod> UnitOperationalPeriods { get; set; } = [];
     public List<LegalDocumentArtifact> LegalDocumentArtifacts { get; set; } = [];
     public List<LeaseAgreement> LeaseAgreements { get; set; } = [];

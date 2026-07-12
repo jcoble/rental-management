@@ -23,12 +23,14 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             ct);
 
         // The count and every effective-state predicate remain in one translated SQL statement.
-        // Owner/Tenant relationship contexts will extend this predicate in their destructive slices.
+        // Team assignments and Owner/Tenant relationships share this one DB-side effective-state predicate.
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
             .AsNoTracking()
-            .WhereEffectiveTeamAccess(
+            .WhereEffectiveAccess(
                 attempt.Persistence.Query<WorkspaceMembership>().AsNoTracking(),
                 attempt.Persistence.Query<MembershipRoleAssignment>().AsNoTracking(),
+                attempt.Persistence.Query<OwnerUserAccess>().AsNoTracking(),
+                attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking(),
                 command.UserId,
                 command.IssuedAtUtc);
         var auditRoot = await effectiveContexts
@@ -121,9 +123,11 @@ public sealed class StartAuthSessionHandler
         }
 
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffectiveTeamAccess(
+            .WhereEffectiveAccess(
                 attempt.Persistence.Query<WorkspaceMembership>(),
                 attempt.Persistence.Query<MembershipRoleAssignment>(),
+                attempt.Persistence.Query<OwnerUserAccess>(),
+                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
                 command.UserId,
                 command.IssuedAtUtc);
 

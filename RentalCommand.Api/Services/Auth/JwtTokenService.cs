@@ -146,16 +146,6 @@ public class JwtTokenService : IJwtTokenService
             claims.Add(new Claim("portfolioId", user.PortfolioId.Value.ToString()));
         }
 
-        if (user.OwnerEntityId.HasValue)
-        {
-            claims.Add(new Claim("ownerEntityId", user.OwnerEntityId.Value.ToString()));
-        }
-
-        if (user.TenantId.HasValue)
-        {
-            claims.Add(new Claim("tenantId", user.TenantId.Value.ToString()));
-        }
-
         foreach (var role in roles)
         {
             claims.Add(new Claim(ClaimTypes.Role, role));

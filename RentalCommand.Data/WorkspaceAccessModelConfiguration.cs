@@ -10,6 +10,7 @@ internal static class WorkspaceAccessModelConfiguration
     public static void ConfigureWorkspaceAccessKernel(this ModelBuilder modelBuilder)
     {
         ConfigureAccessContext(modelBuilder);
+        ConfigureOwnerRelationshipAccess(modelBuilder);
         ConfigureMembership(modelBuilder);
         ConfigureCatalog(modelBuilder);
         ConfigureAssignments(modelBuilder);
@@ -17,6 +18,74 @@ internal static class WorkspaceAccessModelConfiguration
         ConfigureSessionRefreshCredentials(modelBuilder);
         ConfigureLoginContextSelectionChallenges(modelBuilder);
         ConfigureAccessEnvelopeProjection(modelBuilder);
+        ConfigureRelationshipAccessProjections(modelBuilder);
+    }
+
+    private static void ConfigureOwnerRelationshipAccess(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<OwnerEntity>()
+            .HasAlternateKey(owner => new { owner.Id, owner.PortfolioId });
+
+        modelBuilder.Entity<OwnerUserAccess>(entity =>
+        {
+            entity.HasKey(access => access.Id);
+            entity.Property(access => access.PublicId).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(access => access.GrantedAtUtc).HasDefaultValueSql("clock_timestamp()");
+            entity.Property(access => access.Reason).IsRequired().HasMaxLength(500);
+            entity.HasQueryFilter(access => access.Portfolio!.DeletedAt == null);
+            entity.HasIndex(access => access.PublicId).IsUnique();
+            entity.HasIndex(access => new
+            {
+                access.AccessContextId,
+                access.PortfolioId,
+                access.EffectiveFromUtc,
+                access.EffectiveToUtc,
+                access.RevokedAtUtc,
+            });
+            entity.HasIndex(access => new { access.AccessContextId, access.OwnerEntityId })
+                .IsUnique()
+                .HasFilter("\"RevokedAtUtc\" IS NULL");
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_OwnerUserAccess_EffectivePeriod",
+                    "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
+                table.HasCheckConstraint(
+                    "CK_OwnerUserAccess_RevocationPair",
+                    "(\"RevokedAtUtc\" IS NULL) = (\"RevokedByUserId\" IS NULL)");
+                table.HasCheckConstraint(
+                    "CK_OwnerUserAccess_RevocationAfterGrant",
+                    "\"RevokedAtUtc\" IS NULL OR \"RevokedAtUtc\" >= \"GrantedAtUtc\"");
+            });
+
+            entity.HasOne(access => access.Portfolio)
+                .WithMany(portfolio => portfolio.OwnerUserAccesses)
+                .HasForeignKey(access => access.PortfolioId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(access => access.AccessContext)
+                .WithMany(context => context.OwnerRelationships)
+                .HasForeignKey(access => new
+                    { access.AccessContextId, access.ApplicationUserId, access.PortfolioId })
+                .HasPrincipalKey(context => new { context.Id, context.UserId, context.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(access => access.ApplicationUser)
+                .WithMany(user => user.OwnerUserAccesses)
+                .HasForeignKey(access => access.ApplicationUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(access => access.OwnerEntity)
+                .WithMany(owner => owner.UserAccesses)
+                .HasForeignKey(access => new { access.OwnerEntityId, access.PortfolioId })
+                .HasPrincipalKey(owner => new { owner.Id, owner.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(access => access.GrantedByUser)
+                .WithMany()
+                .HasForeignKey(access => access.GrantedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(access => access.RevokedByUser)
+                .WithMany()
+                .HasForeignKey(access => access.RevokedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 
     private static void ConfigureAccessContext(ModelBuilder modelBuilder)
@@ -26,6 +95,7 @@ internal static class WorkspaceAccessModelConfiguration
             entity.HasKey(e => e.Id);
             entity.HasAlternateKey(e => new { e.Id, e.UserId });
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.HasAlternateKey(e => new { e.Id, e.UserId, e.PortfolioId });
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(24);
             entity.Property(e => e.AccessRevision).IsConcurrencyToken();
             entity.Property(e => e.LastAuthorizedExperience).HasConversion<string>().HasMaxLength(24);
@@ -367,6 +437,20 @@ internal static class WorkspaceAccessModelConfiguration
             entity.HasNoKey();
             entity.ToView("vw_access_envelopes");
             entity.Property(row => row.EnvelopeJson).HasColumnType("text");
+        });
+    }
+
+    private static void ConfigureRelationshipAccessProjections(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<EffectiveOwnerAccessProjection>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_effective_owner_access");
+        });
+        modelBuilder.Entity<EffectiveTenantAccessProjection>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_effective_tenant_access");
         });
     }
 }

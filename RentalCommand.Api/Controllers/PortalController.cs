@@ -7,8 +7,8 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Tenant-facing portal: read-only views of the signed-in tenant's own leases, balance, payments, work
-/// orders, and messages. Scope is taken entirely from JWT claims (<c>portfolioId</c> + <c>tenantId</c>),
-/// never from request parameters. A caller without a <c>tenantId</c> claim (e.g. staff/admin) gets 403 —
+/// orders, and messages. Scope comes from the validated context and its effective tenant relationship,
+/// never from request parameters or a tenant-id token claim. A context without that relationship gets 403 —
 /// those users manage data through the staff-facing controllers instead.
 /// </summary>
 [ApiController]
@@ -30,19 +30,15 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         _stripe = stripe;
     }
 
-    /// <summary>Tenant id from the <c>tenantId</c> JWT claim, or null when the caller is not a tenant.</summary>
-    private int? GetTenantId()
-    {
-        var claim = User.FindFirst("tenantId");
-        return claim != null && int.TryParse(claim.Value, out var id) ? id : null;
-    }
+    private Task<int?> GetTenantIdAsync(CancellationToken ct) =>
+        _service.ResolveTenantIdAsync(GetPortfolioId(), GetAccessContextId(), ct);
 
     [HttpGet("leases")]
     [ProducesResponseType(typeof(IReadOnlyList<LeaseResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<LeaseResponse>>> Leases(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -57,7 +53,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<PortalBalanceResponse>> Balance(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -72,7 +68,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<PortalPaymentResponse>>> Payments(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -87,7 +83,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<AppointmentResponse>>> Appointments(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -110,7 +106,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<LeaseQuestionResponse>> AskLease(
         [FromQuery] int? leaseId, [FromBody] LeaseQuestionRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -141,7 +137,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         int tenantAccountId, long chargeLedgerEntryId,
         [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -170,7 +166,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetAutopay(int tenantAccountId, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -201,7 +197,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     public async Task<IActionResult> EnrollAutopay(
         int tenantAccountId, [FromBody] AutopayEnrollRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -230,7 +226,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CancelAutopay(int tenantAccountId, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -252,7 +248,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> WorkOrders(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -273,7 +269,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderDetailResponse>> WorkOrder(int id, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -291,7 +287,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         [FromBody] CreateTenantWorkOrderRequest request,
         CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -314,7 +310,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<ConversationSummary>>> Conversations(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -331,7 +327,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ConversationDetail>> Conversation(int id, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -350,7 +346,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<ConversationDetail>> StartConversation(
         [FromBody] TenantStartConversationRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -373,7 +369,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<ConversationDetail>> PostConversationMessage(
         int id, [FromBody] TenantPostMessageRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();

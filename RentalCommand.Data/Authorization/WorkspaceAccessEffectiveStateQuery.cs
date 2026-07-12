@@ -15,26 +15,38 @@ public static class WorkspaceAccessEffectiveStateQuery
     /// membership and at least one effective assignment. All predicates remain composable SQL; a
     /// membership label by itself never grants an authenticated workspace context.
     /// </summary>
-    public static IQueryable<WorkspaceAccessContext> WhereEffectiveTeamAccess(
+    public static IQueryable<WorkspaceAccessContext> WhereEffectiveAccess(
         this IQueryable<WorkspaceAccessContext> contexts,
         IQueryable<WorkspaceMembership> memberships,
         IQueryable<MembershipRoleAssignment> assignments,
+        IQueryable<OwnerUserAccess> ownerRelationships,
+        IQueryable<EffectiveTenantAccessProjection> effectiveTenantRelationships,
         int userId,
         DateTime utcNow)
     {
         var effectiveMemberships = memberships.WhereEffective(utcNow);
         var effectiveAssignments = assignments.WhereEffective(utcNow);
-
         return contexts
             .WhereEffective()
             .Where(context =>
-                context.UserId == userId &&
-                effectiveMemberships.Any(membership =>
-                    membership.AccessContextId == context.Id &&
-                    membership.PortfolioId == context.PortfolioId &&
-                    effectiveAssignments.Any(assignment =>
-                        assignment.WorkspaceMembershipId == membership.Id &&
-                        assignment.PortfolioId == membership.PortfolioId)));
+                (userId <= 0 || context.UserId == userId) &&
+                (effectiveMemberships.Any(membership =>
+                     membership.AccessContextId == context.Id &&
+                     membership.PortfolioId == context.PortfolioId &&
+                     effectiveAssignments.Any(assignment =>
+                         assignment.WorkspaceMembershipId == membership.Id &&
+                         assignment.PortfolioId == membership.PortfolioId)) ||
+                 ownerRelationships.Any(access =>
+                     access.AccessContextId == context.Id &&
+                     access.ApplicationUserId == context.UserId &&
+                     access.PortfolioId == context.PortfolioId &&
+                     access.RevokedAtUtc == null &&
+                     access.EffectiveFromUtc <= utcNow &&
+                     (access.EffectiveToUtc == null || access.EffectiveToUtc > utcNow)) ||
+                 effectiveTenantRelationships.Any(access =>
+                     access.AccessContextId == context.Id &&
+                     access.UserId == context.UserId &&
+                     access.PortfolioId == context.PortfolioId)));
     }
 
     public static IQueryable<WorkspaceAccessContext> WhereEffective(

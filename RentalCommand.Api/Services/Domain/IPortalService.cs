@@ -9,6 +9,9 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IPortalService
 {
+    /// <summary>Resolves the tenant relationship from the validated context; never from a token claim.</summary>
+    Task<int?> ResolveTenantIdAsync(int portfolioId, int accessContextId, CancellationToken ct = default);
+
     Task<IReadOnlyList<LeaseResponse>> GetLeasesAsync(int portfolioId, int tenantId, CancellationToken ct = default);
     Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default);
     Task<IReadOnlyList<PortalPaymentResponse>> GetPaymentsAsync(int portfolioId, int tenantId, CancellationToken ct = default);

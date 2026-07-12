@@ -107,9 +107,11 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
             assignment.RoleProfileId == AccessCatalog.Roles.Single(role =>
                 role.Key == RoleProfileKeys.WorkspaceAdministrator).Id &&
             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
-        (await _sqlite.Db.OwnerEntities.SingleAsync(owner =>
-            owner.PortfolioId == context.PortfolioId && owner.IsPrimary)).Id
-            .Should().Be(user.OwnerEntityId);
+        var owner = await _sqlite.Db.OwnerEntities.SingleAsync(owner =>
+            owner.PortfolioId == context.PortfolioId && owner.IsPrimary);
+        (await _sqlite.Db.OwnerUserAccesses.SingleAsync(access =>
+            access.AccessContextId == context.Id && access.ApplicationUserId == user.Id))
+            .OwnerEntityId.Should().Be(owner.Id);
         (await _users.GetRolesAsync(user)).Should().BeEmpty(
             "fresh registration must not recreate the removed Identity Admin role");
         (await _sqlite.Db.UserAccounts.CountAsync(account => account.Email == user.Email)).Should().Be(0);

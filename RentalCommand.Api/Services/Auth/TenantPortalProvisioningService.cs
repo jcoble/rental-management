@@ -48,7 +48,7 @@ public enum TenantPortalAccess
     /// <summary>A login exists and the tenant can sign in.</summary>
     Active,
 
-    /// <summary>A login exists but is turned off (locked out) — the tenant cannot sign in.</summary>
+    /// <summary>A login exists but its tenant relationship grants are revoked.</summary>
     Disabled,
 }
 
@@ -80,26 +80,23 @@ public sealed record SetPortalAccessResult(
     string? Error = null);
 
 /// <summary>
-/// Provisions a single tenant's portal login on demand. Owns the per-tenant logic the startup
-/// <see cref="IdentitySeeder"/> originally inlined (find Identity user by email → create or link →
-/// assign the Tenant role → upsert the domain <see cref="UserAccount"/>), so a tenant added after
-/// boot can be granted access without a restart. The seeder now loops over this same method, and
-/// <c>TenantController</c> calls it for the "grant portal access" staff action.
+/// Provisions a login identity and explicit context-scoped tenant relationships. Tenant access is not
+/// an Identity role, a UserAccount row, or a direct user-to-tenant foreign key.
 /// </summary>
 public interface ITenantPortalProvisioningService
 {
     /// <summary>
     /// Ensures the tenant (scoped to <paramref name="portfolioId"/> — the IDOR guard) has an Identity
-    /// login with the Tenant role and a matching <see cref="UserAccount"/>. Idempotent: a second call
-    /// reports <see cref="PortalAccountStatus.AlreadyExisted"/>. The login uses the shared
+    /// login and relationship grant. Idempotent: a second call reports
+    /// <see cref="PortalAccountStatus.AlreadyExisted"/>. The login uses the shared
     /// <see cref="SeedSettings.TenantPassword"/> (same credential the seeder issues).
     /// </summary>
     Task<PortalAccountResult> EnsurePortalAccountForTenantAsync(int tenantId, int portfolioId, CancellationToken ct = default);
 
     /// <summary>
     /// Turns the tenant's portal access on or off (scoped to <paramref name="portfolioId"/> — the IDOR
-    /// guard). Disabling locks the Identity login out indefinitely so the tenant can't sign in; enabling
-    /// ensures a login exists (provisioning one if needed) and clears the lock. Idempotent.
+    /// guard). Disabling revokes this tenant's relationship grants without disabling the identity's
+    /// unrelated workspace access. Enabling ensures a login and current relationship grants exist.
     /// </summary>
     Task<SetPortalAccessResult> SetPortalAccessAsync(int tenantId, int portfolioId, bool enabled, CancellationToken ct = default);
 }
@@ -159,6 +156,7 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
 
         var now = _timeProvider.UtcNow();
         bool created;
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
 
         var identityUser = await _userManager.FindByEmailAsync(email);
         if (identityUser == null)
@@ -170,7 +168,6 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
                 EmailConfirmed = true,
                 DisplayName = displayName,
                 PortfolioId = portfolioId,
-                TenantId = tenant.Id,
                 CreatedAt = now,
             };
 
@@ -188,36 +185,10 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
         }
         else
         {
-            // The email already belongs to an Identity user. Only link/confirm it when it is unclaimed
-            // or already this tenant's — never re-point another portfolio's or another tenant's login.
-            if (identityUser.PortfolioId.HasValue && identityUser.PortfolioId.Value != portfolioId)
-            {
-                _logger.LogWarning(
-                    "Cannot grant portal access for {Email}: Identity user belongs to portfolio {ExistingPortfolioId}, not {PortfolioId}.",
-                    email, identityUser.PortfolioId.Value, portfolioId);
-                return new PortalAccountResult(PortalAccountStatus.Failed, email, displayName,
-                    "That email is already used by an account in another portfolio.");
-            }
-
-            if (identityUser.TenantId.HasValue && identityUser.TenantId.Value != tenant.Id)
-            {
-                _logger.LogWarning(
-                    "Cannot grant portal access for {Email}: Identity user already belongs to tenant {ExistingTenantId}, not {TenantId}.",
-                    email, identityUser.TenantId.Value, tenant.Id);
-                return new PortalAccountResult(PortalAccountStatus.Failed, email, displayName,
-                    "That email is already used by another tenant's account.");
-            }
-
             var changed = false;
-            if (identityUser.PortfolioId != portfolioId)
+            if (!identityUser.PortfolioId.HasValue)
             {
                 identityUser.PortfolioId = portfolioId;
-                changed = true;
-            }
-
-            if (identityUser.TenantId != tenant.Id)
-            {
-                identityUser.TenantId = tenant.Id;
                 changed = true;
             }
 
@@ -241,58 +212,56 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
             created = false;
         }
 
-        var roles = await _userManager.GetRolesAsync(identityUser);
-        if (!roles.Contains(nameof(UserRole.Tenant)))
+        var context = await _dbContext.WorkspaceAccessContexts.SingleOrDefaultAsync(candidate =>
+            candidate.UserId == identityUser.Id && candidate.PortfolioId == portfolioId, ct);
+        var contextWasCreated = context is null;
+        context ??= new WorkspaceAccessContext
         {
-            var roleResult = await _userManager.AddToRoleAsync(identityUser, nameof(UserRole.Tenant));
-            if (!roleResult.Succeeded)
-            {
-                _logger.LogWarning(
-                    "Failed to assign Tenant role to portal user {Email}: {Errors}",
-                    email, string.Join("; ", roleResult.Errors.Select(e => e.Description)));
-            }
+            User = identityUser,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        if (contextWasCreated)
+        {
+            _dbContext.WorkspaceAccessContexts.Add(context);
         }
 
-        var account = await _dbContext.UserAccounts
-            .FirstOrDefaultAsync(u => u.PortfolioId == portfolioId && u.Email == email, ct);
-
-        if (account == null)
+        var businessDate = DateOnly.FromDateTime(now);
+        var missingPartyIds = await _dbContext.LeaseManagementParties
+            .Where(party => party.PortfolioId == portfolioId && party.TenantId == tenant.Id &&
+                party.EffectiveFrom <= businessDate &&
+                (party.EffectiveThrough == null || party.EffectiveThrough >= businessDate) &&
+                !_dbContext.TenantUserAccesses.Any(access =>
+                    access.ApplicationUserId == identityUser.Id &&
+                    access.PortfolioId == portfolioId && access.RevokedAtUtc == null &&
+                    access.LeaseManagementPartyId == party.Id))
+            .Select(party => party.Id)
+            .ToListAsync(ct);
+        foreach (var partyId in missingPartyIds)
         {
-            _dbContext.UserAccounts.Add(new UserAccount
+            _dbContext.TenantUserAccesses.Add(new TenantUserAccess
             {
+                PublicId = Guid.NewGuid(),
                 PortfolioId = portfolioId,
-                TenantId = tenant.Id,
-                Email = email,
-                DisplayName = displayName,
-                PasswordHash = string.Empty,
-                Role = UserRole.Tenant,
-                IsActive = true,
-                CreatedAt = now,
-                UpdatedAt = now,
+                AccessContext = context,
+                ApplicationUserId = identityUser.Id,
+                LeaseManagementPartyId = partyId,
+                GrantedAtUtc = now,
+                GrantedByUserId = identityUser.Id,
+                Reason = "Tenant portal provisioning",
             });
         }
-        else
+        if (!contextWasCreated && missingPartyIds.Count > 0)
         {
-            var changed = false;
-            if (account.TenantId != tenant.Id)
-            {
-                account.TenantId = tenant.Id;
-                changed = true;
-            }
-
-            if (account.Role != UserRole.Tenant)
-            {
-                account.Role = UserRole.Tenant;
-                changed = true;
-            }
-
-            if (changed)
-            {
-                account.UpdatedAt = now;
-            }
+            context.AdvanceRevision(context.AccessRevision);
+            context.UpdatedAtUtc = now;
         }
 
         await _dbContext.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         _logger.LogInformation(
             "Ensured tenant portal account for tenant {TenantId} ({Email}) in portfolio {PortfolioId}: {Status}.",
@@ -303,20 +272,6 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
             email,
             displayName);
     }
-
-    /// <summary>
-    /// The lockout end we write to mark a portal login as intentionally turned off. A far-future
-    /// sentinel so it is distinguishable from a transient failed-login auto-lockout (minutes).
-    /// </summary>
-    public static readonly DateTimeOffset PortalDisabledUntil = DateTimeOffset.MaxValue;
-
-    /// <summary>
-    /// True when a login's lockout end marks an intentional "portal access off" (the far-future
-    /// sentinel), as opposed to a short failed-login auto-lockout. Threshold is well beyond any
-    /// auto-lockout window, so a tenant who simply fat-fingered their password is never read as disabled.
-    /// </summary>
-    public static bool IsPortalDisabled(DateTimeOffset? lockoutEnd)
-        => lockoutEnd is { } end && end > DateTimeOffset.UtcNow.AddYears(50);
 
     public async Task<SetPortalAccessResult> SetPortalAccessAsync(
         int tenantId, int portfolioId, bool enabled, CancellationToken ct = default)
@@ -335,31 +290,35 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
                     return new SetPortalAccessResult(SetPortalAccessOutcome.Failed, TenantPortalAccess.None, ensure.Email, ensure.Error);
             }
 
-            var user = await _dbContext.Users
-                .FirstOrDefaultAsync(u => u.TenantId == tenantId && u.PortfolioId == portfolioId, ct);
-            if (user == null)
+            var email = await _dbContext.TenantUserAccesses
+                .Where(access => access.PortfolioId == portfolioId && access.RevokedAtUtc == null &&
+                    access.LeaseManagementParty!.TenantId == tenantId)
+                .OrderBy(access => access.Id)
+                .Select(access => access.ApplicationUser!.Email)
+                .FirstOrDefaultAsync(ct);
+            if (email == null)
             {
                 return new SetPortalAccessResult(SetPortalAccessOutcome.Failed, TenantPortalAccess.None, ensure.Email,
                     "Portal login could not be loaded after provisioning.");
             }
 
-            // Clear the disable lock and any accumulated failed-login count so the tenant can sign in.
-            await _userManager.SetLockoutEndDateAsync(user, null);
-            await _userManager.ResetAccessFailedCountAsync(user);
-
             _logger.LogInformation(
                 "Enabled portal access for tenant {TenantId} ({Email}) in portfolio {PortfolioId}.",
-                tenantId, user.Email, portfolioId);
-            return new SetPortalAccessResult(SetPortalAccessOutcome.Updated, TenantPortalAccess.Active, user.Email);
+                tenantId, email, portfolioId);
+            return new SetPortalAccessResult(SetPortalAccessOutcome.Updated, TenantPortalAccess.Active, email);
         }
 
-        // Disabling locks the login out indefinitely. If there is no login, there's nothing to disable.
-        var existing = await _dbContext.Users
-            .FirstOrDefaultAsync(u => u.TenantId == tenantId && u.PortfolioId == portfolioId, ct);
+        var now = _timeProvider.UtcNow();
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
+        var targetIdentity = await _dbContext.TenantUserAccesses
+            .Where(access => access.PortfolioId == portfolioId && access.RevokedAtUtc == null &&
+                access.LeaseManagementParty!.TenantId == tenantId)
+            .OrderBy(access => access.Id)
+            .Select(access => new { access.AccessContextId, Email = access.ApplicationUser!.Email })
+            .FirstOrDefaultAsync(ct);
 
-        if (existing == null)
+        if (targetIdentity == null)
         {
-            // Scope the existence check to the portfolio so a cross-portfolio id still looks not-found.
             var tenantExists = await _dbContext.Tenants
                 .AnyAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId, ct);
             return tenantExists
@@ -367,12 +326,26 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
                 : new SetPortalAccessResult(SetPortalAccessOutcome.TenantNotFound, TenantPortalAccess.None);
         }
 
-        await _userManager.SetLockoutEnabledAsync(existing, true);
-        await _userManager.SetLockoutEndDateAsync(existing, PortalDisabledUntil);
+        var context = await _dbContext.WorkspaceAccessContexts
+            .SingleAsync(candidate => candidate.Id == targetIdentity.AccessContextId, ct);
+        var accesses = await _dbContext.TenantUserAccesses
+            .Where(access => access.AccessContextId == context.Id && access.RevokedAtUtc == null &&
+                access.LeaseManagementParty!.TenantId == tenantId)
+            .ToListAsync(ct);
+        foreach (var access in accesses)
+        {
+            access.RevokedAtUtc = now;
+            access.RevokedByUserId = context.UserId;
+            access.Reason = "Tenant portal access disabled";
+        }
+        context.AdvanceRevision(context.AccessRevision);
+        context.UpdatedAtUtc = now;
+        await _dbContext.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         _logger.LogInformation(
             "Disabled portal access for tenant {TenantId} ({Email}) in portfolio {PortfolioId}.",
-            tenantId, existing.Email, portfolioId);
-        return new SetPortalAccessResult(SetPortalAccessOutcome.Updated, TenantPortalAccess.Disabled, existing.Email);
+            tenantId, targetIdentity.Email, portfolioId);
+        return new SetPortalAccessResult(SetPortalAccessOutcome.Updated, TenantPortalAccess.Disabled, targetIdentity.Email);
     }
 }

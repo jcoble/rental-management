@@ -203,8 +203,8 @@ internal static class LeaseRelationshipModelConfiguration
             entity.Property(e => e.Reason).IsRequired().HasMaxLength(500);
 
             entity.HasIndex(e => e.PublicId).IsUnique();
-            entity.HasIndex(e => new { e.PortfolioId, e.ApplicationUserId, e.RevokedAtUtc, e.Id });
-            entity.HasIndex(e => new { e.ApplicationUserId, e.LeaseManagementPartyId })
+            entity.HasIndex(e => new { e.PortfolioId, e.AccessContextId, e.RevokedAtUtc, e.Id });
+            entity.HasIndex(e => new { e.AccessContextId, e.LeaseManagementPartyId })
                 .IsUnique()
                 .HasFilter("\"RevokedAtUtc\" IS NULL");
 
@@ -222,8 +222,13 @@ internal static class LeaseRelationshipModelConfiguration
                 .WithMany(p => p.TenantUserAccesses)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.AccessContext)
+                .WithMany(context => context.TenantRelationships)
+                .HasForeignKey(e => new { e.AccessContextId, e.ApplicationUserId, e.PortfolioId })
+                .HasPrincipalKey(context => new { context.Id, context.UserId, context.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.ApplicationUser)
-                .WithMany()
+                .WithMany(user => user.TenantUserAccesses)
                 .HasForeignKey(e => e.ApplicationUserId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.LeaseManagementParty)

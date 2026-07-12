@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Imaging;
@@ -64,6 +63,18 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
         return accessContext.UserId;
     }
 
+    /// <summary>The validated context id used for relationship-scoped record authorization.</summary>
+    protected int GetAccessContextId()
+    {
+        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext accessContext)
+        {
+            throw new MissingAuthContextException("Invalid access context");
+        }
+
+        return accessContext.AccessContextId;
+    }
+
     /// <summary>
     /// True when the validated context has a Team membership. This is only a relationship-shape
     /// signal; endpoint admission still belongs to canonical capability authorization.
@@ -71,16 +82,6 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     protected bool HasWorkspaceMembership() =>
         HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
         value is ActiveAccessContext { WorkspaceMembershipId: not null };
-
-    /// <summary>
-    /// Tenant id from the <c>tenantId</c> claim, or <c>null</c> when the caller is not a tenant
-    /// (landlord/staff/owner). Used to constrain otherwise portfolio-wide management reads to a
-    /// tenant's own records when a tenant calls them.
-    /// </summary>
-    protected int? GetTenantIdOrNull()
-    {
-        return null;
-    }
 
     // Content types we trust to render inline; anything else downloads as octet-stream so an uploaded
     // html/svg can't execute on the app origin. Shared by every scanned-document endpoint.
@@ -94,7 +95,8 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// re-keyed to (<paramref name="entityType"/>, <paramref name="entityId"/>) by
     /// the atomic scan-confirm finalizer. When <paramref name="thumb"/> is set and the file is an image,
     /// returns a resized JPEG preview. Inline for known-safe types, attachment otherwise. The lookup is
-    /// portfolio-scoped (from the JWT claim), so it can't reach another tenant's file (IDOR-safe).
+    /// portfolio-scoped through the validated canonical context, so it can't reach another workspace's
+    /// file (IDOR-safe).
     /// </summary>
     protected async Task<IActionResult> ServeEntityScanAsync(
         RentalCommandDbContext db, IFileStorage files, string entityType, int entityId, bool thumb, CancellationToken ct)

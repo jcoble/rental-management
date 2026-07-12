@@ -71,6 +71,9 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await using (var db = NewPlainContext())
         {
             await db.Database.EnsureCreatedAsync();
+            await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+            await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+            await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
             await db.Database.ExecuteSqlRawAsync(AccessEnvelopeViewSql.Create);
             await SeedAsync(db);
         }
@@ -396,6 +399,139 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         options.Should().Contain("security_invoker=true");
     }
 
+    [SkippableFact]
+    public async Task RelationshipOnlyContexts_AreSelectableAndExposeNoTeamCapabilities()
+    {
+        SkipIfNoDocker();
+        var now = DateTime.UtcNow;
+        await using var db = NewPlainContext();
+        var portfolio = Portfolio("Relationship Workspace");
+        var ownerUser = User("owner-relationship@example.test", "Owner Relationship");
+        var tenantUser = User("tenant-relationship@example.test", "Tenant Relationship");
+        db.AddRange(portfolio, ownerUser, tenantUser);
+        await db.SaveChangesAsync();
+
+        var ownerContext = RelationshipContext(ownerUser.Id, portfolio.Id, WorkspaceExperience.Owner, now);
+        var tenantContext = RelationshipContext(tenantUser.Id, portfolio.Id, WorkspaceExperience.Tenant, now);
+        var owner = new OwnerEntity
+        {
+            PortfolioId = portfolio.Id,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Relationship Owner",
+            IsPrimary = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var property = new Property
+        {
+            PortfolioId = portfolio.Id,
+            OwnerEntity = owner,
+            Name = "Relationship Property",
+            AddressLine1 = "1 Context Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = portfolio.Id,
+            Property = property,
+            UnitNumber = "1",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = portfolio.Id,
+            FirstName = "Relationship",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.AddRange(ownerContext, tenantContext, owner, property, unit, tenant);
+        await db.SaveChangesAsync();
+
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = portfolio.Id,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = "LM-RELATIONSHIP",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = ownerUser.Id,
+        };
+        db.Add(relationship);
+        await db.SaveChangesAsync();
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = portfolio.Id,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "relationship access proof",
+            CreatedAtUtc = now,
+            CreatedByUserId = ownerUser.Id,
+        };
+        db.Add(party);
+        await db.SaveChangesAsync();
+        var tenantAccess = new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
+            AccessContextId = tenantContext.Id, ApplicationUserId = tenantUser.Id,
+            LeaseManagementPartyId = party.Id, GrantedAtUtc = now,
+            GrantedByUserId = ownerUser.Id, Reason = "proof",
+        };
+        db.AddRange(
+            new OwnerUserAccess
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
+                AccessContextId = ownerContext.Id, ApplicationUserId = ownerUser.Id,
+                OwnerEntityId = owner.Id, EffectiveFromUtc = now.AddMinutes(-1),
+                GrantedAtUtc = now, GrantedByUserId = ownerUser.Id, Reason = "proof",
+            },
+            tenantAccess);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var ownerOptions = await new EffectiveAccessContextSelectionQuery(db)
+            .ListAsync(ownerUser.Id, now);
+        var tenantOptions = await new EffectiveAccessContextSelectionQuery(db)
+            .ListAsync(tenantUser.Id, now);
+        ownerOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Owner);
+        tenantOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Tenant);
+
+        var envelopeQuery = new AccessEnvelopeQuery(db);
+        var ownerEnvelope = await envelopeQuery.GetAsync(ownerUser.Id, ownerContext.Id);
+        var tenantEnvelope = await envelopeQuery.GetAsync(tenantUser.Id, tenantContext.Id);
+        ownerEnvelope!.Assignments.Should().BeEmpty();
+        tenantEnvelope!.Assignments.Should().BeEmpty();
+        ownerEnvelope.Navigation.Should().OnlyContain(item => item.CapabilityKeys.Count == 0);
+        tenantEnvelope.Navigation.Should().OnlyContain(item => item.CapabilityKeys.Count == 0);
+        (await db.EffectiveOwnerAccess.SingleAsync(item => item.AccessContextId == ownerContext.Id))
+            .PropertyId.Should().Be(property.Id);
+        (await db.EffectiveTenantAccess.SingleAsync(item => item.AccessContextId == tenantContext.Id))
+            .LeaseManagementId.Should().Be(relationship.Id);
+
+        tenantAccess = await db.TenantUserAccesses.SingleAsync(item => item.Id == tenantAccess.Id);
+        tenantContext = await db.WorkspaceAccessContexts.SingleAsync(item => item.Id == tenantContext.Id);
+        tenantAccess.RevokedAtUtc = now.AddMinutes(1);
+        tenantAccess.RevokedByUserId = ownerUser.Id;
+        tenantContext.AdvanceRevision(1);
+        tenantContext.UpdatedAtUtc = now.AddMinutes(1);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        (await new EffectiveAccessContextSelectionQuery(db).ListAsync(tenantUser.Id, now.AddMinutes(1)))
+            .Should().BeEmpty("revoking the relationship removes the relationship-only login context");
+        (await envelopeQuery.GetAsync(tenantUser.Id, tenantContext.Id)).Should().BeNull();
+        (await db.EffectiveTenantAccess.AnyAsync(item => item.AccessContextId == tenantContext.Id))
+            .Should().BeFalse();
+    }
+
     private async Task<IssueLoginContextSelectionChallengeCommand> IssueChallengeAsync(
         DateTime? expiresAtUtc = null)
     {
@@ -501,6 +637,20 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         };
         return new AccessRoot(context, membership, assignment);
     }
+
+    private static WorkspaceAccessContext RelationshipContext(
+        int userId,
+        int portfolioId,
+        WorkspaceExperience experience,
+        DateTime now) => new()
+    {
+        UserId = userId,
+        PortfolioId = portfolioId,
+        Status = WorkspaceAccessContextStatus.Active,
+        LastAuthorizedExperience = experience,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
 
     private ApplicationUser User(string email, string displayName) => new()
     {

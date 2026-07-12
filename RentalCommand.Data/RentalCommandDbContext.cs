@@ -20,6 +20,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Owner> Owners => Set<Owner>();
     public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
+    public DbSet<OwnerUserAccess> OwnerUserAccesses => Set<OwnerUserAccess>();
     public DbSet<OwnerDistribution> OwnerDistributions => Set<OwnerDistribution>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
@@ -108,6 +109,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<AtomicCommandReceipt> AtomicCommandReceipts => Set<AtomicCommandReceipt>();
     public DbSet<AtomicAuditLog> AtomicAuditLogs => Set<AtomicAuditLog>();
     public DbSet<WorkspaceAccessContext> WorkspaceAccessContexts => Set<WorkspaceAccessContext>();
+    public DbSet<EffectiveOwnerAccessProjection> EffectiveOwnerAccess => Set<EffectiveOwnerAccessProjection>();
+    public DbSet<EffectiveTenantAccessProjection> EffectiveTenantAccess => Set<EffectiveTenantAccessProjection>();
     public DbSet<WorkspaceMembership> WorkspaceMemberships => Set<WorkspaceMembership>();
     public DbSet<RoleProfile> RoleProfiles => Set<RoleProfile>();
     public DbSet<CapabilityDefinition> CapabilityDefinitions => Set<CapabilityDefinition>();
@@ -215,14 +218,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.OwnerEntity)
-                .WithMany()
-                .HasForeignKey(e => e.OwnerEntityId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Tenant)
-                .WithMany()
-                .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

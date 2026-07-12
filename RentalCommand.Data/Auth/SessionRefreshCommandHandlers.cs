@@ -32,11 +32,13 @@ public sealed class IssueSessionRefreshCredentialHandler
             ct);
 
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffective();
-        var effectiveMemberships = attempt.Persistence.Query<WorkspaceMembership>()
-            .WhereEffective(command.IssuedAtUtc);
-        var effectiveAssignments = attempt.Persistence.Query<MembershipRoleAssignment>()
-            .WhereEffective(command.IssuedAtUtc);
+            .WhereEffectiveAccess(
+                attempt.Persistence.Query<WorkspaceMembership>(),
+                attempt.Persistence.Query<MembershipRoleAssignment>(),
+                attempt.Persistence.Query<OwnerUserAccess>(),
+                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
+                0,
+                command.IssuedAtUtc);
 
         var session = await attempt.Persistence.Query<AuthSession>()
             .Where(item => item.Id == command.AuthSessionId)
@@ -51,13 +53,7 @@ public sealed class IssueSessionRefreshCredentialHandler
                 command.AbsoluteFamilyExpiresAtUtc <= item.ExpiresAtUtc &&
                 effectiveContexts.Any(context =>
                     context.Id == item.ActiveAccessContextId &&
-                    context.UserId == item.UserId &&
-                    effectiveMemberships.Any(membership =>
-                        membership.AccessContextId == context.Id &&
-                        membership.PortfolioId == context.PortfolioId &&
-                        effectiveAssignments.Any(assignment =>
-                            assignment.WorkspaceMembershipId == membership.Id &&
-                            assignment.PortfolioId == membership.PortfolioId)))))
+                    context.UserId == item.UserId)))
             .SingleOrDefaultAsync(ct);
 
         if (session is null || !session.CanIssue)
@@ -309,12 +305,13 @@ public sealed class RotateSessionRefreshCredentialHandler
         CancellationToken ct)
     {
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffective();
-        var effectiveMemberships = attempt.Persistence.Query<WorkspaceMembership>()
-            .WhereEffective(presentedAtUtc);
-        var effectiveAssignments = attempt.Persistence.Query<MembershipRoleAssignment>()
-            .WhereEffective(presentedAtUtc);
-
+            .WhereEffectiveAccess(
+                attempt.Persistence.Query<WorkspaceMembership>(),
+                attempt.Persistence.Query<MembershipRoleAssignment>(),
+                attempt.Persistence.Query<OwnerUserAccess>(),
+                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
+                0,
+                presentedAtUtc);
         return await attempt.Persistence.Query<AuthSessionRefreshCredential>()
             .Where(item => item.TokenHash == tokenHash)
             .Select(item => new RefreshTarget(
@@ -332,13 +329,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 item.RefreshTokenFamily!.AuthSession!.ExpiresAtUtc > presentedAtUtc,
                 effectiveContexts.Any(context =>
                     context.Id == item.RefreshTokenFamily!.AuthSession!.ActiveAccessContextId &&
-                    context.UserId == item.RefreshTokenFamily!.AuthSession!.UserId &&
-                    effectiveMemberships.Any(membership =>
-                        membership.AccessContextId == context.Id &&
-                        membership.PortfolioId == context.PortfolioId &&
-                        effectiveAssignments.Any(assignment =>
-                            assignment.WorkspaceMembershipId == membership.Id &&
-                            assignment.PortfolioId == membership.PortfolioId))),
+                    context.UserId == item.RefreshTokenFamily!.AuthSession!.UserId),
                 item.RefreshTokenFamily!.Credentials.Any(candidate =>
                     candidate.Id != item.Id &&
                     candidate.ConsumedAtUtc == null &&

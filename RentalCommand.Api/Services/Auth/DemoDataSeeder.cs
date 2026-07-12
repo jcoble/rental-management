@@ -55,7 +55,8 @@ public class DemoDataSeeder
             {
                 Currency = portfolio.Currency,
                 ActorUserId = _db.Users
-                    .Where(user => user.PortfolioId == portfolioId && user.TenantId == null)
+                    .Where(user => user.WorkspaceAccessContexts.Any(context =>
+                        context.PortfolioId == portfolioId && context.Membership != null))
                     .OrderBy(user => user.Id)
                     .Select(user => (int?)user.Id)
                     .FirstOrDefault(),
