@@ -83,6 +83,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         await using var db = NewContext();
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
     }
 
