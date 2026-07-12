@@ -26,7 +26,29 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
     private readonly SqliteTestContext _sqlite = new();
     private readonly UserManager<ApplicationUser> _users;
 
-    public CanonicalRegistrationBootstrapTests() => _users = CreateUserManager(_sqlite.Db);
+    public CanonicalRegistrationBootstrapTests()
+    {
+        // EnsureCreated deliberately does not create query-only projection views. This login
+        // contract only needs the tenant branch to be queryable; registration below exercises
+        // the management/owner branch.
+        _sqlite.Db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_effective_tenant_access" AS
+            SELECT
+                0 AS "AccessContextId",
+                0 AS "UserId",
+                0 AS "PortfolioId",
+                0 AS "AccessRevision",
+                0 AS "TenantUserAccessId",
+                0 AS "LeaseManagementPartyId",
+                0 AS "TenantId",
+                0 AS "LeaseManagementId",
+                NULL AS "TenantAccountId",
+                0 AS "PropertyId",
+                0 AS "UnitId"
+            WHERE 0;
+            """);
+        _users = CreateUserManager(_sqlite.Db);
+    }
 
     [Fact]
     public async Task Register_Verify_Login_ReturnsCanonicalAdministratorEnvelope()
