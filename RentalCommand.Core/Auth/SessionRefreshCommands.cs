@@ -10,6 +10,12 @@ public static class SessionRefreshCommandIdentity
     public static AtomicCommandIdentity ForContextSelectionChallenge(Guid operationId) =>
         Create("auth-context-selection:issue", operationId);
 
+    public static AtomicCommandIdentity ForContextSwitch(Guid operationId) =>
+        Create("auth-context:switch", operationId);
+
+    public static AtomicCommandIdentity ForSessionRevocation(Guid operationId) =>
+        Create("auth-session:revoke", operationId);
+
     public static AtomicCommandIdentity ForIssue(Guid operationId) =>
         Create("session-refresh:issue", operationId);
 
@@ -65,6 +71,34 @@ public sealed record StartAuthSessionResult(
     long AccessRevision,
     Guid RefreshTokenFamilyId,
     Guid CredentialId) : IAtomicResultData;
+
+public sealed record SwitchAuthSessionContextCommand(
+    Guid AuthSessionId,
+    int UserId,
+    int CurrentAccessContextId,
+    long CurrentAccessRevision,
+    int SelectedAccessContextId,
+    DateTime ChangedAtUtc) : IAtomicCommandData;
+
+public sealed record SwitchAuthSessionContextResult(
+    bool Switched,
+    Guid AuthSessionId,
+    int UserId,
+    int AccessContextId,
+    int PortfolioId,
+    long AccessRevision) : IAtomicResultData;
+
+public sealed record RevokeAuthSessionCommand(
+    Guid AuthSessionId,
+    int UserId,
+    int AccessContextId,
+    long AccessRevision,
+    DateTime RevokedAtUtc,
+    string Reason) : IAtomicCommandData;
+
+public sealed record RevokeAuthSessionResult(
+    bool Revoked,
+    Guid AuthSessionId) : IAtomicResultData;
 
 public sealed record IssueSessionRefreshCredentialCommand(
     Guid AuthSessionId,

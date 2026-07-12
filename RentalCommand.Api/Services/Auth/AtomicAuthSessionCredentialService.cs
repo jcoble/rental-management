@@ -13,6 +13,10 @@ namespace RentalCommand.Api.Services.Auth;
 /// </summary>
 public interface IAtomicAuthSessionCredentialService
 {
+    Task<AtomicLoginContextChallengeOutcome> IssueContextSelectionChallengeAsync(
+        int userId,
+        CancellationToken ct = default);
+
     Task<AtomicAuthSessionStartOutcome> StartAsync(
         AtomicAuthSessionStartRequest request,
         CancellationToken ct = default);
@@ -20,7 +24,23 @@ public interface IAtomicAuthSessionCredentialService
     Task<AtomicAuthSessionRotationOutcome> RotateAsync(
         AtomicAuthSessionRotationRequest request,
         CancellationToken ct = default);
+
+    Task<SwitchAuthSessionContextResult> SwitchContextAsync(
+        SwitchAuthSessionContextCommand command,
+        Guid operationId,
+        CancellationToken ct = default);
+
+    Task<RevokeAuthSessionResult> RevokeSessionAsync(
+        RevokeAuthSessionCommand command,
+        Guid operationId,
+        CancellationToken ct = default);
 }
+
+public sealed record AtomicLoginContextChallengeOutcome(
+    bool Issued,
+    Guid ChallengeId,
+    string? ChallengeBearer,
+    DateTime ExpiresAtUtc);
 
 public sealed record AtomicAuthSessionStartRequest(
     Guid OperationId,
@@ -52,11 +72,17 @@ public sealed record AtomicAuthSessionRotationOutcome(
 
 public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCredentialService
 {
+    private static readonly AtomicJsonResultCodec<LoginContextSelectionChallengeResult> ChallengeCodec =
+        new("auth-context-selection-challenge-result:v1");
     private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartCodec =
         new("auth-session-start-result:v1");
 
     private static readonly AtomicJsonResultCodec<SessionRefreshMutationResult> RotationCodec =
         new("auth-session-refresh-rotation-result:v1");
+    private static readonly AtomicJsonResultCodec<SwitchAuthSessionContextResult> SwitchCodec =
+        new("auth-session-context-switch-result:v1");
+    private static readonly AtomicJsonResultCodec<RevokeAuthSessionResult> RevokeCodec =
+        new("auth-session-revoke-result:v1");
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RefreshCredentialTokenFactory _tokens;
@@ -137,6 +163,38 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             outcome.Disposition);
     }
 
+    public async Task<AtomicLoginContextChallengeOutcome> IssueContextSelectionChallengeAsync(
+        int userId,
+        CancellationToken ct = default)
+    {
+        if (userId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(userId));
+        }
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var challengeId = Guid.NewGuid();
+        var challengeBearer = _tokens.CreateBearer(Guid.NewGuid());
+        var expiresAt = now.AddMinutes(5);
+        var operationId = Guid.NewGuid();
+        var outcome = await _atomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSelectionChallenge(operationId),
+            new IssueLoginContextSelectionChallengeCommand(
+                userId,
+                challengeId,
+                _tokens.HashBearer(challengeBearer),
+                now,
+                expiresAt),
+            ChallengeCodec,
+            ct);
+
+        return new AtomicLoginContextChallengeOutcome(
+            outcome.Value.Issued,
+            outcome.Value.ChallengeId,
+            outcome.Value.Issued ? challengeBearer : null,
+            outcome.Value.ExpiresAtUtc);
+    }
+
     public async Task<AtomicAuthSessionRotationOutcome> RotateAsync(
         AtomicAuthSessionRotationRequest request,
         CancellationToken ct = default)
@@ -147,7 +205,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             throw new ArgumentOutOfRangeException(nameof(request.OperationId));
         }
 
-        if (!_tokens.TryValidateAndReadCredentialId(request.PresentedBearer, out _))
+        if (!_tokens.TryValidateAndReadCredentialId(request.PresentedBearer, out var presentedCredentialId))
         {
             return new AtomicAuthSessionRotationOutcome(
                 SessionRefreshMutationStatus.Rejected,
@@ -162,7 +220,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         var replacementCandidate = _tokens.CreateBearer(replacementCredentialId);
         var replacementExpiresAt = now.AddDays(_options.CredentialLifetimeDays);
         var command = new RotateSessionRefreshCredentialCommand(
-            request.OperationId,
+            presentedCredentialId,
             _tokens.HashBearer(request.PresentedBearer),
             replacementCredentialId,
             _tokens.HashBearer(replacementCandidate),
@@ -170,7 +228,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             replacementExpiresAt);
 
         var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForRotation(request.OperationId),
+            SessionRefreshCommandIdentity.ForRotation(presentedCredentialId),
             command,
             RotationCodec,
             ct);
@@ -187,6 +245,32 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
                 ? _tokens.CreateBearer(value.ReplacementCredentialId!.Value)
                 : null,
             outcome.Disposition);
+    }
+
+    public async Task<SwitchAuthSessionContextResult> SwitchContextAsync(
+        SwitchAuthSessionContextCommand command,
+        Guid operationId,
+        CancellationToken ct = default)
+    {
+        var outcome = await _atomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSwitch(operationId),
+            command,
+            SwitchCodec,
+            ct);
+        return outcome.Value;
+    }
+
+    public async Task<RevokeAuthSessionResult> RevokeSessionAsync(
+        RevokeAuthSessionCommand command,
+        Guid operationId,
+        CancellationToken ct = default)
+    {
+        var outcome = await _atomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForSessionRevocation(operationId),
+            command,
+            RevokeCodec,
+            ct);
+        return outcome.Value;
     }
 
     private static void ValidateLifetimePolicy(AtomicAuthSessionCredentialOptions options)

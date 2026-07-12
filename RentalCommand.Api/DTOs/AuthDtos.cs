@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -12,6 +13,12 @@ public class LoginRequest
     [Required]
     [MaxLength(200)]
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Required only when this identity has more than one effective workspace context. The API
+    /// never guesses a workspace from a legacy user column.
+    /// </summary>
+    public int? AccessContextId { get; set; }
 }
 
 public class RegisterRequest
@@ -43,11 +50,25 @@ public class RefreshRequest
     public string? RefreshToken { get; set; }
 }
 
+public sealed class SwitchAccessContextRequest
+{
+    [Range(1, int.MaxValue)]
+    public int AccessContextId { get; set; }
+}
+
+public sealed class SwitchAccessContextResponse
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public DateTime AccessTokenExpiration { get; set; }
+    public AccessEnvelope Access { get; set; } = null!;
+}
+
 public class LoginResponse
 {
     public string AccessToken { get; set; } = string.Empty;
     public DateTime AccessTokenExpiration { get; set; }
     public UserDto User { get; set; } = new();
+    public AccessEnvelope Access { get; set; } = null!;
 
     /// <summary>
     /// The refresh token, in the response body. Populated ONLY for non-cookie (mobile) callers that
