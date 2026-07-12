@@ -280,6 +280,26 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.PrepareMoveInCommand,
     RentalCommand.Core.Leasing.PrepareMoveInResult,
     RentalCommand.Data.Leasing.PrepareMoveInHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.AddEffectivePartyCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.AddEffectivePartyHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.EndEffectivePartyCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.EndEffectivePartyHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.ChangeEffectivePartyRoleCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.ChangeEffectivePartyRoleHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.GrantTenantUserAccessCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.GrantTenantUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.RevokeTenantUserAccessCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.RevokeTenantUserAccessHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
