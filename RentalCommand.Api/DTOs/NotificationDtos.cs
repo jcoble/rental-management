@@ -33,18 +33,6 @@ public class NotificationResponse
 
 public sealed record UnreadCountResponse(int Count);
 
-public class NotificationEmailResponse
-{
-    public string? Email { get; set; }
-}
-
-public class SetNotificationEmailRequest
-{
-    [EmailAddress]
-    [MaxLength(200)]
-    public string? Email { get; set; }
-}
-
 public class CreateBroadcastNotificationRequest
 {
     [Required]

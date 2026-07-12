@@ -1,146 +1,83 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Engine.Services;
 
-/// <inheritdoc cref="INoticeDraftGenerationService"/>
-/// <remarks>
-/// Runs inside a fresh DI scope (scoped <see cref="RentalCommandDbContext"/>). Delegates the actual
-/// per-portfolio draft composition (and its LLM copy + de-dup idempotency) to the shared
-/// <see cref="INoticeDraftService"/> from the Api project — the same service the manual
-/// "Generate" button calls — so behaviour is identical whether triggered by the worker or the user.
-/// </remarks>
+/// <summary>Consumes one DB-side, fenced batch. It never loops portfolios to discover work.</summary>
 public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly ITenantNoticeWorkClaimStore _claims;
     private readonly INoticeDraftService _notices;
-    private readonly INotificationSettingsService _settings;
     private readonly ILogger<NoticeDraftGenerationService> _logger;
+    private readonly TimeProvider _clock;
 
     public NoticeDraftGenerationService(
         RentalCommandDbContext db,
+        ITenantNoticeWorkClaimStore claims,
         INoticeDraftService notices,
-        INotificationSettingsService settings,
-        ILogger<NoticeDraftGenerationService> logger)
+        ILogger<NoticeDraftGenerationService> logger,
+        TimeProvider clock)
     {
-        _db = db;
-        _notices = notices;
-        _settings = settings;
-        _logger = logger;
+        _db = db; _claims = claims; _notices = notices; _logger = logger; _clock = clock;
     }
 
-    /// <inheritdoc/>
     public async Task<int> GenerateAllAsync(CancellationToken ct = default)
     {
-        var portfolioIds = await _db.Portfolios
-            .Where(p => p.DeletedAt == null)
-            .OrderBy(p => p.Id)
-            .Select(p => p.Id)
-            .ToListAsync(ct);
+        var now = _clock.GetUtcNow().UtcDateTime;
+        var token = Guid.NewGuid();
+        var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
+        var work = await _claims.ClaimReadyAsync(owner, token, now, now.AddMinutes(5), 50, ct);
+        if (work.Count == 0) return 0;
+
+        var policyFacts = await _db.TenantNoticePolicies.AsNoTracking()
+            .Where(policy => work.Select(item => item.TenantNoticePolicyId).Contains(policy.Id))
+            .Select(policy => new { policy.Id, policy.AutomationKey, policy.Mode, policy.FailureBehavior })
+            .ToDictionaryAsync(policy => policy.Id, ct);
 
         var created = 0;
-        foreach (var portfolioId in portfolioIds)
+        foreach (var item in work)
         {
-            ct.ThrowIfCancellationRequested();
-
-            // NoticeAutopilot is a per-portfolio master gate now.
-            var cfg = await _settings.GetRuntimeAsync(portfolioId, ct);
-            if (!cfg.EnableNoticeAutopilot)
-            {
-                _logger.LogDebug("notice autopilot disabled for portfolio {PortfolioId}", portfolioId);
-                continue;
-            }
-
             try
             {
-                // GenerateAsync is idempotent (it skips notice types that already have an open Draft
-                // for the lease), so re-running daily never produces duplicates. The autopilot runs
-                // portfolio-wide (no per-tenant/type scoping).
-                var result = await _notices.GenerateAsync(portfolioId, ct: ct);
-                created += result.CreatedCount;
-
-                // Auto-send: for each freshly-created draft whose type is set to AutoSend AND has an
-                // active template, approve+send it now. Gated by NotifyTenants. Load the portfolio's
-                // settings + active-template types once (DB-side) — no per-draft queries.
-                if (cfg.NotifyTenants && result.Drafts.Count > 0)
+                var policy = policyFacts[item.TenantNoticePolicyId];
+                // The claim SQL already excluded Off and unreviewed legal Auto policies. Generation
+                // remains draft-first; the explicit approval/send command owns the atomic outbox write.
+                var result = await _notices.GenerateAsync(item.PortfolioId, new GenerateNoticeDraftsRequest
                 {
-                    var settings = await _db.NotificationSettings
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(s => s.PortfolioId == portfolioId, ct);
-
-                    var templatedTypes = await _db.NoticeTemplates
-                        .AsNoTracking()
-                        .Where(t => t.PortfolioId == portfolioId && t.IsActive)
-                        .Select(t => t.NoticeType)
-                        .ToListAsync(ct);
-                    var templated = templatedTypes.ToHashSet();
-
-                    foreach (var draft in result.Drafts)
-                    {
-                        if (draft.Status != "Draft") continue;
-                        if (!AutoSendEnabled(settings, draft.NoticeType)) continue;
-                        if (!templated.Contains(draft.NoticeType)) continue;
-
-                        var channels = ChannelsFor(cfg, draft.NoticeType);
-                        if (channels.Count == 0) continue;
-
-                        try
-                        {
-                            await _notices.ApproveAsync(
-                                portfolioId,
-                                draft.Id,
-                                new RentalCommand.Api.DTOs.ApproveNoticeDraftRequest { Channels = channels },
-                                ct);
-                        }
-                        catch (Exception ex)
-                        {
-                            // A blocked/failed auto-send leaves the draft for manual review.
-                            _logger.LogWarning(ex, "Auto-send failed for draft {DraftId} ({Type}); left as draft.", draft.Id, draft.NoticeType);
-                        }
-                    }
+                    LeaseManagementId = item.LeaseManagementId,
+                    NoticeType = policy.AutomationKey,
+                }, ct);
+                var draftIds = result.Drafts.Select(draft => draft.Id).ToArray();
+                if (draftIds.Length > 0)
+                {
+                    var templateVersionId = await _db.TenantNoticePolicies.AsNoTracking()
+                        .Where(row => row.Id == item.TenantNoticePolicyId)
+                        .Select(row => row.WorkspaceNoticeTemplateVersionId)
+                        .SingleAsync(ct);
+                    await _db.NoticeDrafts.Where(draft => draftIds.Contains(draft.Id))
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(draft => draft.TenantNoticePolicyId, item.TenantNoticePolicyId)
+                            .SetProperty(draft => draft.WorkspaceNoticeTemplateVersionId, templateVersionId), ct);
                 }
+                created += result.CreatedCount;
+                if (!await _claims.CompleteAsync(item.Id, token, ct))
+                    _logger.LogWarning("Lost tenant notice work fencing token for {WorkItemId}", item.Id);
             }
             catch (Exception ex)
             {
-                // Isolate one portfolio's failure so the rest of the run still proceeds.
-                _logger.LogWarning(ex, "Notice autopilot failed for portfolio {PortfolioId}; continuing.", portfolioId);
+                _logger.LogWarning(ex, "Tenant notice work {WorkItemId} failed; releasing for retry", item.Id);
+                if (policyFacts[item.TenantNoticePolicyId].FailureBehavior == NoticeFailureBehavior.StopAndRequireReview)
+                    await _claims.BlockAsync(item.Id, token, ct);
+                else
+                    await _claims.ReleaseAsync(item.Id, token, now.AddMinutes(15), ct);
             }
         }
-
-        if (created > 0)
-            _logger.LogInformation("Notice autopilot created {Count} draft(s) across {Portfolios} portfolio(s).",
-                created, portfolioIds.Count);
-
         return created;
-    }
-
-    private static bool AutoSendEnabled(Core.Entities.NotificationSettings? s, string noticeType) => s != null && noticeType switch
-    {
-        "RentReminder" => s.AutoSendRentReminder,
-        "LateRentNotice" => s.AutoSendLateRent,
-        "RenewalOffer" => s.LeaseEndAutoAction == LeaseEndAutoAction.Renewal,
-        "MonthToMonthConversion" => s.LeaseEndAutoAction == LeaseEndAutoAction.MonthToMonth,
-        "MoveOutReminder" => s.LeaseEndAutoAction == LeaseEndAutoAction.NonRenewal,
-        _ => false,
-    };
-
-    private static List<string> ChannelsFor(NotificationsConfig cfg, string noticeType)
-    {
-        var category = noticeType switch
-        {
-            "RentReminder" => Core.Enums.NotificationType.RentCharge,
-            "LateRentNotice" => Core.Enums.NotificationType.LateFee,
-            _ => Core.Enums.NotificationType.LeaseExpiry, // renewal / month-to-month / move-out
-        };
-        var pref = cfg.ResolveChannels(category);
-        var channels = new List<string>();
-        if (pref.EnableInApp) channels.Add("Portal");
-        if (pref.EnableEmail) channels.Add("Email");
-        if (pref.EnableSms) channels.Add("Sms");
-        return channels;
     }
 }

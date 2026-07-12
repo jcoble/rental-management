@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
@@ -159,94 +158,6 @@ public class NotificationService : INotificationService
             "critical" => "Critical",
             _ => "Info",
         };
-    }
-
-    public async Task<NotificationEmailResponse> GetNotificationEmailAsync(int portfolioId, CancellationToken ct = default)
-    {
-        var settings = await _db.Portfolios
-            .AsNoTracking()
-            .Where(p => p.Id == portfolioId)
-            .Select(p => p.Settings)
-            .FirstOrDefaultAsync(ct);
-
-        return new NotificationEmailResponse { Email = ReadNotificationEmail(settings) };
-    }
-
-    public async Task<NotificationEmailResponse?> SetNotificationEmailAsync(int portfolioId, string? email, CancellationToken ct = default)
-    {
-        var portfolio = await _db.Portfolios.FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
-        if (portfolio is null)
-        {
-            return null;
-        }
-
-        var trimmed = string.IsNullOrWhiteSpace(email) ? null : email.Trim();
-        portfolio.Settings = WriteNotificationEmail(portfolio.Settings, trimmed);
-        portfolio.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        return new NotificationEmailResponse { Email = trimmed };
-    }
-
-    private static string? ReadNotificationEmail(string? settingsJson)
-    {
-        if (string.IsNullOrWhiteSpace(settingsJson))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(settingsJson);
-            if (doc.RootElement.TryGetProperty("notifications", out var notifications) &&
-                notifications.ValueKind == JsonValueKind.Object &&
-                notifications.TryGetProperty("email", out var email) &&
-                email.ValueKind == JsonValueKind.String)
-            {
-                return string.IsNullOrWhiteSpace(email.GetString()) ? null : email.GetString();
-            }
-        }
-        catch
-        {
-            return null;
-        }
-
-        return null;
-    }
-
-    private static string WriteNotificationEmail(string? settingsJson, string? email)
-    {
-        Dictionary<string, object?> root;
-        try
-        {
-            root = string.IsNullOrWhiteSpace(settingsJson)
-                ? new Dictionary<string, object?>()
-                : JsonSerializer.Deserialize<Dictionary<string, object?>>(settingsJson) ?? new Dictionary<string, object?>();
-        }
-        catch
-        {
-            root = new Dictionary<string, object?>();
-        }
-
-        Dictionary<string, object?> notifications;
-        if (root.TryGetValue("notifications", out var existing) &&
-            existing is JsonElement element &&
-            element.ValueKind == JsonValueKind.Object)
-        {
-            notifications = JsonSerializer.Deserialize<Dictionary<string, object?>>(element.GetRawText()) ?? new Dictionary<string, object?>();
-        }
-        else if (existing is Dictionary<string, object?> existingDict)
-        {
-            notifications = existingDict;
-        }
-        else
-        {
-            notifications = new Dictionary<string, object?>();
-        }
-
-        notifications["email"] = email;
-        root["notifications"] = notifications;
-        return JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true });
     }
 
     private async Task<bool> IsStaffUserAsync(int portfolioId, int userId, CancellationToken ct)

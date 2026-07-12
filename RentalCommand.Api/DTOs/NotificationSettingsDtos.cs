@@ -23,7 +23,6 @@ public sealed class NotificationSettingsResponse
     public bool EnableRentCharges { get; set; }
     public bool EnableLateFees { get; set; }
     public bool EnableLeaseExpiryReminders { get; set; } = true;
-    public bool NotifyTenants { get; set; }
     public int RentChargeLeadDays { get; set; } = 5;
     public int LateFeeGraceDays { get; set; } = 5;
     public int LeaseExpiryReminderDays { get; set; } = 60;
@@ -34,11 +33,6 @@ public sealed class NotificationSettingsResponse
     public string[] DailyBriefingSmsRecipients { get; set; } = [];
     public string[] DailyBriefingEmailRecipients { get; set; } = [];
 
-    public bool AutoSendRentReminder { get; set; }
-    public bool AutoSendLateRent { get; set; }
-
-    /// <summary>Single mutually-exclusive lease-end auto-send action (string enum name on the wire).</summary>
-    public LeaseEndAutoAction LeaseEndAutoAction { get; set; }
 
     /// <summary>
     /// The portfolio's chosen SMS provider as its <c>SmsProviderKey</c> string name
@@ -94,7 +88,6 @@ public sealed class UpdateNotificationSettingsRequest
     public bool EnableRentCharges { get; set; }
     public bool EnableLateFees { get; set; }
     public bool EnableLeaseExpiryReminders { get; set; } = true;
-    public bool NotifyTenants { get; set; }
     public int RentChargeLeadDays { get; set; } = 5;
     public int LateFeeGraceDays { get; set; } = 5;
     public int LeaseExpiryReminderDays { get; set; } = 60;
@@ -105,11 +98,6 @@ public sealed class UpdateNotificationSettingsRequest
     public string[] DailyBriefingSmsRecipients { get; set; } = [];
     public string[] DailyBriefingEmailRecipients { get; set; } = [];
 
-    public bool AutoSendRentReminder { get; set; }
-    public bool AutoSendLateRent { get; set; }
-
-    /// <summary>Single mutually-exclusive lease-end auto-send action (string enum name on the wire).</summary>
-    public LeaseEndAutoAction LeaseEndAutoAction { get; set; }
 
     /// <summary>Chosen SMS provider (<c>SmsProviderKey</c> string name). Unknown/blank → "None".</summary>
     public string SmsProvider { get; set; } = "None";

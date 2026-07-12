@@ -24,20 +24,17 @@ public class NoticeDraftService : INoticeDraftService
     private static readonly TimeSpan CopyGenerationTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly RentalCommandDbContext _db;
-    private readonly IConversationService _conversations;
     private readonly ILlmProvider _llm;
     private readonly ILogger<NoticeDraftService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public NoticeDraftService(
         RentalCommandDbContext db,
-        IConversationService conversations,
         ILlmProvider llm,
         ILogger<NoticeDraftService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
-        _conversations = conversations;
         _llm = llm;
         _logger = logger;
         _timeProvider = timeProvider;
@@ -81,7 +78,14 @@ public class NoticeDraftService : INoticeDraftService
         // usual trigger window — the landlord explicitly asked for that notice.
         var forced = requestedType != null;
 
-        bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
+        var policies = await _db.TenantNoticePolicies.AsNoTracking()
+            .Where(policy => policy.PortfolioId == portfolioId && policy.Mode != TenantNoticeMode.Off)
+            .ToDictionaryAsync(policy => policy.AutomationKey, StringComparer.OrdinalIgnoreCase, ct);
+        if (requestedType is not null && !policies.ContainsKey(requestedType))
+            throw new InvalidOperationException("This tenant notice automation is disabled or has no policy.");
+
+        bool WantsType(string type) => policies.ContainsKey(type) &&
+            (requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase));
         var wantsRenewal = WantsType("RenewalOffer");
         var wantsMoveOut = WantsType("MoveOutReminder");
         // A tenant-page explicit RentReminder remains the manual flow. Relationship/ledger-scoped
@@ -98,13 +102,16 @@ public class NoticeDraftService : INoticeDraftService
 
         // Preload this portfolio's active notice templates once (DB-side), keyed by type, so each
         // builder can render the landlord's template without a per-lease query.
-        var activeTemplates = await _db.NoticeTemplates
+        var activeTemplateIds = policies.Values.Select(policy => policy.WorkspaceNoticeTemplateVersionId).ToArray();
+        var activeTemplates = await _db.WorkspaceNoticeTemplateVersions
             .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.IsActive)
-            .ToDictionaryAsync(t => t.NoticeType, ct);
+            .Where(template => template.PortfolioId == portfolioId && activeTemplateIds.Contains(template.Id))
+            .ToDictionaryAsync(template => template.Id, ct);
 
         NoticeTemplate? TemplateFor(string type) =>
-            activeTemplates.TryGetValue(type, out var t) ? t : null;
+            policies.TryGetValue(type, out var policy) && activeTemplates.TryGetValue(policy.WorkspaceNoticeTemplateVersionId, out var template)
+                ? new NoticeTemplate { NoticeType = type, Subject = template.Subject, Body = template.Body }
+                : null;
 
         // Load the portfolio name once so {{portfolio_name}} fills correctly in all templates.
         var portfolioName = await _db.Portfolios
@@ -365,6 +372,12 @@ public class NoticeDraftService : INoticeDraftService
 
         if (created.Count > 0)
         {
+            foreach (var draft in created)
+            {
+                var policy = policies[draft.NoticeType];
+                draft.TenantNoticePolicyId = policy.Id;
+                draft.WorkspaceNoticeTemplateVersionId = policy.WorkspaceNoticeTemplateVersionId;
+            }
             _db.NoticeDrafts.AddRange(created);
             await _db.SaveChangesAsync(ct);
         }
@@ -484,6 +497,10 @@ public class NoticeDraftService : INoticeDraftService
                 charge.TenantLedgerEntryId);
         }
 
+        var policy = await _db.TenantNoticePolicies.AsNoTracking()
+            .SingleAsync(row => row.PortfolioId == portfolioId && row.AutomationKey == noticeType && row.Mode != TenantNoticeMode.Off, ct);
+        draft.TenantNoticePolicyId = policy.Id;
+        draft.WorkspaceNoticeTemplateVersionId = policy.WorkspaceNoticeTemplateVersionId;
         _db.NoticeDrafts.Add(draft);
         await _db.SaveChangesAsync(ct);
 
@@ -507,42 +524,6 @@ public class NoticeDraftService : INoticeDraftService
         if (!string.IsNullOrWhiteSpace(request.Body)) draft.Body = request.Body.Trim();
         draft.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
-        return Map(draft);
-    }
-
-    public async Task<NoticeDraftResponse?> ApproveAsync(
-        int portfolioId,
-        int id,
-        ApproveNoticeDraftRequest request,
-        CancellationToken ct = default)
-    {
-        var draft = await BaseQuery(portfolioId).FirstOrDefaultAsync(d => d.Id == id, ct);
-        if (draft == null || draft.Status != "Draft") return null;
-
-        var channels = NormalizeChannels(request.Channels);
-        if (channels.Count == 0) channels = ["Portal"];
-
-        // Approving a notice IS a send → flows through the same Fair Housing gate as a direct message.
-        // A flagged draft throws FairHousingBlockedException (→ 422) unless the landlord acknowledged
-        // the review; the draft stays in "Draft" so they can revise and re-approve.
-        var conversation = await _conversations.StartAsync(
-            portfolioId,
-            draft.RecipientTenantId,
-            draft.Subject,
-            draft.Body,
-            channels,
-            operationKey: $"notice-draft:{draft.Id}:approve-conversation",
-            acknowledgedFairHousingReview: request.AcknowledgedFairHousingReview,
-            ct: ct);
-        if (conversation == null) return null;
-
-        draft.Status = "Approved";
-        draft.ApprovedAt = _timeProvider.UtcNow();
-        draft.UpdatedAt = draft.ApprovedAt.Value;
-        draft.ConversationId = conversation.Id;
-        draft.ApprovedChannels = string.Join(",", channels);
-        await _db.SaveChangesAsync(ct);
-
         return Map(draft);
     }
 
@@ -1281,19 +1262,6 @@ public class NoticeDraftService : INoticeDraftService
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max];
-
-    private static List<string> NormalizeChannels(List<string>? channels) =>
-        (channels ?? [])
-            .Select(c => c.Trim().ToLowerInvariant() switch
-            {
-                "portal" => "Portal",
-                "email" => "Email",
-                "sms" => "Sms",
-                _ => ""
-            })
-            .Where(c => c.Length > 0)
-            .Distinct()
-            .ToList();
 
     private static NoticeDraftResponse Map(NoticeDraft d)
     {

@@ -16,6 +16,28 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
 {
     public RentalCommandDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        GuardImmutableNoticeVersions();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        GuardImmutableNoticeVersions();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void GuardImmutableNoticeVersions()
+    {
+        var changedSystemVersion = ChangeTracker.Entries<SystemNoticeTemplateVersion>()
+            .Any(entry => entry.State is EntityState.Modified or EntityState.Deleted);
+        var changedWorkspaceVersion = ChangeTracker.Entries<WorkspaceNoticeTemplateVersion>()
+            .Any(entry => entry.State is EntityState.Modified or EntityState.Deleted);
+        if (changedSystemVersion || changedWorkspaceVersion)
+            throw new InvalidOperationException("Notice template versions are immutable; create a successor version instead.");
+    }
+
     // Domain entities
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Owner> Owners => Set<Owner>();
@@ -88,11 +110,19 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
     public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
+    public DbSet<UserAlertPreference> UserAlertPreferences => Set<UserAlertPreference>();
+    public DbSet<TeamRoutingRule> TeamRoutingRules => Set<TeamRoutingRule>();
+    public DbSet<TeamRoutingRuleRecipient> TeamRoutingRuleRecipients => Set<TeamRoutingRuleRecipient>();
+    public DbSet<TenantNoticePolicy> TenantNoticePolicies => Set<TenantNoticePolicy>();
+    public DbSet<SystemNoticeTemplateVersion> SystemNoticeTemplateVersions => Set<SystemNoticeTemplateVersion>();
+    public DbSet<WorkspaceNoticeTemplateVersion> WorkspaceNoticeTemplateVersions => Set<WorkspaceNoticeTemplateVersion>();
+    public DbSet<RenderedNotice> RenderedNotices => Set<RenderedNotice>();
+    public DbSet<NoticeDeliveryEvidence> NoticeDeliveryEvidence => Set<NoticeDeliveryEvidence>();
+    public DbSet<TenantNoticeWorkItem> TenantNoticeWorkItems => Set<TenantNoticeWorkItem>();
     public DbSet<BankConnection> BankConnections => Set<BankConnection>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<PlaidTokenExchangeAttempt> PlaidTokenExchangeAttempts => Set<PlaidTokenExchangeAttempt>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
-    public DbSet<NoticeTemplate> NoticeTemplates => Set<NoticeTemplate>();
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
     public DbSet<ApplicationFinancialAccount> ApplicationFinancialAccounts => Set<ApplicationFinancialAccount>();
     public DbSet<ApplicationFinancialEntry> ApplicationFinancialEntries => Set<ApplicationFinancialEntry>();
@@ -540,8 +570,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
             entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
             entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
-            // Lease-end auto-send action, stored as the string enum name (app-wide string-enum convention).
-            entity.Property(e => e.LeaseEndAutoAction).HasConversion<string>().HasMaxLength(40);
             // Per-portfolio now (was a single global row). One settings row per portfolio.
             entity.HasIndex(e => e.PortfolioId).IsUnique();
         });
@@ -557,6 +585,116 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UserAlertPreference>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.PortfolioId, e.UserId }).IsUnique();
+            entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TeamRoutingRule>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.Topic).HasConversion<string>().HasMaxLength(50);
+            entity.HasIndex(e => new { e.PortfolioId, e.Topic, e.PropertyId }).IsUnique();
+            entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property).WithMany().HasForeignKey(e => e.PropertyId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TeamRoutingRuleRecipient>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(500);
+            entity.HasIndex(e => new { e.TeamRoutingRuleId, e.UserId }).IsUnique();
+            entity.HasOne(e => e.Rule).WithMany(e => e.Recipients)
+                .HasForeignKey(e => new { e.TeamRoutingRuleId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TenantNoticePolicy>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.AutomationKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Mode).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.Classification).HasConversion<string>().HasMaxLength(30);
+            entity.Property(e => e.FailureBehavior).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.ReviewedJurisdictionCode).HasMaxLength(80);
+            entity.HasIndex(e => new { e.PortfolioId, e.AutomationKey }).IsUnique();
+            entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.TemplateVersion).WithMany()
+                .HasForeignKey(e => new { e.WorkspaceNoticeTemplateVersionId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<SystemNoticeTemplateVersion>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SystemKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Classification).HasConversion<string>().HasMaxLength(30);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(8000);
+            entity.Property(e => e.JurisdictionCode).HasMaxLength(80);
+            entity.Property(e => e.Provenance).IsRequired().HasMaxLength(1000);
+            entity.HasIndex(e => new { e.SystemKey, e.Version }).IsUnique();
+        });
+
+        modelBuilder.Entity<WorkspaceNoticeTemplateVersion>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.SystemKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(8000);
+            entity.Property(e => e.JurisdictionCode).HasMaxLength(80);
+            entity.HasIndex(e => new { e.PortfolioId, e.SystemKey, e.Version }).IsUnique();
+            entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.BasedOnSystemTemplateVersion).WithMany().HasForeignKey(e => e.BasedOnSystemTemplateVersionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RenderedNotice>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(8000);
+            entity.Property(e => e.ContentSha256).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.TemplateProvenance).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.JurisdictionCode).HasMaxLength(80);
+            entity.HasIndex(e => new { e.PortfolioId, e.NoticeDraftId }).IsUnique();
+        });
+
+        modelBuilder.Entity<NoticeDeliveryEvidence>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.RecipientRole).HasConversion<string>().HasMaxLength(30);
+            entity.Property(e => e.Channel).HasConversion<string>().HasMaxLength(30);
+            entity.Property(e => e.Destination).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.IdempotencyKey).IsRequired().HasMaxLength(300);
+            entity.HasIndex(e => e.OutboxMessageId).IsUnique();
+            entity.HasIndex(e => new { e.RenderedNoticeId, e.RecipientTenantId, e.Channel }).IsUnique();
+            entity.HasOne(e => e.RenderedNotice).WithMany()
+                .HasForeignKey(e => new { e.RenderedNoticeId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.OutboxMessage).WithMany().HasForeignKey(e => e.OutboxMessageId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TenantNoticeWorkItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.BusinessKey).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ClaimOwner).HasMaxLength(200);
+            entity.HasIndex(e => e.BusinessKey).IsUnique();
+            entity.HasIndex(e => new { e.Status, e.DueAtUtc, e.ClaimExpiresAtUtc, e.Id });
+            entity.HasOne<TenantNoticePolicy>().WithMany()
+                .HasForeignKey(e => new { e.TenantNoticePolicyId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<BankConnection>(entity =>
@@ -814,6 +952,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.NoticeType, e.Status });
             entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId, e.NoticeType, e.Status });
+            entity.HasIndex(e => e.TenantNoticePolicyId);
+            entity.HasIndex(e => e.WorkspaceNoticeTemplateVersionId);
+            entity.HasIndex(e => e.RenderedNoticeId).IsUnique();
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
@@ -885,23 +1026,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.Unit)
                 .WithMany(u => u.UnitListings)
                 .HasForeignKey(e => e.UnitId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<NoticeTemplate>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.NoticeType).IsRequired().HasMaxLength(80);
-            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.Body).IsRequired().HasMaxLength(4000);
-            entity.HasIndex(e => e.PortfolioId);
-            // One active template per (portfolio, type) — enforced by a filtered unique index.
-            entity.HasIndex(e => new { e.PortfolioId, e.NoticeType })
-                .HasFilter("\"IsActive\" = true")
-                .IsUnique();
-            entity.HasOne(e => e.Portfolio)
-                .WithMany()
-                .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

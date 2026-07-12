@@ -51,7 +51,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row.EnableRentCharges = request.EnableRentCharges;
         row.EnableLateFees = request.EnableLateFees;
         row.EnableLeaseExpiryReminders = request.EnableLeaseExpiryReminders;
-        row.NotifyTenants = request.NotifyTenants;
         row.RentChargeLeadDays = Math.Clamp(request.RentChargeLeadDays, 0, 31);
         row.LateFeeGraceDays = Math.Clamp(request.LateFeeGraceDays, 0, 60);
         row.LeaseExpiryReminderDays = Math.Clamp(request.LeaseExpiryReminderDays, 1, 365);
@@ -59,9 +58,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row.EnableRecurringMaintenance = request.EnableRecurringMaintenance;
         row.DailyBriefingSendHourLocal = Math.Clamp(request.DailyBriefingSendHourLocal, 0, 23);
         row.DailyBriefingIncludeEmpty = request.DailyBriefingIncludeEmpty;
-        row.AutoSendRentReminder = request.AutoSendRentReminder;
-        row.AutoSendLateRent = request.AutoSendLateRent;
-        row.LeaseEndAutoAction = request.LeaseEndAutoAction;
 
         // SMS provider (pluggable, BYO creds). Provider is a plain string-enum name; credential slots
         // are write-only secrets — null/omitted keeps the saved value, empty string clears it. The
@@ -93,7 +89,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
             EnableRentCharges = row.EnableRentCharges,
             EnableLateFees = row.EnableLateFees,
             EnableLeaseExpiryReminders = row.EnableLeaseExpiryReminders,
-            NotifyTenants = row.NotifyTenants,
             RentChargeLeadDays = row.RentChargeLeadDays,
             LateFeeGraceDays = row.LateFeeGraceDays,
             LeaseExpiryReminderDays = row.LeaseExpiryReminderDays,
@@ -222,7 +217,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                     "EnableRentCharges",
                     "EnableLateFees",
                     "EnableLeaseExpiryReminders",
-                    "NotifyTenants",
                     "RentChargeLeadDays",
                     "LateFeeGraceDays",
                     "LeaseExpiryReminderDays",
@@ -237,7 +231,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                     {false},
                     {false},
                     {true},
-                    {false},
                     {5},
                     {5},
                     {60},
@@ -374,7 +367,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         EnableRentCharges = row.EnableRentCharges,
         EnableLateFees = row.EnableLateFees,
         EnableLeaseExpiryReminders = row.EnableLeaseExpiryReminders,
-        NotifyTenants = row.NotifyTenants,
         RentChargeLeadDays = row.RentChargeLeadDays,
         LateFeeGraceDays = row.LateFeeGraceDays,
         LeaseExpiryReminderDays = row.LeaseExpiryReminderDays,
@@ -384,9 +376,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         DailyBriefingIncludeEmpty = row.DailyBriefingIncludeEmpty,
         DailyBriefingSmsRecipients = UnprotectArray(row.DailyBriefingSmsRecipientsCipherText),
         DailyBriefingEmailRecipients = UnprotectArray(row.DailyBriefingEmailRecipientsCipherText),
-        AutoSendRentReminder = row.AutoSendRentReminder,
-        AutoSendLateRent = row.AutoSendLateRent,
-        LeaseEndAutoAction = row.LeaseEndAutoAction,
         SmsProvider = EffectiveProvider(row).ToString(),
         SmsFromNumber = EffectiveFromNumber(row),
         // Secrets: report only whether each slot is set, never the value. Legacy SignalWire rows map

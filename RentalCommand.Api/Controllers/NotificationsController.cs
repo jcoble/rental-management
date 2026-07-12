@@ -13,12 +13,10 @@ namespace RentalCommand.Api.Controllers;
 public class NotificationsController : AuthenticatedPortfolioControllerBase
 {
     private readonly INotificationService _notifications;
-    private readonly INotificationSettingsService _settings;
 
-    public NotificationsController(INotificationService notifications, INotificationSettingsService settings)
+    public NotificationsController(INotificationService notifications)
     {
         _notifications = notifications;
-        _settings = settings;
     }
 
     [HttpGet]
@@ -69,52 +67,4 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
         return Created($"/api/v1/notifications/{created.Id}", created);
     }
 
-    [HttpGet("email")]
-    [ProducesResponseType(typeof(NotificationEmailResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationEmailResponse>> GetNotificationEmail(CancellationToken ct)
-    {
-        return Ok(await _notifications.GetNotificationEmailAsync(GetPortfolioId(), ct));
-    }
-
-    [HttpPut("email")]
-    [ProducesResponseType(typeof(NotificationEmailResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<NotificationEmailResponse>> SetNotificationEmail(
-        [FromBody] SetNotificationEmailRequest request,
-        CancellationToken ct)
-    {
-        var response = await _notifications.SetNotificationEmailAsync(GetPortfolioId(), request.Email, ct);
-        return response is null ? NotFound(new { error = "Portfolio not found" }) : Ok(response);
-    }
-
-    [HttpGet("settings")]
-    [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationSettingsResponse>> GetSettings(CancellationToken ct)
-    {
-        return Ok(await _settings.GetAdminAsync(GetPortfolioId(), ct));
-    }
-
-    [HttpPut("settings")]
-    [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationSettingsResponse>> SetSettings(
-        [FromBody] UpdateNotificationSettingsRequest request,
-        CancellationToken ct)
-    {
-        return Ok(await _settings.UpdateAsync(GetPortfolioId(), request, ct));
-    }
-
-    /// <summary>
-    /// Sends a one-off verification SMS for the chosen provider so the landlord can confirm their
-    /// credentials work. Blank credential slots fall back to the portfolio's saved secrets. Always
-    /// returns 200 with a <see cref="TestSmsResponse"/> (success flag + message) — provider/transport
-    /// errors are reported in the body, never as a 500, so the UI can show a friendly result.
-    /// </summary>
-    [HttpPost("settings/test-sms")]
-    [ProducesResponseType(typeof(TestSmsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<TestSmsResponse>> SendTestSms(
-        [FromBody] TestSmsRequest request,
-        CancellationToken ct)
-    {
-        return Ok(await _settings.SendTestSmsAsync(GetPortfolioId(), request, ct));
-    }
 }

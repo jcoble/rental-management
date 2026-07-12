@@ -43,19 +43,11 @@ public class NotificationSettings
     public bool EnableRentCharges { get; set; }
     public bool EnableLateFees { get; set; }
     public bool EnableLeaseExpiryReminders { get; set; } = true;
-    public bool NotifyTenants { get; set; }
     public int RentChargeLeadDays { get; set; } = 5;
     public int LateFeeGraceDays { get; set; } = 5;
     public int LeaseExpiryReminderDays { get; set; } = 60;
     public bool EnableDailyBriefingMessages { get; set; }
     public bool EnableRecurringMaintenance { get; set; } = true;
-    // Per-notice-type tenant-facing send mode. false (default) = "ask me first" (draft for approval);
-    // true = auto-send once an active NoticeTemplate exists for the type (consumed by Plan 3's worker).
-    public bool AutoSendRentReminder { get; set; }
-    public bool AutoSendLateRent { get; set; }
-    // Lease-end notices (renewal / month-to-month / non-renewal) are mutually exclusive per lease,
-    // so a single action replaces the three former per-type bools. Default Draft = auto-send nothing.
-    public LeaseEndAutoAction LeaseEndAutoAction { get; set; } = LeaseEndAutoAction.Draft;
     public int DailyBriefingSendHourLocal { get; set; } = 8;
     public bool DailyBriefingIncludeEmpty { get; set; }
     public string? DailyBriefingSmsRecipientsCipherText { get; set; }
