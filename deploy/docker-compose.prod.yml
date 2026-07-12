@@ -142,6 +142,9 @@ services:
       - Jwt__SecretKey=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - Jwt__Issuer=${JWT_ISSUER:-RentalCommand}
       - Jwt__Audience=${JWT_AUDIENCE:-RentalCommandWeb}
+      # Separate deterministic refresh-bearer signing boundary. It remains optional until the
+      # one-time atomic auth cutover; resolving that boundary fails closed when this is unset.
+      - AuthSessionCredentials__SigningKey=${AUTH_SESSION_CREDENTIAL_SIGNING_KEY:-}
       # ── CORS + public URLs ─────────────────────────────────────────────────
       # Same-origin, so the only allowed origin is the app's own host.
       - Cors__AllowedOrigins__0=https://${DOMAIN}

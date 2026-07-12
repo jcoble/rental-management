@@ -68,7 +68,12 @@ public sealed class AddAuthSessionPrerequisites : Migration
             table: "LoginContextSelectionChallenges",
             columns: new[] { "UserId", "ExpiresAtUtc" });
 
-        migrationBuilder.Sql(AccessEnvelopeViewSql.Create);
+        // SECURITY: the API role remains subject to every base-table RLS policy while querying
+        // this view. Keep the migration's security boundary explicit rather than relying on the
+        // PostgreSQL default (security-definer view behavior).
+        migrationBuilder.Sql(
+            "CREATE VIEW \"vw_access_envelopes\" WITH (security_invoker = true) AS\n" +
+            AccessEnvelopeViewSql.Definition);
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
