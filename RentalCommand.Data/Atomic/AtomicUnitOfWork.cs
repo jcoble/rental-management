@@ -376,7 +376,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
 
         public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
             _db.Database
-                .SqlQuery<DateTime>($"""SELECT clock_timestamp() AS "Value"""")
+                .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
                 .SingleAsync(ct);
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
