@@ -41,11 +41,6 @@ public sealed record ReturnPossessionResponse(
     DateTime PossessionReturnedAtUtc,
     bool Replayed);
 
-public sealed class CompleteTurnoverRequest
-{
-    public int TurnoverPeriodId { get; set; }
-}
-
 public sealed record CompleteTurnoverResponse(
     int UnitId,
     int TurnoverPeriodId,

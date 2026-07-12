@@ -14,6 +14,7 @@ public sealed class AtomicCommandReceipt
     public Guid AttemptId { get; set; }
     public string CommandType { get; set; } = string.Empty;
     public string IdempotencyKey { get; set; } = string.Empty;
+    public string RequestFingerprint { get; set; } = string.Empty;
     public AtomicCommandReceiptStatus Status { get; set; }
     public string ResultContract { get; set; } = string.Empty;
     public string? ResultJson { get; set; }

@@ -973,7 +973,7 @@ Engine/UI candidate selection filters and pages this view DB-side.
 
 ## 7. Atomic command boundaries and order
 
-Every command uses the atomic command kernel: one receipt/idempotency key, one explicit transaction, DB-clock facts, audit rows, and outbox rows. The receipt is written in the same transaction as business state. External I/O uses prepare/admit/finalize; it is never held inside a database transaction.
+Every command uses the atomic command kernel: one receipt/idempotency key, one canonical SHA-256 business-request fingerprint, one explicit transaction, DB-clock facts, audit rows, and outbox rows. The receipt is written in the same transaction as business state. Reusing the same command/key with a different business payload is rejected as a conflict after current-session replay authorization and before a stored result is returned. External I/O uses prepare/admit/finalize; it is never held inside a database transaction.
 
 ### 7.1 Prepare move-in
 

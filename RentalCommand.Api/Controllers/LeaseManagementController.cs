@@ -173,6 +173,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return BadRequest(new { error = "Role and LegalBasis are required." });
         }
+        if (!HasRequiredTextWithinLimit(request.ChangeReason, 500))
+        {
+            return BadRequest(new { error = "ChangeReason is required and cannot exceed 500 characters." });
+        }
 
         var command = new AddEffectivePartyCommand(
             envelope.PortfolioId,
@@ -220,6 +224,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         if (request.AccessDisposition is null || request.LegalBasis is null)
         {
             return BadRequest(new { error = "AccessDisposition and LegalBasis are required." });
+        }
+        if (!HasRequiredTextWithinLimit(request.ChangeReason, 500))
+        {
+            return BadRequest(new { error = "ChangeReason is required and cannot exceed 500 characters." });
         }
 
         var command = new EndEffectivePartyCommand(
@@ -269,6 +277,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return BadRequest(new { error = "NewRole, AccessDisposition, and LegalBasis are required." });
         }
+        if (!HasRequiredTextWithinLimit(request.ChangeReason, 500))
+        {
+            return BadRequest(new { error = "ChangeReason is required and cannot exceed 500 characters." });
+        }
 
         var command = new ChangeEffectivePartyRoleCommand(
             envelope.PortfolioId,
@@ -317,6 +329,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return error!;
         }
+        if (!HasRequiredTextWithinLimit(request.Reason, 500))
+        {
+            return BadRequest(new { error = "Reason is required and cannot exceed 500 characters." });
+        }
 
         var command = new GrantTenantUserAccessCommand(
             envelope.PortfolioId,
@@ -356,6 +372,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         if (!TryPrepareMutation(idempotencyKey, out var envelope, out var error))
         {
             return error!;
+        }
+        if (!HasRequiredTextWithinLimit(request.Reason, 500))
+        {
+            return BadRequest(new { error = "Reason is required and cannot exceed 500 characters." });
         }
 
         var command = new RevokeTenantUserAccessCommand(
@@ -528,6 +548,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return BadRequest(new { error = "Every party and access disposition is required." });
         }
+        if (!HasRequiredTextWithinLimit(request.TurnoverReason, 1000))
+        {
+            return BadRequest(new { error = "TurnoverReason is required and cannot exceed 1000 characters." });
+        }
         var portfolioId = GetPortfolioId();
         var userId = GetUserId();
         var digest = Digest(normalizedKey!);
@@ -612,4 +636,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
 
     private static string Digest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static bool HasRequiredTextWithinLimit(string? value, int maxLength) =>
+        !string.IsNullOrWhiteSpace(value) && value.Trim().Length <= maxLength;
 }

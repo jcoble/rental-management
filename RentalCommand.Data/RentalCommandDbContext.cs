@@ -266,6 +266,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.AttemptId).IsRequired();
             entity.Property(e => e.CommandType).IsRequired().HasMaxLength(160);
             entity.Property(e => e.IdempotencyKey).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.RequestFingerprint).IsRequired().HasMaxLength(64);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.Property(e => e.ResultContract).IsRequired().HasMaxLength(200);
             entity.Property(e => e.ResultJson).HasColumnType("jsonb");
