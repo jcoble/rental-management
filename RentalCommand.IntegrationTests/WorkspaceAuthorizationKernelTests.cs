@@ -71,6 +71,9 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _connectionString = _postgres.GetConnectionString();
         await using var db = NewContext();
         await db.Database.EnsureCreatedAsync();
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
         await SeedKernelAsync(db);
 
         var services = new ServiceCollection();
