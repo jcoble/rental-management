@@ -304,13 +304,13 @@ public sealed class AuditTrailTests : IDisposable
         await _db.SaveChangesAsync();
 
         _db.AuditLogs.AddRange(
-            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 71, Operation = AuditLogOperation.Created, UserId = 7, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-3) },
-            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 72, Operation = AuditLogOperation.Created, UserId = 8, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-2) },
-            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 73, Operation = AuditLogOperation.Created, UserId = null, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-1) });
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Conversation", EntityId = 71, Operation = AuditLogOperation.Created, UserId = 7, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-3) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Conversation", EntityId = 72, Operation = AuditLogOperation.Created, UserId = 8, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-2) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Conversation", EntityId = 73, Operation = AuditLogOperation.Created, UserId = null, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-1) });
         await _db.SaveChangesAsync();
 
         var sut = NewAuditQueryService();
-        var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
+        var page = await sut.ListAsync(PortfolioId, null, "Conversation", null, new ListQuery());
 
         // UserId present, no ActorLabel → resolved display name (NOT "User #7").
         page.Single(p => p.EntityId == 71).Actor.Should().Be("Jane Landlord");
@@ -321,77 +321,16 @@ public sealed class AuditTrailTests : IDisposable
     }
 
     [Fact]
-    public async Task Query_Routes_Unit_Tied_Payment_DetailHref_To_Unit_CommandCenter()
+    public void Query_Routes_Canonical_TenantAccount_To_Unit_CommandCenter()
     {
-        var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Maple Duplex",
-            AddressLine1 = "1 Main St",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "1A",
-            MarketRent = 1_200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Maria",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-1A",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-1),
-            EndDate = now.Date.AddMonths(11),
-            MonthlyRent = 1_200m,
-            SecurityDeposit = 1_200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var payment = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1_200m,
-            DueDate = now.Date,
-            PaidDate = now.Date,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.AddRange(property, unit, tenant, lease, payment);
-        await _db.SaveChangesAsync();
-
-        var sut = NewAuditQueryService();
-        var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
-
-        page.Should().ContainSingle();
-        page[0].DetailHref.Should().Be($"/units/{unit.Id}?tab=ledger&ledger=rent&payment={payment.Id}");
+        AuditEntryResponse.BuildDetailHref(nameof(TenantAccount), 81, 42)
+            .Should().Be("/units/42?tab=ledger&tenantAccount=81");
     }
 
     [Theory]
-    [InlineData("Payment", AuditLogOperation.Created, "Recorded a payment")]
-    [InlineData("Lease", AuditLogOperation.Updated, "Updated lease")]
+    [InlineData("TenantLedgerEntry", AuditLogOperation.Created, "Posted a tenant account entry")]
+    [InlineData("TenantAccount", AuditLogOperation.Updated, "Updated tenant account")]
+    [InlineData("LeaseAgreement", AuditLogOperation.Updated, "Updated lease agreement")]
     [InlineData("WorkOrder", AuditLogOperation.Created, "Created a work order")]
     [InlineData("Expense", AuditLogOperation.Deleted, "Deleted expense")]
     [InlineData("Tenant", AuditLogOperation.Created, "Added tenant")]

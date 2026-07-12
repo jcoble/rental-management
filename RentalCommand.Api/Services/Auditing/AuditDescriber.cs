@@ -30,7 +30,7 @@ public sealed class AuditDescriber
     // "Created" reads better as a domain verb for several types ("Recorded a payment").
     private static string Created(string entityType, string noun) => entityType switch
     {
-        "Payment" => "Recorded a payment",
+        "TenantLedgerEntry" => "Posted a tenant account entry",
         "Expense" => "Recorded an expense",
         "WorkOrder" => "Created a work order",
         "Appointment" => "Scheduled an appointment",
@@ -42,9 +42,11 @@ public sealed class AuditDescriber
 
     private static string EntityNoun(string entityType) => entityType switch
     {
-        "Payment" => "payment",
+        "TenantAccount" => "tenant account",
+        "TenantLedgerEntry" => "tenant account entry",
+        "LeaseManagement" => "tenant and lease relationship",
+        "LeaseAgreement" => "lease agreement",
         "Expense" => "expense",
-        "Lease" => "lease",
         "Tenant" => "tenant",
         "Property" => "property",
         "Unit" => "unit",

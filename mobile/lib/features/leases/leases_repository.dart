@@ -488,11 +488,12 @@ class LeaseLedgerEntry {
   }
 }
 
-/// Full response from `GET /api/v1/leases/{id}/ledger`.
+/// Tenant-facing projection of one continuous TenantAccount.
 class LeaseLedger {
   const LeaseLedger({
-    required this.leaseId,
-    required this.leaseNumber,
+    required this.leaseManagementId,
+    required this.tenantAccountId,
+    required this.accountNumber,
     required this.totalCharged,
     required this.totalPaid,
     required this.balance,
@@ -501,13 +502,14 @@ class LeaseLedger {
     this.propertyName,
   });
 
-  final int leaseId;
-  final String leaseNumber;
+  final int leaseManagementId;
+  final int tenantAccountId;
+  final String accountNumber;
 
-  /// Sum of charges owed on this lease.
+  /// Sum of posted account debits.
   final double totalCharged;
 
-  /// Sum of payments received on this lease.
+  /// Sum of posted account credits.
   final double totalPaid;
 
   /// Outstanding balance (charges minus payments). Negative means a credit.
@@ -527,8 +529,10 @@ class LeaseLedger {
         : <LeaseLedgerEntry>[];
 
     return LeaseLedger(
-      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
-      leaseNumber: json['leaseNumber'] as String? ?? '',
+      leaseManagementId:
+          (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt() ?? 0,
+      accountNumber: json['accountNumber'] as String? ?? '',
       totalCharged: (json['totalCharged'] as num?)?.toDouble() ?? 0,
       totalPaid: (json['totalPaid'] as num?)?.toDouble() ?? 0,
       balance: (json['balance'] as num?)?.toDouble() ?? 0,

@@ -399,11 +399,30 @@ public class DashboardService : IDashboardService
                 .Select(u => new ActivityRefRow { Id = u.Id, Label = u.Property!.Name + " · Unit " + u.UnitNumber, UnitId = u.Id }));
         }
 
-        if (Ids("Lease") is { Count: > 0 } leaseIds)
+        if (Ids(nameof(LeaseManagement)) is { Count: > 0 } relationshipIds)
         {
-            await AddAsync("Lease", _db.Leases.AsNoTracking()
-                .Where(l => leaseIds.Contains(l.Id) && l.PortfolioId == portfolioId)
-                .Select(l => new ActivityRefRow { Id = l.Id, Label = l.LeaseNumber, UnitId = l.UnitId }));
+            await AddAsync(nameof(LeaseManagement), _db.LeaseManagements.AsNoTracking()
+                .Where(relationship => relationshipIds.Contains(relationship.Id)
+                    && relationship.PortfolioId == portfolioId)
+                .Select(relationship => new ActivityRefRow
+                {
+                    Id = relationship.Id,
+                    Label = relationship.RelationshipNumber,
+                    UnitId = relationship.UnitId,
+                }));
+        }
+
+        if (Ids(nameof(LeaseAgreement)) is { Count: > 0 } agreementIds)
+        {
+            await AddAsync(nameof(LeaseAgreement), _db.LeaseAgreements.AsNoTracking()
+                .Where(agreement => agreementIds.Contains(agreement.Id)
+                    && agreement.PortfolioId == portfolioId)
+                .Select(agreement => new ActivityRefRow
+                {
+                    Id = agreement.Id,
+                    Label = agreement.AgreementNumber,
+                    UnitId = agreement.LeaseManagement!.UnitId,
+                }));
         }
 
         if (Ids("WorkOrder") is { Count: > 0 } workOrderIds)
@@ -461,23 +480,12 @@ public class DashboardService : IDashboardService
                 .Select(r => new ActivityRefRow { Id = r.Id, Label = r.FirstName + " " + r.LastName, UnitId = r.UnitId }));
         }
 
-        // Payment / SecurityDeposit carry no name column, so compose a short descriptor from projected
-        // scalars. The filter + projection run in SQL; only the string formatting happens here.
-        if (Ids("Payment") is { Count: > 0 } paymentIds)
+        // Tenant-money commands audit the continuous account. Resolve the account number and Unit in one
+        // canonical projection so scan-originated receipts and ordinary account mutations share a label.
+        if (Ids(nameof(TenantAccount)) is { Count: > 0 } accountIds)
         {
-            var found = await _db.Payments.AsNoTracking()
-                .Where(p => paymentIds.Contains(p.Id) && p.PortfolioId == portfolioId)
-                .Select(p => new { p.Id, p.PaymentType, p.Amount, UnitId = p.Lease != null ? p.Lease.UnitId : (int?)null })
-                .ToListAsync(ct);
-            foreach (var p in found)
-            {
-                refs[("Payment", p.Id)] = new ActivityRefRow
-                {
-                    Id = p.Id,
-                    Label = $"{p.PaymentType} · {Money(p.Amount)}",
-                    UnitId = p.UnitId,
-                };
-            }
+            await AddAsync(nameof(TenantAccount),
+                BuildTenantAccountActivityRefsQuery(portfolioId, accountIds));
         }
 
         if (Ids("SecurityDeposit") is { Count: > 0 } depositIds)
@@ -503,11 +511,22 @@ public class DashboardService : IDashboardService
         return refs;
     }
 
+    internal IQueryable<ActivityRefRow> BuildTenantAccountActivityRefsQuery(
+        int portfolioId, IReadOnlyList<int> accountIds) =>
+        _db.TenantAccounts.AsNoTracking()
+            .Where(account => accountIds.Contains(account.Id) && account.PortfolioId == portfolioId)
+            .Select(account => new ActivityRefRow
+            {
+                Id = account.Id,
+                Label = account.AccountNumber,
+                UnitId = account.LeaseManagement!.UnitId,
+            });
+
     private static string Money(decimal amount) =>
         "$" + amount.ToString("N2", CultureInfo.InvariantCulture);
 
     /// <summary>Projection holder for a batched activity lookup (<c>Id</c> + label + owning unit).</summary>
-    private sealed class ActivityRefRow
+    internal sealed class ActivityRefRow
     {
         public int Id { get; set; }
         public string? Label { get; set; }

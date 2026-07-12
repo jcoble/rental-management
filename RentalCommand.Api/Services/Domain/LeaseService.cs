@@ -644,233 +644,185 @@ public class LeaseService : ILeaseService
     private const int MaxLedgerPageSize = 200;
 
     public async Task<LeaseLedgerResponse?> GetLedgerAsync(
-        int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default)
+        int portfolioId, int leaseManagementId, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default)
     {
-        // Clamp paging: a lease's payment history grows unbounded over a multi-year tenancy, so the rows
-        // are always paged DB-side (Skip/Take → SQL LIMIT/OFFSET) rather than materialized whole.
         skip = Math.Max(0, skip);
         var pageSize = Math.Clamp(take ?? DefaultLedgerPageSize, 1, MaxLedgerPageSize);
 
-        var query = _db.Leases
-            .AsNoTracking()
-            .Include(l => l.Tenant)
-            .Include(l => l.LeaseTenants)
-                .ThenInclude(lt => lt.Tenant)
-            .Include(l => l.Property)
-            .Where(l => l.Id == id && l.PortfolioId == portfolioId);
-
-        // When a tenant calls this, they may only read THEIR OWN lease's ledger — the lookup itself
-        // requires the tenant match, so a non-owned (or non-existent) lease returns null/404 without
-        // revealing whether it exists. Landlord/staff callers pass null and see any lease in scope.
-        if (restrictToTenantId is > 0)
-        {
-            query = query.Where(l => l.TenantId == restrictToTenantId.Value
-                || l.LeaseTenants.Any(lt => lt.TenantId == restrictToTenantId.Value));
-        }
-
-        var lease = await query.FirstOrDefaultAsync(ct);
-
-        if (lease == null)
+        var header = await BuildCanonicalLedgerHeaderQuery(
+                portfolioId, leaseManagementId, restrictToTenantId)
+            .SingleOrDefaultAsync(ct);
+        if (header is null)
         {
             return null;
         }
 
-        // The ledger ROWS are needed to render each transaction line, so the per-payment projection is
-        // loaded for display — but ONLY the requested page (Skip/Take DB-side), never the whole history.
-        // The TOTALS and the past-due count are computed SQL-side over the whole payment set (see below)
-        // rather than re-derived from this page, so the headline figures stay correct under paging.
-        var paymentsQuery = _db.Payments
-            .AsNoTracking()
-            .Where(p => p.LeaseId == id && p.PortfolioId == portfolioId);
-
-        var payments = await paymentsQuery
-            .Select(p => new
-            {
-                p.Id,
-                p.PaymentType,
-                p.Status,
-                p.Amount,
-                p.AmountPaid,
-                p.DueDate,
-                p.PaidDate,
-                p.Method,
-                p.PeriodKey,
-                LedgerDate = p.PaidDate ?? p.DueDate,
-            })
-            .OrderByDescending(p => p.LedgerDate)
-            .ThenByDescending(p => p.Id)
+        var ledgerRows = await BuildCanonicalLedgerEntriesQuery(portfolioId, header.TenantAccountId)
+            .OrderByDescending(entry => entry.EffectiveOn)
+            .ThenByDescending(entry => entry.Id)
             .Skip(skip)
             .Take(pageSize)
             .ToListAsync(ct);
 
-        // A lease may carry an opening balance migrated in from before Rental Command. It anchors the
-        // ledger as the oldest entry so pre-app history isn't silently dropped.
-        var opening = await _db.OpeningBalances
+        var opening = await _db.TenantLedgerEntries
             .AsNoTracking()
-            .Where(o => o.LeaseId == id && o.PortfolioId == portfolioId)
-            .Select(o => new { o.Id, o.Amount, o.AsOfDate })
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.TenantAccountId == header.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.OpeningBalance)
+            .OrderBy(entry => entry.EffectiveOn)
+            .ThenBy(entry => entry.Id)
+            .Select(entry => new CanonicalLedgerEntryReadRow
+            {
+                Id = entry.Id,
+                TenantAccountId = entry.TenantAccountId,
+                EntryType = entry.EntryType,
+                Direction = entry.Direction,
+                Amount = entry.Amount,
+                EffectiveOn = entry.EffectiveOn,
+                DueOn = entry.DueOn,
+                Description = entry.Description,
+                PaymentMethodSummary = entry.ProviderPaymentAttempt != null
+                    ? entry.ProviderPaymentAttempt.PaymentMethodSummary
+                    : null,
+                LeaseAgreementBaseRent = entry.LeaseAgreement != null
+                    ? entry.LeaseAgreement.BaseRentAmount
+                    : null,
+            })
             .FirstOrDefaultAsync(ct);
-
-        var tenantName = lease.LeaseTenants.Count == 0
-            ? $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim()
-            : string.Join(", ", lease.LeaseTenants
-                .OrderByDescending(lt => lt.IsPrimary)
-                .ThenBy(lt => lt.Id)
-                .Where(lt => lt.Tenant != null)
-                .Select(lt => $"{lt.Tenant!.FirstName} {lt.Tenant.LastName}".Trim()));
-        if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
-
-        var entries = payments
-            .SelectMany(p =>
-            {
-                // A collected payment credits the tenant's balance (money in, shown positive). An
-                // outstanding charge debits it (money owed, shown negative) so the running total reads
-                // as "still owed".
-                var isCollected = p.Status == PaymentStatus.Paid;
-                var signedAmount = isCollected ? p.Amount : -p.Amount;
-                var isProratedRent = p.PaymentType == PaymentType.Rent
-                    && p.PeriodKey != null
-                    && p.Amount != lease.MonthlyRent;
-
-                var rows = new List<LedgerTransactionResponse>
-                {
-                    new()
-                    {
-                        Date = p.LedgerDate,
-                        Type = isCollected ? "Payment" : "Charge",
-                        Id = p.Id,
-                        Description = p.PaymentType.ToString(),
-                        Amount = signedAmount,
-                        PropertyId = lease.PropertyId,
-                        PropertyName = lease.Property?.Name,
-                        Counterparty = tenantName,
-                        Category = p.PaymentType.ToString(),
-                        Status = p.Status.ToString(),
-                        SourceHref = $"/accounting/payments/{p.Id}",
-                        IsProrated = isProratedRent,
-                        Explanation = LedgerExplanation.ForPayment(
-                            p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
-                    },
-                };
-
-                // A Partial is billed at its full Amount (the charge above) but has already collected
-                // AmountPaid in cash. Surface that collection as a companion payment line so the money is
-                // visible on the ledger instead of only in the headline "Paid" total — the charge
-                // (−Amount) and this companion (+AmountPaid) net to the still-owed remainder. The headline
-                // Charged/Paid/Balance are a separate DB aggregate, so emitting this line does not
-                // double-count.
-                var collectedSoFar = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : 0m;
-                if (collectedSoFar > 0m)
-                {
-                    rows.Add(new LedgerTransactionResponse
-                    {
-                        Date = p.LedgerDate,
-                        Type = "Payment",
-                        Id = p.Id,
-                        Description = p.PaymentType.ToString(),
-                        Amount = collectedSoFar,
-                        PropertyId = lease.PropertyId,
-                        PropertyName = lease.Property?.Name,
-                        Counterparty = tenantName,
-                        Category = p.PaymentType.ToString(),
-                        Status = p.Status.ToString(),
-                        SourceHref = $"/accounting/payments/{p.Id}",
-                        IsProrated = isProratedRent,
-                        Explanation = LedgerExplanation.ForPartialCollected(
-                            p.PaymentType, collectedSoFar, p.Amount, p.PaidDate, p.DueDate, p.Method),
-                    });
-                }
-
-                return rows;
-            })
-            .ToList();
-
-        // Business "today" as UTC-midnight (DueDates are stored UTC-midnight) for the past-due test.
-        var todayUtc = _timeProvider.UtcNow().Date;
-
-        // Headline figures over the WHOLE payment set as one SQL aggregate (unaffected by the page):
-        //  - Charged: every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
-        //  - Paid: full Amount of Paid charges + the collected-so-far of Partial charges (the Partial
-        //    remainder stays in the balance, so Balance = Charged − Paid).
-        //  - Total: payment count (the pageable unit) → drives "more history remains?".
-        //  - PastDue: count of Scheduled/Partial/Late charges whose DueDate is before today (the
-        //    "Settle past due" affordance) — computed DB-side, never from the paged rows.
-        var ledgerTotals = await paymentsQuery
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                Charged = g.Sum(p =>
-                    p.Status == PaymentStatus.Scheduled ||
-                    p.Status == PaymentStatus.Partial ||
-                    p.Status == PaymentStatus.Late ||
-                    p.Status == PaymentStatus.Paid
-                        ? p.Amount
-                        : 0m),
-                Paid = g.Sum(p =>
-                    p.Status == PaymentStatus.Paid
-                        ? p.Amount
-                        : p.Status == PaymentStatus.Partial
-                            ? p.AmountPaid ?? 0m
-                            : 0m),
-                Total = g.Count(),
-                PastDue = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled ||
-                     p.Status == PaymentStatus.Partial ||
-                     p.Status == PaymentStatus.Late) &&
-                    p.DueDate < todayUtc
-                        ? 1
-                        : 0),
-            })
-            .SingleOrDefaultAsync(ct);
-
-        var totalCharged = ledgerTotals?.Charged ?? 0m;
-        var totalPaid = ledgerTotals?.Paid ?? 0m;
-        var totalPayments = ledgerTotals?.Total ?? 0;
-        var pastDueCount = ledgerTotals?.PastDue ?? 0;
-
-        // The opening balance anchors pre-Rental-Command history. It's folded into the totals (a positive
-        // opening adds to "charged", a credit adds to "paid", keeping Balance = TotalCharged − TotalPaid
-        // exact) but returned as a SEPARATE anchor rather than mixed into the paged Entries, so it stays a
-        // stable one-row anchor no matter which page is loaded.
-        LedgerTransactionResponse? openingEntry = null;
-        if (opening != null)
-        {
-            totalCharged += Math.Max(opening.Amount, 0m);
-            totalPaid += Math.Max(-opening.Amount, 0m);
-
-            openingEntry = new LedgerTransactionResponse
-            {
-                Date = opening.AsOfDate,
-                Type = "Opening",
-                Id = opening.Id,
-                Description = "Opening balance",
-                Amount = opening.Amount,
-                PropertyId = lease.PropertyId,
-                PropertyName = lease.Property?.Name,
-                Counterparty = tenantName,
-                Category = "Opening",
-                Status = "Opening",
-                SourceHref = $"/accounting/opening-balances/{opening.Id}",
-                Explanation = LedgerExplanation.ForOpeningBalance(opening.Amount, opening.AsOfDate),
-            };
-        }
 
         return new LeaseLedgerResponse
         {
-            LeaseId = lease.Id,
-            LeaseNumber = lease.LeaseNumber,
-            TenantName = tenantName,
-            PropertyName = lease.Property?.Name,
-            TotalCharged = totalCharged,
-            TotalPaid = totalPaid,
-            Balance = totalCharged - totalPaid,
-            PastDueCount = pastDueCount,
-            Opening = openingEntry,
-            Entries = entries,
-            TotalCount = totalPayments,
+            LeaseManagementId = header.LeaseManagementId,
+            TenantAccountId = header.TenantAccountId,
+            AccountNumber = header.AccountNumber,
+            TenantName = string.IsNullOrWhiteSpace(header.TenantName) ? "Tenant" : header.TenantName,
+            PropertyName = header.PropertyName,
+            TotalCharged = header.TotalDebits,
+            TotalPaid = header.TotalCredits,
+            Balance = header.ReceivableBalance,
+            PastDueCount = header.PastDueCount,
+            Opening = opening is null ? null : ToLedgerResponse(opening, header, "Opening"),
+            Entries = ledgerRows.Select(entry => ToLedgerResponse(entry, header)).ToList(),
+            TotalCount = header.TotalEntryCount,
             Skip = skip,
             Take = pageSize,
         };
+    }
+
+    internal IQueryable<CanonicalLedgerHeaderReadRow> BuildCanonicalLedgerHeaderQuery(
+        int portfolioId, int leaseManagementId, int? restrictToTenantId = null) =>
+        from account in _db.TenantAccounts.AsNoTracking()
+        join relationship in _db.LeaseManagements.AsNoTracking()
+            on new { account.PortfolioId, account.LeaseManagementId }
+            equals new { relationship.PortfolioId, LeaseManagementId = relationship.Id }
+        join property in _db.Properties.AsNoTracking()
+            on new { relationship.PortfolioId, Id = relationship.PropertyId }
+            equals new { property.PortfolioId, property.Id }
+        join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            on new { relationship.PortfolioId, LeaseManagementId = relationship.Id }
+            equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+        join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+            on new { account.PortfolioId, TenantAccountId = account.Id }
+            equals new { balance.PortfolioId, balance.TenantAccountId }
+        where relationship.PortfolioId == portfolioId
+            && relationship.Id == leaseManagementId
+            && (restrictToTenantId == null || _db.LeaseManagementParties.Any(party =>
+                party.PortfolioId == portfolioId
+                && party.LeaseManagementId == relationship.Id
+                && party.TenantId == restrictToTenantId.Value))
+        select new CanonicalLedgerHeaderReadRow
+        {
+            LeaseManagementId = relationship.Id,
+            TenantAccountId = account.Id,
+            AccountNumber = account.AccountNumber,
+            TenantName = lifecycle.CurrentPrimaryTenantName,
+            PropertyId = property.Id,
+            PropertyName = property.Name,
+            TotalDebits = balance.TotalDebits,
+            TotalCredits = balance.TotalCredits,
+            ReceivableBalance = balance.ReceivableBalance,
+            PastDueCount = balance.PastDueCount,
+            TotalEntryCount = _db.TenantLedgerEntries.Count(entry =>
+                entry.PortfolioId == portfolioId
+                && entry.TenantAccountId == account.Id
+                && entry.EntryType != TenantLedgerEntryType.OpeningBalance),
+        };
+
+    internal IQueryable<CanonicalLedgerEntryReadRow> BuildCanonicalLedgerEntriesQuery(
+        int portfolioId, int tenantAccountId) =>
+        _db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.TenantAccountId == tenantAccountId
+                && entry.EntryType != TenantLedgerEntryType.OpeningBalance)
+            .Select(entry => new CanonicalLedgerEntryReadRow
+            {
+                Id = entry.Id,
+                TenantAccountId = entry.TenantAccountId,
+                EntryType = entry.EntryType,
+                Direction = entry.Direction,
+                Amount = entry.Amount,
+                EffectiveOn = entry.EffectiveOn,
+                DueOn = entry.DueOn,
+                Description = entry.Description,
+                PaymentMethodSummary = entry.ProviderPaymentAttempt != null
+                    ? entry.ProviderPaymentAttempt.PaymentMethodSummary
+                    : null,
+                LeaseAgreementBaseRent = entry.LeaseAgreement != null
+                    ? entry.LeaseAgreement.BaseRentAmount
+                    : null,
+            });
+
+    private static LedgerTransactionResponse ToLedgerResponse(
+        CanonicalLedgerEntryReadRow entry, CanonicalLedgerHeaderReadRow header, string? type = null) => new()
+    {
+        Date = entry.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+        Type = type ?? (entry.EntryType == TenantLedgerEntryType.PaymentReceipt ? "Payment"
+            : entry.Direction == TenantLedgerDirection.Debit ? "Charge" : "Credit"),
+        Id = entry.Id,
+        Description = entry.Description,
+        Amount = entry.Direction == TenantLedgerDirection.Debit ? -entry.Amount : entry.Amount,
+        PropertyId = header.PropertyId,
+        PropertyName = header.PropertyName,
+        Counterparty = string.IsNullOrWhiteSpace(header.TenantName) ? "Tenant" : header.TenantName,
+        Category = entry.EntryType.ToString(),
+        Status = "Posted",
+        SourceHref = $"/tenant-accounts/{entry.TenantAccountId}/entries?entryId={entry.Id}",
+        IsProrated = entry.EntryType == TenantLedgerEntryType.RentCharge
+            && entry.LeaseAgreementBaseRent.HasValue
+            && entry.Amount != entry.LeaseAgreementBaseRent.Value,
+        Explanation = LedgerExplanation.ForTenantLedgerEntry(
+            entry.EntryType, entry.Direction, entry.Amount, entry.EffectiveOn, entry.DueOn,
+            entry.PaymentMethodSummary, entry.Description),
+    };
+
+    internal sealed class CanonicalLedgerHeaderReadRow
+    {
+        public int LeaseManagementId { get; init; }
+        public int TenantAccountId { get; init; }
+        public string AccountNumber { get; init; } = string.Empty;
+        public string? TenantName { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public decimal TotalDebits { get; init; }
+        public decimal TotalCredits { get; init; }
+        public decimal ReceivableBalance { get; init; }
+        public int PastDueCount { get; init; }
+        public int TotalEntryCount { get; init; }
+    }
+
+    internal sealed class CanonicalLedgerEntryReadRow
+    {
+        public long Id { get; init; }
+        public int TenantAccountId { get; init; }
+        public TenantLedgerEntryType EntryType { get; init; }
+        public TenantLedgerDirection Direction { get; init; }
+        public decimal Amount { get; init; }
+        public DateOnly EffectiveOn { get; init; }
+        public DateOnly? DueOn { get; init; }
+        public string Description { get; init; } = string.Empty;
+        public string? PaymentMethodSummary { get; init; }
+        public decimal? LeaseAgreementBaseRent { get; init; }
     }
 
     public async Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)

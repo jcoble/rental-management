@@ -71,13 +71,13 @@ public class DashboardRecentActivityTests : IDisposable
         byKey[("Tenant", seeded.Tenant2.Id)].Label.Should().Be("Liam Renter");
         byKey[("Tenant", seeded.Tenant3.Id)].Label.Should().Be("Noah Lessee");
         byKey[("Unit", seeded.Unit.Id)].Label.Should().Be("Maple · Unit 1A");
-        byKey[("Lease", seeded.Lease.Id)].Label.Should().Be("L-1A");
-        byKey[("Lease", seeded.Lease.Id)].UnitId.Should().Be(seeded.Unit.Id);
+        byKey[("LeaseManagement", seeded.Relationship.Id)].Label.Should().Be("REL-1A");
+        byKey[("LeaseManagement", seeded.Relationship.Id)].UnitId.Should().Be(seeded.Unit.Id);
         byKey[("WorkOrder", seeded.WorkOrder.Id)].Label.Should().Be("Fix sink");
         byKey[("WorkOrder", seeded.WorkOrder.Id)].UnitId.Should().Be(seeded.Unit.Id);
         byKey[("Property", seeded.Property.Id)].Label.Should().Be("Maple");
-        byKey[("Payment", seeded.Payment.Id)].Label.Should().Be("Rent · $1,200.00");
-        byKey[("Payment", seeded.Payment.Id)].UnitId.Should().Be(seeded.Unit.Id);
+        byKey[("TenantAccount", seeded.Account.Id)].Label.Should().Be("TA-1A");
+        byKey[("TenantAccount", seeded.Account.Id)].UnitId.Should().Be(seeded.Unit.Id);
         byKey[("Expense", seeded.Expense.Id)].Label.Should().Be("Plumbing parts");
         byKey[("Expense", seeded.Expense.Id)].UnitId.Should().Be(seeded.Unit.Id);
 
@@ -139,6 +139,7 @@ public class DashboardRecentActivityTests : IDisposable
         };
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = "1A",
             MarketRent = 1200m,
@@ -148,20 +149,36 @@ public class DashboardRecentActivityTests : IDisposable
         var tenant1 = Tenant("Maria", "Tenant", baseTime);
         var tenant2 = Tenant("Liam", "Renter", baseTime);
         var tenant3 = Tenant("Noah", "Lessee", baseTime);
-        var lease = new Lease
+        var actor = new ApplicationUser
+        {
+            PortfolioId = PortfolioId,
+            UserName = "activity@example.test",
+            NormalizedUserName = "ACTIVITY@EXAMPLE.TEST",
+            Email = "activity@example.test",
+            NormalizedEmail = "ACTIVITY@EXAMPLE.TEST",
+            DisplayName = "Activity Actor",
+        };
+        var relationship = new LeaseManagement
         {
             PortfolioId = PortfolioId,
             Property = property,
             Unit = unit,
-            Tenant = tenant1,
-            LeaseNumber = "L-1A",
-            Status = LeaseStatus.Active,
-            StartDate = baseTime.AddMonths(-1),
-            EndDate = baseTime.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = baseTime,
-            UpdatedAt = baseTime,
+            RelationshipNumber = "REL-1A",
+            EndingDisposition = LeaseManagementEndingDisposition.Undecided,
+            CreatedAtUtc = baseTime,
+            UpdatedAtUtc = baseTime,
+            RowVersion = Guid.NewGuid(),
+            CreatedByUser = actor,
+        };
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            AccountNumber = "TA-1A",
+            Currency = "USD",
+            OpenedAtUtc = baseTime,
+            CreatedAtUtc = baseTime,
+            CreatedByUser = actor,
         };
         var workOrder = new WorkOrder
         {
@@ -171,18 +188,6 @@ public class DashboardRecentActivityTests : IDisposable
             Title = "Fix sink",
             Description = "Leak under the kitchen sink",
             RequestedAt = baseTime,
-            UpdatedAt = baseTime,
-        };
-        var payment = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = baseTime.Date,
-            PaidDate = baseTime.Date,
-            CreatedAt = baseTime,
             UpdatedAt = baseTime,
         };
         var expense = new Expense
@@ -197,7 +202,7 @@ public class DashboardRecentActivityTests : IDisposable
             UpdatedAt = baseTime,
         };
 
-        _db.AddRange(property, unit, tenant1, tenant2, tenant3, lease, workOrder, payment, expense);
+        _db.AddRange(property, unit, tenant1, tenant2, tenant3, actor, relationship, account, workOrder, expense);
         _db.SaveChanges();
 
         // Nine audit rows (<= the Take(10) cap), newest first by timestamp. One row references an
@@ -207,15 +212,15 @@ public class DashboardRecentActivityTests : IDisposable
             Audit("Tenant", tenant2.Id, AuditLogOperation.Updated, baseTime, 2),
             Audit("Tenant", tenant3.Id, AuditLogOperation.Created, baseTime, 3),
             Audit("Unit", unit.Id, AuditLogOperation.Updated, baseTime, 4),
-            Audit("Lease", lease.Id, AuditLogOperation.Created, baseTime, 5),
+            Audit(nameof(LeaseManagement), relationship.Id, AuditLogOperation.Created, baseTime, 5),
             Audit("WorkOrder", workOrder.Id, AuditLogOperation.Created, baseTime, 6),
             Audit("Property", property.Id, AuditLogOperation.Updated, baseTime, 7),
-            Audit("Payment", payment.Id, AuditLogOperation.Created, baseTime, 8),
+            Audit(nameof(TenantAccount), account.Id, AuditLogOperation.Updated, baseTime, 8),
             Audit("Expense", expense.Id, AuditLogOperation.Updated, baseTime, 9),
             Audit("Conversation", 999, AuditLogOperation.Created, baseTime, 10));
         _db.SaveChanges();
 
-        return new SeededActivityGraph(property, unit, tenant1, tenant2, tenant3, lease, workOrder, payment, expense);
+        return new SeededActivityGraph(property, unit, tenant1, tenant2, tenant3, relationship, account, workOrder, expense);
     }
 
     private Tenant Tenant(string first, string last, DateTime now) => new()
@@ -244,8 +249,8 @@ public class DashboardRecentActivityTests : IDisposable
         Tenant Tenant1,
         Tenant Tenant2,
         Tenant Tenant3,
-        Lease Lease,
+        LeaseManagement Relationship,
+        TenantAccount Account,
         WorkOrder WorkOrder,
-        Payment Payment,
         Expense Expense);
 }
