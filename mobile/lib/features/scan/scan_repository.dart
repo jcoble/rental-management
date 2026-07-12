@@ -127,8 +127,8 @@ class ScanRepository {
         ),
         'targetEntityType': targetEntityType,
         'clientOperationId': clientOperationId ?? const Uuid().v4(),
-        if (propertyId != null) 'propertyId': propertyId,
-        if (unitId != null) 'unitId': unitId,
+        ?'propertyId': propertyId,
+        ?'unitId': unitId,
         if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
           'sourceLabel': sourceLabel.trim(),
       });

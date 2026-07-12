@@ -43,7 +43,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     public async Task SaveAsync_ContentChangeMarksPreviouslyPublishedGuidedVersionForRepublish()
     {
         var unit = SeedUnit();
-        await _service.GenerateAsync(PortfolioId, unit.Id, 42);
+        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
         await _service.SaveAsync(PortfolioId, unit.Id, new SaveListingWorkspaceRequest
         {
             ZillowGuided = new SaveGuidedPublicationRequest { MarkCurrentVersionPublished = true },
