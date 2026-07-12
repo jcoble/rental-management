@@ -100,6 +100,7 @@ public interface IAtomicWriteAttempt
     IAtomicScanConfirmationPersistence ScanConfirmation { get; }
     IAtomicScheduledFinancePersistence ScheduledFinance { get; }
     IAtomicProviderInboxPersistence ProviderInbox { get; }
+    IAtomicTenantMoneyPersistence TenantMoney { get; }
     IAtomicPendingFileUploadPersistence PendingFileUploads { get; }
     IAtomicLeaseMutationPersistence Leasing { get; }
 
@@ -161,6 +162,27 @@ public interface IAtomicProviderInboxPersistence
         string claimOwner,
         Guid claimToken,
         CancellationToken ct = default);
+}
+
+/// <summary>Set-based tenant-ledger operations owned by the current atomic attempt.</summary>
+public interface IAtomicTenantMoneyPersistence
+{
+    Task<AtomicLedgerAllocationSummary> AllocateOldestChargesAsync(
+        int portfolioId,
+        int tenantAccountId,
+        long creditEntryId,
+        decimal availableAmount,
+        string businessKeyPrefix,
+        int createdByUserId,
+        DateTime allocatedAtUtc,
+        string? entryType = null,
+        CancellationToken ct = default);
+}
+
+public sealed class AtomicLedgerAllocationSummary
+{
+    public int AllocationCount { get; set; }
+    public decimal AllocatedAmount { get; set; }
 }
 
 /// <summary>One exact pending-blob admission expected by an atomic finalizer.</summary>

@@ -412,6 +412,8 @@ public class ScreeningServiceTests : IDisposable
             Mock.Of<IAtomicScheduledFinancePersistence>();
         public IAtomicProviderInboxPersistence ProviderInbox =>
             Mock.Of<IAtomicProviderInboxPersistence>();
+        public IAtomicTenantMoneyPersistence TenantMoney =>
+            Mock.Of<IAtomicTenantMoneyPersistence>();
         public IAtomicPendingFileUploadPersistence PendingFileUploads =>
             Mock.Of<IAtomicPendingFileUploadPersistence>();
         public IAtomicLeaseMutationPersistence Leasing => Mock.Of<IAtomicLeaseMutationPersistence>();
