@@ -112,6 +112,7 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 // config-selected; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
 builder.Services.AddScoped<RentalCommand.Data.Outbox.IOutboxClaimStore, RentalCommand.Data.Outbox.OutboxClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Notifications.ITenantNoticeWorkClaimStore, RentalCommand.Data.Notifications.TenantNoticeWorkClaimStore>();
 builder.Services.AddScoped<RentalCommand.Data.Scanning.IScanProcessingClaimStore,
     RentalCommand.Data.Scanning.ScanProcessingClaimStore>();
 builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimStore,

@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Api.Services.Domain;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -36,17 +37,20 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
     private readonly RentalCommandDbContext _db;
     private readonly IRlsExecutionContext _rls;
     private readonly TimeProvider _timeProvider;
+    private readonly INotificationFoundationService? _notificationFoundation;
 
     public CanonicalAccountBootstrapService(
         UserManager<ApplicationUser> users,
         RentalCommandDbContext db,
         IRlsExecutionContext rls,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        INotificationFoundationService? notificationFoundation = null)
     {
         _users = users;
         _db = db;
         _rls = rls;
         _timeProvider = timeProvider;
+        _notificationFoundation = notificationFoundation;
     }
 
     public async Task<CanonicalAccountBootstrapResult> CreateAsync(
@@ -165,6 +169,10 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         // the explicit context-scoped OwnerUserAccess created above.
         user.PortfolioId = portfolio.Id;
         await _db.SaveChangesAsync(ct);
+        if (_notificationFoundation is not null)
+        {
+            await _notificationFoundation.SeedSuppliedTemplatesAsync(portfolio.Id, user.Id, ct);
+        }
         await transaction.CommitAsync(ct);
         return new CanonicalAccountBootstrapResult(user, []);
     }

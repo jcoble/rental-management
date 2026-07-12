@@ -48,6 +48,7 @@ public static class CapabilityKeys
     public const string MoneyDisbursementsManage = "money.disbursements.manage";
     public const string MoneyReconciliationDestructive = "money.reconciliation.destructive";
     public const string AccountDestructiveActions = "account.destructive-actions";
+    public const string NotificationsManage = "notifications.manage";
 }
 
 /// <summary>
@@ -124,6 +125,7 @@ public static class AccessCatalog
         new(34, CapabilityKeys.MoneyReconciliationDestructive, "Perform destructive reconciliation actions.", CapabilityAuthorizationTargetKind.Workspace),
         new(35, CapabilityKeys.AccountDestructiveActions, "Perform destructive workspace or account actions.", CapabilityAuthorizationTargetKind.Workspace),
         new(36, CapabilityKeys.LeasingApplicationFeesCollect, "Collect in-scope application fees without refund authority.", CapabilityAuthorizationTargetKind.Property),
+        new(37, CapabilityKeys.NotificationsManage, "Manage Team routing, tenant notice policy, delivery configuration, and notice templates.", CapabilityAuthorizationTargetKind.Workspace),
     ];
 
     public static readonly IReadOnlyDictionary<int, IReadOnlyList<int>> CapabilityIdsByRole =

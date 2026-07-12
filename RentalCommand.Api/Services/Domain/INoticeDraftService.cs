@@ -16,6 +16,5 @@ public interface INoticeDraftService
         GenerateNoticeDraftsRequest? request = null,
         CancellationToken ct = default);
     Task<NoticeDraftResponse?> UpdateAsync(int portfolioId, int id, UpdateNoticeDraftRequest request, CancellationToken ct = default);
-    Task<NoticeDraftResponse?> ApproveAsync(int portfolioId, int id, ApproveNoticeDraftRequest request, CancellationToken ct = default);
     Task<NoticeDraftResponse?> DismissAsync(int portfolioId, int id, CancellationToken ct = default);
 }

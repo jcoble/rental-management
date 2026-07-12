@@ -56,24 +56,6 @@ public class NoticeDraftsController : ManagementControllerBase
         return updated == null ? NotFound(new { error = "Draft notice not found or no longer editable" }) : Ok(updated);
     }
 
-    /// <summary>
-    /// Approves a draft notice and sends it through the tenant conversation channel fan-out. Returns 422
-    /// when the Fair Housing review flags the copy and <c>acknowledgedFairHousingReview</c> is false; the
-    /// body carries a <c>fairHousingConcerns</c> list and the draft remains editable.
-    /// </summary>
-    [HttpPost("{id:int}/approve")]
-    [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
-    public async Task<ActionResult<NoticeDraftResponse>> Approve(
-        int id,
-        [FromBody] ApproveNoticeDraftRequest request,
-        CancellationToken ct)
-    {
-        var updated = await _service.ApproveAsync(GetPortfolioId(), id, request, ct);
-        return updated == null ? NotFound(new { error = "Draft notice not found or cannot be approved" }) : Ok(updated);
-    }
-
     [HttpPost("{id:int}/dismiss")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

@@ -20,19 +20,22 @@ public class PortfolioService : IPortfolioService
     private readonly IDataUpdateService _dataUpdate;
     private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly TimeProvider _timeProvider;
+    private readonly INotificationFoundationService? _notificationFoundation;
 
     public PortfolioService(
         RentalCommandDbContext db,
         UserManager<ApplicationUser> userManager,
         IDataUpdateService dataUpdate,
         ISelfOwnerProvisioner selfOwnerProvisioner,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        INotificationFoundationService? notificationFoundation = null)
     {
         _db = db;
         _userManager = userManager;
         _dataUpdate = dataUpdate;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _timeProvider = timeProvider;
+        _notificationFoundation = notificationFoundation;
     }
 
     public async Task<IReadOnlyList<PortfolioResponse>> ListForUserAsync(int portfolioId, CancellationToken ct = default)
@@ -156,6 +159,7 @@ public class PortfolioService : IPortfolioService
             UpdatedAt = now,
         };
 
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         _db.Portfolios.Add(entity);
         await _db.SaveChangesAsync(ct);
 
@@ -169,9 +173,14 @@ public class PortfolioService : IPortfolioService
             // The landlord IS the first owner — auto-create a primary self-owner so the new portfolio is
             // never owner-less and onboarding skips the manual "add an owner" step. Idempotent.
             await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, entity.Id, ct);
+            if (_notificationFoundation is not null)
+            {
+                await _notificationFoundation.SeedSuppliedTemplatesAsync(entity.Id, user.Id, ct);
+            }
         }
 
         var response = PortfolioResponse.FromEntity(entity);
+        await transaction.CommitAsync(ct);
         await _dataUpdate.BroadcastEntityUpdateAsync(entity.Id, EntityType, entity.Id, response, ct);
         return response;
     }

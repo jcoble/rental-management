@@ -21,9 +21,6 @@ public class NotificationsConfig
     // IsActive flag is the real switch — this is just a master kill switch for the whole feature.
     public bool EnableRecurringMaintenance { get; set; } = true;
 
-    // Whether to enqueue tenant-facing SMS/email notices from the automations (off until providers set).
-    public bool NotifyTenants { get; set; } = false;
-
     // Proactive owner-facing daily briefing delivery. Defaults off until recipients are configured.
     public bool EnableDailyBriefingMessages { get; set; } = false;
     public DailyBriefingOptions DailyBriefing { get; set; } = new();

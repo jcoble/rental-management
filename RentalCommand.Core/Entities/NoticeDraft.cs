@@ -24,6 +24,9 @@ public class NoticeDraft
 
     public DateTime TriggerDate { get; set; }
     public int? ConversationId { get; set; }
+    public int? TenantNoticePolicyId { get; set; }
+    public int? WorkspaceNoticeTemplateVersionId { get; set; }
+    public long? RenderedNoticeId { get; set; }
     public string? ApprovedChannels { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
