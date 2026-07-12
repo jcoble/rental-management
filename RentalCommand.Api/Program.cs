@@ -133,6 +133,8 @@ JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<RentalCommand.Api.Data.IRlsExecutionContext,
+    RentalCommand.Api.Data.RlsExecutionContext>();
 
 // Converted commands opt into the atomic executor. Both interceptors are attached to the shared
 // context during this unmerged rewrite: the legacy audit interceptor stands down only while an
@@ -486,9 +488,15 @@ var platformAdminAllowlist = RentalCommand.Api.Auth.PlatformAdminPolicy.BuildAll
 builder.Services.AddAuthorization(options =>
 {
     RentalCommand.Api.Auth.PlatformAdminPolicy.Register(options, platformAdminAllowlist);
+    options.AddPolicy(
+        RentalCommand.Api.Auth.CanonicalManagementPolicy.Name,
+        policy => policy
+            .RequireAuthenticatedUser()
+            .AddRequirements(new RentalCommand.Api.Auth.CanonicalManagementRequirement()));
 });
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, CapabilityAuthorizationPolicyProvider>();
 builder.Services.AddScoped<IAuthorizationHandler, CapabilityAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, CanonicalManagementAuthorizationHandler>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IActiveAccessContextResolver,
     ActiveAccessContextResolver>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAuthorizationEvaluator,
@@ -514,6 +522,7 @@ builder.Services.AddSingleton(serviceProvider =>
 builder.Services.AddScoped<IAtomicAuthSessionCredentialService, AtomicAuthSessionCredentialService>();
 builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
 builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
+builder.Services.AddScoped<ICanonicalAccountBootstrapService, CanonicalAccountBootstrapService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 // On-demand tenant portal provisioning: shared by the startup seeder and the staff "grant portal
@@ -622,6 +631,9 @@ var app = builder.Build();
 // Migration is idempotent (no-op when already applied); seeding is gated by Seed:Enabled (Development).
 using (var scope = app.Services.CreateScope())
 {
+    using var rlsBypass = scope.ServiceProvider
+        .GetRequiredService<RentalCommand.Api.Data.IRlsExecutionContext>()
+        .BeginBypass(RentalCommand.Api.Data.RlsBypassReason.StartupMigrationAndSeed);
     var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
     // Advisory-locked so the API and Engine (both self-migrate on startup) don't race on a fresh batch.
     await DatabaseMigrator.MigrateWithLockAsync(db);

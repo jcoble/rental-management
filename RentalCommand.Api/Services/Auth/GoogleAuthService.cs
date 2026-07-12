@@ -1,13 +1,9 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -55,35 +51,29 @@ public interface IGoogleAuthService : RentalCommand.Core.Atomic.IAtomicRemoteDep
 public sealed class GoogleAuthService : IGoogleAuthService
 {
     private readonly UserManager<ApplicationUser> _userManager;
-    private readonly IJwtTokenService _tokenService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GoogleAuthOptions _options;
-    private readonly RentalCommandDbContext _db;
-    private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
+    private readonly ICanonicalAccountBootstrapService _accountBootstrap;
+    private readonly IAuthService _authService;
     private readonly ILogger<GoogleAuthService> _logger;
-    private readonly TimeProvider _timeProvider;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
     private const string TokenInfoEndpoint = "https://oauth2.googleapis.com/tokeninfo";
 
     public GoogleAuthService(
         UserManager<ApplicationUser> userManager,
-        IJwtTokenService tokenService,
         IHttpClientFactory httpClientFactory,
         IOptions<GoogleAuthOptions> options,
-        RentalCommandDbContext db,
-        Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
-        ILogger<GoogleAuthService> logger,
-        TimeProvider timeProvider)
+        ICanonicalAccountBootstrapService accountBootstrap,
+        IAuthService authService,
+        ILogger<GoogleAuthService> logger)
     {
         _userManager = userManager;
-        _tokenService = tokenService;
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
-        _db = db;
-        _selfOwnerProvisioner = selfOwnerProvisioner;
+        _accountBootstrap = accountBootstrap;
+        _authService = authService;
         _logger = logger;
-        _timeProvider = timeProvider;
     }
 
     public async Task<GoogleAuthResult> AuthenticateAsync(string code, string redirectUri, CancellationToken ct = default)
@@ -149,8 +139,8 @@ public sealed class GoogleAuthService : IGoogleAuthService
 
     /// <summary>
     /// Shared completion for both the web authorization-code flow and the native id_token flow:
-    /// validates the email claim, finds/creates the local user, provisions their portfolio + Admin
-    /// role (idempotent), and issues our JWT pair.
+    /// validates the email claim, finds/creates the local user through the one canonical account
+    /// bootstrap, and starts the same workspace-scoped session used by password login.
     /// </summary>
     private async Task<GoogleAuthResult> CompleteSignInAsync(Dictionary<string, string> claims, CancellationToken ct)
     {
@@ -159,43 +149,49 @@ public sealed class GoogleAuthService : IGoogleAuthService
             return GoogleAuthResult.Fail("Google id_token did not contain an email claim.");
         }
 
-        var user = await FindOrCreateUserAsync(email, claims, ct);
-        if (user == null)
+        var user = await _userManager.FindByEmailAsync(email);
+        if (user is null)
         {
-            return GoogleAuthResult.Fail($"Failed to find or create user for email {email}.");
+            claims.TryGetValue("name", out var displayName);
+            var bootstrap = await _accountBootstrap.CreateAsync(
+                email,
+                string.IsNullOrWhiteSpace(displayName) ? email : displayName,
+                password: null,
+                emailConfirmed: true,
+                ct);
+            if (!bootstrap.Succeeded || bootstrap.User is null)
+            {
+                _logger.LogWarning(
+                    "Canonical account bootstrap failed for Google sign-in {Email}: {Errors}",
+                    email,
+                    string.Join("; ", bootstrap.Errors));
+                return GoogleAuthResult.Fail("Failed to create the Rental Command account.");
+            }
+
+            user = bootstrap.User;
+            _logger.LogInformation(
+                "Created Google user {Email} (id {UserId}) with canonical workspace access.",
+                email,
+                user.Id);
+        }
+        else if (!user.EmailConfirmed)
+        {
+            user.EmailConfirmed = true;
+            var update = await _userManager.UpdateAsync(user);
+            if (!update.Succeeded)
+            {
+                _logger.LogWarning(
+                    "Could not confirm Google-verified account {Email}: {Errors}",
+                    email,
+                    string.Join("; ", update.Errors.Select(error => error.Description)));
+                return GoogleAuthResult.Fail("Failed to verify the Rental Command account.");
+            }
         }
 
-        // A brand-new Google user (or one created before this fix) needs a sandbox portfolio, the
-        // Admin role (a self-service owner administers their own portfolio), and a UserAccount staff
-        // row. Done BEFORE issuing tokens so the JWT carries portfolioId + roles. Each step is
-        // idempotent, so this also back-fills users created before these fixes.
-        await EnsureOwnerProvisioningAsync(user);
-
-        var roles = await _userManager.GetRolesAsync(user);
-        var tokens = await _tokenService.GenerateTokensAsync(user, roles);
-
-        // Login timing stays on the REAL clock (auth/security tracking), never the simulation clock.
-        user.LastLoginAt = DateTime.UtcNow;
-        await _userManager.UpdateAsync(user);
-
-        var response = new LoginResponse
-        {
-            AccessToken = tokens.AccessToken,
-            AccessTokenExpiration = tokens.AccessTokenExpiration,
-            User = new UserDto
-            {
-                Id = user.Id,
-                Email = user.Email ?? string.Empty,
-                DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
-                PortfolioId = user.PortfolioId,
-                OwnerEntityId = user.OwnerEntityId,
-                TenantId = user.TenantId,
-                Roles = roles.ToList(),
-                EmailVerified = user.EmailConfirmed
-            }
-        };
-
-        return GoogleAuthResult.Ok(response, tokens);
+        var auth = await _authService.LoginExternalAsync(user.Id, ct: ct);
+        return auth.Success && auth.Response is not null && auth.Tokens is not null
+            ? GoogleAuthResult.Ok(auth.Response, auth.Tokens)
+            : GoogleAuthResult.Fail(auth.Error ?? "Unable to start a Rental Command session.");
     }
 
     private async Task<string?> ExchangeCodeAsync(string code, string redirectUri, CancellationToken ct)
@@ -289,128 +285,4 @@ public sealed class GoogleAuthService : IGoogleAuthService
         return claims;
     }
 
-    private async Task<ApplicationUser?> FindOrCreateUserAsync(
-        string email,
-        Dictionary<string, string> claims,
-        CancellationToken ct)
-    {
-        var existing = await _userManager.FindByEmailAsync(email);
-        if (existing != null)
-        {
-            // If the email wasn't confirmed before, mark it confirmed now — Google verified it.
-            if (!existing.EmailConfirmed)
-            {
-                existing.EmailConfirmed = true;
-                await _userManager.UpdateAsync(existing);
-            }
-            return existing;
-        }
-
-        // Create a new user. Google has verified the email, so no confirmation needed.
-        claims.TryGetValue("name", out var displayName);
-        var user = new ApplicationUser
-        {
-            UserName = email,
-            Email = email,
-            EmailConfirmed = true,
-            DisplayName = displayName ?? email,
-            CreatedAt = _timeProvider.UtcNow()
-        };
-
-        var result = await _userManager.CreateAsync(user);
-        if (!result.Succeeded)
-        {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            _logger.LogWarning("Failed to create user for Google sign-in ({Email}): {Errors}", email, errors);
-            return null;
-        }
-
-        _logger.LogInformation("Created new user {Email} (id {UserId}) via Google sign-in.", email, user.Id);
-        return user;
-    }
-
-    /// <summary>
-    /// Ensures a Google user is fully provisioned as the owner of their portfolio: an EMPTY
-    /// <see cref="Portfolio"/> with the first-login Sandbox-vs-Live choice still pending, the
-    /// <see cref="UserRole.Admin"/> Identity role, and a <see cref="UserAccount"/> staff row. Google
-    /// sign-in (unlike email/password registration) did none of this, so the user had no portfolio
-    /// (dashboard failed) and no role (only Dashboard + Help showed in the nav). Mirrors the seeded-admin
-    /// pattern and <c>AuthService.ProvisionPendingPortfolioAsync</c>: no demo data is seeded here — the
-    /// user picks Sandbox-vs-Live on first login. Every step is idempotent, so existing role-less users
-    /// created before this fix are back-filled on their next login.
-    /// </summary>
-    private async Task EnsureOwnerProvisioningAsync(ApplicationUser user)
-    {
-        try
-        {
-            // 1) Empty portfolio with the choice pending — only if the user has none yet. No demo seed.
-            if (user.PortfolioId == null)
-            {
-                var now = _timeProvider.UtcNow();
-                var portfolio = new Portfolio
-                {
-                    Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
-                    ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
-                    Status = PortfolioStatus.Active,
-                    Currency = "USD",
-                    // Pending the first-login choice: not a sandbox yet, no demo data.
-                    IsSandbox = false,
-                    SandboxSeededAtUtc = null,
-                    Settings = Domain.PortfolioOnboarding.WriteChoice(null, Domain.OnboardingChoice.Pending),
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                };
-                _db.Portfolios.Add(portfolio);
-                await _db.SaveChangesAsync();
-
-                user.PortfolioId = portfolio.Id;
-                await _userManager.UpdateAsync(user);
-
-                _logger.LogInformation(
-                    "Provisioned pending portfolio {PortfolioId} (awaiting Sandbox/Live choice) for Google user {Email} (id {UserId}).",
-                    portfolio.Id, user.Email, user.Id);
-            }
-
-            // 2) Admin role — a self-service owner administers their own portfolio. Back-fills
-            //    existing role-less Google users too.
-            if (!await _userManager.IsInRoleAsync(user, nameof(UserRole.Admin)))
-            {
-                await _userManager.AddToRoleAsync(user, nameof(UserRole.Admin));
-                _logger.LogInformation("Granted Admin role to Google user {Email} (id {UserId}).", user.Email, user.Id);
-            }
-
-            // 3) UserAccount staff row (mirrors the seeded admin / AdminUsersController.Create) so the
-            //    owner appears under User Access and any UserAccount-scoped logic resolves them.
-            if (user.PortfolioId is int pid &&
-                !await _db.UserAccounts.AnyAsync(a => a.PortfolioId == pid && a.Email == user.Email))
-            {
-                var ts = _timeProvider.UtcNow();
-                _db.UserAccounts.Add(new UserAccount
-                {
-                    PortfolioId = pid,
-                    Email = user.Email!,
-                    DisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName!,
-                    PasswordHash = string.Empty, // Identity owns the credential
-                    Role = UserRole.Admin,
-                    IsActive = true,
-                    CreatedAt = ts,
-                    UpdatedAt = ts,
-                });
-                await _db.SaveChangesAsync();
-            }
-
-            // 4) Primary self-owner — the landlord IS the first owner. Idempotent, so this also
-            //    back-fills Google users created before this step on their next login.
-            if (user.PortfolioId is int ownerPid)
-            {
-                await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, ownerPid);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Failed owner provisioning (portfolio/role/account) for Google user {Email} (id {UserId}); login still succeeds.",
-                user.Email, user.Id);
-        }
-    }
 }

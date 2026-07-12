@@ -1,8 +1,12 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Auth;
 
@@ -17,6 +21,13 @@ public static class CapabilityPolicy
         return Prefix + capabilityKey;
     }
 }
+
+public static class CanonicalManagementPolicy
+{
+    public const string Name = "CanonicalManagement";
+}
+
+public sealed record CanonicalManagementRequirement : IAuthorizationRequirement;
 
 public sealed record CapabilityRequirement(string CapabilityKey) : IAuthorizationRequirement;
 
@@ -104,7 +115,17 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
             return;
         }
 
-        if (context.Resource is not WorkspaceAuthorizationTarget target ||
+        var target = context.Resource switch
+        {
+            WorkspaceAuthorizationTarget typedTarget => typedTarget,
+            HttpContext httpContext when
+                httpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+                value is ActiveAccessContext active &&
+                active.AccessContextId == activeContext.AccessContextId =>
+                    new WorkspaceCapabilityAuthorizationTarget(active.PortfolioId),
+            _ => null,
+        };
+        if (target is null ||
             target.PortfolioId != activeContext.PortfolioId)
         {
             return;
@@ -133,5 +154,57 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
                int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out userId) &&
                int.TryParse(principal.FindFirstValue("ctx"), out accessContextId) &&
                long.TryParse(principal.FindFirstValue("ar"), out accessRevision);
+    }
+}
+
+/// <summary>
+/// Coarse management-surface admission for canonical tokens. It proves in one SQL statement that
+/// the selected context owns an effective Team assignment with at least one non-assigned-work
+/// capability. Endpoint queries and commands still apply their typed capability/resource checks.
+/// Relationship-only Tenant/Owner contexts and assigned-work-only technicians fail closed.
+/// </summary>
+public sealed class CanonicalManagementAuthorizationHandler
+    : AuthorizationHandler<CanonicalManagementRequirement>
+{
+    private readonly RentalCommand.Data.RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
+
+    public CanonicalManagementAuthorizationHandler(
+        RentalCommand.Data.RentalCommandDbContext db,
+        TimeProvider timeProvider)
+    {
+        _db = db;
+        _timeProvider = timeProvider;
+    }
+
+    protected override async Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        CanonicalManagementRequirement requirement)
+    {
+        if (context.Resource is not HttpContext httpContext ||
+            !httpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext active ||
+            active.WorkspaceMembershipId is null)
+        {
+            return;
+        }
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var allowed = await _db.MembershipRoleAssignments
+            .AsNoTracking()
+            .WhereEffective(now)
+            .AnyAsync(assignment =>
+                assignment.WorkspaceMembershipId == active.WorkspaceMembershipId.Value &&
+                assignment.PortfolioId == active.PortfolioId &&
+                assignment.WorkspaceMembership!.AccessContextId == active.AccessContextId &&
+                assignment.WorkspaceMembership.AccessContext!.UserId == active.UserId &&
+                assignment.WorkspaceMembership.AccessContext.AccessRevision == active.AccessRevision &&
+                assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                    profileCapability.CapabilityDefinition!.AuthorizationTargetKind !=
+                    CapabilityAuthorizationTargetKind.WorkOrder));
+        if (allowed)
+        {
+            context.Succeed(requirement);
+        }
     }
 }

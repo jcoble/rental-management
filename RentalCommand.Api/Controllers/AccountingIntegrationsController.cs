@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 
@@ -23,7 +25,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/integrations/accounting")]
 [Produces("application/json")]
-[Authorize(Roles = "Admin,Manager")]
+[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.IntegrationsManage)]
 public class AccountingIntegrationsController : ManagementControllerBase
 {
     private readonly AccountingConnectionService _service;

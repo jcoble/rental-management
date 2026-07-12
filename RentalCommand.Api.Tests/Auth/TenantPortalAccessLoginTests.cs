@@ -101,12 +101,6 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
 
     private AuthService CreateAuthService()
     {
-        var tokenService = new Mock<IJwtTokenService>();
-        tokenService
-            .Setup(t => t.GenerateTokensAsync(
-                It.IsAny<ApplicationUser>(), It.IsAny<IList<string>>(), It.IsAny<string?>(), It.IsAny<string?>()))
-            .ReturnsAsync(new TokenResult { AccessToken = "test", AccessTokenExpiration = DateTime.UtcNow.AddMinutes(15) });
-
         var userMigration = new Mock<IUserMigrationService>();
         userMigration.Setup(m => m.RequiresPasswordResetAsync(It.IsAny<ApplicationUser>())).ReturnsAsync(false);
         var contextSelection = new Mock<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>();
@@ -118,7 +112,6 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
         return new AuthService(
             _userManager,
             CreateSignInManager(_userManager),
-            tokenService.Object,
             Mock.Of<IAtomicAuthSessionCredentialService>(),
             Mock.Of<ICanonicalAccessTokenService>(),
             contextSelection.Object,
@@ -134,7 +127,7 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
             Mock.Of<IAuthEmailSender>(),
             _ctx.Db,
             new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
-            Mock.Of<ISelfOwnerProvisioner>(),
+            Mock.Of<ICanonicalAccountBootstrapService>(),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
     }

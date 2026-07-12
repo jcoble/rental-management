@@ -70,10 +70,6 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         ".ppt", ".pptx"
     };
 
-    private static readonly HashSet<string> StaffDocumentRoles = ManagementControllerBase.StaffRoles
-        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
     private readonly IDocumentService _documents;
     private readonly IFileStorage _storage;
     private readonly RentalCommandDbContext _db;
@@ -132,7 +128,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             || !Enum.IsDefined(target))
             return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
         var tenantId = GetTenantIdOrNull();
-        var isStaff = GetRoles().Any(role => StaffDocumentRoles.Contains(role));
+        var isStaff = HasWorkspaceMembership();
         if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
@@ -336,7 +332,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         var portfolioId = GetPortfolioId();
         var tenantId = GetTenantIdOrNull();
-        var isStaff = GetRoles().Any(role => StaffDocumentRoles.Contains(role));
+        var isStaff = HasWorkspaceMembership();
         var deleted = await _documents.DeleteAsync(
             portfolioId,
             id,
@@ -363,7 +359,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     private async Task<bool> TenantMayAccessEntityAsync(
         string? entityType, int? entityId, int portfolioId, CancellationToken ct)
     {
-        if (GetRoles().Any(role => StaffDocumentRoles.Contains(role)))
+        if (HasWorkspaceMembership())
         {
             // Staff/owner/manager/agent: not tenant-constrained (portfolio scope already applied).
             return true;

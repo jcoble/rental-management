@@ -25,10 +25,7 @@ public sealed class CanonicalAccessContextMiddleware
         TimeProvider timeProvider)
     {
         var principal = httpContext.User;
-        var hasAnyCoordinate = principal.HasClaim(claim =>
-            claim.Type is "sid" or "ctx" or "ar");
-
-        if (principal.Identity?.IsAuthenticated == true && hasAnyCoordinate)
+        if (principal.Identity?.IsAuthenticated == true)
         {
             if (!Guid.TryParse(principal.FindFirstValue("sid"), out var sessionId) ||
                 !int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) ||

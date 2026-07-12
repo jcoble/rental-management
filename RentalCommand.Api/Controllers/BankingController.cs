@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -13,7 +15,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/banking")]
 [Produces("application/json")]
-[Authorize(Roles = "Admin,Manager")]
+[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
 public class BankingController : ManagementControllerBase
 {
     private readonly IBankingService _service;
