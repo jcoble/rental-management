@@ -6,6 +6,10 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Auth;
+using Microsoft.Extensions.Options;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -63,7 +67,7 @@ public class AuthUserResult
 
 public interface IAuthService
 {
-    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null);
     Task<AuthResult> RegisterAsync(RegisterRequest request);
     Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
     Task<AuthUserResult> ConfirmEmailAsync(string userId, string token);
@@ -99,6 +103,11 @@ public class AuthService : IAuthService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IJwtTokenService _tokenService;
+    private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
+    private readonly ICanonicalAccessTokenService _canonicalTokens;
+    private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
+    private readonly IAccessEnvelopeQuery _accessEnvelopes;
+    private readonly AtomicAuthSessionCredentialOptions _credentialOptions;
     private readonly IUserMigrationService _userMigration;
     private readonly IAuthEmailSender _emailSender;
     private readonly RentalCommandDbContext _db;
@@ -111,6 +120,11 @@ public class AuthService : IAuthService
         UserManager<ApplicationUser> userManager,
         SignInManager<ApplicationUser> signInManager,
         IJwtTokenService tokenService,
+        IAtomicAuthSessionCredentialService atomicCredentials,
+        ICanonicalAccessTokenService canonicalTokens,
+        IEffectiveAccessContextSelectionQuery contextSelection,
+        IAccessEnvelopeQuery accessEnvelopes,
+        IOptions<AtomicAuthSessionCredentialOptions> credentialOptions,
         IUserMigrationService userMigration,
         IAuthEmailSender emailSender,
         RentalCommandDbContext db,
@@ -122,6 +136,11 @@ public class AuthService : IAuthService
         _userManager = userManager;
         _signInManager = signInManager;
         _tokenService = tokenService;
+        _atomicCredentials = atomicCredentials;
+        _canonicalTokens = canonicalTokens;
+        _contextSelection = contextSelection;
+        _accessEnvelopes = accessEnvelopes;
+        _credentialOptions = credentialOptions.Value;
         _userMigration = userMigration;
         _emailSender = emailSender;
         _db = db;
@@ -131,7 +150,7 @@ public class AuthService : IAuthService
         _timeProvider = timeProvider;
     }
 
-    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null)
+    public async Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null)
     {
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null)
@@ -172,19 +191,52 @@ public class AuthService : IAuthService
             return AuthResult.Fail("EMAIL_NOT_VERIFIED: Please verify your email address before logging in.");
         }
 
-        // Login timing stays on the REAL clock (auth/security tracking), never the simulation clock.
-        user.LastLoginAt = DateTime.UtcNow;
-        await _userManager.UpdateAsync(user);
-
-        var roles = await _userManager.GetRolesAsync(user);
-        var tokens = await _tokenService.GenerateTokensAsync(user, roles, ipAddress, userAgent);
-
-        return AuthResult.Ok(new LoginResponse
+        var now = _timeProvider.UtcNow();
+        var contexts = await _contextSelection.ListAsync(user.Id, now);
+        if (contexts.Count == 0)
         {
-            AccessToken = tokens.AccessToken,
-            AccessTokenExpiration = tokens.AccessTokenExpiration,
-            User = await MapToUserDtoAsync(user, roles)
-        }, tokens);
+            return AuthResult.Fail("This account has no active workspace access.");
+        }
+
+        var selected = accessContextId is null
+            ? contexts.Count == 1 ? contexts[0] : null
+            : contexts.SingleOrDefault(item => item.AccessContextId == accessContextId.Value);
+        if (selected is null)
+        {
+            return AuthResult.Fail(
+                contexts.Count > 1
+                    ? "ACCESS_CONTEXT_REQUIRED: Select one of this account's active workspaces."
+                    : "The selected workspace is not available.",
+                AuthErrorType.BadRequest);
+        }
+
+        Guid? challengeId = null;
+        string? challengeBearer = null;
+        if (contexts.Count > 1)
+        {
+            var challenge = await _atomicCredentials.IssueContextSelectionChallengeAsync(user.Id);
+            if (!challenge.Issued || challenge.ChallengeBearer is null)
+            {
+                return AuthResult.Fail("Unable to authorize workspace selection.");
+            }
+
+            challengeId = challenge.ChallengeId;
+            challengeBearer = challenge.ChallengeBearer;
+        }
+
+        var session = await _atomicCredentials.StartAsync(new AtomicAuthSessionStartRequest(
+            Guid.NewGuid(), user.Id, selected.AccessContextId, challengeId, challengeBearer));
+        if (!session.Started || session.RefreshBearer is null)
+        {
+            return AuthResult.Fail("The selected workspace is no longer available.");
+        }
+
+        return await BuildCanonicalAuthResultAsync(
+            user,
+            session.AuthSessionId,
+            session.AccessContextId,
+            session.AccessRevision,
+            session.RefreshBearer);
     }
 
     public async Task<AuthResult> RegisterAsync(RegisterRequest request)
@@ -305,15 +357,36 @@ public class AuthService : IAuthService
 
     public async Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)
     {
-        var tokens = await _tokenService.RefreshTokenAsync(refreshToken, ipAddress, userAgent);
-        if (tokens == null)
+        var rotation = await _atomicCredentials.RotateAsync(
+            new AtomicAuthSessionRotationRequest(Guid.NewGuid(), refreshToken));
+        if (rotation.Status is not (SessionRefreshMutationStatus.Rotated or SessionRefreshMutationStatus.Recovered) ||
+            rotation.ReplacementBearer is null)
         {
             return AuthResult.Fail("Invalid or expired refresh token");
         }
 
-        var principal = _tokenService.ValidateAccessToken(tokens.AccessToken);
-        var userId = principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        var user = userId != null ? await _userManager.FindByIdAsync(userId) : null;
+        var now = _timeProvider.UtcNow();
+        var session = await (
+                from authSession in _db.AuthSessions.AsNoTracking()
+                join context in _db.WorkspaceAccessContexts.AsNoTracking()
+                    on authSession.ActiveAccessContextId equals context.Id
+                where authSession.Id == rotation.AuthSessionId &&
+                      authSession.UserId == context.UserId &&
+                      authSession.Status == AuthSessionStatus.Active &&
+                      authSession.RevokedAtUtc == null &&
+                      authSession.ExpiresAtUtc > now &&
+                      context.Status == WorkspaceAccessContextStatus.Active &&
+                      context.SuspendedAtUtc == null &&
+                      context.RevokedAtUtc == null
+                select new
+                {
+                    authSession.UserId,
+                    authSession.Id,
+                    ContextId = context.Id,
+                    context.AccessRevision,
+                })
+            .SingleOrDefaultAsync();
+        var user = session is null ? null : await _userManager.FindByIdAsync(session.UserId.ToString());
 
         if (user == null)
         {
@@ -325,13 +398,50 @@ public class AuthService : IAuthService
             return AuthResult.Fail("EMAIL_NOT_VERIFIED: Please verify your email address before logging in.");
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
+        return await BuildCanonicalAuthResultAsync(
+            user,
+            session!.Id,
+            session.ContextId,
+            session.AccessRevision,
+            rotation.ReplacementBearer);
+    }
+
+    private async Task<AuthResult> BuildCanonicalAuthResultAsync(
+        ApplicationUser user,
+        Guid sessionId,
+        int accessContextId,
+        long accessRevision,
+        string refreshBearer)
+    {
+        var envelope = await _accessEnvelopes.GetAsync(user.Id, accessContextId);
+        if (envelope is null || envelope.SelectedContext.AccessRevision != accessRevision)
+        {
+            return AuthResult.Fail("The selected workspace access changed. Sign in again.");
+        }
+
+        var access = _canonicalTokens.Issue(new CanonicalAccessCoordinates(
+            user.Id, sessionId, accessContextId, accessRevision));
+        var refreshExpiresAt = _timeProvider.UtcNow().AddDays(_credentialOptions.CredentialLifetimeDays);
+        var tokens = new TokenResult
+        {
+            AccessToken = access.Token,
+            AccessTokenExpiration = access.ExpiresAtUtc,
+            RefreshToken = refreshBearer,
+            RefreshTokenExpiration = refreshExpiresAt,
+        };
 
         return AuthResult.Ok(new LoginResponse
         {
-            AccessToken = tokens.AccessToken,
-            AccessTokenExpiration = tokens.AccessTokenExpiration,
-            User = await MapToUserDtoAsync(user, roles)
+            AccessToken = access.Token,
+            AccessTokenExpiration = access.ExpiresAtUtc,
+            Access = envelope,
+            User = new UserDto
+            {
+                Id = user.Id,
+                Email = user.Email ?? string.Empty,
+                DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
+                EmailVerified = user.EmailConfirmed,
+            },
         }, tokens);
     }
 

@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -23,7 +24,9 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/admin/users")]
 [Produces("application/json")]
-[Authorize(Roles = "Admin")]
+[ApiExplorerSettings(IgnoreApi = true)]
+[Authorize]
+[LegacyTeamApiUnavailable]
 public class AdminUsersController : ManagementControllerBase
 {
     private readonly UserManager<ApplicationUser> _userManager;

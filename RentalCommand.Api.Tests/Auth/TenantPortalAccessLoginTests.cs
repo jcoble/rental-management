@@ -55,7 +55,7 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
     }
 
     [Fact]
-    public async Task DisablingPortalAccess_BlocksLogin_AndReEnablingRestoresIt()
+    public async Task LegacyTenantRoleLogin_DoesNotBypassCanonicalAccessContext()
     {
         var tenant = SeedTenant(Email);
         (await _provisioning.EnsurePortalAccountForTenantAsync(tenant.Id, PortfolioId)).Status
@@ -63,8 +63,9 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
         var password = new SeedSettings().TenantPassword;
         var auth = CreateAuthService();
 
-        // Baseline: a freshly provisioned tenant can sign in.
-        (await auth.LoginAsync(Email, password)).Success.Should().BeTrue();
+        var baseline = await auth.LoginAsync(Email, password);
+        baseline.Success.Should().BeFalse();
+        baseline.Error.Should().Contain("no active workspace access");
 
         // Disable → the login is rejected with a "portal access off" message.
         (await _provisioning.SetPortalAccessAsync(tenant.Id, PortfolioId, enabled: false)).Access
@@ -73,10 +74,12 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
         blocked.Success.Should().BeFalse("a tenant whose portal access is turned off cannot sign in");
         blocked.Error.Should().Contain("portal access");
 
-        // Re-enable → the login works again.
+        // Re-enabling the legacy toggle cannot manufacture canonical relationship access.
         (await _provisioning.SetPortalAccessAsync(tenant.Id, PortfolioId, enabled: true)).Access
             .Should().Be(TenantPortalAccess.Active);
-        (await auth.LoginAsync(Email, password)).Success.Should().BeTrue("re-enabling restores the tenant's sign-in");
+        var reenabled = await auth.LoginAsync(Email, password);
+        reenabled.Success.Should().BeFalse();
+        reenabled.Error.Should().Contain("no active workspace access");
     }
 
     private Tenant SeedTenant(string email)
@@ -106,11 +109,27 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
 
         var userMigration = new Mock<IUserMigrationService>();
         userMigration.Setup(m => m.RequiresPasswordResetAsync(It.IsAny<ApplicationUser>())).ReturnsAsync(false);
+        var contextSelection = new Mock<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>();
+        contextSelection
+            .Setup(query => query.ListAsync(
+                It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<RentalCommand.Core.Authorization.EffectiveAccessContextOption>());
 
         return new AuthService(
             _userManager,
             CreateSignInManager(_userManager),
             tokenService.Object,
+            Mock.Of<IAtomicAuthSessionCredentialService>(),
+            Mock.Of<ICanonicalAccessTokenService>(),
+            contextSelection.Object,
+            Mock.Of<RentalCommand.Core.Authorization.IAccessEnvelopeQuery>(),
+            Options.Create(new AtomicAuthSessionCredentialOptions
+            {
+                SigningKey = Convert.ToBase64String(new byte[32]),
+                CredentialLifetimeDays = 7,
+                FamilyAbsoluteLifetimeDays = 30,
+                SessionLifetimeDays = 30,
+            }),
             userMigration.Object,
             Mock.Of<IAuthEmailSender>(),
             _ctx.Db,

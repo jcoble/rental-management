@@ -7,6 +7,8 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Auth;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -25,6 +27,11 @@ public class AuthController : ControllerBase
     private readonly IWebHostEnvironment _environment;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthController> _logger;
+    private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
+    private readonly ICanonicalAccessTokenService _canonicalTokens;
+    private readonly IAccessEnvelopeQuery _accessEnvelopes;
+    private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
+    private readonly TimeProvider _timeProvider;
 
     public AuthController(
         IAuthService authService,
@@ -33,6 +40,11 @@ public class AuthController : ControllerBase
         IOptions<GoogleAuthOptions> googleOptions,
         IWebHostEnvironment environment,
         IConfiguration configuration,
+        IAtomicAuthSessionCredentialService atomicCredentials,
+        ICanonicalAccessTokenService canonicalTokens,
+        IAccessEnvelopeQuery accessEnvelopes,
+        IEffectiveAccessContextSelectionQuery contextSelection,
+        TimeProvider timeProvider,
         ILogger<AuthController> logger)
     {
         _authService = authService;
@@ -41,6 +53,11 @@ public class AuthController : ControllerBase
         _googleOptions = googleOptions.Value;
         _environment = environment;
         _configuration = configuration;
+        _atomicCredentials = atomicCredentials;
+        _canonicalTokens = canonicalTokens;
+        _accessEnvelopes = accessEnvelopes;
+        _contextSelection = contextSelection;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -85,7 +102,12 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request)
     {
-        var result = await _authService.LoginAsync(request.Email, request.Password, GetIpAddress(), GetUserAgent());
+        var result = await _authService.LoginAsync(
+            request.Email,
+            request.Password,
+            request.AccessContextId,
+            GetIpAddress(),
+            GetUserAgent());
         if (!result.Success)
         {
             return Unauthorized(new { error = result.Error ?? "Login failed" });
@@ -100,38 +122,13 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
     {
-        var result = await _authService.RegisterAsync(request);
-        if (!result.Success)
-        {
-            if (result.ErrorType == AuthErrorType.BadRequest)
+        await Task.CompletedTask;
+        return StatusCode(
+            StatusCodes.Status503ServiceUnavailable,
+            new
             {
-                return BadRequest(new
-                {
-                    error = result.Error ?? "Registration failed",
-                    details = result.ValidationErrors
-                });
-            }
-            return Unauthorized(new { error = result.Error ?? "Registration failed" });
-        }
-
-        const string genericMessage = "Registration successful. Please check your email to verify your account.";
-
-        // Tokens are sensitive: only expose for local dev convenience under an explicit opt-in.
-        if (ShouldExposeDevTokens)
-        {
-            _logger.LogWarning(
-                "Auth:ExposeDevTokens is enabled: returning emailConfirmationToken for user {UserId} in the registration response. This must never be enabled outside local development.",
-                result.UserId);
-
-            return Ok(new
-            {
-                message = genericMessage,
-                userId = result.UserId,
-                emailConfirmationToken = result.EmailConfirmationToken
+                error = "Registration is unavailable until workspace membership provisioning uses the canonical atomic authority command.",
             });
-        }
-
-        return Ok(new { message = genericMessage });
     }
 
     [HttpPost("refresh")]
@@ -156,6 +153,101 @@ public class AuthController : ControllerBase
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
         PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
+    }
+
+    [HttpGet("access")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> GetAccess(CancellationToken ct)
+    {
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "Active access context is unavailable." });
+        }
+
+        var envelope = await _accessEnvelopes.GetAsync(active.UserId, active.AccessContextId, ct);
+        return envelope is null
+            ? Unauthorized(new { error = "Active access context is unavailable." })
+            : Ok(envelope);
+    }
+
+    [HttpGet("contexts")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> ListAccessContexts(CancellationToken ct)
+    {
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "Active access context is unavailable." });
+        }
+
+        return Ok(await _contextSelection.ListAsync(
+            active.UserId,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct));
+    }
+
+    [HttpPost("contexts/select")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<ActionResult<SwitchAccessContextResponse>> SelectAccessContext(
+        [FromBody] SwitchAccessContextRequest request,
+        CancellationToken ct)
+    {
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "Active access context is unavailable." });
+        }
+
+        try
+        {
+            var switched = await _atomicCredentials.SwitchContextAsync(
+                new SwitchAuthSessionContextCommand(
+                    active.SessionId,
+                    active.UserId,
+                    active.AccessContextId,
+                    active.AccessRevision,
+                    request.AccessContextId,
+                    _timeProvider.GetUtcNow().UtcDateTime),
+                Guid.NewGuid(),
+                ct);
+            var envelope = await _accessEnvelopes.GetAsync(
+                switched.UserId,
+                switched.AccessContextId,
+                ct);
+            if (!switched.Switched || envelope is null)
+            {
+                return Forbid();
+            }
+
+            var access = _canonicalTokens.Issue(new CanonicalAccessCoordinates(
+                switched.UserId,
+                switched.AuthSessionId,
+                switched.AccessContextId,
+                switched.AccessRevision));
+            return Ok(new SwitchAccessContextResponse
+            {
+                AccessToken = access.Token,
+                AccessTokenExpiration = access.ExpiresAtUtc,
+                Access = envelope,
+            });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    private bool TryGetActiveAccessContext(out ActiveAccessContext active)
+    {
+        if (HttpContext.Items.TryGetValue(
+                CanonicalAccessContextHttpItem.Key,
+                out var value) &&
+            value is ActiveAccessContext context)
+        {
+            active = context;
+            return true;
+        }
+
+        active = null!;
+        return false;
     }
 
     [HttpPost("confirm-email")]
@@ -273,16 +365,21 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("logout")]
-    [AllowAnonymous]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
     public async Task<IActionResult> Logout()
     {
-        var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
-        if (!string.IsNullOrEmpty(refreshToken))
+        if (TryGetActiveAccessContext(out var active))
         {
-            // Explicit user logout ends ALL of the user's sessions (every device), not just the
-            // presenting one — revoke the whole token family. The token-expiry/401 auto-refresh path
-            // stays single-token (it rotates one token, never calls this).
-            await _tokenService.RevokeRefreshTokenFamilyAsync(refreshToken);
+            await _atomicCredentials.RevokeSessionAsync(
+                new RevokeAuthSessionCommand(
+                    active.SessionId,
+                    active.UserId,
+                    active.AccessContextId,
+                    active.AccessRevision,
+                    _timeProvider.GetUtcNow().UtcDateTime,
+                    "User signed out"),
+                Guid.NewGuid(),
+                HttpContext.RequestAborted);
         }
 
         ClearRefreshTokenCookies();
@@ -299,37 +396,10 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> GoogleSignIn([FromBody] GoogleAuthRequest request)
     {
-        if (!_googleOptions.Enabled)
-        {
-            return StatusCode(StatusCodes.Status501NotImplemented, new { error = "Google sign-in is not configured." });
-        }
-
-        GoogleAuthResult result;
-        if (!string.IsNullOrEmpty(request.IdToken))
-        {
-            // Native (mobile) flow — id_token obtained on-device.
-            result = await _googleAuthService.AuthenticateWithIdTokenAsync(request.IdToken);
-        }
-        else if (!string.IsNullOrEmpty(request.Code) && !string.IsNullOrEmpty(request.RedirectUri))
-        {
-            // Web flow — exchange the authorization code server-side.
-            result = await _googleAuthService.AuthenticateAsync(request.Code, request.RedirectUri);
-        }
-        else
-        {
-            return BadRequest(new { error = "Provide an idToken (native) or code + redirectUri (web)." });
-        }
-
-        if (!result.Success)
-        {
-            // Log detail is already emitted by GoogleAuthService; only return a safe generic message.
-            _logger.LogInformation("Google sign-in attempt failed: {Error}", result.Error);
-            return Unauthorized(new { error = "Google sign-in failed." });
-        }
-
-        SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
-        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
-        return Ok(result.Response);
+        await Task.CompletedTask;
+        return StatusCode(
+            StatusCodes.Status503ServiceUnavailable,
+            new { error = "Google sign-in is unavailable until it issues canonical workspace sessions." });
     }
 
     private void SetRefreshTokenCookie(string token, DateTime expiration)

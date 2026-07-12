@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/tenant-accounts/{tenantAccountId:int}")]
 [Produces("application/json")]
-public sealed class TenantAccountMoneyController : ManagementControllerBase
+public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControllerBase
 {
     private static readonly AtomicJsonResultCodec<RecordTenantReceiptResult> ReceiptCodec =
         new("tenant-account.receipt.record.v1");

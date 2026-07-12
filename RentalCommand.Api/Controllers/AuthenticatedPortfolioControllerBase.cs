@@ -5,24 +5,26 @@ using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Base for controllers that operate within a single portfolio's tenant scope. Reads the
-/// portfolio and user identity from JWT claims (never from request parameters). The user id is an
-/// int (matching <c>ApplicationUser</c>) encoded as the <c>sub</c>/<see cref="ClaimTypes.NameIdentifier"/> claim.
+/// Base for controllers that operate within one selected workspace. The compact JWT coordinates
+/// are validated against the current session/context/revision by middleware; controllers consume
+/// that database-backed result rather than trusting a portfolio or relationship claim.
 /// </summary>
 [Authorize]
 public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
 {
     /// <summary>
-    /// Portfolio id from the <c>portfolioId</c> claim. Throws when the claim is missing or
-    /// unparseable so a request with no portfolio scope can never run a tenant-scoped query with
+    /// Portfolio id from the validated active access context. Throws when the context is missing so
+    /// a request with no workspace scope can never run a tenant-scoped query with
     /// <c>portfolioId == 0</c> (which would read across tenants). Use <see cref="TryGetPortfolioId"/>
     /// for code paths that legitimately tolerate an unscoped caller.
     /// </summary>
-    /// <exception cref="MissingAuthContextException">The <c>portfolioId</c> claim is absent or invalid.</exception>
+    /// <exception cref="MissingAuthContextException">The canonical access context is absent or invalid.</exception>
     protected int GetPortfolioId()
     {
         if (!TryGetPortfolioId(out var id))
@@ -34,14 +36,15 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     }
 
     /// <summary>
-    /// Attempts to read the <c>portfolioId</c> claim without throwing. Returns <c>false</c> (and
+    /// Attempts to read the validated workspace without throwing. Returns <c>false</c> (and
     /// <paramref name="portfolioId"/> = 0) when the caller has no portfolio scope.
     /// </summary>
     protected bool TryGetPortfolioId(out int portfolioId)
     {
-        var claim = User.FindFirst("portfolioId");
-        if (claim != null && int.TryParse(claim.Value, out portfolioId))
+        if (HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+            value is ActiveAccessContext accessContext)
         {
+            portfolioId = accessContext.PortfolioId;
             return true;
         }
 
@@ -52,17 +55,16 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// <summary>Int user id parsed from the <c>sub</c>/NameIdentifier claim.</summary>
     protected int GetUserId()
     {
-        var claim = User.FindFirst(ClaimTypes.NameIdentifier);
-        if (claim == null || !int.TryParse(claim.Value, out var userId))
+        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext accessContext)
         {
             throw new MissingAuthContextException("Invalid user context");
         }
 
-        return userId;
+        return accessContext.UserId;
     }
 
-    protected IEnumerable<string> GetRoles() =>
-        User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+    protected IEnumerable<string> GetRoles() => Array.Empty<string>();
 
     /// <summary>
     /// Tenant id from the <c>tenantId</c> claim, or <c>null</c> when the caller is not a tenant
@@ -71,8 +73,7 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// </summary>
     protected int? GetTenantIdOrNull()
     {
-        var claim = User.FindFirst("tenantId");
-        return claim != null && int.TryParse(claim.Value, out var tenantId) ? tenantId : null;
+        return null;
     }
 
     // Content types we trust to render inline; anything else downloads as octet-stream so an uploaded

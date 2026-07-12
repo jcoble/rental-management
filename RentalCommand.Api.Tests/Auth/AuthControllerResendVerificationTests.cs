@@ -81,6 +81,11 @@ public class AuthControllerResendVerificationTests
             googleOptions,
             environment.Object,
             configuration,
+            Mock.Of<IAtomicAuthSessionCredentialService>(),
+            Mock.Of<ICanonicalAccessTokenService>(),
+            Mock.Of<RentalCommand.Core.Authorization.IAccessEnvelopeQuery>(),
+            Mock.Of<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>(),
+            TimeProvider.System,
             NullLogger<AuthController>.Instance)
         {
             ControllerContext = new ControllerContext

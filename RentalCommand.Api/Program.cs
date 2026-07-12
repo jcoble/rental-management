@@ -215,6 +215,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.StartAuthSessionResult,
     RentalCommand.Data.Auth.StartAuthSessionHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.SwitchAuthSessionContextCommand,
+    RentalCommand.Core.Auth.SwitchAuthSessionContextResult,
+    RentalCommand.Data.Auth.SwitchAuthSessionContextHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.RevokeAuthSessionCommand,
+    RentalCommand.Core.Auth.RevokeAuthSessionResult,
+    RentalCommand.Data.Auth.RevokeAuthSessionHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
     RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
     RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
@@ -468,6 +476,7 @@ builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<ICanonicalAccessTokenService, CanonicalAccessTokenService>();
 builder.Services.AddSingleton(serviceProvider =>
     new RentalCommand.Core.Auth.RefreshCredentialTokenFactory(
         serviceProvider
@@ -687,6 +696,7 @@ app.Use(async (context, next) =>
 });
 
 app.UseAuthentication();
+app.UseMiddleware<RentalCommand.Api.Auth.CanonicalAccessContextMiddleware>();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
