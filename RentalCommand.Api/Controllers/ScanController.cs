@@ -8,8 +8,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
-using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -26,10 +26,10 @@ public class ScanController : ManagementControllerBase
         new("scan-confirm.result.v1");
 
     private readonly IScanService _scan;
+    private readonly IScanUploadService _uploads;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
-    private readonly TimeProvider _timeProvider;
 
     // Content types we trust to render inline (non-active: no script execution). Anything else
     // is forced to download as octet-stream so an uploaded html/svg/etc. can't run on our origin.
@@ -50,16 +50,16 @@ public class ScanController : ManagementControllerBase
 
     public ScanController(
         IScanService scan,
+        IScanUploadService uploads,
         IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
-        IFileStorage files,
-        TimeProvider timeProvider)
+        IFileStorage files)
     {
         _scan = scan;
+        _uploads = uploads;
         _atomic = atomic;
         _db = db;
         _files = files;
-        _timeProvider = timeProvider;
     }
 
     // -------------------------------------------------------------------------
@@ -73,10 +73,13 @@ public class ScanController : ManagementControllerBase
     public async Task<ActionResult<ScanCreatedResponse>> Upload(
         IFormFile file,
         [FromForm] string targetEntityType,
+        [FromForm] string clientOperationId,
         CancellationToken ct)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "A non-empty file is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Length > 160)
+            return BadRequest(new { error = "A non-blank clientOperationId of at most 160 characters is required." });
 
         // When a targetEntityType is explicitly provided it must be a recognised value.
         // Empty/null is allowed — the LLM worker will classify it during processing.
@@ -94,13 +97,25 @@ public class ScanController : ManagementControllerBase
 
         try
         {
-            var draft = await _scan.CreateDraftAsync(
-                GetPortfolioId(), bytes, file.ContentType, targetEntityType, ct);
+            var result = await _uploads.UploadAsync(
+                GetPortfolioId(),
+                GetUserId(),
+                clientOperationId,
+                targetEntityType,
+                createBatch: false,
+                batchName: null,
+                [new ScanUploadFilePayload(bytes, file.FileName, file.ContentType)],
+                ct);
+            var draft = result.Drafts.Single();
 
             return CreatedAtAction(
                 nameof(Get),
-                new { id = draft.Id },
-                new ScanCreatedResponse(draft.Id, draft.Status, $"/api/v1/scans/{draft.Id}/file"));
+                new { id = draft.DraftId },
+                new ScanCreatedResponse(draft.DraftId, draft.Status, $"/api/v1/scans/{draft.DraftId}/file"));
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
         catch (ArgumentException ex)
         {
@@ -126,11 +141,14 @@ public class ScanController : ManagementControllerBase
         [FromForm] List<IFormFile> files,
         [FromForm] string? targetEntityType,
         [FromForm] string? name,
+        [FromForm] string clientOperationId,
         CancellationToken ct)
     {
         var nonEmpty = (files ?? []).Where(f => f is { Length: > 0 }).ToList();
         if (nonEmpty.Count == 0)
             return BadRequest(new { error = "At least one non-empty file is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Length > 160)
+            return BadRequest(new { error = "A non-blank clientOperationId of at most 160 characters is required." });
 
         if (nonEmpty.Count > MaxBatchFiles)
             return BadRequest(new { error = $"A batch can contain at most {MaxBatchFiles} files (got {nonEmpty.Count})." });
@@ -155,40 +173,42 @@ public class ScanController : ManagementControllerBase
             payloads.Add((ms.ToArray(), file.ContentType));
         }
 
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-        var batch = new ScanBatch
-        {
-            PortfolioId = portfolioId,
-            Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim(),
-            TargetEntityType = target,
-            Status = ScanBatchStatus.Processing,
-            FileCount = payloads.Count,
-            CreatedAtUtc = _timeProvider.UtcNow(),
-        };
-        _db.ScanBatches.Add(batch);
-        await _db.SaveChangesAsync(ct);
-
-        var draftIds = new List<int>(payloads.Count);
         try
         {
-            foreach (var (bytes, contentType) in payloads)
-            {
-                var draft = await _scan.CreateBatchDraftAsync(portfolioId, batch.Id, bytes, contentType, target, ct);
-                draftIds.Add(draft.Id);
-            }
+            var result = await _uploads.UploadAsync(
+                portfolioId,
+                GetUserId(),
+                clientOperationId,
+                target,
+                createBatch: true,
+                name,
+                payloads.Select((payload, index) => new ScanUploadFilePayload(
+                    payload.Bytes,
+                    nonEmpty[index].FileName,
+                    payload.ContentType)).ToArray(),
+                ct);
+            var batchId = result.BatchId
+                ?? throw new InvalidOperationException("Atomic batch upload returned no batch id.");
+
+            return CreatedAtAction(
+                nameof(GetBatch),
+                new { id = batchId },
+                new ScanBatchCreatedResponse(
+                    batchId,
+                    result.BatchName,
+                    result.TargetEntityType,
+                    nameof(ScanBatchStatus.Processing),
+                    result.Drafts.Count,
+                    result.Drafts.Select(draft => draft.DraftId).ToArray()));
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
         catch (ArgumentException ex)
         {
-            await tx.RollbackAsync(ct);
             return BadRequest(new { error = ex.Message });
         }
-        await tx.CommitAsync(ct);
-
-        return CreatedAtAction(
-            nameof(GetBatch),
-            new { id = batch.Id },
-            new ScanBatchCreatedResponse(
-                batch.Id, batch.Name, batch.TargetEntityType, batch.Status.ToString(), batch.FileCount, draftIds));
     }
 
     // -------------------------------------------------------------------------

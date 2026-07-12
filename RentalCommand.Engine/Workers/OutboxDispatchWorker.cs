@@ -37,6 +37,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
         var pushSender = scopedProvider.GetRequiredService<IPushSender>();
         var fileStorage = scopedProvider.GetRequiredService<IFileStorage>();
+        var dataUpdate = scopedProvider.GetRequiredService<IDataUpdateService>();
         var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
         var now = DateTime.UtcNow;
@@ -50,7 +51,8 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
             try
             {
-                var receipt = await DispatchAsync(channel, pushSender, fileStorage, db, claim, cancellationToken);
+                var receipt = await DispatchAsync(
+                    channel, pushSender, fileStorage, dataUpdate, db, claim, cancellationToken);
                 var changed = await store.MarkAcceptedAsync(
                     claim.Id,
                     claim.ClaimToken,
@@ -126,6 +128,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
         INotificationChannel channel,
         IPushSender pushSender,
         IFileStorage fileStorage,
+        IDataUpdateService dataUpdate,
         RentalCommandDbContext db,
         OutboxClaim claim,
         CancellationToken ct)
@@ -198,6 +201,23 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 }
                 await fileStorage.DeleteAsync(storagePath, ct);
                 return new NotificationDeliveryReceipt("file-storage", $"outbox-{claim.Id}");
+            }
+
+            case "data-update":
+            {
+                var entityType = Required(root, "entityType");
+                var entityId = RequiredInt(root, "entityId");
+                var data = root.TryGetProperty("data", out var value)
+                    ? value.Clone()
+                    : JsonSerializer.SerializeToElement(new { });
+                await dataUpdate.BroadcastEntityUpdateAsync(
+                    claim.PortfolioId
+                    ?? throw new OutboxPermanentDeliveryException("Data-update outbox row has no portfolio."),
+                    entityType,
+                    entityId,
+                    data,
+                    ct);
+                return new NotificationDeliveryReceipt("postgres-notify", $"outbox-{claim.Id}");
             }
 
             default:

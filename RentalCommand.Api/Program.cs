@@ -193,6 +193,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Documents.DeleteStoredDocumentResult,
     RentalCommand.Data.Documents.DeleteStoredDocumentHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.FinalizeScanUploadCommand,
+    RentalCommand.Core.Scanning.FinalizeScanUploadResult,
+    RentalCommand.Data.Scanning.FinalizeScanUploadHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Conversations.SendConversationMessageCommand,
     RentalCommand.Core.Conversations.SendConversationMessageResult,
     RentalCommand.Data.Conversations.SendConversationMessageHandler>();

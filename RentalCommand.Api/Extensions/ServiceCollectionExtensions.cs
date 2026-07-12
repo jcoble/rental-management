@@ -134,7 +134,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAnalyticsService, AnalyticsService>();
 
         // --- scan upload pipeline ---
-        services.AddScoped<IScanFileService, ScanFileService>();
+        services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddScoped<IScanService, ScanService>();
         services.AddScoped<IAuditTrailService, AuditTrailService>();
         services.AddScoped<IVoiceIntakeService, VoiceIntakeService>();

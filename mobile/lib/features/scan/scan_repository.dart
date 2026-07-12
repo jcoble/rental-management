@@ -74,6 +74,7 @@ class ScanRepository {
     String filename,
     String contentType, {
     String targetEntityType = 'Expense',
+    String? clientOperationId,
     void Function(double progress)? onSendProgress,
   }) async {
     try {
@@ -84,6 +85,7 @@ class ScanRepository {
           contentType: DioMediaType.parse(contentType),
         ),
         'targetEntityType': targetEntityType,
+        'clientOperationId': clientOperationId ?? const Uuid().v4(),
       });
 
       final response = await _dio.post<Map<String, dynamic>>(

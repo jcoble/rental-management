@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
@@ -16,13 +15,13 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Scanning;
 
 /// <summary>
-/// Implements <see cref="IScanService"/>: stores upload, creates a <see cref="ScanDraft"/>,
-/// prepares typed atomic confirmation commands and handles reject lifecycle transitions.
+/// Implements the post-upload scan lifecycle: prepares typed atomic confirmation commands and
+/// handles review/reject transitions. Blob admission and draft creation belong to
+/// <see cref="IScanUploadService"/>.
 /// </summary>
 public sealed class ScanService : IScanService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IScanFileService _files;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -37,93 +36,14 @@ public sealed class ScanService : IScanService
 
     public ScanService(
         RentalCommandDbContext db,
-        IScanFileService files,
         IAuditTrailService audit,
         ILogger<ScanService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
-        _files = files;
         _audit = audit;
         _logger = logger;
         _timeProvider = timeProvider;
-    }
-
-    // -------------------------------------------------------------------------
-    // CreateDraftAsync
-    // -------------------------------------------------------------------------
-
-    public Task<ScanDraft> CreateDraftAsync(
-        int portfolioId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct = default)
-        => CreateDraftCoreAsync(portfolioId, batchId: null, fileBytes, contentType, targetEntityType, ct);
-
-    public Task<ScanDraft> CreateBatchDraftAsync(
-        int portfolioId,
-        int batchId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct = default)
-        => CreateDraftCoreAsync(portfolioId, batchId, fileBytes, contentType, targetEntityType, ct);
-
-    /// <summary>
-    /// Shared store-file → preview → persist-draft path for both single-file and batch uploads.
-    /// <paramref name="batchId"/> links the draft into a bulk-scan batch when non-null.
-    /// </summary>
-    private async Task<ScanDraft> CreateDraftCoreAsync(
-        int portfolioId,
-        int? batchId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct)
-    {
-        var stored = await _files.StoreAsync(
-            portfolioId,
-            targetEntityType,
-            fileBytes,
-            $"scan-{_timeProvider.UtcNow():yyyyMMddHHmmss}",
-            contentType,
-            ct);
-
-        // Generate a small JPEG preview so clients (especially mobile) never fetch the
-        // full-resolution original just to render the review thumbnail. Best-effort:
-        // ResizeToJpeg returns null for non-images (e.g. PDFs); the file endpoint then
-        // falls back to serving the original.
-        string? thumbnailPath = null;
-        var thumbBytes = ThumbnailResizer.ResizeToJpeg(fileBytes, maxDim: 1000, quality: 72);
-        if (thumbBytes is not null)
-        {
-            var thumbStored = await _files.StoreAsync(
-                portfolioId,
-                targetEntityType,
-                thumbBytes,
-                $"scan-thumb-{_timeProvider.UtcNow():yyyyMMddHHmmss}",
-                "image/jpeg",
-                ct);
-            thumbnailPath = thumbStored.FilePath;
-        }
-
-        var draft = new ScanDraft
-        {
-            PortfolioId = portfolioId,
-            BatchId = batchId,
-            FilePath = stored.FilePath,
-            SourceStoredFileId = stored.Id,
-            SourceStoredFile = stored,
-            ThumbnailPath = thumbnailPath,
-            TargetEntityType = targetEntityType,
-            Status = "Pending",
-            CreatedAt = _timeProvider.UtcNow(),
-        };
-
-        _db.ScanDrafts.Add(draft);
-        await _db.SaveChangesAsync(ct);
-        return draft;
     }
 
     // -------------------------------------------------------------------------

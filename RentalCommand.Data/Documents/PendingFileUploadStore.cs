@@ -73,7 +73,7 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         ArgumentException.ThrowIfNullOrWhiteSpace(requestFingerprint);
         var normalizedPurpose = purpose.Trim().ToLowerInvariant();
         var normalizedOperationId = clientOperationId.Trim();
-        var operationHash = Digest(normalizedOperationId);
+        var operationHash = ComputeOperationKeyHash(normalizedOperationId);
         var id = Guid.NewGuid();
         var safeName = SanitizeFileName(fileName);
         var storagePath = $"pending-{id:N}-{safeName}";
@@ -190,8 +190,12 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
                 .SetProperty(upload => upload.CleanupClaimToken, (Guid?)null)
                 .SetProperty(upload => upload.CleanupClaimExpiresAtUtc, (DateTime?)null), ct);
 
-    private static string Digest(string value) => Convert.ToHexString(
-        SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    internal static string ComputeOperationKeyHash(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(value.Trim()))).ToLowerInvariant();
+    }
 
     private static string SanitizeFileName(string value)
     {
