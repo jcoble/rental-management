@@ -10,6 +10,8 @@ public sealed class PendingFileUploadCleanupService
     private readonly IPendingFileUploadStore _store;
     private readonly IFileStorage _storage;
     private readonly ILogger<PendingFileUploadCleanupService> _logger;
+    private readonly string _claimOwner =
+        $"{Environment.MachineName}:{Environment.ProcessId}:pending-upload-cleanup:{Guid.NewGuid():N}";
 
     public PendingFileUploadCleanupService(
         IPendingFileUploadStore store,
@@ -23,9 +25,8 @@ public sealed class PendingFileUploadCleanupService
 
     public async Task<int> RunBatchAsync(CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
         var claims = await _store.ClaimExpiredAsync(
-            now, now.Subtract(PreparedRetention), ClaimLease, batchSize: 25, ct);
+            _claimOwner, PreparedRetention, ClaimLease, batchSize: 25, ct);
         var cleaned = 0;
         foreach (var claim in claims)
         {
@@ -33,12 +34,13 @@ public sealed class PendingFileUploadCleanupService
             {
                 await _storage.DeleteAsync(claim.StoragePath, ct);
                 cleaned += await _store.MarkAbandonedAsync(
-                    claim.Id, claim.ClaimToken, DateTime.UtcNow, CancellationToken.None);
+                    claim.Id, claim.ClaimOwner, claim.ClaimToken, CancellationToken.None);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex, "Pending upload {PendingUploadId} cleanup failed; it will retry.", claim.Id);
-                await _store.ReleaseCleanupClaimAsync(claim.Id, claim.ClaimToken, CancellationToken.None);
+                await _store.ReleaseCleanupClaimAsync(
+                    claim.Id, claim.ClaimOwner, claim.ClaimToken, CancellationToken.None);
             }
         }
         return cleaned;

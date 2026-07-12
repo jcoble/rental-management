@@ -5685,6 +5685,7 @@ namespace RentalCommand.Data.Migrations
                     b.Property<Guid>("Id").HasColumnType("uuid");
                     b.Property<int>("ActorScopeId").HasColumnType("integer");
                     b.Property<DateTime?>("CleanupClaimExpiresAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("CleanupClaimOwner").HasMaxLength(200).HasColumnType("character varying(200)");
                     b.Property<Guid?>("CleanupClaimToken").HasColumnType("uuid");
                     b.Property<string>("ContentType").IsRequired().HasMaxLength(120).HasColumnType("character varying(120)");
                     b.Property<DateTime>("CreatedAtUtc").HasColumnType("timestamp with time zone");

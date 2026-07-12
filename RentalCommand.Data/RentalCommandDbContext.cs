@@ -328,6 +328,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.FileName).IsRequired().HasMaxLength(260);
             entity.Property(e => e.ContentType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.State).HasConversion<int>();
+            entity.Property(e => e.CleanupClaimOwner).HasMaxLength(200);
             entity.HasIndex(e => new { e.PortfolioId, e.ActorScopeId, e.Purpose, e.OperationKeyHash }).IsUnique();
             entity.HasIndex(e => new { e.State, e.CreatedAtUtc, e.CleanupClaimExpiresAtUtc });
             entity.HasIndex(e => e.StoredFileId);

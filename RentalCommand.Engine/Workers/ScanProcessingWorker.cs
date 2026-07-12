@@ -86,7 +86,7 @@ public class ScanProcessingWorker : EngineWorkerBase
         var claimStore = scoped.GetRequiredService<IScanProcessingClaimStore>();
 
         var pending = await claimStore.ClaimAsync(
-            _claimOwner, TimeProvider.System.GetUtcNow().UtcDateTime, ClaimLease, BatchSize, ct);
+            _claimOwner, ClaimLease, BatchSize, ct);
         if (pending.Count == 0) return 0;
 
         var processed = 0;
@@ -168,7 +168,8 @@ public class ScanProcessingWorker : EngineWorkerBase
                         "(model {ModelId}): {Reason}; marking Failed",
                         draft.Id, extracted.ModelId, failureReason);
                     await MarkFailedAsync(
-                        scoped, dataUpdate, draft.PortfolioId, draft.Id, draft.ClaimToken, logger, failureReason);
+                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        draft.ClaimOwner, draft.ClaimToken, logger, failureReason);
                     continue;
                 }
 
@@ -219,6 +220,7 @@ public class ScanProcessingWorker : EngineWorkerBase
 
                 var completed = await claimStore.MarkReviewingAsync(
                     draft.Id,
+                    draft.ClaimOwner,
                     draft.ClaimToken,
                     new ScanProcessingResult(
                         fieldJson,
@@ -268,7 +270,8 @@ public class ScanProcessingWorker : EngineWorkerBase
                 logger.LogWarning(
                     "Scan extraction interrupted (cancellation) for draft {DraftId}; marking Failed", draft.Id);
                 await MarkFailedAsync(
-                    scoped, dataUpdate, draft.PortfolioId, draft.Id, draft.ClaimToken, logger,
+                    scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                    draft.ClaimOwner, draft.ClaimToken, logger,
                     "extraction interrupted (timeout or shutdown)");
                 break;
             }
@@ -278,7 +281,8 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // Use a fresh, non-cancelled save: if the failure rode in on an already-cancelled
                 // token (e.g. a timeout surfaced as a DB/HTTP cancellation), reusing it here would
                 // throw again and leave the draft stuck in 'Processing'.
-                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, draft.ClaimToken, logger,
+                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                    draft.ClaimOwner, draft.ClaimToken, logger,
                     "extraction failed (provider or processing error)");
             }
         }
@@ -372,6 +376,7 @@ public class ScanProcessingWorker : EngineWorkerBase
         IDataUpdateService dataUpdate,
         int portfolioId,
         int draftId,
+        string claimOwner,
         Guid claimToken,
         ILogger logger,
         string? failureReason = null)
@@ -388,7 +393,7 @@ public class ScanProcessingWorker : EngineWorkerBase
             // ExecuteUpdate expression tree (it would try to compile to SQL).
             var reviewedAt = failScope.ServiceProvider.GetRequiredService<TimeProvider>().UtcNow();
             var completed = await failStore.MarkFailedAsync(
-                draftId, claimToken, reviewedAt, reason, CancellationToken.None);
+                draftId, claimOwner, claimToken, reviewedAt, reason, CancellationToken.None);
             if (completed == 0)
             {
                 logger.LogWarning(

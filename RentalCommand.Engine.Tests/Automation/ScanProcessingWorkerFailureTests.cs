@@ -458,7 +458,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     /// <summary>
     /// SQLite-compatible test boundary for the worker's PostgreSQL claim store. Candidate filtering,
     /// ordering, and paging remain database-side; the fake only substitutes the PostgreSQL-specific
-    /// SKIP LOCKED statement that SQLite cannot execute. Completion remains fenced by claim token so
+    /// SKIP LOCKED statement that SQLite cannot execute. Completion remains fenced by owner and token so
     /// these tests exercise the worker's real ownership contract.
     /// </summary>
     private sealed class TestScanProcessingClaimStore : IScanProcessingClaimStore
@@ -469,11 +469,11 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 
         public async Task<IReadOnlyList<ScanProcessingClaim>> ClaimAsync(
             string claimOwner,
-            DateTime nowUtc,
             TimeSpan leaseDuration,
             int batchSize,
             CancellationToken ct = default)
         {
+            var nowUtc = DateTime.UtcNow;
             var candidates = await _db.ScanDrafts
                 .Where(d => d.Status == "Pending")
                 .OrderBy(d => d.CreatedAt)
@@ -500,16 +500,18 @@ public class ScanProcessingWorkerFailureTests : IDisposable
                 d.FilePath,
                 d.SourceStoredFileId,
                 d.TargetEntityType,
+                d.ProcessingClaimOwner!,
                 d.ProcessingClaimToken!.Value)).ToList();
         }
 
         public async Task<int> MarkReviewingAsync(
             int id,
+            string claimOwner,
             Guid claimToken,
             ScanProcessingResult result,
             CancellationToken ct = default)
         {
-            var draft = await Owned(id, claimToken).SingleOrDefaultAsync(ct);
+            var draft = await Owned(id, claimOwner, claimToken).SingleOrDefaultAsync(ct);
             if (draft is null) return 0;
 
             draft.ExtractedFields = result.ExtractedFields;
@@ -527,12 +529,13 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 
         public async Task<int> MarkFailedAsync(
             int id,
+            string claimOwner,
             Guid claimToken,
             DateTime reviewedAtUtc,
             string? failureReason,
             CancellationToken ct = default)
         {
-            var draft = await Owned(id, claimToken).SingleOrDefaultAsync(ct);
+            var draft = await Owned(id, claimOwner, claimToken).SingleOrDefaultAsync(ct);
             if (draft is null) return 0;
 
             draft.Status = "Failed";
@@ -543,10 +546,11 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             return 1;
         }
 
-        private IQueryable<ScanDraft> Owned(int id, Guid claimToken) =>
+        private IQueryable<ScanDraft> Owned(int id, string claimOwner, Guid claimToken) =>
             _db.ScanDrafts.Where(d =>
                 d.Id == id &&
                 d.Status == "Processing" &&
+                d.ProcessingClaimOwner == claimOwner &&
                 d.ProcessingClaimToken == claimToken);
 
         private static void ClearClaim(ScanDraft draft)

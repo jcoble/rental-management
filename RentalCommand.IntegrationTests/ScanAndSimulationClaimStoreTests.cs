@@ -60,30 +60,49 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         await using var dbA = NewContext();
         await using var dbB = NewContext();
         var claimed = await Task.WhenAll(
-            new ScanProcessingClaimStore(dbA).ClaimAsync("scan-a", now, TimeSpan.FromMinutes(2), 8),
-            new ScanProcessingClaimStore(dbB).ClaimAsync("scan-b", now, TimeSpan.FromMinutes(2), 8));
+            new ScanProcessingClaimStore(dbA).ClaimAsync("scan-a", TimeSpan.FromMinutes(2), 8),
+            new ScanProcessingClaimStore(dbB).ClaimAsync("scan-b", TimeSpan.FromMinutes(2), 8));
 
         var all = claimed.SelectMany(rows => rows).ToArray();
         all.Should().HaveCount(8);
         all.Select(row => row.Id).Should().OnlyHaveUniqueItems();
 
         var first = all[0];
+        await using (var wrongOwnerDb = NewContext())
+        {
+            var wrongOwner = new ScanProcessingClaimStore(wrongOwnerDb);
+            (await wrongOwner.MarkFailedAsync(
+                first.Id, "not-the-owner", first.ClaimToken, now, "wrong owner"))
+                .Should().Be(0);
+        }
         await using (var expire = NewContext())
         {
-            await expire.ScanDrafts.Where(row => row.Id == first.Id).ExecuteUpdateAsync(setters => setters
-                .SetProperty(row => row.ProcessingClaimExpiresAtUtc, now.AddSeconds(-1)));
+            await expire.Database.ExecuteSqlInterpolatedAsync($$"""
+                UPDATE "ScanDrafts"
+                SET "ProcessingClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
+                WHERE "Id" = {{first.Id}}
+                """);
+        }
+        await using (var expiredDb = NewContext())
+        {
+            var expired = new ScanProcessingClaimStore(expiredDb);
+            (await expired.MarkFailedAsync(
+                first.Id, first.ClaimOwner, first.ClaimToken, now, "expired"))
+                .Should().Be(0);
         }
         await using var reclaimDb = NewContext();
         var replacement = (await new ScanProcessingClaimStore(reclaimDb)
-            .ClaimAsync("scan-replacement", now, TimeSpan.FromMinutes(2), 1)).Single();
+            .ClaimAsync("scan-replacement", TimeSpan.FromMinutes(2), 1)).Single();
         replacement.Id.Should().Be(first.Id);
         replacement.ClaimToken.Should().NotBe(first.ClaimToken);
 
         await using var staleDb = NewContext();
         var staleStore = new ScanProcessingClaimStore(staleDb);
-        (await staleStore.MarkFailedAsync(first.Id, first.ClaimToken, now, "stale"))
+        (await staleStore.MarkFailedAsync(
+            first.Id, first.ClaimOwner, first.ClaimToken, now, "stale"))
             .Should().Be(0);
-        (await staleStore.MarkFailedAsync(replacement.Id, replacement.ClaimToken, now, "current"))
+        (await staleStore.MarkFailedAsync(
+            replacement.Id, replacement.ClaimOwner, replacement.ClaimToken, now, "current"))
             .Should().Be(1);
     }
 
@@ -104,13 +123,13 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         await using (var failClosed = NewContext(apiRoleConnection))
         {
             (await new ScanProcessingClaimStore(failClosed)
-                .ClaimAsync("no-engine-context", now, TimeSpan.FromMinutes(2), 1))
+                .ClaimAsync("no-engine-context", TimeSpan.FromMinutes(2), 1))
                 .Should().BeEmpty();
         }
 
         await using var engineContext = NewContext(apiRoleConnection, new EngineRlsInterceptor());
         (await new ScanProcessingClaimStore(engineContext)
-            .ClaimAsync("engine-context", now, TimeSpan.FromMinutes(2), 1))
+            .ClaimAsync("engine-context", TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
     }
 
@@ -136,26 +155,44 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         await using var dbA = NewContext();
         await using var dbB = NewContext();
         var first = await new SimWorkerCommandClaimStore(dbA)
-            .ClaimOldestAsync("sim-a", now, TimeSpan.FromMinutes(6));
+            .ClaimOldestAsync("sim-a", TimeSpan.FromMinutes(6));
         first.Should().NotBeNull();
         (await new SimWorkerCommandClaimStore(dbB)
-            .ClaimOldestAsync("sim-b", now, TimeSpan.FromMinutes(6))).Should().BeNull();
+            .ClaimOldestAsync("sim-b", TimeSpan.FromMinutes(6))).Should().BeNull();
+
+        await using (var wrongOwnerDb = NewContext())
+        {
+            var wrongOwner = new SimWorkerCommandClaimStore(wrongOwnerDb);
+            (await wrongOwner.MarkDoneAsync(
+                id, "not-the-owner", first!.ClaimToken, "{}", now)).Should().Be(0);
+        }
 
         await using (var expire = NewContext())
         {
-            await expire.SimWorkerCommands.Where(row => row.Id == id).ExecuteUpdateAsync(setters => setters
-                .SetProperty(row => row.ClaimExpiresAtUtc, now.AddSeconds(-1)));
+            await expire.Database.ExecuteSqlInterpolatedAsync($$"""
+                UPDATE "SimWorkerCommands"
+                SET "ClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
+                WHERE "Id" = {{id}}
+                """);
+        }
+        await using (var expiredDb = NewContext())
+        {
+            var expired = new SimWorkerCommandClaimStore(expiredDb);
+            (await expired.MarkDoneAsync(
+                id, first!.ClaimOwner, first.ClaimToken, "{}", now)).Should().Be(0);
         }
         await using var reclaimDb = NewContext();
         var replacement = await new SimWorkerCommandClaimStore(reclaimDb)
-            .ClaimOldestAsync("sim-b", now, TimeSpan.FromMinutes(6));
+            .ClaimOldestAsync("sim-b", TimeSpan.FromMinutes(6));
         replacement.Should().NotBeNull();
         replacement!.ClaimToken.Should().NotBe(first!.ClaimToken);
 
         await using var completeDb = NewContext();
         var completion = new SimWorkerCommandClaimStore(completeDb);
-        (await completion.MarkDoneAsync(id, first.ClaimToken, "{}", now)).Should().Be(0);
-        (await completion.MarkDoneAsync(id, replacement.ClaimToken, "{\"created\":1}", now)).Should().Be(1);
+        (await completion.MarkDoneAsync(
+            id, first!.ClaimOwner, first.ClaimToken, "{}", now)).Should().Be(0);
+        (await completion.MarkDoneAsync(
+            id, replacement!.ClaimOwner, replacement.ClaimToken, "{\"created\":1}", now)).Should().Be(1);
     }
 
     private async Task<int> SeedPortfolioAsync(DateTime now)
