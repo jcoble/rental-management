@@ -182,7 +182,46 @@ public sealed record ConfirmScanDraftCommand(
     int DraftId,
     int ConfirmedByUserId,
     DateTime ConfirmedAtUtc,
+    string ExpectedDraftFingerprint,
     ScanConfirmationTargetData Target) : IAtomicCommandData;
+
+/// <summary>
+/// Stable version token for the exact draft facts used to prepare a confirmation command. The
+/// length-prefixed binary encoding distinguishes null from empty and prevents field-boundary
+/// ambiguity; callers compare the SHA-256 digest after acquiring the draft's transaction lock.
+/// </summary>
+public static class ScanConfirmationDraftFingerprint
+{
+    private const int EncodingVersion = 1;
+
+    public static string Create(
+        string targetEntityType,
+        int? sourceStoredFileId,
+        string? extractedFields)
+    {
+        ArgumentNullException.ThrowIfNull(targetEntityType);
+
+        using var payload = new MemoryStream();
+        using (var writer = new BinaryWriter(payload, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(EncodingVersion);
+            WriteNullableString(writer, targetEntityType);
+            writer.Write(sourceStoredFileId.HasValue);
+            if (sourceStoredFileId.HasValue)
+                writer.Write(sourceStoredFileId.Value);
+            WriteNullableString(writer, extractedFields);
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(payload.GetBuffer().AsSpan(0, checked((int)payload.Length))));
+    }
+
+    private static void WriteNullableString(BinaryWriter writer, string? value)
+    {
+        writer.Write(value is not null);
+        if (value is not null)
+            writer.Write(value);
+    }
+}
 
 /// <summary>One receipt identity per caller operation, scoped to its portfolio-owned draft.</summary>
 public static class ScanConfirmationCommandIdentity

@@ -499,131 +499,68 @@ public class ScanController : ManagementControllerBase
         var drafts = await query
             .Skip(listQuery.NormalizedSkip)
             .Take(listQuery.NormalizedTake)
+            .Select(d => new ScanDraftPageQueryRow
+            {
+                Id = d.Id,
+                PortfolioId = d.PortfolioId,
+                TargetEntityType = d.TargetEntityType,
+                Status = d.Status,
+                ExtractedFields = d.ExtractedFields,
+                ModelId = d.ModelId,
+                TokensUsed = d.TokensUsed,
+                CostUsd = d.CostUsd,
+                FailureReason = d.FailureReason,
+                CreatedAt = d.CreatedAt,
+                ReviewedAt = d.ReviewedAt,
+                ConfirmedAt = d.ConfirmedAt,
+                CreatedEntityType = d.Status == "Confirmed" && d.ConfirmedEntityId != null
+                    ? d.TargetEntityType
+                    : null,
+                CreatedEntityId = d.Status == "Confirmed" ? d.ConfirmedEntityId : null,
+                CreatedUnitId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
+                    ? null
+                    : d.TargetEntityType == "Payment"
+                        ? _db.Payments
+                            .Where(p => p.PortfolioId == portfolioId && p.Id == d.ConfirmedEntityId)
+                            .Select(p => p.Lease != null ? (int?)p.Lease.UnitId : null)
+                            .FirstOrDefault()
+                        : d.TargetEntityType == "Expense"
+                            ? _db.Expenses
+                                .Where(e => e.PortfolioId == portfolioId && e.Id == d.ConfirmedEntityId)
+                                .Select(e => e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null))
+                                .FirstOrDefault()
+                            : d.TargetEntityType == "WorkOrder"
+                                ? _db.WorkOrders
+                                    .Where(w => w.PortfolioId == portfolioId && w.Id == d.ConfirmedEntityId)
+                                    .Select(w => w.UnitId)
+                                    .FirstOrDefault()
+                                : d.TargetEntityType == "Lease"
+                                    ? _db.Leases
+                                        .Where(l => l.PortfolioId == portfolioId && l.Id == d.ConfirmedEntityId)
+                                        .Select(l => (int?)l.UnitId)
+                                        .FirstOrDefault()
+                                    : d.TargetEntityType == "Application" || d.TargetEntityType == "RentalApplication"
+                                        ? _db.RentalApplications
+                                            .Where(a => a.PortfolioId == portfolioId && a.Id == d.ConfirmedEntityId)
+                                            .Select(a => a.UnitId)
+                                            .FirstOrDefault()
+                                        : null,
+            })
             .ToListAsync(ct);
 
-        var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
-        var linkedFiles = filePaths.Count == 0
-            ? new Dictionary<string, StoredFile>(StringComparer.Ordinal)
-            : await _db.StoredFiles
-                .AsNoTracking()
-                .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
-                .ToDictionaryAsync(f => f.FilePath, ct);
-
-        var createdRefs = new List<CreatedEntityRef>();
+        var items = new List<ScanDraftResponse>(drafts.Count);
         foreach (var draft in drafts)
         {
-            if (linkedFiles.TryGetValue(draft.FilePath, out var linkedFile)
-                && linkedFile.EntityId is > 0
-                && !string.IsNullOrWhiteSpace(linkedFile.EntityType))
-            {
-                createdRefs.Add(new CreatedEntityRef(linkedFile.EntityType, linkedFile.EntityId.Value));
-            }
+            items.Add(new ScanDraftResponse(
+                draft.Id, draft.PortfolioId, draft.TargetEntityType, draft.Status,
+                $"/api/v1/scans/{draft.Id}/file",
+                ScanDraftResponse.ParseFields(draft.ExtractedFields),
+                draft.ModelId, draft.TokensUsed, draft.CostUsd, draft.FailureReason,
+                draft.CreatedAt, draft.ReviewedAt, draft.ConfirmedAt,
+                draft.CreatedEntityType, draft.CreatedEntityId, draft.CreatedUnitId));
         }
-
-        var createdUnitIds = await ResolveCreatedUnitIdsAsync(portfolioId, createdRefs, ct);
-
-        var items = drafts.Select(d =>
-        {
-            linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
-            int? createdUnitId = null;
-            if (linkedFile?.EntityId is > 0 && !string.IsNullOrWhiteSpace(linkedFile.EntityType))
-            {
-                createdUnitId = createdUnitIds.GetValueOrDefault((linkedFile.EntityType, linkedFile.EntityId.Value));
-            }
-
-            return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId, createdUnitId);
-        }).ToList();
 
         return new ScanDraftListResponse(items, totalCount, listQuery.NormalizedSkip, listQuery.NormalizedTake);
-    }
-
-    private async Task<IReadOnlyDictionary<(string EntityType, int EntityId), int?>> ResolveCreatedUnitIdsAsync(
-        int portfolioId,
-        IReadOnlyList<CreatedEntityRef> refs,
-        CancellationToken ct)
-    {
-        var unitIds = new Dictionary<(string, int), int?>();
-        if (refs.Count == 0)
-        {
-            return unitIds;
-        }
-
-        List<int> Ids(string type)
-        {
-            var ids = new List<int>();
-            foreach (var item in refs)
-            {
-                if (string.Equals(item.EntityType, type, StringComparison.OrdinalIgnoreCase)
-                    && !ids.Contains(item.EntityId))
-                {
-                    ids.Add(item.EntityId);
-                }
-            }
-
-            return ids;
-        }
-
-        async Task AddAsync(string type, IQueryable<CreatedUnitRefRow> projected)
-        {
-            foreach (var row in await projected.ToListAsync(ct))
-            {
-                unitIds[(type, row.Id)] = row.UnitId;
-            }
-        }
-
-        var paymentIds = Ids("Payment");
-        if (paymentIds.Count > 0)
-        {
-            await AddAsync("Payment", _db.Payments.AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && paymentIds.Contains(p.Id))
-                .Select(p => new CreatedUnitRefRow { Id = p.Id, UnitId = p.Lease != null ? (int?)p.Lease.UnitId : null }));
-        }
-
-        var expenseIds = Ids("Expense");
-        if (expenseIds.Count > 0)
-        {
-            await AddAsync("Expense", _db.Expenses.AsNoTracking()
-                .Where(e => e.PortfolioId == portfolioId && expenseIds.Contains(e.Id))
-                .Select(e => new CreatedUnitRefRow
-                {
-                    Id = e.Id,
-                    UnitId = e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null),
-                }));
-        }
-
-        var workOrderIds = Ids("WorkOrder");
-        if (workOrderIds.Count > 0)
-        {
-            await AddAsync("WorkOrder", _db.WorkOrders.AsNoTracking()
-                .Where(w => w.PortfolioId == portfolioId && workOrderIds.Contains(w.Id))
-                .Select(w => new CreatedUnitRefRow { Id = w.Id, UnitId = w.UnitId }));
-        }
-
-        var leaseIds = Ids("Lease");
-        if (leaseIds.Count > 0)
-        {
-            await AddAsync("Lease", _db.Leases.AsNoTracking()
-                .Where(l => l.PortfolioId == portfolioId && leaseIds.Contains(l.Id))
-                .Select(l => new CreatedUnitRefRow { Id = l.Id, UnitId = l.UnitId }));
-        }
-
-        var applicationIds = Ids("Application");
-        applicationIds.AddRange(Ids("RentalApplication").Where(id => !applicationIds.Contains(id)));
-        if (applicationIds.Count > 0)
-        {
-            var rows = await _db.RentalApplications.AsNoTracking()
-                .Where(a => a.PortfolioId == portfolioId && applicationIds.Contains(a.Id))
-                .Select(a => new CreatedUnitRefRow { Id = a.Id, UnitId = a.UnitId })
-                .ToListAsync(ct);
-
-            foreach (var row in rows)
-            {
-                unitIds[("Application", row.Id)] = row.UnitId;
-                unitIds[("RentalApplication", row.Id)] = row.UnitId;
-            }
-        }
-
-        return unitIds;
     }
 
     private async Task<int?> ResolveCreatedUnitIdAsync(
@@ -668,12 +605,23 @@ public class ScanController : ManagementControllerBase
         };
     }
 
-    private readonly record struct CreatedEntityRef(string EntityType, int EntityId);
-
-    private sealed class CreatedUnitRefRow
+    private sealed class ScanDraftPageQueryRow
     {
-        public int Id { get; set; }
-        public int? UnitId { get; set; }
+        public int Id { get; init; }
+        public int PortfolioId { get; init; }
+        public string TargetEntityType { get; init; } = string.Empty;
+        public string Status { get; init; } = string.Empty;
+        public string? ExtractedFields { get; init; }
+        public string? ModelId { get; init; }
+        public int? TokensUsed { get; init; }
+        public decimal? CostUsd { get; init; }
+        public string? FailureReason { get; init; }
+        public DateTime CreatedAt { get; init; }
+        public DateTime? ReviewedAt { get; init; }
+        public DateTime? ConfirmedAt { get; init; }
+        public string? CreatedEntityType { get; init; }
+        public int? CreatedEntityId { get; init; }
+        public int? CreatedUnitId { get; init; }
     }
 
     // -------------------------------------------------------------------------

@@ -117,6 +117,7 @@ public enum AtomicScanDraftClaimOutcome
     NotReady,
     Rejected,
     TargetMismatch,
+    StalePreparation,
     AlreadyConfirmed,
 }
 
@@ -141,6 +142,7 @@ public interface IAtomicScanConfirmationPersistence
         int portfolioId,
         int draftId,
         string expectedTargetEntityType,
+        string expectedDraftFingerprint,
         int confirmedByUserId,
         CancellationToken ct = default);
 

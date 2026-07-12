@@ -80,7 +80,7 @@ public sealed record ScanDraftResponse(
         };
     }
 
-    private static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
+    internal static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
             return [];

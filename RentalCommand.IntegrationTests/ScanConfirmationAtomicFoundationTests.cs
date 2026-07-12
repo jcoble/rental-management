@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -26,6 +27,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
+    private readonly ConcurrentDictionary<int, string> _preparedFingerprints = new();
 
     public async Task InitializeAsync()
     {
@@ -141,6 +143,97 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 
         retry.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
         retry.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+    }
+
+    [SkippableTheory]
+    [InlineData("extraction")]
+    [InlineData("source")]
+    [InlineData("target")]
+    public async Task ChangedPreparedDraftFact_RollsBackReceiptAndAllBusinessEffects(string changedFact)
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync($"stale-{changedFact}");
+        var command = Command(draftId, $"stale-{changedFact}-target");
+        var identity = Identity(draftId, $"stale-{changedFact}");
+        int? replacementSourceId = null;
+
+        await using (var arrange = Scope())
+        {
+            if (changedFact == "source")
+            {
+                var replacement = new StoredFile
+                {
+                    PortfolioId = _portfolioId,
+                    FileName = "replacement.jpg",
+                    FilePath = $"scan/replacement-{Guid.NewGuid():N}.jpg",
+                    ContentType = "image/jpeg",
+                    FileSize = 101,
+                    EntityType = "Expense",
+                    UploadedAt = CommandTime,
+                };
+                arrange.Db.StoredFiles.Add(replacement);
+                await arrange.Db.SaveChangesAsync();
+                replacementSourceId = replacement.Id;
+            }
+
+            var draftQuery = arrange.Db.ScanDrafts.Where(row => row.Id == draftId);
+            if (changedFact == "extraction")
+            {
+                await draftQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.ExtractedFields, "{\"total\":{\"value\":999}}"));
+            }
+            else if (changedFact == "source")
+            {
+                await draftQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.SourceStoredFileId, replacementSourceId));
+            }
+            else
+            {
+                await draftQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(row => row.TargetEntityType, "Payment"));
+            }
+        }
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        (await action.Should().ThrowAsync<ScanConfirmationValidationException>())
+            .Which.Message.Should().Contain("Review the latest extraction");
+        await using var verify = Scope();
+        var draft = await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId);
+        draft.Status.Should().Be("Reviewing");
+        draft.ConfirmedEntityId.Should().BeNull();
+        (await verify.Db.Expenses.CountAsync(expense => expense.Description == $"stale-{changedFact}-target"))
+            .Should().Be(0);
+        (await verify.Db.StoredFiles.CountAsync(file => file.EntityId != null
+            && (file.Id == draft.SourceStoredFileId || file.Id == replacementSourceId))).Should().Be(0);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.Db.OutboxMessages.CountAsync()).Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task AlreadyConfirmed_ReturnsCanonicalResultBeforeFingerprintComparison()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("already-confirmed-stale-fingerprint");
+        var first = await UnitOfWork.ExecuteAsync(
+            Identity(draftId, "first-confirm"), Command(draftId, "canonical-target"), Codec);
+        var staleCommand = Command(draftId, "ignored-target") with
+        {
+            ExpectedDraftFingerprint = new string('0', 64),
+        };
+
+        var recovered = await UnitOfWork.ExecuteAsync(
+            Identity(draftId, "recover-confirmed"), staleCommand, Codec);
+
+        recovered.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.AlreadyConfirmed);
+        recovered.Value.TargetEntityId.Should().Be(first.Value.TargetEntityId);
+        await using var verify = Scope();
+        (await verify.Db.Expenses.CountAsync()).Should().Be(1);
     }
 
     [SkippableFact]
@@ -317,6 +410,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             arrange.Db.AddRange(source, draft);
             await arrange.Db.SaveChangesAsync();
             draftId = draft.Id;
+            RememberPreparedFingerprint(draft);
         }
         var identity = Identity(draftId);
 
@@ -343,7 +437,8 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             draftId,
             ConfirmedByUserId: 42,
             ConfirmedAtUtc: CommandTime,
-            new ScanConfirmationTargetData(
+            ExpectedDraftFingerprint: _preparedFingerprints[draftId],
+            Target: new ScanConfirmationTargetData(
                 ScanConfirmationTargetKind.Expense,
                 Expense: new ScanExpenseTargetData(
                     Receipt(description),
@@ -392,6 +487,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         };
         scope.Db.AddRange(file, draft);
         await scope.Db.SaveChangesAsync();
+        RememberPreparedFingerprint(draft);
         return draft.Id;
     }
 
@@ -410,8 +506,13 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         };
         scope.Db.ScanDrafts.Add(draft);
         await scope.Db.SaveChangesAsync();
+        RememberPreparedFingerprint(draft);
         return draft.Id;
     }
+
+    private void RememberPreparedFingerprint(ScanDraft draft) =>
+        _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
+            draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
 
     private IAtomicUnitOfWork UnitOfWork => Services.GetRequiredService<IAtomicUnitOfWork>();
     private IServiceProvider Services => _services ?? throw new InvalidOperationException();

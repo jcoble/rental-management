@@ -1,9 +1,11 @@
+using System.Data.Common;
 using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
@@ -20,6 +22,7 @@ public class ScanControllerTests : IDisposable
 {
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly List<string> _executedSql = [];
 
     public ScanControllerTests()
     {
@@ -28,6 +31,7 @@ public class ScanControllerTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
         _db = new ScanControllerTestDbContext(options);
@@ -228,6 +232,7 @@ public class ScanControllerTests : IDisposable
                 PortfolioId = 42,
                 TargetEntityType = "Payment",
                 Status = "Confirmed",
+                ConfirmedEntityId = 14,
                 FilePath = "uploads/payment.jpg",
                 CreatedAt = now,
             },
@@ -237,34 +242,15 @@ public class ScanControllerTests : IDisposable
                 PortfolioId = 42,
                 TargetEntityType = "Application",
                 Status = "Confirmed",
+                ConfirmedEntityId = 15,
                 FilePath = "uploads/application.jpg",
                 CreatedAt = now.AddSeconds(1),
-            });
-        _db.StoredFiles.AddRange(
-            new StoredFile
-            {
-                PortfolioId = 42,
-                FileName = "payment.jpg",
-                FilePath = "uploads/payment.jpg",
-                ContentType = "image/jpeg",
-                FileSize = 1,
-                EntityType = "Payment",
-                EntityId = 14,
-            },
-            new StoredFile
-            {
-                PortfolioId = 42,
-                FileName = "application.jpg",
-                FilePath = "uploads/application.jpg",
-                ContentType = "image/jpeg",
-                FileSize = 1,
-                EntityType = "Application",
-                EntityId = 15,
             });
         await _db.SaveChangesAsync();
 
         var controller = CreateController(Mock.Of<IScanService>());
 
+        _executedSql.Clear();
         var result = await controller.ListPage(new ListQuery { Skip = 0, Take = 20 }, "Confirmed", CancellationToken.None);
 
         var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
@@ -278,6 +264,10 @@ public class ScanControllerTests : IDisposable
             i.CreatedEntityType == "Application" &&
             i.CreatedEntityId == 15 &&
             i.CreatedUnitId == 11);
+        _executedSql.Should().HaveCount(2, "the page uses one count and one DB-shaped item query");
+        _executedSql[1].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[1].Should().ContainEquivalentOf("LIMIT");
+        _executedSql[1].Should().NotContain("StoredFiles");
     }
 
     [Fact]
@@ -466,6 +456,7 @@ public class ScanControllerTests : IDisposable
         draftId,
         7,
         DateTime.UtcNow,
+        ScanConfirmationDraftFingerprint.Create("Expense", null, null),
         new ScanConfirmationTargetData(
             ScanConfirmationTargetKind.Expense,
             Expense: new ScanExpenseTargetData(
@@ -503,6 +494,28 @@ public class ScanControllerTests : IDisposable
             if (Exception is not null)
                 return Task.FromException<AtomicCommandOutcome<TResult>>(Exception);
             return Task.FromResult((AtomicCommandOutcome<TResult>)Outcome!);
+        }
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 }
