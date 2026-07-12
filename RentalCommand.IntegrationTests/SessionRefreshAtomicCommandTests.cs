@@ -26,6 +26,9 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
 
     private readonly DateTime _now = new(2026, 7, 10, 18, 0, 0, DateTimeKind.Utc);
     private readonly Guid _sessionId = Guid.NewGuid();
+    private int _accessContextId;
+    private int _membershipId;
+    private int _assignmentId;
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private ReuseFailureInterceptor? _failureInterceptor;
@@ -242,6 +245,54 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             item.IdempotencyKey == SafeOperationKey(operation))).Should().Be(0);
     }
 
+    [SkippableTheory]
+    [InlineData(AccessLossKind.ContextSuspended)]
+    [InlineData(AccessLossKind.MembershipRevoked)]
+    [InlineData(AccessLossKind.LastAssignmentRemoved)]
+    public async Task Issue_RejectsWhenEffectiveWorkspaceAccessIsLost(AccessLossKind loss)
+    {
+        SkipIfNoDocker();
+        await RemoveEffectiveAccessAsync(loss, _now.AddSeconds(30));
+        var familyId = Guid.NewGuid();
+        var credentialId = Guid.NewGuid();
+
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("issue", Guid.NewGuid()),
+            Issue(familyId, credentialId, Hash($"rejected-{loss}")),
+            Codec);
+
+        outcome.Value.Status.Should().Be(SessionRefreshMutationStatus.Rejected);
+        await using var db = NewPlainContext();
+        (await db.AuthSessionRefreshTokenFamilies.CountAsync(item => item.Id == familyId)).Should().Be(0);
+        (await db.AuthSessionRefreshCredentials.CountAsync(item => item.Id == credentialId)).Should().Be(0);
+    }
+
+    [SkippableTheory]
+    [InlineData(AccessLossKind.ContextSuspended)]
+    [InlineData(AccessLossKind.MembershipRevoked)]
+    [InlineData(AccessLossKind.LastAssignmentRemoved)]
+    public async Task Rotation_RejectsWithoutConsumingCredentialWhenEffectiveWorkspaceAccessIsLost(
+        AccessLossKind loss)
+    {
+        SkipIfNoDocker();
+        var issued = await IssueCredentialAsync();
+        await RemoveEffectiveAccessAsync(loss, _now.AddSeconds(30));
+        var replacementId = Guid.NewGuid();
+        var operationId = Guid.NewGuid();
+
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("rotate", operationId),
+            Rotate(operationId, issued.TokenHash, replacementId, Hash($"rejected-rotation-{loss}")),
+            Codec);
+
+        outcome.Value.Status.Should().Be(SessionRefreshMutationStatus.Rejected);
+        await using var db = NewPlainContext();
+        var original = await db.AuthSessionRefreshCredentials.SingleAsync(item => item.Id == issued.CredentialId);
+        original.ConsumedAtUtc.Should().BeNull();
+        original.ReplacedByCredentialId.Should().BeNull();
+        (await db.AuthSessionRefreshCredentials.CountAsync(item => item.Id == replacementId)).Should().Be(0);
+    }
+
     private async Task<IssuedCredential> IssueCredentialAsync()
     {
         var familyId = Guid.NewGuid();
@@ -326,6 +377,31 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         };
         db.WorkspaceAccessContexts.Add(context);
         await db.SaveChangesAsync();
+        var membership = new WorkspaceMembership
+        {
+            AccessContextId = context.Id,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        db.WorkspaceMemberships.Add(membership);
+        await db.SaveChangesAsync();
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = membership.Id,
+            PortfolioId = portfolio.Id,
+            RoleProfileId = 1,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        db.MembershipRoleAssignments.Add(assignment);
+        await db.SaveChangesAsync();
         db.AuthSessions.Add(new AuthSession
         {
             Id = _sessionId,
@@ -336,6 +412,42 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             LastSeenAtUtc = _now,
             ExpiresAtUtc = _now.AddDays(30),
         });
+        await db.SaveChangesAsync();
+        _accessContextId = context.Id;
+        _membershipId = membership.Id;
+        _assignmentId = assignment.Id;
+    }
+
+    private async Task RemoveEffectiveAccessAsync(AccessLossKind loss, DateTime changedAtUtc)
+    {
+        await using var db = NewPlainContext();
+        switch (loss)
+        {
+            case AccessLossKind.ContextSuspended:
+            {
+                var context = await db.WorkspaceAccessContexts.SingleAsync(item => item.Id == _accessContextId);
+                context.Status = WorkspaceAccessContextStatus.Suspended;
+                context.SuspendedAtUtc = changedAtUtc;
+                context.UpdatedAtUtc = changedAtUtc;
+                break;
+            }
+            case AccessLossKind.MembershipRevoked:
+            {
+                var membership = await db.WorkspaceMemberships.SingleAsync(item => item.Id == _membershipId);
+                membership.Status = WorkspaceMembershipStatus.Revoked;
+                membership.RevokedAtUtc = changedAtUtc;
+                membership.UpdatedAtUtc = changedAtUtc;
+                break;
+            }
+            case AccessLossKind.LastAssignmentRemoved:
+                await db.MembershipRoleAssignments
+                    .Where(item => item.Id == _assignmentId)
+                    .ExecuteDeleteAsync();
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(loss), loss, null);
+        }
+
         await db.SaveChangesAsync();
     }
 
@@ -352,6 +464,13 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; session refresh kernel test skipped.");
 
     private sealed record IssuedCredential(Guid FamilyId, Guid CredentialId, string TokenHash);
+
+    public enum AccessLossKind
+    {
+        ContextSuspended,
+        MembershipRevoked,
+        LastAssignmentRemoved,
+    }
 
     private sealed class RefreshTestActor : ICurrentActor
     {

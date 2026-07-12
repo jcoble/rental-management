@@ -24,16 +24,22 @@ public sealed class IssueLoginContextSelectionChallengeHandler
 
         // The count and every effective-state predicate remain in one translated SQL statement.
         // Owner/Tenant relationship contexts will extend this predicate in their destructive slices.
-        var effectiveContextCount = await attempt.Persistence.Query<WorkspaceAccessContext>()
+        var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
             .AsNoTracking()
             .WhereEffectiveTeamAccess(
                 attempt.Persistence.Query<WorkspaceMembership>().AsNoTracking(),
                 attempt.Persistence.Query<MembershipRoleAssignment>().AsNoTracking(),
                 command.UserId,
-                command.IssuedAtUtc)
-            .CountAsync(ct);
+                command.IssuedAtUtc);
+        var auditRoot = await effectiveContexts
+            .OrderBy(context => context.Id)
+            .Select(context => new ChallengeAuditRoot(
+                context.Id,
+                context.PortfolioId,
+                effectiveContexts.Count()))
+            .FirstOrDefaultAsync(ct);
 
-        if (effectiveContextCount < 2)
+        if (auditRoot is null || auditRoot.EffectiveContextCount < 2)
         {
             return new LoginContextSelectionChallengeResult(
                 false,
@@ -50,6 +56,22 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             CreatedAtUtc = command.IssuedAtUtc,
             ExpiresAtUtc = command.ExpiresAtUtc,
         });
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            auditRoot.PortfolioId,
+            nameof(WorkspaceAccessContext),
+            auditRoot.AccessContextId,
+            AuditLogOperation.Updated,
+            command.UserId,
+            ActorLabel: "authentication:context-selection",
+            NewValues: JsonSerializer.Serialize(new
+            {
+                command.ChallengeId,
+                command.UserId,
+                AuditRootAccessContextId = auditRoot.AccessContextId,
+                auditRoot.EffectiveContextCount,
+                command.ExpiresAtUtc,
+            }),
+            ChangeReason: "Login context selection challenge issued"));
 
         return new LoginContextSelectionChallengeResult(
             true,
@@ -73,6 +95,11 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             throw new ArgumentOutOfRangeException(nameof(command.ExpiresAtUtc));
         }
     }
+
+    private sealed record ChallengeAuditRoot(
+        int AccessContextId,
+        int PortfolioId,
+        int EffectiveContextCount);
 }
 
 public sealed class StartAuthSessionHandler
@@ -178,18 +205,19 @@ public sealed class StartAuthSessionHandler
 
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             target.PortfolioId,
-            nameof(AuthSession),
-            0,
-            AuditLogOperation.Created,
+            nameof(WorkspaceAccessContext),
+            target.Context.Id,
+            AuditLogOperation.Updated,
             command.UserId,
             ActorLabel: "authentication:session",
             NewValues: JsonSerializer.Serialize(new
             {
                 command.AuthSessionId,
-                AccessContextId = target.Context.Id,
+                AuditRootAccessContextId = target.Context.Id,
                 target.AccessRevision,
                 command.RefreshTokenFamilyId,
                 command.CredentialId,
+                command.ContextSelectionChallengeId,
             }),
             ChangeReason: "Authentication session started"));
 
