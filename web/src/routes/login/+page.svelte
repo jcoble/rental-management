@@ -7,6 +7,7 @@
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { auth } from '$lib/api/endpoints/auth';
+	import type { EffectiveAccessContextOption } from '$lib/types';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
@@ -15,8 +16,8 @@
 	let email = $state('');
 	let password = $state('');
 	let accessContextId = $state('');
-	const contextChoices = $derived(
-		form && 'contexts' in form ? form.contexts ?? [] : []
+	const contextChoices: EffectiveAccessContextOption[] = $derived(
+		form && 'contexts' in form && Array.isArray(form.contexts) ? form.contexts : []
 	);
 
 	// "Resend verification" affordance, shown only when the API flags the login as EMAIL_NOT_VERIFIED.
