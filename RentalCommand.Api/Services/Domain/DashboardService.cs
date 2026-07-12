@@ -36,7 +36,6 @@ public class DashboardService : IDashboardService
         var now = _timeProvider.UtcNow();
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var nextMonthStart = monthStart.AddMonths(1);
-        var soonCutoff = now.AddDays(60);
 
         return new DashboardResponse
         {
@@ -55,7 +54,7 @@ public class DashboardService : IDashboardService
             Occupancy = await BuildOccupancyAsync(portfolioId, ct),
             Accounting = await BuildAccountingAsync(portfolioId, now, monthStart, nextMonthStart, ct),
             Maintenance = await BuildMaintenanceAsync(portfolioId, ct),
-            Leasing = await BuildLeasingAsync(portfolioId, now, soonCutoff, ct),
+            Leasing = await BuildLeasingAsync(portfolioId, ct),
             RecentActivity = await BuildRecentActivityAsync(portfolioId, ct),
             UpcomingAppointments = await BuildUpcomingAppointmentsAsync(portfolioId, now, ct),
         };
@@ -63,21 +62,17 @@ public class DashboardService : IDashboardService
 
     private async Task<DashboardOccupancy> BuildOccupancyAsync(int portfolioId, CancellationToken ct)
     {
-        // Units belong to the portfolio via their property. Soft-deleted units/properties are excluded
-        // by their global query filters. "Occupied" is defined as Unit.Status == Occupied — the single
-        // occupancy definition shared by Analytics, the Occupancy report, and the Properties list. (Do
-        // NOT derive occupancy from active leases here: that diverged from the rest of the app.)
-        // "Reserved" is Unit.Status == Reserved; "Vacant" is the remainder (Vacant + Offline). All counts
-        // are computed SQL-side in a single grouped aggregate so no unit rows are pulled into memory.
-        var counts = await _db.Units
+        // The database projection is the single source of occupancy truth. Possession and operational
+        // periods determine these counts; mutable Unit.Status and legacy Lease.Status are not consulted.
+        var counts = await _db.UnitOccupancyProjections
             .AsNoTracking()
-            .Where(u => u.Property!.PortfolioId == portfolioId)
+            .Where(row => row.PortfolioId == portfolioId)
             .GroupBy(_ => 1)
             .Select(g => new
             {
                 Total = g.Count(),
-                Occupied = g.Count(u => u.Status == UnitStatus.Occupied),
-                Reserved = g.Count(u => u.Status == UnitStatus.Reserved),
+                Occupied = g.Count(row => row.IsOccupied),
+                Reserved = g.Count(row => !row.IsOccupied && row.HasScheduledMoveIn),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -217,50 +212,71 @@ public class DashboardService : IDashboardService
         };
     }
 
-    private async Task<DashboardLeasing> BuildLeasingAsync(
-        int portfolioId, DateTime now, DateTime soonCutoff, CancellationToken ct)
+    private async Task<DashboardLeasing> BuildLeasingAsync(int portfolioId, CancellationToken ct)
     {
-        var byStatusRaw = await _db.Leases
+        var byStatusRaw = await _db.LeaseManagementLifecycleProjections
             .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId)
-            .GroupBy(l => l.Status)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .Where(row => row.PortfolioId == portfolioId)
+            .GroupBy(row => row.Lifecycle)
+            .Select(group => new { Status = group.Key, Count = group.Count() })
             .ToListAsync(ct);
 
-        var byStatus = byStatusRaw.ToDictionary(g => g.Status.ToString(), g => g.Count);
-        var leaseCounts = await _db.Leases
+        var byStatus = byStatusRaw.ToDictionary(group => group.Status, group => group.Count);
+        var leaseCounts = await _db.LeaseManagementLifecycleProjections
             .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId)
+            .Where(row => row.PortfolioId == portfolioId)
             .GroupBy(_ => 1)
-            .Select(g => new
+            .Select(group => new
             {
-                Total = g.Count(),
-                Active = g.Count(l => l.Status == LeaseStatus.Active),
+                Total = group.Count(),
+                Active = group.Count(row => row.Lifecycle == "Occupied" || row.Lifecycle == "Ending"),
             })
             .SingleOrDefaultAsync(ct);
 
         var totalLeases = leaseCounts?.Total ?? 0;
         var activeLeases = leaseCounts?.Active ?? 0;
 
-        // Active leases ending within 60 days, with tenant/property/unit labels joined in.
-        var expiring = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId
-                && l.Status == LeaseStatus.Active
-                && l.EndDate >= now
-                && l.EndDate <= soonCutoff)
-            .OrderBy(l => l.EndDate)
-            .Select(l => new DashboardExpiringLease
+        var expiringRows = await (
+            from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            where lifecycle.PortfolioId == portfolioId
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && lifecycle.CurrentAgreementId != null
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId.Value }
+                equals new { agreement.PortfolioId, agreement.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join unit in _db.Units.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            where agreement.TermEndOn != null
+                && agreement.TermEndOn >= lifecycle.BusinessDate
+                && agreement.TermEndOn <= lifecycle.BusinessDate.AddDays(60)
+            orderby agreement.TermEndOn, agreement.Id
+            select new ExpiringAgreementReadRow
             {
-                Id = l.Id,
-                LeaseNumber = string.IsNullOrWhiteSpace(l.LeaseNumber) ? $"Lease #{l.Id}" : l.LeaseNumber,
-                Tenant = l.Tenant != null ? (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim() : null,
-                Property = l.Property != null ? l.Property.Name : null,
-                Unit = l.Unit != null ? l.Unit.UnitNumber : null,
-                EndDate = l.EndDate,
-                MonthlyRent = l.MonthlyRent,
-            })
-            .ToListAsync(ct);
+                Id = agreement.Id,
+                AgreementNumber = agreement.AgreementNumber,
+                Tenant = lifecycle.CurrentPrimaryTenantName,
+                Property = property.Name,
+                Unit = unit.UnitNumber,
+                EndOn = agreement.TermEndOn.Value,
+                BaseRentAmount = agreement.BaseRentAmount,
+            }).ToListAsync(ct);
+
+        var expiring = expiringRows.Select(row => new DashboardExpiringLease
+        {
+            Id = row.Id,
+            LeaseNumber = string.IsNullOrWhiteSpace(row.AgreementNumber)
+                ? $"Agreement #{row.Id}"
+                : row.AgreementNumber,
+            Tenant = row.Tenant,
+            Property = row.Property,
+            Unit = row.Unit,
+            EndDate = row.EndOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            MonthlyRent = row.BaseRentAmount,
+        }).ToList();
 
         return new DashboardLeasing
         {
@@ -269,6 +285,17 @@ public class DashboardService : IDashboardService
             ExpiringSoon = expiring,
             ByStatus = byStatus,
         };
+    }
+
+    private sealed class ExpiringAgreementReadRow
+    {
+        public int Id { get; init; }
+        public string AgreementNumber { get; init; } = string.Empty;
+        public string? Tenant { get; init; }
+        public string Property { get; init; } = string.Empty;
+        public string Unit { get; init; } = string.Empty;
+        public DateOnly EndOn { get; init; }
+        public decimal BaseRentAmount { get; init; }
     }
 
     private async Task<IReadOnlyList<DashboardActivity>> BuildRecentActivityAsync(int portfolioId, CancellationToken ct)

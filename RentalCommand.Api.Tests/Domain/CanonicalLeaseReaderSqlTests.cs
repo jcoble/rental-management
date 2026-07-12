@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Interfaces;
@@ -68,6 +69,29 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("count");
         sql.Should().Contain("DISTINCT");
         sql.Should().Contain("LIMIT");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+    }
+
+    [Fact]
+    public void Unit_dashboard_header_joins_canonical_occupancy_agreement_and_account_in_one_statement()
+    {
+        using var db = NewContext();
+        var service = new UnitDashboardService(
+            db,
+            new AuditDescriber(),
+            new AuditDiffBuilder(),
+            TimeProvider.System);
+
+        var sql = service.BuildCanonicalDashboardQuery(17, 42).ToQueryString();
+
+        sql.Should().Contain("vw_unit_occupancy");
+        sql.Should().Contain("vw_lease_management_lifecycle");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("vw_lease_agreement_status");
+        sql.Should().Contain("vw_tenant_account_balances");
+        sql.Should().Contain("vw_security_deposit_balances");
+        sql.Should().Contain("TenantAccountId");
         sql.Should().NotContain("\"Leases\"");
         sql.Should().NotContain("LeaseTenants");
     }

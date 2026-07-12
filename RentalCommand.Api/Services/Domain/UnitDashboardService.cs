@@ -11,10 +11,6 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IUnitDashboardService"/>
 public class UnitDashboardService : IUnitDashboardService
 {
-    private const string RenewalNoticeType = "RenewalOffer";
-    private const string NoticeStatusApproved = "Approved";
-    private const string NoticeStatusDraft = "Draft";
-
     /// <summary>Cap for each Overview list (recent payments, open WOs, pending docs, upcoming appts).</summary>
     private const int OverviewTake = 5;
 
@@ -24,138 +20,51 @@ public class UnitDashboardService : IUnitDashboardService
     private readonly RentalCommandDbContext _db;
     private readonly AuditDescriber _auditDescriber;
     private readonly AuditDiffBuilder _auditDiff;
-    private readonly TimeProvider _timeProvider;
 
     public UnitDashboardService(RentalCommandDbContext db, AuditDescriber auditDescriber, AuditDiffBuilder auditDiff, TimeProvider timeProvider)
     {
         _db = db;
         _auditDescriber = auditDescriber;
         _auditDiff = auditDiff;
-        _timeProvider = timeProvider;
+        _ = timeProvider;
     }
 
     public async Task<UnitDashboardResponse?> GetDashboardAsync(int portfolioId, int unitId, CancellationToken ct = default)
     {
-        // (1) Unit + property name. Scope is enforced through the owning property (units carry no PortfolioId).
-        var unitRow = await _db.Units
-            .AsNoTracking()
-            .Where(u => u.Id == unitId && u.Property!.PortfolioId == portfolioId)
-            .Select(u => new { Unit = u, PropertyName = u.Property!.Name })
-            .FirstOrDefaultAsync(ct);
+        var unitRow = await BuildCanonicalDashboardQuery(portfolioId, unitId).FirstOrDefaultAsync(ct);
 
         if (unitRow is null)
         {
             return null;
         }
 
-        var now = _timeProvider.UtcNow();
-
-        // The unit's lease ids stay as a SQL subquery anywhere they are reused below. Do not materialize
-        // this list in API memory; payment/document filtering must remain DB-side even for long-lived units.
-        var unitLeaseIds = _db.Leases
-            .AsNoTracking()
-            .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId)
-            .Select(l => l.Id);
-
-        // (2) Current lease (+ tenant): only in-force occupying leases or pending signature leases.
-        // Ended leases stay historical and are surfaced through the lease history table, not the header.
-        var today = now.Date;
-        var currentLease = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId
-                && ((l.Status == LeaseStatus.Active && l.StartDate <= today && l.EndDate >= today)
-                    || (l.Status == LeaseStatus.NoticeGiven && l.StartDate <= today && (l.MoveOutDate ?? l.EndDate) >= today)
-                    || (l.Status == LeaseStatus.PendingSignature && l.EndDate >= today)))
-            .OrderByDescending(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-            .ThenByDescending(l => l.StartDate)
-            .ThenByDescending(l => l.Id)
-            .Select(l => new
-            {
-                l.Id,
-                l.LeaseNumber,
-                l.Status,
-                l.StartDate,
-                l.EndDate,
-                l.MonthlyRent,
-                l.SecurityDeposit,
-                HasHeldSecurityDeposit = _db.SecurityDepositHoldings.Any(h =>
-                    h.PortfolioId == portfolioId
-                    && h.LeaseId == l.Id
-                    && h.Status == SecurityDepositStatus.Held),
-                l.TenantId,
-                TenantFirst = l.Tenant != null ? l.Tenant.FirstName : null,
-                TenantLast = l.Tenant != null ? l.Tenant.LastName : null,
-                TenantEmail = l.Tenant != null ? l.Tenant.Email : null,
-                TenantPhone = l.Tenant != null ? l.Tenant.Phone : null,
-            })
-            .FirstOrDefaultAsync(ct);
-
-        var currentTenants = currentLease is null
+        var now = unitRow.EffectiveNowUtc;
+        var currentTenants = unitRow.LeaseManagementId is not int leaseManagementId
             ? new List<UnitTenantSummary>()
-            : await _db.LeaseTenants
+            : await _db.LeaseManagementParties
                 .AsNoTracking()
-                .Where(lt => lt.PortfolioId == portfolioId && lt.LeaseId == currentLease.Id)
-                .OrderByDescending(lt => lt.IsPrimary)
-                .ThenBy(lt => lt.Id)
-                .Select(lt => new UnitTenantSummary
+                .Where(party => party.PortfolioId == portfolioId
+                    && party.LeaseManagementId == leaseManagementId
+                    && party.EffectiveFrom <= unitRow.BusinessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= unitRow.BusinessDate)
+                    && party.Role != LeaseManagementPartyRole.Guarantor)
+                .OrderBy(party => party.Role == LeaseManagementPartyRole.PrimaryTenant ? 0
+                    : party.Role == LeaseManagementPartyRole.CoTenant ? 1
+                    : party.Role == LeaseManagementPartyRole.Occupant ? 2
+                    : 3)
+                .ThenBy(party => party.Id)
+                .Select(party => new UnitTenantSummary
                 {
-                    Id = lt.TenantId,
-                    Name = (lt.Tenant!.FirstName + " " + lt.Tenant.LastName).Trim(),
-                    Email = lt.Tenant.Email,
-                    Phone = lt.Tenant.Phone,
+                    Id = party.TenantId,
+                    Name = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+                    Email = party.Tenant.Email,
+                    Phone = party.Tenant.Phone,
                 })
                 .ToListAsync(ct);
 
-        if (currentLease is not null && currentTenants.Count == 0)
-        {
-            currentTenants =
-            [
-                new UnitTenantSummary
-                {
-                    Id = currentLease.TenantId,
-                    Name = $"{currentLease.TenantFirst} {currentLease.TenantLast}".Trim(),
-                    Email = currentLease.TenantEmail,
-                    Phone = currentLease.TenantPhone,
-                },
-            ];
-        }
-
-        // (3) Rent state — a single grouped conditional SUM over the unit's payments (no materialization).
-        // Outstanding = still-owed rows (Scheduled/Partial/Late). Overdue flags whether any owed row is past due.
-        // Scoped to the unit's CURRENT lease (Active in-term / NoticeGiven) via ForCurrentLeaseAttention,
-        // mirroring AccountingService's receivables query — so leftover Scheduled/Late charges on a prior,
-        // ended lease don't over-count the unit's Outstanding (or flip its rent state to Overdue), keeping
-        // the Unit header reconciled with the Accounting Outstanding/Overdue KPIs.
-        decimal outstanding = 0m;
-        bool hasOverdue = false;
-        bool hasDueSoon = false;
-        var rent = await _db.Payments
-            .AsNoTracking()
-            .ForCurrentLeaseAttention(now)
-            .Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && unitLeaseIds.Contains(p.LeaseId.Value))
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                // Owed = Scheduled/Partial/Late. A Partial only owes its unpaid remainder
-                // (Amount − AmountPaid); Scheduled/Late owe in full. Mirrors AccountingService so the
-                // Unit Rent tab reconciles with the Accounting Outstanding KPI and the lease ledger
-                // Balance instead of over-counting an already-collected partial at its full amount.
-                Outstanding = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
-                    : 0m),
-                OverdueCount = g.Count(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
-                DueSoonCount = g.Count(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial)
-                    && p.DueDate >= now),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        outstanding = rent?.Outstanding ?? 0m;
-        hasOverdue = (rent?.OverdueCount ?? 0) > 0;
-        hasDueSoon = (rent?.DueSoonCount ?? 0) > 0;
+        var outstanding = unitRow.ReceivableBalance;
+        var hasOverdue = unitRow.PastDueAmount > 0m;
+        var hasDueSoon = unitRow.NextDueOn is not null;
 
         // (4) Counts — open work orders + documents on the unit and its children.
         var openWorkOrderCount = await _db.WorkOrders
@@ -167,7 +76,7 @@ public class UnitDashboardService : IUnitDashboardService
 
         // The unit's document set: files attached to the unit OR any of its children, computed DB-side as
         // a set of (EntityType, EntityId) predicates against subqueries (one query, IN (...) per child type).
-        var docs = await BuildUnitDocumentsQuery(portfolioId, unitId, unitLeaseIds)
+        var docs = await BuildUnitDocumentsQuery(portfolioId, unitId)
             .OrderByDescending(f => f.UploadedAt)
             .Select(f => new UnitDocumentSummary
             {
@@ -181,7 +90,7 @@ public class UnitDashboardService : IUnitDashboardService
             .Take(OverviewTake)
             .ToListAsync(ct);
 
-        var docsCount = await BuildUnitDocumentsQuery(portfolioId, unitId, unitLeaseIds).CountAsync(ct);
+        var docsCount = await BuildUnitDocumentsQuery(portfolioId, unitId).CountAsync(ct);
 
         // (5) Upcoming appointments for the unit.
         var upcomingAppointments = await _db.Appointments
@@ -202,25 +111,41 @@ public class UnitDashboardService : IUnitDashboardService
             })
             .ToListAsync(ct);
 
-        // Overview: recent payments (newest by due date) + open work orders (newest requested first).
-        var recentPayments = await _db.Payments
+        // Posted payment receipts use the same immutable ledger-entry ids as the global Tenant Account.
+        List<RecentPaymentReadRow> recentPaymentRows = unitRow.TenantAccountId is not int tenantAccountId
+            ? []
+            : await _db.TenantLedgerEntries
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && unitLeaseIds.Contains(p.LeaseId.Value))
-            .OrderByDescending(p => p.DueDate)
-            .ThenByDescending(p => p.Id)
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.TenantAccountId == tenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)
+            .OrderByDescending(entry => entry.PostedAtUtc)
+            .ThenByDescending(entry => entry.Id)
             .Take(OverviewTake)
-            .Select(p => new UnitPaymentSummary
+            .Select(entry => new RecentPaymentReadRow
             {
-                Id = p.Id,
-                // Unit-scoped payments are all lease-tied (filtered by the unit's lease ids above).
-                LeaseId = p.LeaseId!.Value,
-                Type = p.PaymentType.ToString(),
-                Status = p.Status.ToString(),
-                Amount = p.Amount,
-                DueDate = p.DueDate,
-                PaidDate = p.PaidDate,
+                Id = entry.Id,
+                TenantAccountId = entry.TenantAccountId,
+                LeaseAgreementId = entry.LeaseAgreementId,
+                Type = entry.EntryType.ToString(),
+                Amount = entry.Amount,
+                EffectiveOn = entry.EffectiveOn,
+                PostedAtUtc = entry.PostedAtUtc,
             })
             .ToListAsync(ct);
+
+        var recentPayments = recentPaymentRows.Select(entry => new UnitPaymentSummary
+        {
+            Id = entry.Id,
+            TenantAccountId = entry.TenantAccountId,
+            LeaseManagementId = unitRow.LeaseManagementId!.Value,
+            LeaseAgreementId = entry.LeaseAgreementId,
+            Type = entry.Type,
+            Status = "Posted",
+            Amount = entry.Amount,
+            DueDate = entry.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            PaidDate = entry.PostedAtUtc,
+        }).ToList();
 
         var openWorkOrders = await _db.WorkOrders
             .AsNoTracking()
@@ -243,9 +168,12 @@ public class UnitDashboardService : IUnitDashboardService
 
         // Stage inputs — a few cheap EXISTS checks plus the values already fetched above. The resolver is
         // a pure function over these; it issues no queries and does not loop rows.
-        var hasDraftOrPendingLease = currentLease is not { Status: LeaseStatus.Active }
-            && await _db.Leases.AsNoTracking().AnyAsync(l => l.UnitId == unitId && l.PortfolioId == portfolioId
-                && (l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature), ct);
+        var hasDraftOrPendingLease = await _db.LeaseAgreements.AsNoTracking().AnyAsync(agreement =>
+            agreement.PortfolioId == portfolioId
+            && agreement.LeaseManagement!.UnitId == unitId
+            && agreement.FullyExecutedAtUtc == null
+            && agreement.VoidedAtUtc == null
+            && agreement.DraftCanceledAtUtc == null, ct);
 
         var hasOpenApplication = await _db.RentalApplications.AsNoTracking().AnyAsync(a =>
             a.UnitId == unitId && a.PortfolioId == portfolioId
@@ -264,72 +192,45 @@ public class UnitDashboardService : IUnitDashboardService
             && a.ScheduledStart >= now
             && a.Status != AppointmentStatus.Cancelled, ct);
 
-        // Make-ready signal: Unit offline, OR open work orders, OR last lease ended recently, OR a move-out
-        // inspection completed. Each is an indexed existence check.
-        var recentlyEndedLease = await _db.Leases.AsNoTracking().AnyAsync(l =>
-            l.UnitId == unitId && l.PortfolioId == portfolioId
-            && (l.Status == LeaseStatus.Expired || l.Status == LeaseStatus.Terminated)
-            && (l.MoveOutDate != null ? l.MoveOutDate >= now.AddDays(-60) : l.EndDate >= now.AddDays(-60)), ct);
-
         var moveOutInspectionDone = await _db.Inspections.AsNoTracking().AnyAsync(i =>
             i.UnitId == unitId && i.PortfolioId == portfolioId
             && i.Type == InspectionType.MoveOut
             && (i.Status == InspectionStatus.Completed || i.Status == InspectionStatus.Reviewed), ct);
 
-        var recentMoveOutSignal = unitRow.Unit.Status == UnitStatus.Offline
+        var recentMoveOutSignal = unitRow.IsInTurnover || unitRow.IsOutOfService || unitRow.IsOnManagementHold
             || openWorkOrderCount > 0
-            || recentlyEndedLease
+            || unitRow.Lifecycle == "AccountingCloseout"
             || moveOutInspectionDone;
 
-        var leaseSnapshot = currentLease is null
-            ? null
-            : new LeaseSnapshot(
-                currentLease.Status,
-                currentLease.StartDate,
-                currentLease.EndDate,
-                currentLease.SecurityDeposit,
-                currentLease.HasHeldSecurityDeposit);
-
-        var stageInputs = new UnitStageInputs(
-            unitRow.Unit.Status,
-            leaseSnapshot,
-            hasDraftOrPendingLease,
-            hasOpenApplication,
-            hasUpcomingShowing,
-            hasUpcomingMoveInAppt,
-            recentMoveOutSignal,
-            outstanding);
-
-        var (stage, nextActionLabel) = UnitLifecycleStageResolver.Resolve(stageInputs, now);
-        var nextBestAction = await ResolveNextBestActionAsync(
-            portfolioId,
-            unitId,
-            unitRow.Unit.PropertyId,
-            stage,
-            nextActionLabel,
-            currentLease?.Id,
-            currentLease?.TenantId,
-            ct);
+        var stage = ResolveCanonicalStage(unitRow, hasDraftOrPendingLease, hasOpenApplication,
+            hasUpcomingShowing, hasUpcomingMoveInAppt, recentMoveOutSignal);
+        var nextBestAction = new UnitNextBestAction
+        {
+            Label = NextBestActionLabel(stage, outstanding, unitRow.AgreementEndOn, unitRow.BusinessDate),
+            Href = NextBestActionHref(stage, unitId, unitRow.Unit.PropertyId, unitRow.CurrentPrimaryTenantId),
+        };
 
         // Header rent state + lease-ends-in.
-        var isActiveLease = currentLease is { Status: LeaseStatus.Active };
-        var rentState = currentLease is null
+        var rentState = unitRow.TenantAccountId is null
             ? "NoLease"
             : hasOverdue ? "Overdue"
             : hasDueSoon ? "Due"
             : "Current";
 
-        int? leaseEndsInDays = isActiveLease
-            ? Math.Max(0, (int)Math.Ceiling((currentLease!.EndDate - now).TotalDays))
+        int? leaseEndsInDays = unitRow.AgreementEndOn is { } end
+            ? Math.Max(0, end.DayNumber - unitRow.BusinessDate.DayNumber)
             : null;
 
         var tenantName = currentTenants.Count == 0
             ? null
-            : string.Join(", ", currentTenants.Select(t => t.Name).Where(name => !string.IsNullOrWhiteSpace(name)));
+            : string.Join(", ", currentTenants.Select(t => t.Name));
+
+        var unitResponse = unitRow.Unit;
+        unitResponse.Status = ResolveCanonicalUnitStatus(unitRow);
 
         return new UnitDashboardResponse
         {
-            Unit = UnitResponse.FromEntity(unitRow.Unit),
+            Unit = unitResponse,
             PropertyName = unitRow.PropertyName,
             LifecycleStage = stage.ToString(),
             NextBestAction = nextBestAction,
@@ -342,15 +243,17 @@ public class UnitDashboardService : IUnitDashboardService
                 DocsNeedingReviewCount = docsCount,
                 CurrentTenantName = tenantName,
             },
-            CurrentLease = currentLease is null ? null : new UnitLeaseSummary
+            CurrentLease = unitRow.AgreementId is not int agreementId ? null : new UnitLeaseSummary
             {
-                Id = currentLease.Id,
-                LeaseNumber = string.IsNullOrWhiteSpace(currentLease.LeaseNumber) ? $"Lease #{currentLease.Id}" : currentLease.LeaseNumber,
-                Status = currentLease.Status.ToString(),
-                StartDate = currentLease.StartDate,
-                EndDate = currentLease.EndDate,
-                MonthlyRent = currentLease.MonthlyRent,
-                SecurityDeposit = currentLease.SecurityDeposit,
+                Id = agreementId,
+                LeaseManagementId = unitRow.LeaseManagementId!.Value,
+                TenantAccountId = unitRow.TenantAccountId,
+                LeaseNumber = string.IsNullOrWhiteSpace(unitRow.AgreementNumber) ? $"Agreement #{agreementId}" : unitRow.AgreementNumber,
+                Status = unitRow.AgreementStatus ?? unitRow.Lifecycle ?? "Preparing",
+                StartDate = unitRow.AgreementStartOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                EndDate = (unitRow.AgreementEndOn ?? DateOnly.MaxValue).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                MonthlyRent = unitRow.BaseRentAmount ?? 0m,
+                SecurityDeposit = unitRow.SecurityDepositObligation ?? 0m,
             },
             CurrentTenant = currentTenants.FirstOrDefault(),
             CurrentTenants = currentTenants,
@@ -365,6 +268,165 @@ public class UnitDashboardService : IUnitDashboardService
             RecentTimeline = await GetTimelineAsync(portfolioId, unitId, 0, RecentTimelineTake, ct),
         };
     }
+
+    /// <summary>
+    /// Canonical Unit Command Center header query. Occupancy and lifecycle come from database views;
+    /// the selected legal artifact, tenant account, balance, and deposit are joined by their canonical
+    /// identities in one PostgreSQL statement. No legacy Lease, LeaseTenant, or Unit.Status fact is read.
+    /// </summary>
+    internal IQueryable<UnitDashboardReadRow> BuildCanonicalDashboardQuery(int portfolioId, int unitId) =>
+        from unit in _db.Units.AsNoTracking()
+        where unit.PortfolioId == portfolioId && unit.Id == unitId
+        join property in _db.Properties.AsNoTracking()
+            on new { unit.PortfolioId, Id = unit.PropertyId }
+            equals new { property.PortfolioId, property.Id }
+        join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+            on new { unit.PortfolioId, UnitId = unit.Id }
+            equals new { occupancy.PortfolioId, occupancy.UnitId }
+        let selectedRelationshipId = occupancy.CurrentLeaseManagementId ?? occupancy.PlannedLeaseManagementId
+        from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            .Where(row => row.PortfolioId == unit.PortfolioId
+                && row.LeaseManagementId == selectedRelationshipId)
+            .DefaultIfEmpty()
+        let selectedAgreementId = lifecycle == null
+            ? null
+            : lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId
+        from agreement in _db.LeaseAgreements.AsNoTracking()
+            .Where(row => row.PortfolioId == unit.PortfolioId && row.Id == selectedAgreementId)
+            .DefaultIfEmpty()
+        from agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            .Where(row => row.PortfolioId == unit.PortfolioId && row.AgreementId == selectedAgreementId)
+            .DefaultIfEmpty()
+        from balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+            .Where(row => row.PortfolioId == unit.PortfolioId
+                && row.TenantAccountId == lifecycle!.TenantAccountId)
+            .DefaultIfEmpty()
+        from deposit in _db.SecurityDepositBalanceProjections.AsNoTracking()
+            .Where(row => row.PortfolioId == unit.PortfolioId
+                && row.TenantAccountId == lifecycle!.TenantAccountId)
+            .DefaultIfEmpty()
+        select new UnitDashboardReadRow
+        {
+            Unit = new UnitResponse
+            {
+                Id = unit.Id,
+                PropertyId = unit.PropertyId,
+                UnitNumber = unit.UnitNumber,
+                FloorPlan = unit.FloorPlan,
+                Bedrooms = unit.Bedrooms,
+                Bathrooms = unit.Bathrooms,
+                SquareFeet = unit.SquareFeet,
+                MarketRent = unit.MarketRent,
+                Status = UnitStatus.Vacant,
+                Notes = unit.Notes,
+                CreatedAt = unit.CreatedAt,
+                UpdatedAt = unit.UpdatedAt,
+            },
+            PropertyName = property.Name,
+            EffectiveNowUtc = occupancy.EffectiveNowUtc,
+            BusinessDate = lifecycle == null ? DateOnly.FromDateTime(occupancy.EffectiveNowUtc) : lifecycle.BusinessDate,
+            IsOccupied = occupancy.IsOccupied,
+            HasScheduledMoveIn = occupancy.HasScheduledMoveIn,
+            IsInTurnover = occupancy.IsInTurnover,
+            IsOutOfService = occupancy.IsOutOfService,
+            IsOnManagementHold = occupancy.IsOnManagementHold,
+            LeaseManagementId = selectedRelationshipId,
+            Lifecycle = lifecycle == null ? null : lifecycle.Lifecycle,
+            TenantAccountId = lifecycle == null ? null : lifecycle.TenantAccountId,
+            CurrentPrimaryTenantId = lifecycle == null ? null : lifecycle.CurrentPrimaryTenantId,
+            AgreementId = agreement == null ? null : agreement.Id,
+            AgreementNumber = agreement == null ? null : agreement.AgreementNumber,
+            AgreementStatus = agreementStatus == null ? null : agreementStatus.AgreementStatus,
+            AgreementStartOn = agreement == null ? null : agreement.TermStartOn,
+            AgreementEndOn = agreement == null ? null : agreement.TermEndOn,
+            BaseRentAmount = agreement == null ? null : agreement.BaseRentAmount,
+            SecurityDepositObligation = agreement == null ? null : agreement.SecurityDepositObligation,
+            ReceivableBalance = balance == null ? 0m : balance.ReceivableBalance,
+            PastDueAmount = balance == null ? 0m : balance.PastDueAmount,
+            NextDueOn = balance == null ? null : balance.NextDueOn,
+            HeldDepositBalance = deposit == null ? 0m : deposit.HeldBalance,
+        };
+
+    private static UnitLifecycleStage ResolveCanonicalStage(
+        UnitDashboardReadRow row,
+        bool hasDraftOrPendingAgreement,
+        bool hasOpenApplication,
+        bool hasUpcomingShowing,
+        bool hasUpcomingMoveInAppointment,
+        bool recentMoveOutSignal)
+    {
+        if (row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold)
+        {
+            return UnitLifecycleStage.Turnover;
+        }
+
+        if (row.Lifecycle == "Ending")
+        {
+            return UnitLifecycleStage.MoveOut;
+        }
+
+        if (row.IsOccupied || row.Lifecycle == "Occupied")
+        {
+            return row.AgreementEndOn is { } end
+                && end >= row.BusinessDate
+                && end <= row.BusinessDate.AddDays(90)
+                ? UnitLifecycleStage.Renewal
+                : UnitLifecycleStage.Active;
+        }
+
+        if ((row.HasScheduledMoveIn || hasUpcomingMoveInAppointment)
+            && row.AgreementStatus is "Active" or "Upcoming")
+        {
+            return UnitLifecycleStage.MoveIn;
+        }
+
+        if (hasDraftOrPendingAgreement || row.HasScheduledMoveIn || row.Lifecycle is "Upcoming" or "Preparing")
+        {
+            return UnitLifecycleStage.Lease;
+        }
+
+        if (hasOpenApplication)
+        {
+            return UnitLifecycleStage.Applicant;
+        }
+
+        if (recentMoveOutSignal)
+        {
+            return UnitLifecycleStage.Turnover;
+        }
+
+        return hasUpcomingShowing ? UnitLifecycleStage.Listed : UnitLifecycleStage.Ready;
+    }
+
+    private static string NextBestActionLabel(
+        UnitLifecycleStage stage,
+        decimal outstanding,
+        DateOnly? agreementEndOn,
+        DateOnly businessDate) => stage switch
+        {
+            UnitLifecycleStage.Ready => "List this unit",
+            UnitLifecycleStage.Listed => "Review applicants / schedule showing",
+            UnitLifecycleStage.Applicant => "Screen & decide on the applicant",
+            UnitLifecycleStage.Lease => "Finish and send the agreement",
+            UnitLifecycleStage.MoveIn => "Confirm possession / collect deposit",
+            UnitLifecycleStage.Active when outstanding > 0m => $"Collect {outstanding:C}",
+            UnitLifecycleStage.Active => "Rent on track",
+            UnitLifecycleStage.Renewal when agreementEndOn is { } end =>
+                $"Prepare renewal — agreement ends in {Math.Max(0, end.DayNumber - businessDate.DayNumber)} days",
+            UnitLifecycleStage.Renewal => "Prepare renewal",
+            UnitLifecycleStage.MoveOut => "Schedule move-out inspection",
+            UnitLifecycleStage.Turnover => "Track make-ready / mark rent-ready",
+            _ => "Open unit",
+        };
+
+    private static UnitStatus ResolveCanonicalUnitStatus(UnitDashboardReadRow row) =>
+        row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold
+            ? UnitStatus.Offline
+            : row.IsOccupied
+                ? UnitStatus.Occupied
+                : row.HasScheduledMoveIn
+                    ? UnitStatus.Reserved
+                    : UnitStatus.Vacant;
 
     private async Task<UnitTurnoverSummary> BuildTurnoverSummaryAsync(
         int portfolioId,
@@ -458,13 +520,19 @@ public class UnitDashboardService : IUnitDashboardService
         // Keep child scopes as IQueryable subqueries so the paged AuditLogs query does the filtering in
         // SQL. Do not materialize the child ids first; a heavily used unit can have unbounded payments,
         // work orders, inspections, appointments, and expenses.
-        var leaseIds = _db.Leases.AsNoTracking()
-            .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId)
-            .Select(l => l.Id);
+        var relationshipIds = _db.LeaseManagements.AsNoTracking()
+            .Where(relationship => relationship.UnitId == unitId && relationship.PortfolioId == portfolioId)
+            .Select(relationship => relationship.Id);
 
-        var paymentIds = _db.Payments.AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && leaseIds.Contains(p.LeaseId.Value))
-            .Select(p => p.Id);
+        var agreementIds = _db.LeaseAgreements.AsNoTracking()
+            .Where(agreement => agreement.PortfolioId == portfolioId
+                && relationshipIds.Contains(agreement.LeaseManagementId))
+            .Select(agreement => agreement.Id);
+
+        var accountIds = _db.TenantAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == portfolioId
+                && relationshipIds.Contains(account.LeaseManagementId))
+            .Select(account => account.Id);
 
         var workOrderIds = _db.WorkOrders.AsNoTracking()
             .Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId)
@@ -488,8 +556,9 @@ public class UnitDashboardService : IUnitDashboardService
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId && (
                 (a.EntityType == "Unit" && a.EntityId == unitId) ||
-                (a.EntityType == "Lease" && leaseIds.Contains(a.EntityId)) ||
-                (a.EntityType == "Payment" && paymentIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseManagement) && relationshipIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseAgreement) && agreementIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(TenantAccount) && accountIds.Contains(a.EntityId)) ||
                 (a.EntityType == "WorkOrder" && workOrderIds.Contains(a.EntityId)) ||
                 (a.EntityType == "Inspection" && inspectionIds.Contains(a.EntityId)) ||
                 (a.EntityType == "Appointment" && appointmentIds.Contains(a.EntityId)) ||
@@ -498,13 +567,28 @@ public class UnitDashboardService : IUnitDashboardService
             .ThenByDescending(a => a.Id)
             .Skip(skip)
             .Take(take)
+            .Select(a => new TimelineReadRow
+            {
+                Audit = a,
+                ActorName = a.ActorLabel != null && a.ActorLabel != ""
+                    ? a.ActorLabel
+                    : a.User != null && a.User.DisplayName != null && a.User.DisplayName != ""
+                        ? a.User.DisplayName
+                        : a.User != null ? a.User.Email : null,
+            })
             .ToListAsync(ct);
 
-        // Resolve user display names for any user-attributed rows in one batched query (no N+1).
-        var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
-
         return rows
-            .Select(a => AuditEntryResponse.FromEntity(a, _auditDescriber, _auditDiff, userNames, unitId))
+            .Select(row =>
+            {
+                var response = AuditEntryResponse.FromEntity(row.Audit, _auditDescriber, _auditDiff, unitId: unitId);
+                if (!string.IsNullOrWhiteSpace(row.ActorName))
+                {
+                    response.Actor = row.ActorName!;
+                }
+
+                return response;
+            })
             .ToList();
     }
 
@@ -513,109 +597,38 @@ public class UnitDashboardService : IUnitDashboardService
     /// <see cref="IQueryable"/> (EntityType/EntityId predicates against indexed child-id subqueries).
     /// Reused for both the capped Overview list and the header count so the shape stays identical.
     /// </summary>
-    private IQueryable<StoredFile> BuildUnitDocumentsQuery(int portfolioId, int unitId, IQueryable<int> leaseIds)
+    private IQueryable<StoredFile> BuildUnitDocumentsQuery(int portfolioId, int unitId)
     {
-        // Child-id subqueries stay in the database (translated to IN (SELECT ...)); no child id list is
-        // materialized in API memory before the stored-file query runs.
         var workOrderIds = _db.WorkOrders.Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId).Select(w => w.Id);
         var inspectionIds = _db.Inspections.Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId).Select(i => i.Id);
-        var paymentIds = _db.Payments.Where(p => p.PortfolioId == portfolioId && p.LeaseId != null && leaseIds.Contains(p.LeaseId.Value)).Select(p => p.Id);
         var expenseIds = _db.Expenses
             .Where(e => e.PortfolioId == portfolioId
                 && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
             .Select(e => e.Id);
 
+        var legalArtifactFileIds = _db.LegalDocumentArtifacts
+            .Where(artifact => artifact.PortfolioId == portfolioId
+                && _db.LeaseAgreements.Any(agreement => agreement.PortfolioId == portfolioId
+                    && (agreement.IssuedArtifactId == artifact.Id || agreement.ExecutedArtifactId == artifact.Id)
+                    && agreement.LeaseManagement!.UnitId == unitId))
+            .Select(artifact => artifact.StoredFileId);
+
+        var ledgerSourceFileIds = _db.TenantLedgerEntries
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.SourceStoredFileId != null
+                && entry.TenantAccount!.LeaseManagement!.UnitId == unitId)
+            .Select(entry => entry.SourceStoredFileId!.Value);
+
         return _db.StoredFiles
             .AsNoTracking()
-            .Where(f => f.PortfolioId == portfolioId && f.EntityId != null && (
-                (f.EntityType == "Unit" && f.EntityId == unitId) ||
-                (f.EntityType == "Lease" && leaseIds.Contains(f.EntityId!.Value)) ||
-                (f.EntityType == "Payment" && paymentIds.Contains(f.EntityId!.Value)) ||
-                (f.EntityType == "Expense" && expenseIds.Contains(f.EntityId!.Value)) ||
-                (f.EntityType == "WorkOrder" && workOrderIds.Contains(f.EntityId!.Value)) ||
-                (f.EntityType == "Inspection" && inspectionIds.Contains(f.EntityId!.Value))));
-    }
-
-    private async Task<UnitNextBestAction> ResolveNextBestActionAsync(
-        int portfolioId,
-        int unitId,
-        int propertyId,
-        UnitLifecycleStage stage,
-        string defaultLabel,
-        int? currentLeaseId,
-        int? currentTenantId,
-        CancellationToken ct)
-    {
-        var defaultHref = NextBestActionHref(stage, unitId, propertyId, currentTenantId);
-        if (stage != UnitLifecycleStage.Renewal
-            || currentLeaseId is not int leaseId
-            || currentTenantId is not int tenantId)
-        {
-            return new UnitNextBestAction { Label = defaultLabel, Href = defaultHref };
-        }
-
-        var renewalNotice = await _db.NoticeDrafts
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId
-                && d.LeaseId == leaseId
-                && d.TenantId == tenantId
-                && d.NoticeType == RenewalNoticeType
-                && (d.Status == NoticeStatusApproved || d.Status == NoticeStatusDraft))
-            .OrderByDescending(d => d.Status == NoticeStatusApproved)
-            .ThenByDescending(d => d.ApprovedAt ?? d.UpdatedAt)
-            .ThenByDescending(d => d.Id)
-            .Select(d => new
-            {
-                d.Status,
-                d.ConversationId,
-            })
-            .FirstOrDefaultAsync(ct);
-
-        return renewalNotice?.Status switch
-        {
-            NoticeStatusApproved when renewalNotice.ConversationId is int conversationId => new UnitNextBestAction
-            {
-                Label = "Renewal sent - open conversation",
-                Href = $"/messages?conversation={conversationId}",
-            },
-            NoticeStatusApproved => new UnitNextBestAction
-            {
-                Label = "Renewal sent",
-                Href = $"/units/{unitId}?tab=lease",
-            },
-            NoticeStatusDraft => new UnitNextBestAction
-            {
-                Label = "Review renewal draft",
-                Href = defaultHref,
-            },
-            _ => new UnitNextBestAction { Label = defaultLabel, Href = defaultHref },
-        };
-    }
-
-    /// <summary>Batched lookup of display names for the user-attributed audit rows (mirrors AuditQueryService).</summary>
-    private async Task<IReadOnlyDictionary<int, string>> ResolveActorNamesAsync(
-        int portfolioId, IReadOnlyList<AuditLog> rows, CancellationToken ct)
-    {
-        var ids = rows
-            .Where(r => string.IsNullOrWhiteSpace(r.ActorLabel) && r.UserId.HasValue)
-            .Select(r => r.UserId!.Value)
-            .Distinct()
-            .ToList();
-
-        if (ids.Count == 0)
-        {
-            return new Dictionary<int, string>();
-        }
-
-        var resolved = await _db.Users
-            .AsNoTracking()
-            .Where(u => ids.Contains(u.Id) && u.PortfolioId == portfolioId)
-            .Select(u => new { u.Id, u.DisplayName, u.Email })
-            .ToListAsync(ct);
-
-        return resolved.ToDictionary(
-            u => u.Id,
-            u => !string.IsNullOrWhiteSpace(u.DisplayName) ? u.DisplayName! : (u.Email ?? string.Empty));
+            .Where(file => file.PortfolioId == portfolioId && (
+                legalArtifactFileIds.Contains(file.Id)
+                || ledgerSourceFileIds.Contains(file.Id)
+                || (file.EntityId != null && (
+                    (file.EntityType == "Unit" && file.EntityId == unitId)
+                    || (file.EntityType == "Expense" && expenseIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == "WorkOrder" && workOrderIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == "Inspection" && inspectionIds.Contains(file.EntityId.Value))))));
     }
 
     /// <summary>Deep link for a stage's next-best-action: the relevant unit tab (drawer flows attach there).</summary>
@@ -664,5 +677,50 @@ public class UnitDashboardService : IUnitDashboardService
         }
 
         return first >= second ? first : second;
+    }
+
+    internal sealed class UnitDashboardReadRow
+    {
+        public required UnitResponse Unit { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public DateTime EffectiveNowUtc { get; init; }
+        public DateOnly BusinessDate { get; init; }
+        public bool IsOccupied { get; init; }
+        public bool HasScheduledMoveIn { get; init; }
+        public bool IsInTurnover { get; init; }
+        public bool IsOutOfService { get; init; }
+        public bool IsOnManagementHold { get; init; }
+        public int? LeaseManagementId { get; init; }
+        public string? Lifecycle { get; init; }
+        public int? TenantAccountId { get; init; }
+        public int? CurrentPrimaryTenantId { get; init; }
+        public int? AgreementId { get; init; }
+        public string? AgreementNumber { get; init; }
+        public string? AgreementStatus { get; init; }
+        public DateOnly? AgreementStartOn { get; init; }
+        public DateOnly? AgreementEndOn { get; init; }
+        public decimal? BaseRentAmount { get; init; }
+        public decimal? SecurityDepositObligation { get; init; }
+        public decimal ReceivableBalance { get; init; }
+        public decimal PastDueAmount { get; init; }
+        public DateOnly? NextDueOn { get; init; }
+        public decimal HeldDepositBalance { get; init; }
+    }
+
+    private sealed class RecentPaymentReadRow
+    {
+        public long Id { get; init; }
+        public int TenantAccountId { get; init; }
+        public int? LeaseAgreementId { get; init; }
+        public string Type { get; init; } = string.Empty;
+        public decimal Amount { get; init; }
+        public DateOnly EffectiveOn { get; init; }
+        public DateTime PostedAtUtc { get; init; }
+    }
+
+    private sealed class TimelineReadRow
+    {
+        public required AuditLog Audit { get; init; }
+        public string? ActorName { get; init; }
     }
 }
