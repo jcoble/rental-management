@@ -167,6 +167,24 @@ public interface IAtomicProviderInboxPersistence
 /// <summary>Set-based tenant-ledger operations owned by the current atomic attempt.</summary>
 public interface IAtomicTenantMoneyPersistence
 {
+    /// <summary>
+    /// Posts a bounded batch of agreement-backed scheduled rent charges. Eligibility, period
+    /// generation, proration, duplicate suppression, ordering, and paging are one PostgreSQL
+    /// statement; the returned rows are only the entries inserted by this attempt.
+    /// </summary>
+    Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledRentChargesAsync(
+        int batchSize,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Posts a bounded batch of late-fee charges from open rent-charge balances. Grace-period
+    /// eligibility, state caps, duplicate suppression, ordering, and paging remain DB-side.
+    /// </summary>
+    Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledLateFeesAsync(
+        int batchSize,
+        string stateCapsJson,
+        CancellationToken ct = default);
+
     Task<AtomicLedgerAllocationSummary> AllocateOldestChargesAsync(
         int portfolioId,
         int tenantAccountId,
@@ -186,6 +204,20 @@ public interface IAtomicTenantMoneyPersistence
         int createdByUserId,
         DateTime allocatedAtUtc,
         CancellationToken ct = default);
+}
+
+public sealed class AtomicScheduledTenantCharge
+{
+    public long LedgerEntryId { get; set; }
+    public int PortfolioId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int LeaseAgreementId { get; set; }
+    public string EntryType { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public DateOnly EffectiveOn { get; set; }
+    public DateOnly DueOn { get; set; }
+    public string BusinessKey { get; set; } = string.Empty;
+    public int CreatedByUserId { get; set; }
 }
 
 public sealed class AtomicLedgerAllocationSummary

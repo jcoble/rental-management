@@ -78,6 +78,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Automation.ApplyClaimedRecurringExpenseBatchCommand,
     RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
     RentalCommand.Data.Automation.ApplyClaimedRecurringExpenseBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchCommand,
+    RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchResult,
+    RentalCommand.Data.Payments.ApplyScheduledTenantChargeBatchHandler>();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)

@@ -14,6 +14,245 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
         _scope = scope;
     }
 
+    public async Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledRentChargesAsync(
+        int batchSize,
+        CancellationToken ct = default)
+    {
+        if (batchSize is <= 0 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
+
+        using var lease = _scope.BeginInternalRawDml(
+            "TenantLedgerEntries", AtomicRawDmlOperation.Insert);
+
+        // The lateral month series is deliberately inside PostgreSQL. It produces every due period
+        // through each portfolio's simulation-aware business horizon, applies the persisted
+        // proration convention, removes already-posted business keys, and bounds the write before
+        // anything is materialized by .NET.
+        return await _db.Database.SqlQuery<AtomicScheduledTenantCharge>($"""
+            WITH agreement_periods AS MATERIALIZED (
+                SELECT agreement."PortfolioId",
+                       account."Id" AS "TenantAccountId",
+                       agreement."Id" AS "LeaseAgreementId",
+                       account."Currency",
+                       account."CreatedByUserId",
+                       agreement."PublicId" AS agreement_public_id,
+                       agreement."BaseRentAmount",
+                       agreement."RentDueDay",
+                       agreement."GoverningFromOn",
+                       agreement."TermStartOn",
+                       agreement."TermEndOn",
+                       agreement."SupersededEffectiveOn",
+                       effective_date.business_date,
+                       month.month_start::date AS month_start,
+                       (month.month_start + interval '1 month - 1 day')::date AS month_end,
+                       GREATEST(
+                           agreement."TermStartOn",
+                           agreement."GoverningFromOn",
+                           month.month_start::date) AS period_start,
+                       LEAST(
+                           COALESCE(agreement."TermEndOn", 'infinity'::date),
+                           COALESCE(agreement."SupersededEffectiveOn" - 1, 'infinity'::date),
+                           (month.month_start + interval '1 month - 1 day')::date) AS period_end,
+                       COALESCE(NULLIF(portfolio."Settings"::jsonb ->> 'prorationConvention', ''), 'ActualDays')
+                           AS proration_convention
+                FROM "LeaseAgreements" AS agreement
+                JOIN "LeaseManagements" AS management
+                  ON management."Id" = agreement."LeaseManagementId"
+                 AND management."PortfolioId" = agreement."PortfolioId"
+                JOIN "TenantAccounts" AS account
+                  ON account."LeaseManagementId" = management."Id"
+                 AND account."PortfolioId" = management."PortfolioId"
+                JOIN "Portfolios" AS portfolio ON portfolio."Id" = agreement."PortfolioId"
+                JOIN "NotificationSettings" AS settings
+                  ON settings."PortfolioId" = agreement."PortfolioId"
+                 AND settings."EnableRentCharges"
+                CROSS JOIN LATERAL (
+                    SELECT rc_business_date(agreement."PortfolioId") AS business_date
+                ) AS effective_date
+                CROSS JOIN LATERAL generate_series(
+                    date_trunc('month', GREATEST(agreement."TermStartOn", agreement."GoverningFromOn")::timestamp),
+                    date_trunc('month', (effective_date.business_date
+                        + GREATEST(settings."RentChargeLeadDays", 0))::timestamp),
+                    interval '1 month') AS month(month_start)
+                WHERE agreement."FullyExecutedAtUtc" IS NOT NULL
+                  AND agreement."VoidedAtUtc" IS NULL
+                  AND agreement."DraftCanceledAtUtc" IS NULL
+                  AND management."CanceledAtUtc" IS NULL
+                  AND account."ClosedAtUtc" IS NULL
+                  AND agreement."BaseRentAmount" > 0
+            ), candidates AS MATERIALIZED (
+                SELECT period.*,
+                       GREATEST(
+                           make_date(
+                               EXTRACT(year FROM period.month_start)::integer,
+                               EXTRACT(month FROM period.month_start)::integer,
+                               LEAST(
+                                   GREATEST(period."RentDueDay"::integer, 1),
+                                   EXTRACT(day FROM period.month_end)::integer)),
+                           period.period_start) AS due_on,
+                       'rent:' || period.agreement_public_id::text || ':'
+                           || to_char(period.month_start, 'YYYY-MM') AS business_key
+                FROM agreement_periods AS period
+                WHERE period.period_start <= period.period_end
+            ), eligible AS MATERIALIZED (
+                SELECT candidate.*,
+                       CASE
+                         WHEN candidate.period_start = candidate.month_start
+                          AND candidate.period_end = candidate.month_end
+                           THEN candidate."BaseRentAmount"
+                         WHEN lower(candidate.proration_convention) = 'thirtyday'
+                           THEN round(candidate."BaseRentAmount" * (
+                               (CASE WHEN candidate.period_end = candidate.month_end
+                                     THEN 30
+                                     ELSE LEAST(EXTRACT(day FROM candidate.period_end)::integer, 30)
+                                END)
+                               - LEAST(EXTRACT(day FROM candidate.period_start)::integer, 30) + 1
+                             )::numeric / 30::numeric, 2)
+                         ELSE round(candidate."BaseRentAmount" *
+                             (candidate.period_end - candidate.period_start + 1)::numeric /
+                             EXTRACT(day FROM candidate.month_end)::numeric, 2)
+                       END AS charge_amount
+                FROM candidates AS candidate
+                JOIN "NotificationSettings" AS settings
+                  ON settings."PortfolioId" = candidate."PortfolioId"
+                WHERE candidate.due_on <= candidate.business_date
+                    + GREATEST(settings."RentChargeLeadDays", 0)
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "TenantLedgerEntries" AS existing
+                      WHERE existing."TenantAccountId" = candidate."TenantAccountId"
+                        AND existing."BusinessKey" = candidate.business_key)
+                ORDER BY candidate.due_on, candidate."TenantAccountId", candidate."LeaseAgreementId"
+                LIMIT {batchSize}
+            ), inserted AS (
+                INSERT INTO "TenantLedgerEntries" (
+                    "PortfolioId", "TenantAccountId", "EntryType", "Direction", "Amount",
+                    "Currency", "EffectiveOn", "DueOn", "PostedAtUtc", "Description",
+                    "BusinessKey", "LeaseAgreementId", "CreatedByUserId")
+                SELECT eligible."PortfolioId", eligible."TenantAccountId", 'RentCharge', 'Debit',
+                       eligible.charge_amount, eligible."Currency", eligible.due_on,
+                       eligible.due_on, clock_timestamp(),
+                       'Rent due ' || to_char(eligible.due_on, 'Mon FMDD, YYYY'),
+                       eligible.business_key, eligible."LeaseAgreementId", eligible."CreatedByUserId"
+                FROM eligible
+                WHERE eligible.charge_amount > 0
+                ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
+                RETURNING "Id", "PortfolioId", "TenantAccountId", "LeaseAgreementId",
+                          "EntryType", "Amount", "EffectiveOn", "DueOn", "BusinessKey",
+                          "CreatedByUserId"
+            )
+            SELECT inserted."Id" AS "LedgerEntryId",
+                   inserted."PortfolioId", inserted."TenantAccountId",
+                   inserted."LeaseAgreementId", inserted."EntryType",
+                   inserted."Amount", inserted."EffectiveOn", inserted."DueOn",
+                   inserted."BusinessKey", inserted."CreatedByUserId"
+            FROM inserted
+            ORDER BY inserted."Id"
+            """).ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledLateFeesAsync(
+        int batchSize,
+        string stateCapsJson,
+        CancellationToken ct = default)
+    {
+        if (batchSize is <= 0 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
+        ArgumentException.ThrowIfNullOrWhiteSpace(stateCapsJson);
+
+        using var lease = _scope.BeginInternalRawDml(
+            "TenantLedgerEntries", AtomicRawDmlOperation.Insert);
+
+        return await _db.Database.SqlQuery<AtomicScheduledTenantCharge>($"""
+            WITH caps AS MATERIALIZED (
+                SELECT upper(cap."State") AS state,
+                       cap."MaxFlat" AS max_flat,
+                       cap."MaxPercentOfRent" AS max_percent
+                FROM jsonb_to_recordset(CAST({stateCapsJson} AS jsonb)) AS cap(
+                    "State" text,
+                    "MaxFlat" numeric,
+                    "MaxPercentOfRent" numeric)
+            ), candidates AS MATERIALIZED (
+                SELECT rent."PortfolioId",
+                       rent."TenantAccountId",
+                       rent."LeaseAgreementId",
+                       rent."Currency",
+                       rent."BusinessKey" AS rent_business_key,
+                       agreement."LateFeeAmount",
+                       agreement."GracePeriodDays",
+                       account."CreatedByUserId",
+                       effective_date.business_date,
+                       LEAST(
+                           agreement."LateFeeAmount",
+                           COALESCE(cap.max_flat, agreement."LateFeeAmount"),
+                           COALESCE(
+                               rent."Amount" * cap.max_percent / 100::numeric,
+                               agreement."LateFeeAmount")) AS fee_amount,
+                       'late-fee:' || rent."BusinessKey" AS business_key
+                FROM "vw_tenant_charge_balances" AS balance
+                JOIN "TenantLedgerEntries" AS rent
+                  ON rent."Id" = balance."TenantLedgerEntryId"
+                 AND rent."PortfolioId" = balance."PortfolioId"
+                 AND rent."TenantAccountId" = balance."TenantAccountId"
+                JOIN "TenantAccounts" AS account
+                  ON account."Id" = rent."TenantAccountId"
+                 AND account."PortfolioId" = rent."PortfolioId"
+                JOIN "LeaseAgreements" AS agreement
+                  ON agreement."Id" = rent."LeaseAgreementId"
+                 AND agreement."PortfolioId" = rent."PortfolioId"
+                JOIN "LeaseManagements" AS management
+                  ON management."Id" = agreement."LeaseManagementId"
+                 AND management."PortfolioId" = agreement."PortfolioId"
+                JOIN "Properties" AS property
+                  ON property."Id" = management."PropertyId"
+                 AND property."PortfolioId" = management."PortfolioId"
+                JOIN "NotificationSettings" AS settings
+                  ON settings."PortfolioId" = rent."PortfolioId"
+                 AND settings."EnableLateFees"
+                LEFT JOIN caps AS cap ON cap.state = upper(COALESCE(property."State", ''))
+                CROSS JOIN LATERAL (
+                    SELECT rc_business_date(rent."PortfolioId") AS business_date
+                ) AS effective_date
+                WHERE rent."EntryType" = 'RentCharge'
+                  AND balance."OpenAmount" > 0
+                  AND rent."DueOn" < effective_date.business_date
+                      - GREATEST(agreement."GracePeriodDays"::integer, 0)
+                  AND agreement."LateFeeAmount" > 0
+                  AND management."CanceledAtUtc" IS NULL
+                  AND account."ClosedAtUtc" IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "TenantLedgerEntries" AS existing
+                      WHERE existing."TenantAccountId" = rent."TenantAccountId"
+                        AND existing."BusinessKey" = 'late-fee:' || rent."BusinessKey")
+                ORDER BY rent."DueOn", rent."TenantAccountId", rent."Id"
+                LIMIT {batchSize}
+            ), inserted AS (
+                INSERT INTO "TenantLedgerEntries" (
+                    "PortfolioId", "TenantAccountId", "EntryType", "Direction", "Amount",
+                    "Currency", "EffectiveOn", "DueOn", "PostedAtUtc", "Description",
+                    "BusinessKey", "LeaseAgreementId", "CreatedByUserId")
+                SELECT candidate."PortfolioId", candidate."TenantAccountId", 'LateFeeCharge',
+                       'Debit', round(candidate.fee_amount, 2), candidate."Currency",
+                       candidate.business_date, candidate.business_date, clock_timestamp(),
+                       'Late fee for ' || replace(candidate.rent_business_key, 'rent:', ''),
+                       candidate.business_key, candidate."LeaseAgreementId",
+                       candidate."CreatedByUserId"
+                FROM candidates AS candidate
+                WHERE round(candidate.fee_amount, 2) > 0
+                ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
+                RETURNING "Id", "PortfolioId", "TenantAccountId", "LeaseAgreementId",
+                          "EntryType", "Amount", "EffectiveOn", "DueOn", "BusinessKey",
+                          "CreatedByUserId"
+            )
+            SELECT inserted."Id" AS "LedgerEntryId",
+                   inserted."PortfolioId", inserted."TenantAccountId",
+                   inserted."LeaseAgreementId", inserted."EntryType",
+                   inserted."Amount", inserted."EffectiveOn", inserted."DueOn",
+                   inserted."BusinessKey", inserted."CreatedByUserId"
+            FROM inserted
+            ORDER BY inserted."Id"
+            """).ToListAsync(ct);
+    }
+
     public async Task<AtomicLedgerAllocationSummary> AllocateOldestChargesAsync(
         int portfolioId,
         int tenantAccountId,

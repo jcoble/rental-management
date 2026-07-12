@@ -114,6 +114,9 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 request.TermsSchemaVersion,
                 request.TermsPayload.GetRawText(),
                 request.CreateSecurityDepositAccount,
+                request.OpeningBalanceAmount,
+                request.OpeningBalanceEffectiveOn,
+                request.OpeningBalanceNote,
                 $"prepare-move-in:{portfolioId}:{request.ApplicationId}:{keyDigest}");
 
             var outcome = await _atomic.ExecuteAsync(

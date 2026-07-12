@@ -35,6 +35,13 @@ public sealed class PrepareMoveInRequest
     public int TermsSchemaVersion { get; set; } = 1;
     public JsonElement TermsPayload { get; set; }
     public bool CreateSecurityDepositAccount { get; set; }
+    /// <summary>
+    /// Optional signed balance brought into Rental Command. Positive means owed; negative means a
+    /// tenant credit. It is posted once to the new TenantAccount, never stored as a mutable lease row.
+    /// </summary>
+    public decimal? OpeningBalanceAmount { get; set; }
+    public DateOnly? OpeningBalanceEffectiveOn { get; set; }
+    public string? OpeningBalanceNote { get; set; }
 }
 
 public sealed record PrepareMoveInResponse(
@@ -42,6 +49,7 @@ public sealed record PrepareMoveInResponse(
     int LeaseManagementId,
     int TenantAccountId,
     int LeaseAgreementId,
+    long? OpeningBalanceLedgerEntryId,
     int? SecurityDepositAccountId,
     IReadOnlyList<int> LeaseManagementPartyIds,
     IReadOnlyList<int> LeaseAgreementSignerIds,
@@ -52,6 +60,7 @@ public sealed record PrepareMoveInResponse(
         result.LeaseManagementId,
         result.TenantAccountId,
         result.LeaseAgreementId,
+        result.OpeningBalanceLedgerEntryId,
         result.SecurityDepositAccountId,
         result.LeaseManagementPartyIds,
         result.LeaseAgreementSignerIds,

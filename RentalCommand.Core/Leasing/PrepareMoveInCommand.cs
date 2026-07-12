@@ -42,6 +42,9 @@ public sealed record PrepareMoveInCommand(
     int TermsSchemaVersion,
     string TermsPayload,
     bool CreateSecurityDepositAccount,
+    decimal? OpeningBalanceAmount,
+    DateOnly? OpeningBalanceEffectiveOn,
+    string? OpeningBalanceNote,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum PrepareMoveInOutcome
@@ -61,6 +64,7 @@ public sealed record PrepareMoveInResult(
     int LeaseManagementId,
     int TenantAccountId,
     int LeaseAgreementId,
+    long? OpeningBalanceLedgerEntryId,
     int? SecurityDepositAccountId,
     IReadOnlyList<int> LeaseManagementPartyIds,
     IReadOnlyList<int> LeaseAgreementSignerIds,

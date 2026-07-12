@@ -5,6 +5,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Data.Leasing;
 
@@ -284,6 +285,64 @@ public sealed class PrepareMoveInHandler
 
         await attempt.FlushBusinessAsync(ct);
 
+        TenantLedgerEntry? openingBalance = null;
+        if (command.OpeningBalanceAmount is { } signedOpening && signedOpening != 0m)
+        {
+            openingBalance = new TenantLedgerEntry
+            {
+                PortfolioId = command.PortfolioId,
+                TenantAccountId = account.Id,
+                EntryType = TenantLedgerEntryType.OpeningBalance,
+                Direction = signedOpening > 0m
+                    ? TenantLedgerDirection.Debit
+                    : TenantLedgerDirection.Credit,
+                Amount = Math.Abs(signedOpening),
+                Currency = account.Currency,
+                EffectiveOn = command.OpeningBalanceEffectiveOn!.Value,
+                PostedAtUtc = command.PreparedAtUtc,
+                Description = string.IsNullOrWhiteSpace(command.OpeningBalanceNote)
+                    ? "Opening tenant-account balance"
+                    : command.OpeningBalanceNote.Trim(),
+                BusinessKey = $"opening:{agreement.PublicId}",
+                LeaseAgreementId = agreement.Id,
+                CreatedByUserId = command.CreatedByUserId,
+            };
+            attempt.Persistence.Add(openingBalance);
+            await attempt.FlushBusinessAsync(ct);
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(TenantAccount),
+                account.Id,
+                AuditLogOperation.Updated,
+                UserId: command.CreatedByUserId,
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    openingBalance.Id,
+                    openingBalance.Direction,
+                    openingBalance.Amount,
+                    openingBalance.EffectiveOn,
+                    openingBalance.LeaseAgreementId,
+                }),
+                ChangeReason: "Posted opening balance while preparing the tenant account."),
+                command.PreparedAtUtc);
+            attempt.StageOutbox(new OutboxMessage
+            {
+                PortfolioId = command.PortfolioId,
+                MessageType = "data-update",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    entityType = nameof(TenantLedgerEntry),
+                    entityId = openingBalance.Id,
+                    data = new { TenantAccountId = account.Id, openingBalance.Direction },
+                }),
+                IdempotencyKey = OutboxIdempotency.Create(
+                    "prepare-move-in-opening-balance",
+                    command.DeliveryIdempotencyKey),
+                CreatedAtUtc = command.PreparedAtUtc,
+                NextAttemptAtUtc = command.PreparedAtUtc,
+            });
+        }
+
         attempt.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
@@ -313,6 +372,7 @@ public sealed class PrepareMoveInHandler
             relationship.Id,
             account.Id,
             agreement.Id,
+            openingBalance?.Id,
             depositAccount?.Id,
             partyRows.Select(party => party.Id).ToArray(),
             signerRows.Select(signer => signer.Id).ToArray(),
@@ -455,6 +515,15 @@ public sealed class PrepareMoveInHandler
         {
             throw new ArgumentException("Initial agreement terms are invalid.");
         }
+        if (command.OpeningBalanceAmount.HasValue != command.OpeningBalanceEffectiveOn.HasValue
+            || command.OpeningBalanceAmount == 0m
+            || (!string.IsNullOrWhiteSpace(command.OpeningBalanceNote)
+                && !command.OpeningBalanceAmount.HasValue)
+            || command.OpeningBalanceNote?.Trim().Length > 500)
+        {
+            throw new ArgumentException(
+                "Opening balance amount and effective date must be supplied together; amount cannot be zero.");
+        }
         using var payload = JsonDocument.Parse(command.TermsPayload);
         if (payload.RootElement.ValueKind != JsonValueKind.Object)
         {
@@ -498,6 +567,7 @@ public sealed class PrepareMoveInHandler
             leaseManagementId,
             0,
             0,
+            null,
             null,
             Array.Empty<int>(),
             Array.Empty<int>(),
