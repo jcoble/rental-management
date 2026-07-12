@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -425,7 +426,7 @@ public class ScanBatchControllerTests : IDisposable
         IScanUploadService? uploads = null)
     {
         var files = Mock.Of<IFileStorage>();
-        return new ScanController(
+        var controller = new ScanController(
             scan, uploads ?? Mock.Of<IScanUploadService>(), Mock.Of<IAtomicUnitOfWork>(), _db, files)
         {
             ControllerContext = new ControllerContext
@@ -439,6 +440,10 @@ public class ScanBatchControllerTests : IDisposable
                 },
             },
         };
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.NewGuid(), 7, 1, PortfolioId, 1,
+            WorkspaceExperience.Management, 1, WorkspaceExperience.Management);
+        return controller;
     }
 
     private static IFormFile FakeFile(string name, byte[] bytes) =>

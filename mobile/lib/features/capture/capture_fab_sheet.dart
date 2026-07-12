@@ -114,7 +114,10 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
   /// draft so the server runs the lease schema (not the receipt/expense one)
   /// and the draft routes to the guided "New rental from your lease" flow.
   Future<void> _scanLease() async {
-    final choice = await _pickDocSource(photosSubtitle: 'Snap each page of the lease', pdfSubtitle: 'Import an existing lease PDF');
+    final choice = await _pickDocSource(
+      photosSubtitle: 'Snap each page of the lease',
+      pdfSubtitle: 'Import an existing lease PDF',
+    );
     if (choice == null || !mounted) return;
     switch (choice) {
       case _DocSource.photos:
@@ -129,7 +132,10 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
   /// so the worker runs [ApplicationExtractionSchema] and the review screen shows
   /// applicant fields. Confirming creates a RentalApplication — mirrors web.
   Future<void> _scanApplication() async {
-    final choice = await _pickDocSource(photosSubtitle: 'Snap each page of the application', pdfSubtitle: 'Import an existing application PDF');
+    final choice = await _pickDocSource(
+      photosSubtitle: 'Snap each page of the application',
+      pdfSubtitle: 'Import an existing application PDF',
+    );
     if (choice == null || !mounted) return;
     switch (choice) {
       case _DocSource.photos:
@@ -140,7 +146,10 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
   }
 
   /// Shared "photos OR PDF" source chooser used by lease/application scan-IN.
-  Future<_DocSource?> _pickDocSource({required String photosSubtitle, required String pdfSubtitle}) {
+  Future<_DocSource?> _pickDocSource({
+    required String photosSubtitle,
+    required String pdfSubtitle,
+  }) {
     return showModalBottomSheet<_DocSource>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -246,7 +255,9 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
     String filename,
     String contentType,
   ) async {
-    final created = await ref.read(scanRepositoryProvider).uploadImage(
+    final created = await ref
+        .read(scanRepositoryProvider)
+        .uploadImage(
           bytes,
           filename,
           contentType,
@@ -341,7 +352,9 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
     String filename,
     String contentType,
   ) async {
-    final created = await ref.read(scanRepositoryProvider).uploadImage(
+    final created = await ref
+        .read(scanRepositoryProvider)
+        .uploadImage(
           bytes,
           filename,
           contentType,
@@ -553,9 +566,9 @@ class _CaptureTile extends StatelessWidget {
           Text(
             label,
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: cs.onSurface,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: cs.onSurface),
           ),
         ],
       ),

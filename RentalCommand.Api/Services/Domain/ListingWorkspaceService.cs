@@ -72,7 +72,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                 ApplySynchronizedUnitDetails(listing!, seed);
                 if (previousFacts != CaptureSynchronizedUnitDetails(listing!))
                     listing!.ContentVersion++;
-                listing.UpdatedAt = now;
+                listing!.UpdatedAt = now;
             }
 
             await _db.SaveChangesAsync(ct);
