@@ -123,7 +123,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                 && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
             (await verify.AtomicAuditLogs.CountAsync(row =>
                 row.CommandType == identity.CommandType
-                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
             (await verify.OutboxMessages.CountAsync(row =>
                 row.IdempotencyKey == OutboxIdempotency.Create(
                     "scheduled-tenant-charge",
@@ -212,7 +212,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                 row.TenantAccountId == scenario.AccountId)).Should().Be(0);
             (await failed.AtomicAuditLogs.CountAsync(row =>
                 row.CommandType == identity.CommandType
-                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
             (await failed.AtomicCommandReceipts.CountAsync(row =>
                 row.CommandType == identity.CommandType
                 && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);

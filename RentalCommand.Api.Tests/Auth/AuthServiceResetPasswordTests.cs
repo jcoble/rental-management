@@ -8,6 +8,7 @@ using Moq;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Auditing;
@@ -109,6 +110,17 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         _userManager,
         null!,
         Mock.Of<IJwtTokenService>(),
+        Mock.Of<IAtomicAuthSessionCredentialService>(),
+        Mock.Of<ICanonicalAccessTokenService>(),
+        Mock.Of<IEffectiveAccessContextSelectionQuery>(),
+        Mock.Of<IAccessEnvelopeQuery>(),
+        Options.Create(new AtomicAuthSessionCredentialOptions
+        {
+            SigningKey = Convert.ToBase64String(new byte[32]),
+            CredentialLifetimeDays = 7,
+            FamilyAbsoluteLifetimeDays = 30,
+            SessionLifetimeDays = 30,
+        }),
         Mock.Of<IUserMigrationService>(),
         Mock.Of<IAuthEmailSender>(),
         _ctx.Db,
