@@ -2,6 +2,19 @@ using Microsoft.EntityFrameworkCore;
 
 namespace RentalCommand.Data;
 
+/// <summary>Authoritative, database-derived status for one base Agreement version.</summary>
+public sealed class LeaseAgreementStatusProjection
+{
+    public int PortfolioId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int AgreementId { get; set; }
+    public DateOnly BusinessDate { get; set; }
+    public DateOnly GoverningFromOn { get; set; }
+    public DateOnly? GoverningThroughExclusiveOn { get; set; }
+    public string AgreementStatus { get; set; } = string.Empty;
+    public bool IsGoverning { get; set; }
+}
+
 /// <summary>Authoritative, database-derived occupancy facts for one live Unit.</summary>
 public sealed class UnitOccupancyProjection
 {
@@ -54,6 +67,16 @@ internal static class LeaseLifecycleProjectionModelConfiguration
 {
     internal static void ConfigureLeaseLifecycleProjections(this ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<LeaseAgreementStatusProjection>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_lease_agreement_status");
+            entity.Property(row => row.BusinessDate).HasColumnType("date");
+            entity.Property(row => row.GoverningFromOn).HasColumnType("date");
+            entity.Property(row => row.GoverningThroughExclusiveOn).HasColumnType("date");
+            entity.Property(row => row.AgreementStatus).HasMaxLength(40);
+        });
+
         modelBuilder.Entity<UnitOccupancyProjection>(entity =>
         {
             entity.HasNoKey();
@@ -119,6 +142,59 @@ internal static class LeaseEffectiveClockSql
           CROSS JOIN effective_time
           WHERE portfolio."Id" = portfolio_id;
         $function$;
+        """;
+}
+
+internal static class LeaseAgreementStatusViewSql
+{
+    public const string Drop = "DROP VIEW IF EXISTS \"vw_lease_agreement_status\";";
+    public const string Create =
+        "CREATE VIEW \"vw_lease_agreement_status\" WITH (security_invoker = true) AS\n" + Definition;
+
+    public const string Definition = """
+        WITH portfolio_business_date AS MATERIALIZED (
+          SELECT portfolio."Id" AS "PortfolioId",
+                 rc_business_date(portfolio."Id") AS "BusinessDate"
+          FROM "Portfolios" AS portfolio
+          WHERE portfolio."DeletedAt" IS NULL
+        )
+        SELECT agreement."PortfolioId",
+               agreement."LeaseManagementId",
+               agreement."Id" AS "AgreementId",
+               effective_date."BusinessDate",
+               agreement."GoverningFromOn",
+               LEAST(agreement."TermEndOn" + 1, agreement."SupersededEffectiveOn")
+                 AS "GoverningThroughExclusiveOn",
+               CASE
+                 WHEN agreement."VoidedAtUtc" IS NOT NULL THEN 'Void'
+                 WHEN agreement."DraftCanceledAtUtc" IS NOT NULL THEN 'Canceled'
+                 WHEN agreement."IssuedAtUtc" IS NULL THEN 'Draft'
+                 WHEN agreement."FullyExecutedAtUtc" IS NULL THEN 'AwaitingSignatures'
+                 WHEN agreement."SupersededEffectiveOn" IS NOT NULL
+                      AND effective_date."BusinessDate" >= agreement."SupersededEffectiveOn"
+                   THEN 'Superseded'
+                 WHEN effective_date."BusinessDate" < agreement."GoverningFromOn"
+                   THEN 'Upcoming'
+                 WHEN effective_date."BusinessDate" >= agreement."GoverningFromOn"
+                      AND (agreement."TermEndOn" IS NULL
+                           OR effective_date."BusinessDate" < agreement."TermEndOn" + 1)
+                      AND (agreement."SupersededEffectiveOn" IS NULL
+                           OR effective_date."BusinessDate" < agreement."SupersededEffectiveOn")
+                   THEN 'Active'
+                 ELSE 'Expired'
+               END AS "AgreementStatus",
+               (agreement."FullyExecutedAtUtc" IS NOT NULL
+                 AND agreement."VoidedAtUtc" IS NULL
+                 AND agreement."DraftCanceledAtUtc" IS NULL
+                 AND effective_date."BusinessDate" >= agreement."GoverningFromOn"
+                 AND (agreement."TermEndOn" IS NULL
+                      OR effective_date."BusinessDate" < agreement."TermEndOn" + 1)
+                 AND (agreement."SupersededEffectiveOn" IS NULL
+                      OR effective_date."BusinessDate" < agreement."SupersededEffectiveOn"))
+                 AS "IsGoverning"
+        FROM "LeaseAgreements" AS agreement
+        JOIN portfolio_business_date AS effective_date
+          ON effective_date."PortfolioId" = agreement."PortfolioId";
         """;
 }
 
