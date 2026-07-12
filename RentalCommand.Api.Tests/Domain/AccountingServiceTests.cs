@@ -680,7 +680,7 @@ public class AccountingServiceTests : IDisposable
 
         ledgerSql.Should().NotBeNull("the report ledger must filter, combine, and sort rows as one DB-side query");
         ledgerSql!.Should().Contain("ORDER BY", "ledger sorting must run in SQL");
-        ledgerSql.Should().Contain("\"MatchedPaymentId\" IS NULL", "matched bank rows must be suppressed before materialization");
+        ledgerSql.Should().Contain("\"MatchedTenantLedgerEntryId\" IS NULL", "matched bank rows must be suppressed before materialization");
         ledgerSql.Should().Contain("\"MatchedExpenseId\" IS NULL", "matched bank rows must be suppressed before materialization");
     }
 
@@ -961,7 +961,7 @@ public class AccountingServiceTests : IDisposable
             IsoCurrencyCode = "USD",
             Category = category,
             MatchStatus = matchStatus,
-            MatchedPaymentId = matchedPaymentId,
+            MatchedTenantLedgerEntryId = matchedPaymentId,
             MatchedExpenseId = matchedExpenseId,
             CreatedAt = postedAt,
             UpdatedAt = postedAt,

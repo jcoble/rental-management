@@ -180,7 +180,8 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
                 existing."Id" AS existing_id,
                 modified.provider_id IS NOT NULL AS is_modified,
                 removed.provider_id IS NOT NULL AND existing."Id" IS NOT NULL AS is_removed,
-                existing."MatchedPaymentId" AS old_payment_id,
+                existing."MatchedTenantAccountId" AS old_tenant_account_id,
+                existing."MatchedTenantLedgerEntryId" AS old_ledger_entry_id,
                 existing."MatchedExpenseId" AS old_expense_id,
                 existing."MatchStatus" AS old_match_status,
                 existing."MatchConfidence" AS old_match_confidence,
@@ -190,7 +191,9 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
                     'authorizedAt', existing."AuthorizedAt", 'description', existing."Description",
                     'merchantName', existing."MerchantName", 'amount', existing."Amount",
                     'isoCurrencyCode', existing."IsoCurrencyCode", 'category', existing."Category",
-                    'matchedPaymentId', existing."MatchedPaymentId", 'matchedExpenseId', existing."MatchedExpenseId",
+                    'matchedTenantAccountId', existing."MatchedTenantAccountId",
+                    'matchedTenantLedgerEntryId', existing."MatchedTenantLedgerEntryId",
+                    'matchedExpenseId', existing."MatchedExpenseId",
                     'matchStatus', existing."MatchStatus", 'matchConfidence', existing."MatchConfidence",
                     'notes', existing."Notes") END AS old_values
             FROM incoming_ids AS ids
@@ -205,11 +208,13 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
             INSERT INTO "BankTransactions"
                 ("PortfolioId", "BankConnectionId", "ProviderTransactionId", "PostedAt", "AuthorizedAt",
                  "Description", "MerchantName", "Amount", "IsoCurrencyCode", "Category", "RawData",
-                 "MatchedPaymentId", "MatchedExpenseId", "MatchStatus", "MatchConfidence", "Notes",
+                 "MatchedTenantAccountId", "MatchedTenantLedgerEntryId", "MatchedExpenseId",
+                 "MatchStatus", "MatchConfidence", "Notes",
                  "CreatedAt", "UpdatedAt")
             SELECT @portfolioId, @connectionId, source.provider_id, source.posted_at, source.authorized_at,
                    source.description, source.merchant_name, source.amount, source.currency, source.category, source.raw_data,
-                   CASE WHEN source.is_removed OR source.old_match_status = 'Matched' THEN NULL ELSE source.old_payment_id END,
+                   CASE WHEN source.is_removed OR source.old_match_status = 'Matched' THEN NULL ELSE source.old_tenant_account_id END,
+                   CASE WHEN source.is_removed OR source.old_match_status = 'Matched' THEN NULL ELSE source.old_ledger_entry_id END,
                    CASE WHEN source.is_removed OR source.old_match_status = 'Matched' THEN NULL ELSE source.old_expense_id END,
                    CASE WHEN source.is_removed THEN 'Removed'
                         WHEN source.existing_id IS NULL OR source.old_match_status = 'Matched' THEN 'Unmatched'
@@ -226,7 +231,9 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
                 "Description" = EXCLUDED."Description", "MerchantName" = EXCLUDED."MerchantName",
                 "Amount" = EXCLUDED."Amount", "IsoCurrencyCode" = EXCLUDED."IsoCurrencyCode",
                 "Category" = EXCLUDED."Category", "RawData" = EXCLUDED."RawData",
-                "MatchedPaymentId" = EXCLUDED."MatchedPaymentId", "MatchedExpenseId" = EXCLUDED."MatchedExpenseId",
+                "MatchedTenantAccountId" = EXCLUDED."MatchedTenantAccountId",
+                "MatchedTenantLedgerEntryId" = EXCLUDED."MatchedTenantLedgerEntryId",
+                "MatchedExpenseId" = EXCLUDED."MatchedExpenseId",
                 "MatchStatus" = EXCLUDED."MatchStatus", "MatchConfidence" = EXCLUDED."MatchConfidence",
                 "Notes" = EXCLUDED."Notes", "UpdatedAt" = EXCLUDED."UpdatedAt"
             RETURNING *
@@ -240,7 +247,9 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
                        'authorizedAt', merged."AuthorizedAt", 'description', merged."Description",
                        'merchantName', merged."MerchantName", 'amount', merged."Amount",
                        'isoCurrencyCode', merged."IsoCurrencyCode", 'category', merged."Category",
-                       'matchedPaymentId', merged."MatchedPaymentId", 'matchedExpenseId', merged."MatchedExpenseId",
+                       'matchedTenantAccountId', merged."MatchedTenantAccountId",
+                       'matchedTenantLedgerEntryId', merged."MatchedTenantLedgerEntryId",
+                       'matchedExpenseId', merged."MatchedExpenseId",
                        'matchStatus', merged."MatchStatus", 'matchConfidence', merged."MatchConfidence",
                        'notes', merged."Notes") AS new_values,
                    CASE WHEN source.existing_id IS NULL THEN 'Bank transaction imported from Plaid.'
@@ -319,7 +328,9 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
                        'authorizedAt', inserted."AuthorizedAt", 'description', inserted."Description",
                        'merchantName', inserted."MerchantName", 'amount', inserted."Amount",
                        'isoCurrencyCode', inserted."IsoCurrencyCode", 'category', inserted."Category",
-                       'matchedPaymentId', inserted."MatchedPaymentId", 'matchedExpenseId', inserted."MatchedExpenseId",
+                       'matchedTenantAccountId', inserted."MatchedTenantAccountId",
+                       'matchedTenantLedgerEntryId', inserted."MatchedTenantLedgerEntryId",
+                       'matchedExpenseId', inserted."MatchedExpenseId",
                        'matchStatus', inserted."MatchStatus", 'matchConfidence', inserted."MatchConfidence",
                        'notes', inserted."Notes") AS new_values
             FROM inserted

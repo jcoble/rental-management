@@ -13,7 +13,8 @@ public class BankTransaction
     public decimal Amount { get; set; }
     public string IsoCurrencyCode { get; set; } = "USD";
     public string? Category { get; set; }
-    public int? MatchedPaymentId { get; set; }
+    public int? MatchedTenantAccountId { get; set; }
+    public long? MatchedTenantLedgerEntryId { get; set; }
     public int? MatchedExpenseId { get; set; }
     public string MatchStatus { get; set; } = "Unmatched";
     public decimal? MatchConfidence { get; set; }
@@ -24,6 +25,7 @@ public class BankTransaction
 
     public Portfolio? Portfolio { get; set; }
     public BankConnection? BankConnection { get; set; }
-    public Payment? MatchedPayment { get; set; }
+    public TenantAccount? MatchedTenantAccount { get; set; }
+    public TenantLedgerEntry? MatchedTenantLedgerEntry { get; set; }
     public Expense? MatchedExpense { get; set; }
 }

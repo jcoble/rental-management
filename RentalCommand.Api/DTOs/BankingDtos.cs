@@ -70,7 +70,8 @@ public class BankTransactionResponse
     public decimal Amount { get; set; }
     public string IsoCurrencyCode { get; set; } = "USD";
     public string? Category { get; set; }
-    public int? MatchedPaymentId { get; set; }
+    public int? MatchedTenantAccountId { get; set; }
+    public long? MatchedTenantLedgerEntryId { get; set; }
     public int? MatchedExpenseId { get; set; }
     public string MatchStatus { get; set; } = "Unmatched";
     public decimal? MatchConfidence { get; set; }
@@ -89,7 +90,8 @@ public class BankTransactionListResponse
 public class BankMatchSuggestionResponse
 {
     public string EntityType { get; set; } = string.Empty;
-    public int EntityId { get; set; }
+    public long EntityId { get; set; }
+    public int? TenantAccountId { get; set; }
     public decimal Confidence { get; set; }
     public string Label { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
@@ -137,17 +139,20 @@ public class SyncBankConnectionResponse
 
 public class MatchBankTransactionRequest
 {
-    public string EntityType { get; set; } = string.Empty;
-    public int EntityId { get; set; }
+    public int? TenantAccountId { get; set; }
+    public long? TenantLedgerEntryId { get; set; }
+    public int? ExpenseId { get; set; }
 }
 
 /// <summary>
-/// Confirm a suggested match. Supply exactly one of <see cref="PaymentId"/> or
-/// <see cref="ExpenseId"/>; when both are omitted the transaction's current suggestion is used.
+/// Confirm a suggested match. Supply either a canonical tenant receipt identity
+/// (<see cref="TenantAccountId"/> plus <see cref="TenantLedgerEntryId"/>) or an
+/// <see cref="ExpenseId"/>; when all are omitted the current suggestion is used.
 /// </summary>
 public class ConfirmBankMatchRequest
 {
-    public int? PaymentId { get; set; }
+    public int? TenantAccountId { get; set; }
+    public long? TenantLedgerEntryId { get; set; }
     public int? ExpenseId { get; set; }
 }
 

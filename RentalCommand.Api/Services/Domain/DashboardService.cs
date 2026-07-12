@@ -155,7 +155,7 @@ public class DashboardService : IDashboardService
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                UnmatchedDeposits = g.Sum(t => t.Amount > 0 && t.MatchedPaymentId == null ? t.Amount : 0m),
+                UnmatchedDeposits = g.Sum(t => t.Amount > 0 && t.MatchedTenantLedgerEntryId == null ? t.Amount : 0m),
                 UnmatchedWithdrawals = g.Sum(t => t.Amount < 0 && t.MatchedExpenseId == null ? -t.Amount : 0m),
             })
             .FirstOrDefaultAsync(ct);

@@ -646,10 +646,23 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(c => c.Transactions)
                 .HasForeignKey(e => e.BankConnectionId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.MatchedPayment)
+            entity.HasIndex(e => new { e.PortfolioId, e.MatchedTenantAccountId, e.MatchedTenantLedgerEntryId })
+                .HasFilter("\"MatchedTenantLedgerEntryId\" IS NOT NULL");
+            entity.HasOne(e => e.MatchedTenantAccount)
                 .WithMany()
-                .HasForeignKey(e => e.MatchedPaymentId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .HasForeignKey(e => new { e.MatchedTenantAccountId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.MatchedTenantLedgerEntry)
+                .WithMany()
+                .HasForeignKey(e => new
+                {
+                    e.MatchedTenantLedgerEntryId,
+                    e.MatchedTenantAccountId,
+                    e.PortfolioId,
+                })
+                .HasPrincipalKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.MatchedExpense)
                 .WithMany()
                 .HasForeignKey(e => e.MatchedExpenseId)

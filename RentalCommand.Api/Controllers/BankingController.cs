@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Read-only banking and reconciliation endpoints. This stores imported/Plaid-synced bank
-/// transactions and lets the landlord match them to payments or expenses; it never initiates
+/// transactions and lets the landlord match them to tenant-account receipts or expenses; it never initiates
 /// transfers or writes back to the bank.
 /// </summary>
 [ApiController]
@@ -125,7 +125,7 @@ public class BankingController : ManagementControllerBase
     }
 
     /// <summary>
-    /// Duplicate / match review queue: imported bank lines with a suggested payment or expense
+    /// Duplicate / match review queue: imported bank lines with a suggested tenant receipt or expense
     /// match that still need the landlord to confirm or dismiss, so a scanned receipt and the bank
     /// deposit/withdrawal are not double-counted.
     /// </summary>
@@ -140,9 +140,9 @@ public class BankingController : ManagementControllerBase
     }
 
     /// <summary>
-    /// Confirm a suggested match. Links the bank line to the payment/expense and marks it Matched so
-    /// accounting treats them as the same money. Body may name a paymentId or expenseId; if both are
-    /// omitted the current suggestion is used.
+    /// Confirm a suggested match. Links the bank line to a canonical tenant-account receipt or an
+    /// expense and marks it Matched so accounting treats them as the same money. A receipt target
+    /// requires both tenantAccountId and tenantLedgerEntryId; an empty body accepts the suggestion.
     /// </summary>
     [HttpPost("transactions/{id:int}/confirm-match")]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]

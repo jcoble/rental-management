@@ -125,7 +125,7 @@ public class AccountingService : IAccountingService
                 t.PortfolioId == portfolioId &&
                 t.MatchStatus != "Removed" &&
                 t.Amount > 0 &&
-                t.MatchedPaymentId == null)
+                t.MatchedTenantLedgerEntryId == null)
             .SumAsync(t => (decimal?)t.Amount, ct) ?? 0m;
         rollup.Collected += unmatchedBankDeposits;
 
@@ -182,7 +182,7 @@ public class AccountingService : IAccountingService
         var depositsCollected = await _db.BankTransactions
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
-                        t.Amount > 0 && t.MatchedPaymentId == null)
+                        t.Amount > 0 && t.MatchedTenantLedgerEntryId == null)
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -640,11 +640,9 @@ public class AccountingService : IAccountingService
     {
         var result = new Dictionary<(string, int), ReconciliationState>();
 
-        var paymentRows = pageRows.Where(r => r.Kind == KindPayment).ToList();
         var expenseRows = pageRows.Where(r => r.Kind == KindExpense).ToList();
-        if (paymentRows.Count == 0 && expenseRows.Count == 0) return result;
+        if (expenseRows.Count == 0) return result;
 
-        var paymentIds = paymentRows.Select(r => r.Id).ToHashSet();
         var expenseIds = expenseRows.Select(r => r.Id).ToHashSet();
 
         // 1) Confirmed (Matched) bank lines that link to a row on this page → "cleared".
@@ -653,11 +651,9 @@ public class AccountingService : IAccountingService
             .Where(t =>
                 t.PortfolioId == portfolioId &&
                 t.MatchStatus == "Matched" &&
-                ((t.MatchedPaymentId != null && paymentIds.Contains(t.MatchedPaymentId.Value)) ||
-                 (t.MatchedExpenseId != null && expenseIds.Contains(t.MatchedExpenseId.Value))))
+                t.MatchedExpenseId != null && expenseIds.Contains(t.MatchedExpenseId.Value))
             .Select(t => new
             {
-                t.MatchedPaymentId,
                 t.MatchedExpenseId,
                 t.PostedAt,
                 InstitutionName = t.BankConnection!.InstitutionName,
@@ -666,16 +662,7 @@ public class AccountingService : IAccountingService
 
         foreach (var c in cleared)
         {
-            if (c.MatchedPaymentId is int pid && paymentIds.Contains(pid))
-            {
-                result[(KindPayment, pid)] = new ReconciliationState
-                {
-                    Reconciled = true,
-                    ClearedBankName = c.InstitutionName,
-                    ClearedAt = c.PostedAt,
-                };
-            }
-            else if (c.MatchedExpenseId is int eid && expenseIds.Contains(eid))
+            if (c.MatchedExpenseId is int eid && expenseIds.Contains(eid))
             {
                 result[(KindExpense, eid)] = new ReconciliationState
                 {
@@ -689,16 +676,13 @@ public class AccountingService : IAccountingService
         // 2) For rows not already cleared, suggest a still-unmatched bank line. Amount/date/name
         // gates, scoring, and top-1 ranking all stay DB-side; the in-memory step only attaches the
         // already-ranked DTO to the page row.
-        var openPaymentIds = paymentIds
-            .Where(id => !result.ContainsKey((KindPayment, id)))
-            .ToArray();
         var openExpenseIds = expenseIds
             .Where(id => !result.ContainsKey((KindExpense, id)))
             .ToArray();
 
-        if (openPaymentIds.Length == 0 && openExpenseIds.Length == 0) return result;
+        if (openExpenseIds.Length == 0) return result;
 
-        var suggestions = await LoadSqlRankedInlineSuggestionsAsync(portfolioId, openPaymentIds, openExpenseIds, ct);
+        var suggestions = await LoadSqlRankedInlineSuggestionsAsync(portfolioId, openExpenseIds, ct);
         foreach (var suggestion in suggestions)
         {
             result[(suggestion.Kind, suggestion.EntityId)] = new ReconciliationState
@@ -719,56 +703,9 @@ public class AccountingService : IAccountingService
 
     private async Task<List<InlineBankSuggestionRankRow>> LoadSqlRankedInlineSuggestionsAsync(
         int portfolioId,
-        int[] paymentIds,
         int[] expenseIds,
         CancellationToken ct)
     {
-        var paymentCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from p in _db.Payments.AsNoTracking()
-            let anchor = p.PaidDate ?? p.DueDate
-            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
-            let tenantName = (p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName).Trim().ToLower()
-            let leaseNumber = p.Lease!.LeaseNumber.ToLower()
-            let propertyName = p.Lease!.Property!.Name.ToLower()
-            let hasNameMatch =
-                (tenantName != "" && bankText.Contains(tenantName)) ||
-                (leaseNumber != "" && bankText.Contains(leaseNumber)) ||
-                (propertyName != "" && bankText.Contains(propertyName))
-            let dateScore =
-                t.PostedAt >= anchor.AddDays(-1) && t.PostedAt < anchor.AddDays(2) ? 0.80m :
-                t.PostedAt >= anchor.AddDays(-2) && t.PostedAt < anchor.AddDays(3) ? 0.72m :
-                t.PostedAt >= anchor.AddDays(-4) && t.PostedAt < anchor.AddDays(5) ? 0.62m :
-                t.PostedAt >= anchor.AddDays(-7) && t.PostedAt < anchor.AddDays(8) ? 0.52m :
-                t.PostedAt >= anchor.AddDays(-14) && t.PostedAt < anchor.AddDays(15) && hasNameMatch ? 0.42m :
-                0m
-            where
-                paymentIds.Contains(p.Id) &&
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                t.MatchedPaymentId == null &&
-                t.MatchedExpenseId == null &&
-                t.Amount > 0m &&
-                p.PortfolioId == portfolioId &&
-                p.Status != PaymentStatus.Failed &&
-                p.Status != PaymentStatus.Refunded &&
-                t.Amount >= p.Amount - 0.01m &&
-                t.Amount <= p.Amount + 0.01m &&
-                t.PostedAt >= anchor.AddDays(-14) &&
-                t.PostedAt < anchor.AddDays(15) &&
-                dateScore > 0m
-            select new InlineBankSuggestionRankRow
-            {
-                Kind = KindPayment,
-                EntityId = p.Id,
-                BankTransactionId = t.Id,
-                Name = t.MerchantName,
-                FallbackName = t.BankConnection!.InstitutionName,
-                Amount = t.Amount,
-                Date = t.PostedAt,
-                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
-            };
-
         var expenseCandidates =
             from t in _db.BankTransactions.AsNoTracking()
             from e in _db.Expenses.AsNoTracking()
@@ -790,7 +727,7 @@ public class AccountingService : IAccountingService
                 expenseIds.Contains(e.Id) &&
                 t.PortfolioId == portfolioId &&
                 t.MatchStatus == "Unmatched" &&
-                t.MatchedPaymentId == null &&
+                t.MatchedTenantLedgerEntryId == null &&
                 t.MatchedExpenseId == null &&
                 t.Amount < 0m &&
                 e.PortfolioId == portfolioId &&
@@ -811,8 +748,7 @@ public class AccountingService : IAccountingService
                 Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
             };
 
-        return await paymentCandidates
-            .Concat(expenseCandidates)
+        return await expenseCandidates
             .GroupBy(c => new { c.Kind, c.EntityId })
             .Select(g => g
                 .OrderByDescending(c => c.Confidence)
@@ -958,7 +894,7 @@ public class AccountingService : IAccountingService
         var unmatchedDepositTotal = await _db.BankTransactions
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
-                        t.Amount > 0 && t.MatchedPaymentId == null)
+                        t.Amount > 0 && t.MatchedTenantLedgerEntryId == null)
             .SumAsync(t => (decimal?)t.Amount, ct) ?? 0m;
 
         var expenseTotal = await _db.Expenses
@@ -1212,7 +1148,7 @@ public class AccountingService : IAccountingService
             .Where(t =>
                 t.PortfolioId == portfolioId &&
                 t.MatchStatus != "Removed" &&
-                t.MatchedPaymentId == null &&
+                t.MatchedTenantLedgerEntryId == null &&
                 t.MatchedExpenseId == null)
             .Select(t => new AccountingReportLedgerRow
             {
