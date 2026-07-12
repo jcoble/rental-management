@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -202,40 +203,18 @@ public class ScanController : ManagementControllerBase
         CancellationToken ct = default)
     {
         var portfolioId = GetPortfolioId();
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 100);
 
-        var batches = await _db.ScanBatches
-            .Where(b => b.PortfolioId == portfolioId)
+        var batches = await QueryBatchSummaryRows(portfolioId)
             .OrderByDescending(b => b.CreatedAtUtc)
             .ThenByDescending(b => b.Id)
             .Skip(skip)
             .Take(take)
+            .Select(BatchSummaryProjection)
             .ToListAsync(ct);
 
-        if (batches.Count == 0)
-            return Ok(Array.Empty<ScanBatchSummaryResponse>());
-
-        var batchIds = batches.Select(b => b.Id).ToList();
-
-        // One grouped query for all the rollup counts (status per batch) instead of N per-batch queries.
-        var statusCounts = await _db.ScanDrafts
-            .Where(d => d.PortfolioId == portfolioId && d.BatchId != null && batchIds.Contains(d.BatchId.Value))
-            .GroupBy(d => new { BatchId = d.BatchId!.Value, d.Status })
-            .Select(g => new { g.Key.BatchId, g.Key.Status, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var countsByBatch = statusCounts
-            .GroupBy(x => x.BatchId)
-            .ToDictionary(g => g.Key, g => BuildCounts(g.Select(x => (x.Status, x.Count))));
-
-        var result = batches.Select(b =>
-        {
-            var counts = countsByBatch.TryGetValue(b.Id, out var c) ? c : EmptyCounts;
-            return new ScanBatchSummaryResponse(
-                b.Id, b.Name, b.TargetEntityType, ComputeStatus(b, counts).ToString(),
-                b.FileCount, b.CreatedAtUtc, counts);
-        }).ToList();
-
-        return Ok(result);
+        return Ok(batches);
     }
 
     // -------------------------------------------------------------------------
@@ -249,8 +228,10 @@ public class ScanController : ManagementControllerBase
     {
         var portfolioId = GetPortfolioId();
 
-        var batch = await _db.ScanBatches
-            .FirstOrDefaultAsync(b => b.Id == id && b.PortfolioId == portfolioId, ct);
+        var batch = await QueryBatchSummaryRows(portfolioId)
+            .Where(b => b.Id == id)
+            .Select(BatchSummaryProjection)
+            .SingleOrDefaultAsync(ct);
 
         if (batch is null)
             return NotFound(new { error = "Scan batch not found" });
@@ -258,82 +239,106 @@ public class ScanController : ManagementControllerBase
         // Portfolio-scoped: only this portfolio's drafts in this batch (IDOR-safe — a foreign caller
         // can neither read the batch above nor any draft here).
         var drafts = await _db.ScanDrafts
+            .AsNoTracking()
             .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
             .OrderBy(d => d.CreatedAt)
             .ThenBy(d => d.Id)
+            .Select(d => new ScanBatchDraftQueryRow
+            {
+                Id = d.Id,
+                Status = d.Status,
+                TargetEntityType = d.TargetEntityType,
+                ExtractedFields = d.ExtractedFields,
+                ConfirmedEntityId = d.Status == "Confirmed" ? d.ConfirmedEntityId : null,
+                CreatedAt = d.CreatedAt,
+                FailureReason = d.FailureReason,
+            })
             .ToListAsync(ct);
 
-        var statusCounts = await _db.ScanDrafts
-            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
-            .GroupBy(d => d.Status)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var counts = BuildCounts(statusCounts.Select(c => (c.Status, c.Count)));
-
-        // Resolve the created-entity id for any confirmed draft so the UI can link straight to the record.
-        var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
-        var linkedFiles = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
-            .ToDictionaryAsync(f => f.FilePath, ct);
-
-        var draftDtos = drafts.Select(d =>
+        var draftDtos = new List<ScanBatchDraftResponse>(drafts.Count);
+        foreach (var draft in drafts)
         {
-            linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
-            var (tenant, unit, term) = SummarizeLeaseFields(d.ExtractedFields);
-            return new ScanBatchDraftResponse(
-                d.Id, d.Status, d.TargetEntityType, $"/api/v1/scans/{d.Id}/file",
+            var (tenant, unit, term) = SummarizeLeaseFields(draft.ExtractedFields);
+            draftDtos.Add(new ScanBatchDraftResponse(
+                draft.Id, draft.Status, draft.TargetEntityType, $"/api/v1/scans/{draft.Id}/file",
                 tenant, unit, term,
-                d.Status == "Confirmed" ? linkedFile?.EntityId : null,
-                d.CreatedAt,
-                d.FailureReason);
-        }).ToList();
+                draft.ConfirmedEntityId,
+                draft.CreatedAt,
+                draft.FailureReason));
+        }
 
         return Ok(new ScanBatchDetailResponse(
-            batch.Id, batch.Name, batch.TargetEntityType, ComputeStatus(batch, counts).ToString(),
-            batch.FileCount, batch.CreatedAtUtc, counts, draftDtos));
+            batch.Id, batch.Name, batch.TargetEntityType, batch.Status,
+            batch.FileCount, batch.CreatedAtUtc, batch.Counts, draftDtos));
     }
 
     // -------------------------------------------------------------------------
     // Batch rollup helpers
     // -------------------------------------------------------------------------
 
-    private static readonly ScanBatchCounts EmptyCounts = new(0, 0, 0, 0, 0, 0);
-
-    /// <summary>Folds per-status draft counts into a <see cref="ScanBatchCounts"/> rollup.</summary>
-    private static ScanBatchCounts BuildCounts(IEnumerable<(string Status, int Count)> statusCounts)
-    {
-        int total = 0, pending = 0, reviewing = 0, confirmed = 0, rejected = 0, failed = 0;
-        foreach (var (status, count) in statusCounts)
-        {
-            total += count;
-            switch (status)
+    private IQueryable<ScanBatchSummaryQueryRow> QueryBatchSummaryRows(int portfolioId) =>
+        _db.ScanBatches
+            .AsNoTracking()
+            .Where(batch => batch.PortfolioId == portfolioId)
+            .Select(batch => new ScanBatchSummaryQueryRow
             {
-                // "Processing" (mid-extraction) and "Confirming" (mid-confirm) are transient; surface
-                // them under Pending so a batch still in flight reads as not-yet-reviewable.
-                case "Pending" or "Processing" or "Confirming": pending += count; break;
-                case "Reviewing": reviewing += count; break;
-                case "Confirmed": confirmed += count; break;
-                case "Rejected": rejected += count; break;
-                case "Failed": failed += count; break;
-            }
-        }
-        return new ScanBatchCounts(total, pending, reviewing, confirmed, rejected, failed);
+                Id = batch.Id,
+                Name = batch.Name,
+                TargetEntityType = batch.TargetEntityType,
+                FileCount = batch.FileCount,
+                CreatedAtUtc = batch.CreatedAtUtc,
+                Total = _db.ScanDrafts.Count(d => d.PortfolioId == portfolioId && d.BatchId == batch.Id),
+                Pending = _db.ScanDrafts.Count(d =>
+                    d.PortfolioId == portfolioId && d.BatchId == batch.Id &&
+                    (d.Status == "Pending" || d.Status == "Processing" || d.Status == "Confirming")),
+                Reviewing = _db.ScanDrafts.Count(d =>
+                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Reviewing"),
+                Confirmed = _db.ScanDrafts.Count(d =>
+                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Confirmed"),
+                Rejected = _db.ScanDrafts.Count(d =>
+                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Rejected"),
+                Failed = _db.ScanDrafts.Count(d =>
+                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Failed"),
+            });
+
+    private static readonly Expression<Func<ScanBatchSummaryQueryRow, ScanBatchSummaryResponse>> BatchSummaryProjection =
+        row => new ScanBatchSummaryResponse(
+            row.Id,
+            row.Name,
+            row.TargetEntityType,
+            row.Total > 0 && row.Pending == 0 && row.Reviewing == 0
+                ? "Completed"
+                : row.Reviewing > 0 || row.Confirmed > 0 || row.Rejected > 0
+                    ? "Reviewing"
+                    : "Processing",
+            row.FileCount,
+            row.CreatedAtUtc,
+            new ScanBatchCounts(row.Total, row.Pending, row.Reviewing, row.Confirmed, row.Rejected, row.Failed));
+
+    private sealed class ScanBatchSummaryQueryRow
+    {
+        public int Id { get; init; }
+        public string? Name { get; init; }
+        public string TargetEntityType { get; init; } = string.Empty;
+        public int FileCount { get; init; }
+        public DateTime CreatedAtUtc { get; init; }
+        public int Total { get; init; }
+        public int Pending { get; init; }
+        public int Reviewing { get; init; }
+        public int Confirmed { get; init; }
+        public int Rejected { get; init; }
+        public int Failed { get; init; }
     }
 
-    /// <summary>
-    /// Computes the batch's effective status from its draft rollup (cheap on read so a confirm/reject
-    /// never has to touch the batch row): Completed when every draft is confirmed/rejected, Reviewing
-    /// when at least one draft is ready to review, otherwise still Processing.
-    /// </summary>
-    private static ScanBatchStatus ComputeStatus(ScanBatch batch, ScanBatchCounts counts)
+    private sealed class ScanBatchDraftQueryRow
     {
-        if (counts.Total > 0 && counts.Pending == 0 && counts.Reviewing == 0)
-            return ScanBatchStatus.Completed;
-        if (counts.Reviewing > 0 || counts.Confirmed > 0 || counts.Rejected > 0)
-            return ScanBatchStatus.Reviewing;
-        return ScanBatchStatus.Processing;
+        public int Id { get; init; }
+        public string Status { get; init; } = string.Empty;
+        public string TargetEntityType { get; init; } = string.Empty;
+        public string? ExtractedFields { get; init; }
+        public int? ConfirmedEntityId { get; init; }
+        public DateTime CreatedAt { get; init; }
+        public string? FailureReason { get; init; }
     }
 
     /// <summary>

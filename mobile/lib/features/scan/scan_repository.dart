@@ -194,6 +194,7 @@ class ScanRepository {
           ),
         },
       );
+      _confirmOperationIds.remove(id);
       return response.data;
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);

@@ -171,8 +171,8 @@ export const scan = {
 		return api.upload<ScanCreatedResponse>('/scans', fd);
 	},
 
-	confirm: (id: number, overridesJson: string): Promise<ScanConfirmResponse> =>
-		api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, {
+	confirm: async (id: number, overridesJson: string): Promise<ScanConfirmResponse> => {
+		const response = await api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, {
 			overridesJson,
 			clientOperationId:
 				scanConfirmOperationIds.get(id) ??
@@ -181,7 +181,10 @@ export const scan = {
 					scanConfirmOperationIds.set(id, operationId);
 					return operationId;
 				})()
-		}),
+		});
+		scanConfirmOperationIds.delete(id);
+		return response;
+	},
 
 	retry: (id: number): Promise<unknown> =>
 		api.post(`/scans/${id}/retry`, {}),
