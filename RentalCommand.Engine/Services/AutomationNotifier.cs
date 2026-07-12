@@ -191,11 +191,11 @@ public sealed class AutomationNotifier
     }
 
     private async Task<int?> TenantUserIdAsync(int portfolioId, int tenantId, CancellationToken ct) =>
-        await _db.Users
+        await _db.EffectiveTenantAccess
             .AsNoTracking()
-            .Where(u => u.PortfolioId == portfolioId && u.TenantId == tenantId)
-            .OrderBy(u => u.Id)
-            .Select(u => (int?)u.Id)
+            .Where(access => access.PortfolioId == portfolioId && access.TenantId == tenantId)
+            .OrderBy(access => access.UserId)
+            .Select(access => (int?)access.UserId)
             .FirstOrDefaultAsync(ct);
 
     public sealed record InAppContent(

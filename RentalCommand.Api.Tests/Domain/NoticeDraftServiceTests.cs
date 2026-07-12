@@ -145,14 +145,24 @@ public class NoticeDraftServiceTests : IDisposable
     public async Task GenerateAsync_RendersActiveLandlordTemplateWithCanonicalRecipientTokens()
     {
         var relationship = _fixture.SeedRelationship("Avery", "Brooks", 1400m, 60);
-        _fixture.Db.NoticeTemplates.Add(new NoticeTemplate
+        var customized = new WorkspaceNoticeTemplateVersion
         {
             PortfolioId = 1,
-            NoticeType = "RenewalOffer",
+            SystemKey = "RenewalOffer",
+            Version = 2,
+            BasedOnSystemTemplateVersionId = 1,
+            IsCustomized = true,
             Subject = "Renewal for {{tenant_name}}",
             Body = "Hi {{tenant_name}}, renew {{property_address}} with {{portfolio_name}}?",
-            IsActive = true,
-        });
+            CreatedByUserId = 1,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        _fixture.Db.WorkspaceNoticeTemplateVersions.Add(customized);
+        await _fixture.Db.SaveChangesAsync();
+        var policy = await _fixture.Db.TenantNoticePolicies
+            .SingleAsync(candidate => candidate.PortfolioId == 1 && candidate.AutomationKey == "RenewalOffer");
+        policy.WorkspaceNoticeTemplateVersionId = customized.Id;
+        policy.UpdatedAtUtc = DateTime.UtcNow;
         await _fixture.Db.SaveChangesAsync();
         _fixture.Db.ChangeTracker.Clear();
 
@@ -327,7 +337,6 @@ public class NoticeDraftServiceTests : IDisposable
 
     private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
         _fixture.Db,
-        new NoopConversationService(),
         llm ?? new NoopLlmProvider(),
         NullLogger<NoticeDraftService>.Instance,
         TimeProvider.System);
@@ -378,6 +387,55 @@ public class NoticeDraftServiceTests : IDisposable
                 CreatedAtUtc = DateTime.UtcNow,
                 UpdatedAtUtc = DateTime.UtcNow,
             });
+            Db.SaveChanges();
+
+            var now = DateTime.UtcNow;
+            var automationKeys = new[]
+            {
+                "RenewalOffer",
+                "MonthToMonthConversion",
+                "MoveOutReminder",
+                "LateRentNotice",
+                "RentReminder",
+            };
+            for (var index = 0; index < automationKeys.Length; index++)
+            {
+                var templateId = index + 1;
+                var automationKey = automationKeys[index];
+                Db.SystemNoticeTemplateVersions.Add(new SystemNoticeTemplateVersion
+                {
+                    Id = templateId,
+                    SystemKey = automationKey,
+                    Version = 1,
+                    Classification = NoticeClassification.Operational,
+                    Subject = $"{automationKey} for {{{{tenant_name}}}}",
+                    Body = "Hi {{tenant_name}}, this notice concerns {{property_address}} and {{portfolio_name}}.",
+                    Provenance = "canonical notice test fixture",
+                    PublishedAtUtc = now,
+                });
+                Db.WorkspaceNoticeTemplateVersions.Add(new WorkspaceNoticeTemplateVersion
+                {
+                    Id = templateId,
+                    PortfolioId = 1,
+                    SystemKey = automationKey,
+                    Version = 1,
+                    BasedOnSystemTemplateVersionId = templateId,
+                    Subject = $"{automationKey} for {{{{tenant_name}}}}",
+                    Body = "Hi {{tenant_name}}, this notice concerns {{property_address}} and {{portfolio_name}}.",
+                    CreatedByUserId = 1,
+                    CreatedAtUtc = now,
+                });
+                Db.TenantNoticePolicies.Add(new TenantNoticePolicy
+                {
+                    PortfolioId = 1,
+                    AutomationKey = automationKey,
+                    Mode = TenantNoticeMode.Draft,
+                    Classification = NoticeClassification.Operational,
+                    WorkspaceNoticeTemplateVersionId = templateId,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                });
+            }
             Db.SaveChanges();
         }
 
@@ -663,68 +721,4 @@ public class NoticeDraftServiceTests : IDisposable
             Task.FromResult(new LlmToolResult("end", "", [], 0, 0, "noop"));
     }
 
-    private sealed class NoopConversationService : IConversationService
-    {
-        public Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ConversationSummary>>([]);
-
-        public Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default) =>
-            Task.FromResult(new ConversationListResponse());
-
-        public Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default) => Task.FromResult(0);
-
-        public Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(null);
-
-        public Task<ConversationDetail?> StartAsync(
-            int portfolioId,
-            int tenantId,
-            string subject,
-            string body,
-            List<string> channels,
-            string operationKey,
-            bool acknowledgedFairHousingReview = false,
-            CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(new ConversationDetail
-            {
-                Id = 1,
-                TenantId = tenantId,
-                Subject = subject,
-            });
-
-        public Task<ConversationDetail?> PostMessageAsync(
-            int portfolioId,
-            int id,
-            string body,
-            List<string> channels,
-            string operationKey,
-            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
-
-        public Task<IReadOnlyList<ConversationSummary>> ListForTenantAsync(
-            int portfolioId,
-            int tenantId,
-            CancellationToken ct = default) => Task.FromResult<IReadOnlyList<ConversationSummary>>([]);
-
-        public Task<ConversationDetail?> GetForTenantAsync(
-            int portfolioId,
-            int tenantId,
-            int id,
-            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
-
-        public Task<ConversationDetail?> TenantStartAsync(
-            int portfolioId,
-            int tenantId,
-            string subject,
-            string body,
-            string operationKey,
-            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
-
-        public Task<ConversationDetail?> TenantPostAsync(
-            int portfolioId,
-            int tenantId,
-            int id,
-            string body,
-            string operationKey,
-            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
-    }
 }

@@ -480,7 +480,7 @@ public sealed class DocumentsControllerTests : IDisposable
             target = _ctx.Db.Units
                 .Where(unit => unit.Property!.PortfolioId == PortfolioId)
                 .OrderByDescending(unit => unit.Id)
-                .Select(unit => new { unit.PropertyId, UnitId = unit.Id })
+                .Select(unit => new { unit.PropertyId, UnitId = (int?)unit.Id })
                 .FirstOrDefault();
             if (target is null)
                 return;
@@ -492,7 +492,7 @@ public sealed class DocumentsControllerTests : IDisposable
             PublicId = Guid.NewGuid(),
             PortfolioId = PortfolioId,
             PropertyId = target.PropertyId,
-            UnitId = target.UnitId,
+            UnitId = target.UnitId!.Value,
             RelationshipNumber = $"DOC-{tenantId}-{Guid.NewGuid():N}",
             CreatedAtUtc = now,
             CreatedByUserId = user.Id,

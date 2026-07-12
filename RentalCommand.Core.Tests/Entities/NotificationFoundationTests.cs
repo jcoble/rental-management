@@ -13,8 +13,9 @@ public sealed class NotificationFoundationTests
         var policy = new TenantNoticePolicy();
 
         policy.Mode.Should().Be(TenantNoticeMode.Draft);
-        typeof(TenantNoticePolicy).GetProperties().Select(property => property.Name)
-            .Should().NotContain(name => name is "NotifyTenants" or "SendTenantNotices");
+        var propertyNames = typeof(TenantNoticePolicy).GetProperties().Select(property => property.Name);
+        propertyNames.Should().NotContain("NotifyTenants");
+        propertyNames.Should().NotContain("SendTenantNotices");
     }
 
     [Fact]

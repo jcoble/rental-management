@@ -132,7 +132,6 @@ public class LeaseExpiryReminderServiceTests : IDisposable
         {
             EnableLeaseExpiryReminders = enable,
             LeaseExpiryReminderDays    = reminderDays,
-            NotifyTenants              = false,
         };
 
         SeedNotificationSettings(enable, reminderDays);
