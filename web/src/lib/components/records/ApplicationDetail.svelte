@@ -863,6 +863,10 @@
 									Updated {fmtDateTime(latestScreening.lastStatusAtUtc)}
 								</span>
 							</div>
+							<div class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+								<p class="font-medium text-foreground">{latestScreening.statusSummary}</p>
+								<p class="mt-1 text-muted-foreground">Next: {latestScreening.nextAction}</p>
+							</div>
 							<div class="grid gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
 								{@render fieldRow('Provider', latestScreening.providerDisplayName)}
 								{@render fieldRow('Reference', latestScreening.providerReference || '—')}

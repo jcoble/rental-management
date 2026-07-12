@@ -211,6 +211,10 @@ class ApplicantScreening {
     this.creditReportingAgencyPhone,
     this.hasCompleteCreditReportingAgencyContact = false,
     this.canGenerateAdverseAction = false,
+    this.statusSummary = '',
+    this.nextAction = '',
+    this.isTerminal = false,
+    this.canOpenProvider = false,
   });
 
   final int id;
@@ -234,6 +238,10 @@ class ApplicantScreening {
   final String? creditReportingAgencyPhone;
   final bool hasCompleteCreditReportingAgencyContact;
   final bool canGenerateAdverseAction;
+  final String statusSummary;
+  final String nextAction;
+  final bool isTerminal;
+  final bool canOpenProvider;
 
   bool get isCompleted => status == 'Completed';
   bool get canMarkExternalComplete =>
@@ -278,6 +286,10 @@ class ApplicantScreening {
           json['hasCompleteCreditReportingAgencyContact'] as bool? ?? false,
       canGenerateAdverseAction:
           json['canGenerateAdverseAction'] as bool? ?? false,
+      statusSummary: json['statusSummary'] as String? ?? '',
+      nextAction: json['nextAction'] as String? ?? '',
+      isTerminal: json['isTerminal'] as bool? ?? false,
+      canOpenProvider: json['canOpenProvider'] as bool? ?? false,
     );
   }
 }

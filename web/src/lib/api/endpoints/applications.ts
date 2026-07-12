@@ -124,6 +124,10 @@ export interface ApplicantScreeningResponse {
 	creditReportingAgencyPhone: string | null;
 	hasCompleteCreditReportingAgencyContact: boolean;
 	canGenerateAdverseAction: boolean;
+	statusSummary: string;
+	nextAction: string;
+	isTerminal: boolean;
+	canOpenProvider: boolean;
 }
 
 export interface ScreeningWorkspaceResponse {
