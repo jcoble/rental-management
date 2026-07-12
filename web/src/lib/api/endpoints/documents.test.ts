@@ -12,7 +12,6 @@ const authenticatedFileProxySources = [
 	'../../../routes/document-file/[id]/+server.ts',
 	'../../../routes/expense-file/[id]/+server.ts',
 	'../../../routes/lease-file/[id]/+server.ts',
-	'../../../routes/payment-file/[id]/+server.ts',
 	'../../../routes/scan-file/[id]/+server.ts',
 	'../../../routes/workorder-file/[id]/+server.ts'
 ].map((path) => [path, readFileSync(new URL(path, import.meta.url), 'utf8')] as const);

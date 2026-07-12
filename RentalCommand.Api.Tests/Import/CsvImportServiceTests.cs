@@ -31,8 +31,6 @@ public class CsvImportServiceTests : IDisposable
             new PaymentService(
                 _ctx.Db,
                 noop,
-                new RentalCommand.Api.Services.AuditTrailService(_ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-                Mock.Of<IFileStorage>(),
                 TimeProvider.System),
             new ExpenseService(_ctx.Db, noop, Mock.Of<IFileStorage>(), TimeProvider.System),
             new LoanService(_ctx.Db, noop, TimeProvider.System));
