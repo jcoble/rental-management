@@ -248,6 +248,7 @@ export function leaseRentTrackingErrors(value: {
 	return {};
 }
 
+/**
  * Record-application-fee form for the application's pre-tenancy financial account.
  */
 export const applicationFeeSchema = z.object({
