@@ -243,23 +243,36 @@ class ApplicationsRepository {
     }
   }
 
-  /// Records a real application/screening fee as income — a lease-less payment
-  /// attributed to the application's property. Shows on accounting + Schedule E.
-  Future<void> recordFee(
+  /// Records an immutable fee collection in the application's pre-tenancy
+  /// financial account. Dio reuses this request's operation key if an
+  /// interceptor retries the same submission.
+  Future<ApplicationFinanceMutation> recordFee(
     int id, {
+    required String operationKey,
     required double amount,
     String? method,
-    DateTime? paidDate,
+    DateTime? effectiveOn,
   }) async {
     try {
-      await _dio.post<Map<String, dynamic>>(
+      final response = await _dio.post<Map<String, dynamic>>(
         '/applications/$id/fee',
+        options: Options(headers: {'Idempotency-Key': operationKey}),
         data: {
           'amount': amount,
           if (method != null && method.isNotEmpty) 'method': method,
-          if (paidDate != null) 'paidDate': paidDate.toUtc().toIso8601String(),
+          'currency': 'USD',
+          if (effectiveOn != null)
+            'effectiveOn': effectiveOn.toIso8601String().split('T').first,
         },
       );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicationFinanceMutation.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -334,7 +347,7 @@ class ApplicationsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/applications/$id/adverse-action',
         data: {
-          'operationKey': _newOperationId(),
+          'operationKey': newOperationKey(),
           if (reason != null && reason.isNotEmpty) 'reason': reason,
           'sendToApplicant': sendToApplicant,
         },
@@ -352,7 +365,7 @@ class ApplicationsRepository {
     }
   }
 
-  static String _newOperationId() {
+  static String newOperationKey() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
     return bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();

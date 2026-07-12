@@ -163,16 +163,21 @@ class _ApplicationDetailScreenState
 
     setState(() => _busy = true);
     try {
-      await ref
+      final result = await ref
           .read(applicationsRepositoryProvider)
           .recordFee(
             _id,
+            operationKey: input.operationKey,
             amount: input.amount,
             method: input.method,
-            paidDate: input.paidDate,
+            effectiveOn: input.effectiveOn,
           );
       await _refresh();
-      _snack('Application fee recorded.');
+      _snack(
+        result.replayed
+            ? 'Application fee was already recorded.'
+            : 'Application fee recorded.',
+      );
     } on ApiException catch (e) {
       _snack(e.message);
     } finally {
@@ -1156,10 +1161,16 @@ class _DeclineDialogState extends State<_DeclineDialog> {
 // ── Record application fee dialog ─────────────────────────────────────────────
 
 class _RecordFeeInput {
-  const _RecordFeeInput({required this.amount, this.method, this.paidDate});
+  const _RecordFeeInput({
+    required this.operationKey,
+    required this.amount,
+    this.method,
+    this.effectiveOn,
+  });
+  final String operationKey;
   final double amount;
   final String? method;
-  final DateTime? paidDate;
+  final DateTime? effectiveOn;
 }
 
 class _RecordFeeDialog extends StatefulWidget {
@@ -1172,7 +1183,7 @@ class _RecordFeeDialog extends StatefulWidget {
 class _RecordFeeDialogState extends State<_RecordFeeDialog> {
   final _amountController = TextEditingController();
   final _methodController = TextEditingController();
-  DateTime? _paidDate;
+  DateTime? _effectiveOn;
   String? _amountError;
 
   @override
@@ -1186,11 +1197,11 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _paidDate ?? now,
+      initialDate: _effectiveOn ?? now,
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 1),
     );
-    if (picked != null) setState(() => _paidDate = picked);
+    if (picked != null) setState(() => _effectiveOn = picked);
   }
 
   void _submit() {
@@ -1202,9 +1213,10 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
     final method = _methodController.text.trim();
     Navigator.of(context).pop(
       _RecordFeeInput(
+        operationKey: ApplicationsRepository.newOperationKey(),
         amount: amount,
         method: method.isEmpty ? null : method,
-        paidDate: _paidDate,
+        effectiveOn: _effectiveOn,
       ),
     );
   }
@@ -1219,8 +1231,8 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Records a paid application/screening fee as income for this '
-            "application's property. No lease required.",
+            'Records a collected application or screening fee in this '
+            "application's financial account.",
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -1255,9 +1267,9 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
             children: [
               Expanded(
                 child: Text(
-                  _paidDate == null
-                      ? 'Paid date: today'
-                      : 'Paid date: ${_paidDate!.toIso8601String().split('T').first}',
+                  _effectiveOn == null
+                      ? 'Received date: today'
+                      : 'Received date: ${_effectiveOn!.toIso8601String().split('T').first}',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ),
