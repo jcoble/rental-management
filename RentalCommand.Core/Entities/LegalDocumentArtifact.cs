@@ -3,7 +3,7 @@ using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
-/// <summary>An immutable identity and content hash for one issued or executed legal PDF.</summary>
+/// <summary>An immutable identity and content hash for one issued or executed legal document.</summary>
 public class LegalDocumentArtifact : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }

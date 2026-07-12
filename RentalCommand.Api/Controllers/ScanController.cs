@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -107,6 +108,7 @@ public class ScanController : ManagementControllerBase
                 targetEntityType,
                 createBatch: false,
                 batchName: null,
+                await BuildCaptureContextAsync(ct),
                 [new ScanUploadFilePayload(bytes, file.FileName, file.ContentType)],
                 ct);
             var draft = result.Drafts.Single();
@@ -185,6 +187,7 @@ public class ScanController : ManagementControllerBase
                 target,
                 createBatch: true,
                 name,
+                await BuildCaptureContextAsync(ct),
                 payloads.Select((payload, index) => new ScanUploadFilePayload(
                     payload.Bytes,
                     nonEmpty[index].FileName,
@@ -212,6 +215,46 @@ public class ScanController : ManagementControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    private async Task<ScanCaptureContextData> BuildCaptureContextAsync(CancellationToken ct)
+    {
+        var active = HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value)
+            ? value as ActiveAccessContext
+            : null;
+        IFormCollection? form = null;
+        if (Request.HasFormContentType)
+            form = await Request.ReadFormAsync(ct);
+
+        static int? Positive(IFormCollection? values, string key) =>
+            values is not null && int.TryParse(values[key], out var parsed) && parsed > 0
+                ? parsed
+                : null;
+        static long? PositiveLong(IFormCollection? values, string key) =>
+            values is not null && long.TryParse(values[key], out var parsed) && parsed > 0
+                ? parsed
+                : null;
+        static string? Text(IFormCollection? values, string key, int maxLength)
+        {
+            var text = values?[key].ToString().Trim();
+            return string.IsNullOrWhiteSpace(text)
+                ? null
+                : text.Length <= maxLength
+                    ? text
+                    : throw new ArgumentException($"{key} cannot exceed {maxLength} characters.");
+        }
+
+        return new ScanCaptureContextData(
+            active?.LastAuthorizedExperience ?? active?.DefaultExperience,
+            active?.AccessContextId,
+            active?.AccessRevision,
+            Positive(form, "propertyId"),
+            Positive(form, "unitId"),
+            Positive(form, "leaseManagementId"),
+            Positive(form, "tenantAccountId"),
+            Text(form, "focusedRecordKind", 80),
+            PositiveLong(form, "focusedRecordId"),
+            Text(form, "sourceLabel", 100));
     }
 
     // -------------------------------------------------------------------------
@@ -558,8 +601,19 @@ public class ScanController : ManagementControllerBase
                 CreatedAt = d.CreatedAt,
                 ReviewedAt = d.ReviewedAt,
                 ConfirmedAt = d.ConfirmedAt,
+                SourceContentSha256 = d.SourceContentSha256,
+                SourceLabel = d.SourceLabel,
+                CaptureExperience = d.CaptureExperience,
+                CaptureAccessContextId = d.CaptureAccessContextId,
+                CaptureAccessRevision = d.CaptureAccessRevision,
+                CapturePropertyId = d.CapturePropertyId,
+                CaptureUnitId = d.CaptureUnitId,
+                CaptureLeaseManagementId = d.CaptureLeaseManagementId,
+                CaptureTenantAccountId = d.CaptureTenantAccountId,
+                CaptureFocusedRecordKind = d.CaptureFocusedRecordKind,
+                CaptureFocusedRecordId = d.CaptureFocusedRecordId,
                 CreatedEntityType = d.Status == "Confirmed" && d.ConfirmedEntityId != null
-                    ? d.TargetEntityType
+                    ? d.TargetEntityType == "Lease" ? nameof(LeaseAgreement) : d.TargetEntityType
                     : null,
                 CreatedEntityId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
                     ? null
@@ -593,9 +647,10 @@ public class ScanController : ManagementControllerBase
                                     .Select(w => w.UnitId)
                                     .FirstOrDefault()
                                 : d.TargetEntityType == "Lease"
-                                    ? _db.Leases
-                                        .Where(l => l.PortfolioId == portfolioId && l.Id == d.ConfirmedEntityId)
-                                        .Select(l => (int?)l.UnitId)
+                                    ? _db.LeaseAgreements
+                                        .Where(agreement => agreement.PortfolioId == portfolioId
+                                            && agreement.Id == d.ConfirmedEntityId)
+                                        .Select(agreement => (int?)agreement.LeaseManagement!.UnitId)
                                         .FirstOrDefault()
                                     : d.TargetEntityType == "Application" || d.TargetEntityType == "RentalApplication"
                                         ? _db.RentalApplications
@@ -615,7 +670,13 @@ public class ScanController : ManagementControllerBase
                 ScanDraftResponse.ParseFields(draft.ExtractedFields),
                 draft.ModelId, draft.TokensUsed, draft.CostUsd, draft.FailureReason,
                 draft.CreatedAt, draft.ReviewedAt, draft.ConfirmedAt,
-                draft.CreatedEntityType, draft.CreatedEntityId, draft.CreatedUnitId));
+                draft.CreatedEntityType, draft.CreatedEntityId, draft.CreatedUnitId,
+                CaptureContext: new ScanCaptureContextDto(
+                    draft.CaptureExperience?.ToString(), draft.CaptureAccessContextId,
+                    draft.CaptureAccessRevision, draft.CapturePropertyId, draft.CaptureUnitId,
+                    draft.CaptureLeaseManagementId, draft.CaptureTenantAccountId,
+                    draft.CaptureFocusedRecordKind, draft.CaptureFocusedRecordId, draft.SourceLabel),
+                SourceContentSha256: draft.SourceContentSha256));
         }
 
         return new ScanDraftListResponse(items, totalCount, listQuery.NormalizedSkip, listQuery.NormalizedTake);
@@ -644,10 +705,10 @@ public class ScanController : ManagementControllerBase
                 .Where(w => w.PortfolioId == portfolioId && w.Id == entityId.Value)
                 .Select(w => w.UnitId)
                 .FirstOrDefaultAsync(ct),
-            "Lease" => await _db.Leases
+            "Lease" or nameof(LeaseAgreement) => await _db.LeaseAgreements
                 .AsNoTracking()
-                .Where(l => l.PortfolioId == portfolioId && l.Id == entityId.Value)
-                .Select(l => (int?)l.UnitId)
+                .Where(agreement => agreement.PortfolioId == portfolioId && agreement.Id == entityId.Value)
+                .Select(agreement => (int?)agreement.LeaseManagement!.UnitId)
                 .FirstOrDefaultAsync(ct),
             "Application" or "RentalApplication" => await _db.RentalApplications
                 .AsNoTracking()
@@ -672,6 +733,17 @@ public class ScanController : ManagementControllerBase
         public DateTime CreatedAt { get; init; }
         public DateTime? ReviewedAt { get; init; }
         public DateTime? ConfirmedAt { get; init; }
+        public string? SourceContentSha256 { get; init; }
+        public string? SourceLabel { get; init; }
+        public WorkspaceExperience? CaptureExperience { get; init; }
+        public int? CaptureAccessContextId { get; init; }
+        public long? CaptureAccessRevision { get; init; }
+        public int? CapturePropertyId { get; init; }
+        public int? CaptureUnitId { get; init; }
+        public int? CaptureLeaseManagementId { get; init; }
+        public int? CaptureTenantAccountId { get; init; }
+        public string? CaptureFocusedRecordKind { get; init; }
+        public long? CaptureFocusedRecordId { get; init; }
         public string? CreatedEntityType { get; init; }
         public long? CreatedEntityId { get; init; }
         public int? CreatedUnitId { get; init; }
@@ -855,6 +927,10 @@ public class ScanController : ManagementControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
 
         var result = atomicResult.Value;
         return result.Outcome switch
@@ -886,6 +962,7 @@ public class ScanController : ManagementControllerBase
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Lease" or nameof(LeaseAgreement) => Ok(new { agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };
     }

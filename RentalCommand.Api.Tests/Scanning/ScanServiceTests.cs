@@ -100,16 +100,49 @@ public class ScanServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task PrepareConfirmationAsync_LeaseTarget_IsTemporarilyUnavailable()
+    public async Task PrepareConfirmationAsync_LeaseTarget_SealsCanonicalExecutedImportChoice()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "Lease");
+        draft.SourceStoredFileId = 44;
+        draft.SourceContentSha256 = new string('a', 64);
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","monthlyRent":1250,"rentDueDay":1}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        var command = result.Command!;
+        command.SourceStoredFileId.Should().Be(44);
+        command.SourceContentSha256.Should().Be(new string('a', 64));
+        command.Target.Kind.Should().Be(ScanConfirmationTargetKind.Lease);
+        command.Target.Lease.Should().NotBeNull();
+        command.Target.Lease!.ReviewDisposition.Should().Be(LeaseScanReviewDisposition.AlreadyFullySigned);
+        command.Target.Lease.PropertyId.Should().Be(12);
+        command.Target.Lease.UnitId.Should().Be(34);
+        command.Target.Lease.LeaseManagementId.Should().Be(56);
+        command.Target.Lease.TenantAccountId.Should().Be(78);
+        command.Target.Lease.DocumentTemplateId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_RequiresExplicitSignatureDisposition()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "Lease");
 
-        var result = await _sut.PrepareConfirmationAsync(
+        var action = () => _sut.PrepareConfirmationAsync(
             PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
 
-        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.TemporarilyUnavailable);
-        result.Command.Should().BeNull();
-        result.Error.Should().Contain("temporarily unavailable");
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*AlreadyFullySigned*NeedsSignatures*");
     }
 
     [Fact]

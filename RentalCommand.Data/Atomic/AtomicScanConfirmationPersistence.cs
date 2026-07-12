@@ -75,7 +75,16 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         var currentFingerprint = ScanConfirmationDraftFingerprint.Create(
             draft.TargetEntityType,
             draft.SourceStoredFileId,
-            draft.ExtractedFields);
+            draft.ExtractedFields,
+            draft.SourceContentSha256,
+            draft.CaptureAccessContextId,
+            draft.CaptureAccessRevision,
+            draft.CapturePropertyId,
+            draft.CaptureUnitId,
+            draft.CaptureLeaseManagementId,
+            draft.CaptureTenantAccountId,
+            draft.CaptureFocusedRecordKind,
+            draft.CaptureFocusedRecordId);
         if (!string.Equals(currentFingerprint, expectedDraftFingerprint, StringComparison.Ordinal))
         {
             return Snapshot(AtomicScanDraftClaimOutcome.StalePreparation, draft);

@@ -19,4 +19,17 @@ public interface IScanUploadService
         string? batchName,
         IReadOnlyList<ScanUploadFilePayload> files,
         CancellationToken ct = default);
+
+    Task<FinalizeScanUploadResult> UploadAsync(
+        int portfolioId,
+        int userId,
+        string clientOperationId,
+        string targetEntityType,
+        bool createBatch,
+        string? batchName,
+        ScanCaptureContextData captureContext,
+        IReadOnlyList<ScanUploadFilePayload> files,
+        CancellationToken ct = default) =>
+        UploadAsync(portfolioId, userId, clientOperationId, targetEntityType, createBatch,
+            batchName, files, ct);
 }
