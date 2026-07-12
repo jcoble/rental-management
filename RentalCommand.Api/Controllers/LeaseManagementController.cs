@@ -26,6 +26,10 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.party.access.grant.v1");
     private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> RevokeAccessResultCodec =
         new("lease-management.party.access.revoke.v1");
+    private static readonly AtomicJsonResultCodec<GivePossessionResult> GivePossessionCodec =
+        new("lease-management.give-possession.v1");
+    private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
+        new("lease-management.return-possession.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
@@ -458,6 +462,111 @@ public sealed class LeaseManagementController : ManagementControllerBase
         return true;
     }
 
+    [HttpPost("{leaseManagementId:int}/give-possession")]
+    [ProducesResponseType(typeof(GivePossessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> GivePossession(int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] GivePossessionRequest request, CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity("lease-management.give-possession",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new GivePossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
+                    sessionId, accessContextId, accessRevision,
+                    $"give-possession:{portfolioId}:{leaseManagementId}:{digest}"),
+                GivePossessionCodec, ct);
+            return outcome.Value.Outcome switch
+            {
+                GivePossessionOutcome.Given or GivePossessionOutcome.AlreadyGiven
+                    when outcome.Value.PossessionGivenAtUtc.HasValue => Ok(new GivePossessionResponse(
+                        outcome.Value.LeaseManagementId, outcome.Value.UnitId,
+                        outcome.Value.PossessionGivenAtUtc.Value,
+                        outcome.Disposition != AtomicCommandDisposition.Executed)),
+                GivePossessionOutcome.UnitUnavailable => Conflict(new { error = outcome.Value.Error }),
+                GivePossessionOutcome.RelationshipNotEligible
+                    or GivePossessionOutcome.AgreementNotExecuted
+                    or GivePossessionOutcome.AccountNotOpen =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseManagementId:int}/return-possession")]
+    [ProducesResponseType(typeof(ReturnPossessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ReturnPossession(int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReturnPossessionRequest request, CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+        if (request.Parties.Any(item => item.Disposition is null)
+            || request.Accesses.Any(item => item.Disposition is null))
+        {
+            return BadRequest(new { error = "Every party and access disposition is required." });
+        }
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity("lease-management.return-possession",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new ReturnPossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
+                    sessionId, accessContextId, accessRevision, request.EffectiveOn,
+                    request.Parties.Select(item => new ReturnPossessionParty(
+                        item.LeaseManagementPartyId, item.Disposition!.Value)).ToArray(),
+                    request.Accesses.Select(item => new ReturnPossessionAccess(
+                        item.TenantUserAccessId, item.Disposition!.Value)).ToArray(),
+                    request.TurnoverReason,
+                    $"return-possession:{portfolioId}:{leaseManagementId}:{digest}"),
+                ReturnPossessionCodec, ct);
+            return outcome.Value.Outcome switch
+            {
+                ReturnPossessionOutcome.Returned
+                    when outcome.Value.TurnoverPeriodId.HasValue
+                         && outcome.Value.PossessionReturnedAtUtc.HasValue =>
+                    Ok(new ReturnPossessionResponse(outcome.Value.LeaseManagementId,
+                        outcome.Value.UnitId, outcome.Value.TurnoverPeriodId.Value,
+                        outcome.Value.PossessionReturnedAtUtc.Value,
+                        outcome.Disposition != AtomicCommandDisposition.Executed)),
+                ReturnPossessionOutcome.AlreadyReturned => Conflict(new { error = outcome.Value.Error }),
+                ReturnPossessionOutcome.TurnoverAlreadyOpen => Conflict(new { error = outcome.Value.Error }),
+                ReturnPossessionOutcome.PossessionNotGiven
+                    or ReturnPossessionOutcome.InvalidPartyDisposition
+                    or ReturnPossessionOutcome.InvalidAccessDisposition =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
     private bool TryReadAccessClaims(
         out Guid sessionId,
         out int accessContextId,
@@ -478,4 +587,29 @@ public sealed class LeaseManagementController : ManagementControllerBase
         int AccessContextId,
         long AccessRevision,
         string KeyDigest);
+
+    private bool TryPrepareCommand(string? idempotencyKey, out string? normalizedKey,
+        out Guid sessionId, out int accessContextId, out long accessRevision,
+        out IActionResult? failure)
+    {
+        normalizedKey = idempotencyKey?.Trim();
+        sessionId = default;
+        accessContextId = default;
+        accessRevision = default;
+        failure = null;
+        if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
+        {
+            failure = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            return false;
+        }
+        if (!TryReadAccessClaims(out sessionId, out accessContextId, out accessRevision))
+        {
+            failure = Forbid();
+            return false;
+        }
+        return true;
+    }
+
+    private static string Digest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
