@@ -129,7 +129,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
     public DbSet<ApplicationFinancialAccount> ApplicationFinancialAccounts => Set<ApplicationFinancialAccount>();
     public DbSet<ApplicationFinancialEntry> ApplicationFinancialEntries => Set<ApplicationFinancialEntry>();
-    public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
+    public DbSet<ApplicantScreening> ApplicantScreenings => Set<ApplicantScreening>();
+    public DbSet<ApplicantScreeningMilestone> ApplicantScreeningMilestones => Set<ApplicantScreeningMilestone>();
     public DbSet<AdverseActionNotice> AdverseActionNotices => Set<AdverseActionNotice>();
 
     // Native e-signature (envelope + per-signer tokens + append-only audit trail)
@@ -1090,6 +1091,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<RentalApplication>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Email).HasMaxLength(200);
@@ -1134,25 +1136,59 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
-        modelBuilder.Entity<ScreeningResult>(entity =>
+        modelBuilder.Entity<ApplicantScreening>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.CreditScoreBand).HasMaxLength(40);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.ProviderKey).HasMaxLength(80);
+            entity.Property(e => e.ProviderDisplayName).IsRequired().HasMaxLength(160);
             entity.Property(e => e.ProviderReference).HasMaxLength(200);
-            // Raw provider response, stored as Postgres jsonb.
-            entity.Property(e => e.RawResultJson).HasColumnType("jsonb");
-            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.ProviderHostedUrl).HasMaxLength(2000);
+            entity.Property(e => e.OperationKey).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Mode).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
-            entity.Property(e => e.Recommendation).HasConversion<string>().HasMaxLength(40);
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.ApplicationId);
+            entity.Property(e => e.Decision).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.DecisionReason).HasMaxLength(1000);
+            entity.Property(e => e.CreditReportingAgencyName).HasMaxLength(300);
+            entity.Property(e => e.CreditReportingAgencyAddress).HasMaxLength(500);
+            entity.Property(e => e.CreditReportingAgencyPhone).HasMaxLength(80);
+            entity.HasIndex(e => new { e.PortfolioId, e.ApplicationId, e.OperationKey }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.ApplicationId, e.LastStatusAtUtc });
+            entity.HasIndex(e => new { e.ProviderKey, e.ProviderReference })
+                .IsUnique()
+                .HasFilter("\"ProviderKey\" IS NOT NULL AND \"ProviderReference\" IS NOT NULL");
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Application)
+                .WithMany(e => e.Screenings)
+                .HasForeignKey(e => new { e.ApplicationId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.CreatedByUser)
                 .WithMany()
-                .HasForeignKey(e => e.ApplicationId)
+                .HasForeignKey(e => e.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.DecisionRecordedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.DecisionRecordedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ApplicantScreeningMilestone>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Source).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.DeliveryId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => new { e.Source, e.DeliveryId }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.ApplicantScreeningId, e.OccurredAtUtc });
+            entity.HasOne(e => e.ApplicantScreening)
+                .WithMany(e => e.Milestones)
+                .HasForeignKey(e => new { e.ApplicantScreeningId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -2468,7 +2504,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
 
         // Dependents of RentalApplication (RentalApplication has `DeletedAt == null`); nav is `Application`.
         modelBuilder.Entity<AdverseActionNotice>().HasQueryFilter(e => e.Application!.DeletedAt == null);
-        modelBuilder.Entity<ScreeningResult>().HasQueryFilter(e => e.Application!.DeletedAt == null);
+        modelBuilder.Entity<ApplicantScreening>().HasQueryFilter(e => e.Application!.DeletedAt == null);
+        modelBuilder.Entity<ApplicantScreeningMilestone>().HasQueryFilter(e => e.ApplicantScreening!.Application!.DeletedAt == null);
         // Application financial accounts and entries are immutable accounting history. They remain
         // queryable after the mutable application is soft-deleted; every reader must scope them by
         // PortfolioId and must not recover deleted applicant PII through the application navigation.

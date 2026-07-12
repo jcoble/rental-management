@@ -309,22 +309,17 @@ public class ApplicationsController : ManagementControllerBase
             && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
     }
 
-    /// <summary>
-    /// Runs a background/credit screening (FCRA) for the application. Requires recorded FCRA consent
-    /// (400 otherwise). The screening provider is gated: when no key is configured this returns 503
-    /// "screening not configured" and records nothing. On success a screening result is created and the
-    /// application moves to UnderReview.
-    /// </summary>
-    [HttpPost("{id:int}/screen")]
-    [ProducesResponseType(typeof(ScreeningResultResponse), StatusCodes.Status200OK)]
+    [HttpPost("{id:int}/screening/integrated")]
+    [ProducesResponseType(typeof(ApplicantScreeningResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> Screen(int id, CancellationToken ct)
+    public async Task<IActionResult> StartIntegratedScreening(
+        int id, [FromBody] StartIntegratedScreeningRequest body, CancellationToken ct)
     {
         try
         {
-            var result = await _screening.RequestScreeningAsync(GetPortfolioId(), id, GetUserId(), ct);
+            var result = await _screening.StartIntegratedAsync(GetPortfolioId(), id, GetUserId(), body, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (ConsentRequiredException ex)
@@ -335,15 +330,67 @@ public class ApplicationsController : ManagementControllerBase
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
         }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
-    /// <summary>Returns the screening result(s) recorded for the application, newest first.</summary>
+    [HttpPost("{id:int}/screening/external")]
+    [ProducesResponseType(typeof(ApplicantScreeningResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> TrackExternalScreening(
+        int id, [FromBody] TrackExternalScreeningRequest body, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _screening.TrackExternalAsync(GetPortfolioId(), id, GetUserId(), body, ct);
+            return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPatch("{id:int}/screening/{screeningId:int}/external")]
+    [ProducesResponseType(typeof(ApplicantScreeningResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> UpdateExternalScreening(
+        int id, int screeningId, [FromBody] UpdateExternalScreeningRequest body, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _screening.UpdateExternalAsync(GetPortfolioId(), id, screeningId, body, ct);
+            return result == null ? NotFound(new { error = "External screening not found" }) : Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("{id:int}/screening/{screeningId:int}/decision")]
+    [ProducesResponseType(typeof(ApplicantScreeningResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RecordScreeningDecision(
+        int id, int screeningId, [FromBody] RecordScreeningDecisionRequest body, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _screening.RecordDecisionAsync(
+                GetPortfolioId(), id, screeningId, GetUserId(), body, ct);
+            return result == null ? NotFound(new { error = "Screening not found" }) : Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [HttpGet("{id:int}/screening")]
-    [ProducesResponseType(typeof(IReadOnlyList<ScreeningResultResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ScreeningWorkspaceResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetScreening(int id, CancellationToken ct)
     {
-        var results = await _screening.GetScreeningResultsAsync(GetPortfolioId(), id, ct);
+        var results = await _screening.GetWorkspaceAsync(GetPortfolioId(), id, ct);
         return results == null ? NotFound(new { error = "Application not found" }) : Ok(results);
     }
 
@@ -357,9 +404,16 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> GenerateAdverseAction(
         int id, [FromBody] GenerateAdverseActionRequest body, CancellationToken ct)
     {
-        var result = await _screening.GenerateAdverseActionAsync(
-            GetPortfolioId(), id, GetUserId(), body, ct);
-        return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
+        try
+        {
+            var result = await _screening.GenerateAdverseActionAsync(
+                GetPortfolioId(), id, GetUserId(), body, ct);
+            return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>

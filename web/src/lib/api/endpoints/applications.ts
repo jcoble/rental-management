@@ -89,23 +89,60 @@ export interface UpdateApplicationRequest {
 }
 
 /** Outcome of a screening request. */
-export type ScreeningStatus = 'Requested' | 'Completed' | 'Failed';
+export type ScreeningStatus =
+	| 'Created'
+	| 'AwaitingProvider'
+	| 'AwaitingApplicant'
+	| 'InProgress'
+	| 'Completed'
+	| 'Failed'
+	| 'Cancelled';
 
 /** Screening recommendation (string enum, matches the API). */
 export type ScreeningRecommendation = 'Accept' | 'Conditional' | 'Decline';
 
 /** Result of a gated tenant-screening run against an application. */
-export interface ScreeningResultResponse {
+export interface ApplicantScreeningResponse {
 	id: number;
 	applicationId: number;
+	mode: 'Integrated' | 'External';
 	status: ScreeningStatus;
-	creditScoreBand: string | null;
-	hasCriminalRecord: boolean;
-	hasEvictionRecord: boolean;
-	recommendation: ScreeningRecommendation | null;
+	providerDisplayName: string;
 	providerReference: string | null;
-	requestedAtUtc: string | null;
+	providerHostedUrl: string | null;
+	consentConfirmed: boolean;
+	invitedAtUtc: string | null;
+	applicantSubmittedAtUtc: string | null;
 	completedAtUtc: string | null;
+	failedAtUtc: string | null;
+	lastStatusAtUtc: string;
+	decision: ScreeningRecommendation | null;
+	consumerReportUsedForDecision: boolean;
+}
+
+export interface ScreeningWorkspaceResponse {
+	integratedProvider: {
+		key: string | null;
+		displayName: string | null;
+		isConfigured: boolean;
+		createsHostedInvitation: boolean;
+		supportsStatusWebhooks: boolean;
+		suppliesAdverseActionAgency: boolean;
+		supportsApplicantPaidOrders: boolean;
+		supportsLandlordPaidOrders: boolean;
+	};
+	screenings: ApplicantScreeningResponse[];
+}
+
+export interface TrackExternalScreeningRequest {
+	operationKey: string;
+	providerDisplayName: string;
+	providerReference?: string | null;
+	providerHostedUrl?: string | null;
+	creditReportingAgencyName?: string | null;
+	creditReportingAgencyAddress?: string | null;
+	creditReportingAgencyPhone?: string | null;
+	status: ScreeningStatus;
 }
 
 /** Body for recording an immutable fee collection in the application's pre-tenancy account. */
@@ -167,10 +204,20 @@ export const applications = {
 		api.post<ApplicationResponse>(`/applications/${id}/decline`, { reason: reason ?? null }),
 	withdraw: (id: number) => api.post<ApplicationResponse>(`/applications/${id}/withdraw`),
 	createLink: () => api.post<ApplicationLinkResult>('/applications/link'),
-	/** Run a (gated) tenant screening. Requires FCRA consent on the application. */
-	screen: (id: number) => api.post<ScreeningResultResponse>(`/applications/${id}/screen`),
-	/** Prior screening results for an application, newest first. */
-	screening: (id: number) => api.get<ScreeningResultResponse[]>(`/applications/${id}/screening`),
+	startIntegratedScreening: (id: number, operationKey: string) =>
+		api.post<ApplicantScreeningResponse>(`/applications/${id}/screening/integrated`, { operationKey }),
+	trackExternalScreening: (id: number, body: TrackExternalScreeningRequest) =>
+		api.post<ApplicantScreeningResponse>(`/applications/${id}/screening/external`, body),
+	updateExternalScreening: (
+		id: number,
+		screeningId: number,
+		body: { operationKey: string; status: ScreeningStatus; occurredAtUtc?: string }
+	) =>
+		api.patch<ApplicantScreeningResponse>(
+			`/applications/${id}/screening/${screeningId}/external`,
+			body
+		),
+	screening: (id: number) => api.get<ScreeningWorkspaceResponse>(`/applications/${id}/screening`),
 	/** Record a fee collection idempotently in the application's pre-tenancy account. */
 	recordFee: (id: number, operationKey: string, body: RecordApplicationFeeRequest) =>
 		fetchApi<ApplicationFinanceMutationResponse>(`/applications/${id}/fee`, {

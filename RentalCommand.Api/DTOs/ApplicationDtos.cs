@@ -420,33 +420,94 @@ public class ApplicationLinkResult
 // Screening (FCRA) shapes
 // ---------------------------------------------------------------------------
 
-/// <summary>Wire shape for a persisted <see cref="ScreeningResult"/> returned to the landlord.</summary>
-public class ScreeningResultResponse
+public sealed class ScreeningProviderCapabilitiesResponse
 {
-    public int Id { get; set; }
-    public int ApplicationId { get; set; }
-    public string Status { get; set; } = string.Empty;
-    public string? CreditScoreBand { get; set; }
-    public bool? HasCriminalRecord { get; set; }
-    public bool? HasEvictionRecord { get; set; }
-    public string? Recommendation { get; set; }
-    public string? ProviderReference { get; set; }
-    public DateTime RequestedAtUtc { get; set; }
-    public DateTime? CompletedAtUtc { get; set; }
+    public string? Key { get; init; }
+    public string? DisplayName { get; init; }
+    public bool IsConfigured { get; init; }
+    public bool CreatesHostedInvitation { get; init; }
+    public bool SupportsStatusWebhooks { get; init; }
+    public bool SuppliesAdverseActionAgency { get; init; }
+    public bool SupportsApplicantPaidOrders { get; init; }
+    public bool SupportsLandlordPaidOrders { get; init; }
+}
 
-    public static ScreeningResultResponse FromEntity(ScreeningResult e) => new()
+public sealed class ApplicantScreeningResponse
+{
+    public int Id { get; init; }
+    public int ApplicationId { get; init; }
+    public ScreeningMode Mode { get; init; }
+    public ApplicantScreeningStatus Status { get; init; }
+    public string ProviderDisplayName { get; init; } = string.Empty;
+    public string? ProviderReference { get; init; }
+    public string? ProviderHostedUrl { get; init; }
+    public bool ConsentConfirmed { get; init; }
+    public DateTime? InvitedAtUtc { get; init; }
+    public DateTime? ApplicantSubmittedAtUtc { get; init; }
+    public DateTime? CompletedAtUtc { get; init; }
+    public DateTime? FailedAtUtc { get; init; }
+    public DateTime LastStatusAtUtc { get; init; }
+    public ScreeningDecision? Decision { get; init; }
+    public bool ConsumerReportUsedForDecision { get; init; }
+
+    public static ApplicantScreeningResponse FromEntity(ApplicantScreening e) => new()
     {
         Id = e.Id,
         ApplicationId = e.ApplicationId,
-        Status = e.Status.ToString(),
-        CreditScoreBand = e.CreditScoreBand,
-        HasCriminalRecord = e.HasCriminalRecord,
-        HasEvictionRecord = e.HasEvictionRecord,
-        Recommendation = e.Recommendation?.ToString(),
+        Mode = e.Mode,
+        Status = e.Status,
+        ProviderDisplayName = e.ProviderDisplayName,
         ProviderReference = e.ProviderReference,
-        RequestedAtUtc = e.RequestedAtUtc,
+        ProviderHostedUrl = e.ProviderHostedUrl,
+        ConsentConfirmed = e.ConsentConfirmed,
+        InvitedAtUtc = e.InvitedAtUtc,
+        ApplicantSubmittedAtUtc = e.ApplicantSubmittedAtUtc,
         CompletedAtUtc = e.CompletedAtUtc,
+        FailedAtUtc = e.FailedAtUtc,
+        LastStatusAtUtc = e.LastStatusAtUtc,
+        Decision = e.Decision,
+        ConsumerReportUsedForDecision = e.ConsumerReportUsedForDecision,
     };
+}
+
+public sealed class ScreeningWorkspaceResponse
+{
+    public ScreeningProviderCapabilitiesResponse IntegratedProvider { get; init; } = new();
+    public IReadOnlyList<ApplicantScreeningResponse> Screenings { get; init; } = [];
+}
+
+public sealed class StartIntegratedScreeningRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+}
+
+public sealed class TrackExternalScreeningRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+    [Required, MaxLength(160)] public string ProviderDisplayName { get; init; } = string.Empty;
+    [MaxLength(200)] public string? ProviderReference { get; init; }
+    [Url, MaxLength(2000)] public string? ProviderHostedUrl { get; init; }
+    [MaxLength(300)] public string? CreditReportingAgencyName { get; init; }
+    [MaxLength(500)] public string? CreditReportingAgencyAddress { get; init; }
+    [MaxLength(80)] public string? CreditReportingAgencyPhone { get; init; }
+    public ApplicantScreeningStatus Status { get; init; } = ApplicantScreeningStatus.InProgress;
+}
+
+public sealed class UpdateExternalScreeningRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+    public ApplicantScreeningStatus Status { get; init; }
+    [MaxLength(200)] public string? ProviderReference { get; init; }
+    [Url, MaxLength(2000)] public string? ProviderHostedUrl { get; init; }
+    public DateTime? OccurredAtUtc { get; init; }
+}
+
+public sealed class RecordScreeningDecisionRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+    public ScreeningDecision? Decision { get; init; }
+    [MaxLength(1000)] public string? Reason { get; init; }
+    public bool ConsumerReportUsed { get; init; }
 }
 
 /// <summary>Body for <c>POST /api/v1/applications/{id}/adverse-action</c>.</summary>

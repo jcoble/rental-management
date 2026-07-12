@@ -9,18 +9,13 @@ namespace RentalCommand.Api.Services.Screening;
 /// </summary>
 public sealed class DisabledScreeningProvider : IScreeningProvider
 {
-    private readonly ILogger<DisabledScreeningProvider> _logger;
+    public ScreeningProviderDescriptor Descriptor { get; } = new(
+        "unconfigured",
+        "Integrated screening",
+        false,
+        new ScreeningProviderCapabilities(false, false, false, false, false));
 
-    public DisabledScreeningProvider(ILogger<DisabledScreeningProvider> logger)
-    {
-        _logger = logger;
-    }
-
-    public bool IsConfigured => false;
-
-    public Task<ScreeningProviderResult> RequestScreeningAsync(ScreeningRequest request, CancellationToken ct = default)
-    {
-        _logger.LogDebug("Screening is not configured — RequestScreeningAsync is a no-op.");
-        return Task.FromResult(ScreeningProviderResult.NotConfigured());
-    }
+    public Task<ScreeningInvitationResult> CreateInvitationAsync(
+        ScreeningInvitationRequest request, CancellationToken ct = default) =>
+        throw new InvalidOperationException("No integrated screening provider adapter is configured.");
 }

@@ -179,10 +179,12 @@ public sealed class SandboxService : ISandboxService
         await _db.Conversations.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 3. Tenant-screening chain (AdverseActionNotice / ScreeningResult → RentalApplication).
+        // 3. Tenant-screening chain (AdverseActionNotice / ApplicantScreening → RentalApplication).
         await _db.AdverseActionNotices.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.ScreeningResults.IgnoreQueryFilters()
+        await _db.ApplicantScreeningMilestones.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.ApplicantScreenings.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.RentalApplications.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
