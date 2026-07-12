@@ -24,6 +24,8 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         new("lease-agreement.successor-draft.create.v1");
     private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
         new("lease-agreement.issue.v1");
+    private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
+        new("lease-agreement.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly string _webBaseUrl;
@@ -150,6 +152,31 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseAgreementId:int}/void")]
+    public async Task<IActionResult> Void(
+        int leaseManagementId,
+        int leaseAgreementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] VoidLegalArtifactRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        var command = new VoidLeaseAgreementCommand(envelope.PortfolioId, leaseManagementId,
+            leaseAgreementId, request.VoidReasonCode, request.VoidNote, envelope.UserId,
+            envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
+            $"agreement-void:{envelope.PortfolioId}:{leaseAgreementId}:{envelope.KeyDigest}");
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity("lease-agreement.void",
+                $"{envelope.PortfolioId}:{leaseAgreementId}:{envelope.KeyDigest}"), command, VoidCodec, ct);
+            return outcome.Value.Outcome == VoidLegalArtifactOutcome.Voided
+                ? Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed })
+                : Conflict(new { error = outcome.Value.Error });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
     }
 
     private async Task<IActionResult> Execute<TCommand>(

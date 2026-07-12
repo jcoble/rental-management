@@ -104,7 +104,9 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
             var executedBytes = _executedPdf.Generate(data, contentSha256: string.Empty);
             var sha256 = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
-            var fileName = $"lease-agreement-{sigRequest.LeaseAgreementId}-executed.pdf";
+            var fileName = sigRequest.LeaseAgreementId.HasValue
+                ? $"lease-agreement-{sigRequest.LeaseAgreementId}-executed.pdf"
+                : $"lease-addendum-{sigRequest.LeaseAddendumId}-executed.pdf";
             var admission = await _pendingUploads.PrepareAsync(
                 sigRequest.PortfolioId,
                 actorScopeId: 0,
@@ -167,16 +169,29 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         DateTime now,
         CancellationToken ct)
     {
-        var agreement = await _db.LeaseAgreements.AsNoTracking()
+        var agreement = sigRequest.LeaseAgreementId.HasValue
+            ? await _db.LeaseAgreements.AsNoTracking()
             .Include(candidate => candidate.LeaseManagement!).ThenInclude(relationship => relationship.Property)
             .Include(candidate => candidate.LeaseManagement!).ThenInclude(relationship => relationship.Unit)
             .SingleOrDefaultAsync(
                 candidate => candidate.Id == sigRequest.LeaseAgreementId
                     && candidate.PortfolioId == sigRequest.PortfolioId,
-                ct);
+                ct)
+            : null;
+        var addendum = sigRequest.LeaseAddendumId.HasValue
+            ? await _db.LeaseAddenda.AsNoTracking()
+                .Include(candidate => candidate.BaseAgreement)
+                .Include(candidate => candidate.LeaseManagement!).ThenInclude(relationship => relationship.Property)
+                .Include(candidate => candidate.LeaseManagement!).ThenInclude(relationship => relationship.Unit)
+                .SingleOrDefaultAsync(candidate => candidate.Id == sigRequest.LeaseAddendumId
+                    && candidate.PortfolioId == sigRequest.PortfolioId, ct)
+            : null;
+        agreement ??= addendum?.BaseAgreement;
         if (agreement?.LeaseManagement?.Property is null)
         {
-            return null;
+            // BaseAgreement and Addendum share LeaseManagement, but an AsNoTracking include does not
+            // fix up the base Agreement's relationship. Use the explicitly loaded Addendum parent.
+            if (addendum?.LeaseManagement?.Property is null) return null;
         }
 
         var portfolio = await _db.Portfolios.AsNoTracking()
@@ -184,14 +199,22 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
             ? portfolio.ManagementCompanyName
             : portfolio?.Name ?? "Landlord";
-        var primarySigner = await _db.LeaseAgreementSigners.AsNoTracking()
-            .Where(signer => signer.LeaseAgreementId == agreement.Id
-                && signer.PortfolioId == agreement.PortfolioId
-                && signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
-            .Select(signer => new { signer.NameSnapshot, signer.EmailSnapshot })
-            .FirstOrDefaultAsync(ct);
+        var primarySigner = sigRequest.LeaseAgreementId.HasValue
+            ? await _db.LeaseAgreementSigners.AsNoTracking()
+                .Where(signer => signer.LeaseAgreementId == agreement!.Id
+                    && signer.PortfolioId == agreement.PortfolioId
+                    && signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
+                .Select(signer => new { signer.NameSnapshot, signer.EmailSnapshot })
+                .FirstOrDefaultAsync(ct)
+            : await _db.LeaseAddendumSigners.AsNoTracking()
+                .Where(signer => signer.LeaseAddendumId == addendum!.Id
+                    && signer.PortfolioId == addendum.PortfolioId
+                    && signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
+                .Select(signer => new { signer.NameSnapshot, signer.EmailSnapshot })
+                .FirstOrDefaultAsync(ct);
         var tenantName = primarySigner?.NameSnapshot ?? string.Empty;
-        var property = agreement.LeaseManagement.Property;
+        var relationship = addendum?.LeaseManagement ?? agreement!.LeaseManagement!;
+        var property = relationship.Property!;
         var propertyAddress = string.Join(", ", new[]
             {
                 property.AddressLine1,
@@ -209,10 +232,11 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         // is never tracked or persisted; every authoritative term comes from LeaseAgreement.
         var presentation = new Lease
         {
-            LeaseNumber = agreement.AgreementNumber,
-            StartDate = agreement.TermStartOn.ToDateTime(TimeOnly.MinValue),
-            EndDate = (agreement.TermEndOn ?? agreement.TermStartOn).ToDateTime(TimeOnly.MinValue),
-            MonthlyRent = agreement.BaseRentAmount,
+            LeaseNumber = addendum?.AddendumNumber ?? agreement!.AgreementNumber,
+            StartDate = (addendum?.EffectiveFromOn ?? agreement!.TermStartOn).ToDateTime(TimeOnly.MinValue),
+            EndDate = (addendum?.EffectiveThroughOn ?? agreement!.TermEndOn ?? agreement.TermStartOn)
+                .ToDateTime(TimeOnly.MinValue),
+            MonthlyRent = agreement!.BaseRentAmount,
             SecurityDeposit = agreement.SecurityDepositObligation,
             LateFeeAmount = agreement.LateFeeAmount,
             RentDueDay = agreement.RentDueDay,
@@ -227,7 +251,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                 TenantName = tenantName,
                 PropertyName = property?.Name ?? string.Empty,
                 PropertyAddress = propertyAddress,
-                UnitNumber = agreement.LeaseManagement.Unit?.UnitNumber,
+                UnitNumber = relationship.Unit?.UnitNumber,
                 State = property?.State ?? string.Empty,
                 YearBuilt = property?.YearBuilt,
             },
@@ -235,7 +259,8 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                 sigRequest.PortfolioId, signerRows, tenantName, primarySigner?.EmailSnapshot, ct),
             LandlordName = landlordName,
             EnvelopeId = sigRequest.PublicId.ToString("D"),
-            DocumentName = sigRequest.IssuedArtifact?.FileName ?? $"agreement-{agreement.Id}.pdf",
+            DocumentName = sigRequest.IssuedArtifact?.FileName
+                ?? (addendum is null ? $"agreement-{agreement.Id}.pdf" : $"addendum-{addendum.Id}.pdf"),
             OriginalDocumentBytes = originalDocumentBytes,
             TemplateFieldSnapshotJson = null,
             CompletedAtUtc = now,

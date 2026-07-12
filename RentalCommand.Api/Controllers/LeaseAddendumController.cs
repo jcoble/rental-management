@@ -1,0 +1,198 @@
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Esign;
+using RentalCommand.Core.Leasing;
+using RentalCommand.Data;
+
+namespace RentalCommand.Api.Controllers;
+
+[ApiController]
+[Route("api/v1/lease-managements/{leaseManagementId:int}/addenda")]
+[Produces("application/json")]
+public sealed class LeaseAddendumController : ManagementControllerBase
+{
+    private static readonly AtomicJsonResultCodec<LeaseAddendumDraftMutationResult> DraftCodec =
+        new("lease-addendum.draft.mutation.v1");
+    private static readonly AtomicJsonResultCodec<IssueLeaseAddendumResult> IssueCodec =
+        new("lease-addendum.issue.v1");
+    private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
+        new("lease-addendum.void.v1");
+    private readonly IAtomicUnitOfWork _atomic;
+    private readonly RentalCommandDbContext _db;
+    private readonly string _webBaseUrl;
+
+    public LeaseAddendumController(IAtomicUnitOfWork atomic, RentalCommandDbContext db, IConfiguration configuration)
+    {
+        _atomic = atomic;
+        _db = db;
+        _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create(int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] CreateLeaseAddendumDraftRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
+        if (!TryInputs(request, out var signers, out var effects, out error)) return error!;
+        var command = new CreateLeaseAddendumDraftCommand(envelope.PortfolioId, leaseManagementId,
+            request.BaseAgreementId, request.AddendumNumber, request.Purpose!.Value,
+            request.EffectiveFromOn, request.EffectiveThroughOn, request.TermsSchemaVersion,
+            request.TermsPayload.GetRawText(), request.DocumentTemplateId, request.DocumentTemplateVersion,
+            signers!, effects!, envelope.UserId, envelope.SessionId, envelope.AccessContextId,
+            envelope.AccessRevision, $"addendum-create:{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}");
+        return await ExecuteDraft("lease-addendum.draft.create",
+            $"{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}", command,
+            StatusCodes.Status201Created, ct);
+    }
+
+    [HttpPatch("{leaseAddendumId:int}/draft")]
+    public async Task<IActionResult> Edit(int leaseManagementId, int leaseAddendumId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] EditLeaseAddendumDraftRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
+        if (!TryInputs(request, out var signers, out var effects, out error)) return error!;
+        var command = new EditLeaseAddendumDraftCommand(envelope.PortfolioId, leaseManagementId,
+            leaseAddendumId, request.DraftRevision, request.AddendumNumber, request.Purpose!.Value,
+            request.EffectiveFromOn, request.EffectiveThroughOn, request.TermsSchemaVersion,
+            request.TermsPayload.GetRawText(), request.DocumentTemplateId, request.DocumentTemplateVersion,
+            signers!, effects!, envelope.UserId, envelope.SessionId, envelope.AccessContextId,
+            envelope.AccessRevision, $"addendum-edit:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}");
+        return await ExecuteDraft("lease-addendum.draft.edit",
+            $"{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}", command,
+            StatusCodes.Status200OK, ct);
+    }
+
+    [HttpPost("{sourceAddendumId:int}/correct")]
+    public async Task<IActionResult> Correct(int leaseManagementId, int sourceAddendumId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] CorrectLeaseAddendumRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
+        var command = new CorrectLeaseAddendumDraftCommand(envelope.PortfolioId, leaseManagementId,
+            sourceAddendumId, request.SupersessionEffectiveOn, envelope.UserId, envelope.SessionId,
+            envelope.AccessContextId, envelope.AccessRevision,
+            $"addendum-correct:{envelope.PortfolioId}:{sourceAddendumId}:{envelope.KeyDigest}");
+        return await ExecuteDraft("lease-addendum.draft.correct",
+            $"{envelope.PortfolioId}:{sourceAddendumId}:{envelope.KeyDigest}", command,
+            StatusCodes.Status201Created, ct);
+    }
+
+    [HttpPost("{leaseAddendumId:int}/issue")]
+    public async Task<IActionResult> Issue(int leaseManagementId, int leaseAddendumId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] IssueLeaseAddendumRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
+        var signerIds = await _db.LeaseAddendumSigners.AsNoTracking()
+            .Where(item => item.PortfolioId == envelope.PortfolioId && item.LeaseAddendumId == leaseAddendumId)
+            .OrderBy(item => item.SigningOrder).Select(item => item.Id).ToArrayAsync(ct);
+        if (signerIds.Length == 0) return UnprocessableEntity(new { error = "The Addendum has no signer snapshot." });
+        var command = new IssueLeaseAddendumCommand(request.PendingUploadId, request.RequestFingerprint,
+            envelope.PortfolioId, leaseManagementId, leaseAddendumId, request.DraftRevision,
+            $"addendum-issue:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}", request.Subject,
+            request.StorageKey, request.FileName, request.FileSize, request.ContentSha256.ToLowerInvariant(),
+            _webBaseUrl, signerIds.Select(id => new NativeEsignAddendumSignerCommand(id)).ToArray(),
+            envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity("lease-addendum.issue",
+                $"{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}"), command, IssueCodec, ct);
+            return StatusCode(StatusCodes.Status201Created, new IssueLeaseAddendumResponse(outcome.Value.PublicId,
+                outcome.Value.LeaseManagementId, outcome.Value.LeaseAddendumId, outcome.Value.SignatureRequestId,
+                outcome.Value.IssuedArtifactId, outcome.Disposition == AtomicCommandDisposition.Replayed));
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseAddendumId:int}/void")]
+    public async Task<IActionResult> Void(int leaseManagementId, int leaseAddendumId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] VoidLegalArtifactRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
+        var command = new VoidLeaseAddendumCommand(envelope.PortfolioId, leaseManagementId,
+            leaseAddendumId, request.VoidReasonCode, request.VoidNote, envelope.UserId,
+            envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
+            $"addendum-void:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}");
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity("lease-addendum.void",
+                $"{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}"), command, VoidCodec, ct);
+            return outcome.Value.Outcome == VoidLegalArtifactOutcome.Voided
+                ? Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed })
+                : Conflict(new { error = outcome.Value.Error });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    private async Task<IActionResult> ExecuteDraft<TCommand>(string type, string id, TCommand command,
+        int successStatus, CancellationToken ct) where TCommand : notnull, IAtomicCommandData
+    {
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(type, id), command, DraftCodec, ct);
+            return outcome.Value.Outcome == LeaseAddendumDraftMutationOutcome.Applied
+                ? StatusCode(successStatus, LeaseAddendumDraftMutationResponse.From(outcome.Value,
+                    outcome.Disposition == AtomicCommandDisposition.Replayed))
+                : outcome.Value.Outcome is LeaseAddendumDraftMutationOutcome.StaleDraftRevision
+                    or LeaseAddendumDraftMutationOutcome.DraftNotEditable
+                    or LeaseAddendumDraftMutationOutcome.SourceAddendumNotEligible
+                    ? Conflict(new { error = outcome.Value.Error })
+                    : UnprocessableEntity(new { error = outcome.Value.Error });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+        catch (JsonException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    private bool TryInputs(CreateLeaseAddendumDraftRequest request,
+        out LeaseAddendumDraftSignerInput[]? signers, out LeaseAddendumFinancialEffectInput[]? effects,
+        out IActionResult? error)
+    {
+        signers = null; effects = null; error = null;
+        if (request.Purpose is null || request.TermsPayload.ValueKind != JsonValueKind.Object
+            || request.Signers.Any(item => item.SignerRole is null)
+            || request.FinancialEffects.Any(item => item.EffectType is null))
+        {
+            error = BadRequest(new { error = "Purpose, object TermsPayload, signer roles, and effect types are required." });
+            return false;
+        }
+        signers = request.Signers.Select(item => new LeaseAddendumDraftSignerInput(
+            item.LeaseManagementPartyId, item.TenantId, item.SignerRole!.Value, item.NameSnapshot,
+            item.EmailSnapshot, item.SigningOrder, item.IsRequired)).ToArray();
+        effects = request.FinancialEffects.Select(item => new LeaseAddendumFinancialEffectInput(
+            item.EffectType!.Value, item.Amount, item.Currency, item.ChargeCode, item.EffectiveFromOn,
+            item.EffectiveThroughOn, item.DueOn, item.Description)).ToArray();
+        return true;
+    }
+
+    private bool TryEnvelope(string? key, out Envelope envelope, out IActionResult? error)
+    {
+        envelope = default; error = null;
+        var normalized = key?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
+        { error = BadRequest(new { error = "A valid Idempotency-Key is required." }); return false; }
+        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sid)
+            || !int.TryParse(User.FindFirstValue("ctx"), out var context)
+            || !long.TryParse(User.FindFirstValue("ar"), out var revision))
+        { error = Forbid(); return false; }
+        envelope = new(GetPortfolioId(), GetUserId(), sid, context, revision,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant());
+        return true;
+    }
+
+    private readonly record struct Envelope(int PortfolioId, int UserId, Guid SessionId,
+        int AccessContextId, long AccessRevision, string KeyDigest);
+}
