@@ -3,26 +3,22 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import {
 		accounting,
 		downloadScheduleECsv,
 		type ReconciledAccountingTransaction
 	} from '$lib/api/endpoints/accounting';
-	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { units } from '$lib/api/endpoints/units';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
+	import type { Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { PAYMENT_METHODS } from '$lib/constants/payments';
-	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
+	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import {
 		EXPENSE_CATEGORIES,
 		EXPENSE_CATEGORY_OPTIONS,
@@ -37,7 +33,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import { Pencil, Trash2, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
+	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -49,7 +45,6 @@
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
-	import { formatLeasePickerLabel } from '$lib/accounting/payment-detail-display';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -87,7 +82,6 @@
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
 	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
-	let transactionDeleteTarget = $state<AccountingTransaction | null>(null);
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
 
@@ -162,40 +156,9 @@
 	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
 	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
 	const accountingReportsQuery = createQuery(() => ({ queryKey: ['accounting-reports', portfolioId], queryFn: () => accounting.reports() }));
-	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
 	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
-
-	// --- Payment form/dialog ---
-	// amountPaid is the cash-collected-so-far split that only applies to a Partial payment; blank for
-	// every other status (dropped on submit so the server clears it).
-	const emptyPayment = { leaseId: '', amount: '', amountPaid: '', dueDate: '', paymentType: 'Rent', status: 'Scheduled' };
-	let showPaymentForm = $state(false);
-	let editingPaymentId = $state<number | null>(null);
-	let paymentForm = $state({ ...emptyPayment });
-	let paymentErrors = $state<Record<string, string>>({});
-	let paymentDeleteTarget = $state<Payment | null>(null);
-
-	function clearPaymentError(field: string) {
-		if (!paymentErrors[field]) return;
-		const next = { ...paymentErrors };
-		delete next[field];
-		paymentErrors = next;
-	}
-
-	$effect(() => {
-		if (paymentForm.leaseId) clearPaymentError('leaseId');
-	});
-	$effect(() => {
-		if (paymentForm.amount) clearPaymentError('amount');
-	});
-	$effect(() => {
-		if (paymentForm.dueDate) clearPaymentError('dueDate');
-	});
-	$effect(() => {
-		if (paymentForm.amountPaid) clearPaymentError('amountPaid');
-	});
 
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
@@ -204,131 +167,12 @@
 		queryClient.invalidateQueries({ queryKey: ['accounting-reports', portfolioId] });
 	}
 
-	const savePaymentMutation = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number | null; data: Record<string, unknown> }) =>
-			id == null ? payments.create(data) : payments.update(id, data),
-		onSuccess: (_r, vars) => {
-			showSuccess(vars.id == null ? 'Payment created.' : 'Payment updated.');
-			closePaymentForm();
-			invalidatePayments();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	// --- Mark Paid modal ---
-	// Capture how the money arrived (method / reference) + when, with smart defaults so one click
-	// is still fast: date = today, method = the last method this user picked (remembered in
-	// localStorage). The mark-paid endpoint accepts paidDate / method / externalReference / notes; the
-	// payment record already carries its own amount, so there's no amount field here. Methods come from
-	// the shared canonical list so web + mobile offer identical values.
-	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
-	function loadLastMethod(): string {
-		if (typeof localStorage === 'undefined') return '';
-		try {
-			return localStorage.getItem(LAST_METHOD_KEY) ?? '';
-		} catch {
-			return '';
-		}
-	}
-	function rememberLastMethod(method: string) {
-		if (!method || typeof localStorage === 'undefined') return;
-		try {
-			localStorage.setItem(LAST_METHOD_KEY, method);
-		} catch {
-			/* storage may be unavailable */
-		}
-	}
-	const emptyMarkPaid = { paidDate: '', method: '', externalReference: '', notes: '' };
-	let showMarkPaidForm = $state(false);
-	let markPaidTarget = $state<AccountingTransaction | null>(null);
-	let markPaidForm = $state({ ...emptyMarkPaid });
-
-	function todayLocal(): string {
-		const d = new Date();
-		const p = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-	}
-
 	// A ledger row's destination: unit-tied Payment/Expense rows fold into their unit's Command Center
 	// tab (via recordHref); Bank rows (no detail page / no unit) keep the server detailHref fallback.
 	function ledgerHref(t: AccountingTransaction): string {
 		if (t.kind === 'Payment') return recordHref('payment', { id: t.id, unitId: t.unitId });
 		if (t.kind === 'Expense') return recordHref('expense', { id: t.id, unitId: t.unitId });
 		return t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`;
-	}
-
-	function openMarkPaid(t: AccountingTransaction) {
-		markPaidTarget = t;
-		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
-		showMarkPaidForm = true;
-	}
-	function closeMarkPaid() {
-		showMarkPaidForm = false;
-		markPaidTarget = null;
-	}
-
-	const markPaidMutation = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => payments.markPaid(id, data),
-		onSuccess: (_r, vars) => {
-			showSuccess('Payment marked paid.');
-			rememberLastMethod(String(vars.data.method ?? ''));
-			closeMarkPaid();
-			invalidatePayments();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitMarkPaid() {
-		if (!markPaidTarget) return;
-		const data: Record<string, unknown> = {};
-		if (markPaidForm.paidDate) data.paidDate = markPaidForm.paidDate;
-		if (markPaidForm.method) data.method = markPaidForm.method;
-		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
-		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
-		markPaidMutation.mutate({ id: markPaidTarget.id, data });
-	}
-
-	const deletePaymentMutation = createMutation(() => ({
-		mutationFn: (id: number) => payments.delete(id),
-		onSuccess: () => {
-			showSuccess('Payment deleted.');
-			paymentDeleteTarget = null;
-			invalidatePayments();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function openCreatePayment() {
-		editingPaymentId = null;
-		paymentForm = { ...emptyPayment };
-		paymentErrors = {};
-		showPaymentForm = true;
-	}
-	function openEditPayment(p: Payment) {
-		editingPaymentId = p.id;
-		paymentForm = { leaseId: String(p.leaseId), amount: String(p.amount), amountPaid: p.amountPaid != null ? String(p.amountPaid) : '', dueDate: p.dueDate?.slice(0, 10) ?? '', paymentType: p.paymentType, status: p.status };
-		paymentErrors = {};
-		showPaymentForm = true;
-	}
-	function closePaymentForm() {
-		showPaymentForm = false;
-		editingPaymentId = null;
-		paymentErrors = {};
-	}
-	function submitPayment() {
-		const result = parseForm(paymentSchema, paymentForm);
-		if (result.errors) {
-			paymentErrors = result.errors;
-			return;
-		}
-		paymentErrors = {};
-		// amountPaid only travels for a Partial payment. For any other status send null so the server
-		// clears a stale collected-so-far (e.g. when editing a payment away from Partial); mirrors
-		// PaymentService.NormalizeAmountPaid, which nulls AmountPaid for non-Partial statuses.
-		const { amountPaid, ...rest } = result.data;
-		const data: Record<string, unknown> =
-			rest.status === 'Partial' ? { portfolioId, ...rest, amountPaid } : { portfolioId, ...rest, amountPaid: null };
-		savePaymentMutation.mutate({ id: editingPaymentId, data });
 	}
 
 	// --- Expense form/dialog ---
@@ -423,18 +267,6 @@
 		onSuccess: () => {
 			showSuccess('Expense deleted.');
 			expenseDeleteTarget = null;
-			invalidateExpenses();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const deleteTransactionMutation = createMutation(() => ({
-		mutationFn: (t: AccountingTransaction) =>
-			t.kind === 'Payment' ? payments.delete(t.id) : expenses.delete(t.id),
-		onSuccess: () => {
-			showSuccess('Transaction deleted.');
-			transactionDeleteTarget = null;
-			invalidatePayments();
 			invalidateExpenses();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -709,10 +541,6 @@
 	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
 	const vendorReviewCount = $derived((reports?.vendors1099 ?? []).filter((v) => v.needsW9 || v.needs1099Review).length);
 
-	const selectedLeaseLabel = $derived.by(() => {
-		const lease = (leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId);
-		return lease ? formatLeasePickerLabel(lease) : null;
-	});
 	const selectedPropertyLabel = $derived(
 		(propertiesQuery.data || []).find((p) => String(p.id) === expenseForm.propertyId)?.name ?? null
 	);
@@ -930,13 +758,6 @@
 				size="sm"
 				onclick={(ev) => { ev.stopPropagation(); goto('/banking'); }}
 			>Reconcile</Button>
-		{:else if t.kind === 'Payment' && t.status !== 'Paid'}
-			<Button
-				data-testid="payment-mark-paid"
-				variant="outline"
-				size="sm"
-				onclick={(ev) => { ev.stopPropagation(); openMarkPaid(t); }}
-			>Mark paid</Button>
 		{/if}
 		{#if t.kind !== 'Bank'}
 			<Button
@@ -946,13 +767,6 @@
 				size="icon"
 				onclick={(ev) => { ev.stopPropagation(); goto(ledgerHref(t)); }}
 			><Pencil class="h-3.5 w-3.5" /></Button>
-			<Button
-				data-testid="transaction-delete"
-				aria-label="Delete transaction"
-				variant="outline"
-				size="icon"
-				onclick={(ev) => { ev.stopPropagation(); transactionDeleteTarget = t; }}
-			><Trash2 class="h-3.5 w-3.5" /></Button>
 		{/if}
 	</div>
 {/snippet}
@@ -1213,10 +1027,6 @@
 				<p class="text-sm text-muted-foreground">Payments, expenses, deposits, and withdrawals in one paged ledger.</p>
 			</div>
 			<div class="flex flex-wrap gap-2">
-				<Button data-testid="payment-create-button" variant="outline" class="shrink-0 gap-2" onclick={openCreatePayment}>
-					<Plus class="h-4 w-4" />
-					New Payment
-				</Button>
 				<Button data-testid="expense-create-button" class="shrink-0 gap-2" onclick={openCreateExpense}>
 					<Plus class="h-4 w-4" />
 					New Expense
@@ -1336,146 +1146,6 @@
 	</Tabs.Root>
 </div>
 
-<Dialog.Root
-	open={showPaymentForm}
-	onOpenChange={(v) => { if (!v) closePaymentForm(); }}
->
-	<Dialog.Content class="max-w-lg">
-		<Dialog.Header>
-			<Dialog.Title>{editingPaymentId == null ? 'New Payment' : 'Edit Payment'}</Dialog.Title>
-		</Dialog.Header>
-		<div class="space-y-2" data-testid="payment-form">
-			<div>
-				<label for="payment-lease-input" class="mb-1 block text-xs font-medium text-muted-foreground">Property / unit</label>
-				<Select.Root type="single" bind:value={paymentForm.leaseId}>
-					<Select.Trigger id="payment-lease-input" class="w-full" data-testid="payment-lease-input">
-						{selectedLeaseLabel ?? 'Property / unit'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Property / unit">Property / unit</Select.Item>
-						{#each leasesQuery.data || [] as lease}
-							<Select.Item value={String(lease.id)} label={formatLeasePickerLabel(lease)}>{formatLeasePickerLabel(lease)}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<div>
-					<Input data-testid="payment-amount-input" bind:value={paymentForm.amount} placeholder="Amount" type="text" inputmode="decimal" mask="currency" />
-					{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
-				</div>
-				<div>
-					<DatePicker testid="payment-due-date-input" bind:value={paymentForm.dueDate} placeholder="Due date" />
-					{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
-				</div>
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<Select.Root type="single" bind:value={paymentForm.paymentType}>
-					<Select.Trigger class="w-full" data-testid="payment-type-input">
-						{paymentForm.paymentType ? paymentTypeLabel(paymentForm.paymentType) : 'Select type'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each PAYMENT_TYPES as t}
-							<Select.Item value={t} label={paymentTypeLabel(t)}>{paymentTypeLabel(t)}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<Select.Root type="single" bind:value={paymentForm.status}>
-					<Select.Trigger class="w-full" data-testid="payment-status-input">
-						{paymentForm.status || 'Select status'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each PAYMENT_STATUSES as s}
-							<Select.Item value={s} label={s}>{s}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<!-- Partial payments collect only some of the amount up front. The "Amount paid" split is
-			     shown (and required) only for status = Partial; the remainder (amount − paid) stays owed.
-			     Hidden for every other status, where it has no meaning. -->
-			{#if paymentForm.status === 'Partial'}
-				<div>
-					<label for="payment-amount-paid-input" class="mb-1 block text-xs font-medium text-muted-foreground">Amount paid (so far)</label>
-					<Input id="payment-amount-paid-input" data-testid="payment-amount-paid-input" bind:value={paymentForm.amountPaid} placeholder="Amount paid" type="text" inputmode="decimal" mask="currency" />
-					{#if paymentErrors.amountPaid}
-						<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-paid-error">{paymentErrors.amountPaid}</p>
-					{:else}
-						<p class="mt-1 text-xs text-muted-foreground">How much was collected. The rest stays owed.</p>
-					{/if}
-				</div>
-			{/if}
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
-			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save payment'}</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<!-- Mark Paid: capture how/when the money arrived. Smart defaults (today + last-used method) keep
-	 it one quick confirm; the payment record carries its own amount so there's no amount field. -->
-<Dialog.Root
-	open={showMarkPaidForm}
-	onOpenChange={(v) => { if (!v) closeMarkPaid(); }}
->
-	<Dialog.Content class="max-w-md" data-testid="mark-paid-dialog">
-		<Dialog.Header>
-			<Dialog.Title>Mark paid</Dialog.Title>
-			{#if markPaidTarget}
-				<Dialog.Description data-testid="mark-paid-summary">
-					{markPaidTarget.description} · {money(markPaidTarget.amount)}
-				</Dialog.Description>
-			{/if}
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="mark-paid-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Date received</span>
-				<DatePicker testid="mark-paid-date-input" bind:value={markPaidForm.paidDate} placeholder="Date received" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
-				<Select.Root type="single" bind:value={markPaidForm.method}>
-					<Select.Trigger class="w-full" data-testid="mark-paid-method-input">
-						{markPaidForm.method || 'Select method'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No method">No method</Select.Item>
-						{#each PAYMENT_METHODS as m}
-							<Select.Item value={m} label={m}>{m}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
-				<Input
-					data-testid="mark-paid-reference-input"
-					bind:value={markPaidForm.externalReference}
-					placeholder="Check #, confirmation #, etc. (optional)"
-				/>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
-				<textarea
-					data-testid="mark-paid-notes-input"
-					bind:value={markPaidForm.notes}
-					rows={2}
-					maxlength={2000}
-					placeholder="Anything to remember about this payment (optional)"
-					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
-			<Button data-testid="mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
-				{markPaidMutation.isPending ? 'Saving…' : 'Mark paid'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
 
 <Dialog.Root
 	open={showExpenseForm}
@@ -1725,24 +1395,6 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-<ConfirmDialog
-	open={transactionDeleteTarget !== null}
-	title="Delete transaction"
-	message={transactionDeleteTarget ? `Delete this ${transactionDeleteTarget.kind.toLowerCase()} for ${money(transactionDeleteTarget.amount)}?` : ''}
-	busy={deleteTransactionMutation.isPending}
-	testid="transaction-delete"
-	onconfirm={() => transactionDeleteTarget && deleteTransactionMutation.mutate(transactionDeleteTarget)}
-	oncancel={() => (transactionDeleteTarget = null)}
-/>
-<ConfirmDialog
-	open={paymentDeleteTarget !== null}
-	title="Delete payment"
-	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentTypeLabel(paymentDeleteTarget.paymentType).toLowerCase()} charge?` : ''}
-	busy={deletePaymentMutation.isPending}
-	testid="payment-delete"
-	onconfirm={() => paymentDeleteTarget && deletePaymentMutation.mutate(paymentDeleteTarget.id)}
-	oncancel={() => (paymentDeleteTarget = null)}
-/>
 <ConfirmDialog
 	open={expenseDeleteTarget !== null}
 	title="Delete expense"

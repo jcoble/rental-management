@@ -1,5 +1,5 @@
 <!--
-  "Who's behind" — one row per tenant/lease currently behind on rent, with one-tap Mark-paid and Text
+  "Who's behind" — one row per tenant account currently behind on rent, with Record receipt and Text
   actions. This is the web counterpart of the mobile OverdueScreen and the destination behind the
   dashboard "tenants behind" KPI.
 
@@ -14,7 +14,6 @@
 	import { accounting } from '$lib/api/endpoints/accounting';
 	import { payments } from '$lib/api/endpoints/payments';
 	import type { PastDueLease } from '$lib/types';
-	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
@@ -46,12 +45,12 @@
 
 	function displayName(lease: PastDueLease): string {
 		if (lease.tenantName && lease.tenantName.trim()) return lease.tenantName.trim();
-		if (lease.leaseNumber) return `Lease ${lease.leaseNumber}`;
-		return `Lease #${lease.leaseId}`;
+		if (lease.relationshipNumber) return lease.relationshipNumber;
+		return `Tenant account #${lease.tenantAccountId}`;
 	}
 
 	function daysLate(lease: PastDueLease): number {
-		const d = daysFromTodayUtc(lease.oldestDueDate);
+		const d = daysFromTodayUtc(lease.oldestDueOn);
 		return d === null ? 0 : Math.max(0, -d);
 	}
 
@@ -70,13 +69,13 @@
 		return parts.join(' · ');
 	}
 
-	// Which lease's row is currently being marked caught-up (its buttons show a spinner).
-	let busyLeaseId = $state<number | null>(null);
+	// Which tenant account is currently receiving a receipt (its buttons show a spinner).
+	let busyAccountId = $state<number | null>(null);
 
-	// --- Mark Paid modal ---
-	// Capture how/when the money arrived once, then apply it to every still-owed payment on the lease.
+	// --- Record receipt modal ---
+	// Capture how/when the money arrived once, then allocate it to the oldest open charges.
 	// Smart defaults: date = today, method = last-used (remembered in localStorage). The mark-paid
-	// endpoint accepts paidDate / method / externalReference / notes. Methods come from the shared
+	// receipt command accepts paidDate / method / externalReference / notes. Methods come from the shared
 	// canonical list so web + mobile offer identical values.
 	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
 	function loadLastMethod(): string {
@@ -104,30 +103,41 @@
 	let showMarkPaidForm = $state(false);
 	let markPaidTarget = $state<PastDueLease | null>(null);
 	let markPaidForm = $state({ paidDate: '', method: '', externalReference: '', notes: '' });
+	let receiptOperationKey = $state<string | null>(null);
 
 	function openMarkPaid(lease: PastDueLease) {
 		markPaidTarget = lease;
 		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
 		showMarkPaidForm = true;
+		receiptOperationKey = null;
 	}
 	function closeMarkPaid() {
 		showMarkPaidForm = false;
 		markPaidTarget = null;
+		receiptOperationKey = null;
 	}
 
-	// Mark every still-owed past-due payment on a lease as paid in one server-side action. Afterwards we
+	// Record one receipt against the continuous tenant account. Afterwards we
 	// refresh the shared sources (past-due list + dashboard snapshot) so the KPI count and these rows
 	// update together and stay in lockstep.
 	const markPaidMutation = createMutation(() => ({
 		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: Record<string, unknown> }) => {
-			const result = await payments.markLeasePastDuePaid(lease.leaseId, data);
-			return result.markedPaidCount;
+			receiptOperationKey ??= crypto.randomUUID();
+			return payments.recordReceipt(lease.tenantAccountId, receiptOperationKey, {
+				amount: lease.pastDueAmount,
+				effectiveOn: String(data.paidDate),
+				description: String(data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`),
+				paymentMethodSummary: String(data.method),
+				externalReference: data.externalReference ? String(data.externalReference) : undefined,
+				payerName: lease.tenantName || undefined,
+				allocateOldestCharges: true
+			});
 		},
 		onMutate: ({ lease }) => {
-			busyLeaseId = lease.leaseId;
+			busyAccountId = lease.tenantAccountId;
 		},
-		onSuccess: (count, vars) => {
-			showSuccess(count > 1 ? `${count} payments marked paid.` : 'Payment marked paid.');
+		onSuccess: (_result, vars) => {
+			showSuccess('Receipt recorded and applied to the oldest open charges.');
 			rememberLastMethod(String(vars.data.method ?? ''));
 			closeMarkPaid();
 			queryClient.invalidateQueries({ queryKey: ['accounting-past-due', portfolioId] });
@@ -135,14 +145,18 @@
 			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['payments'] });
 		},
-		onError: (err) => showError(apiErrorMessage(err, "Couldn't mark this lease paid. Please try again.")),
+		onError: (err) => showError(apiErrorMessage(err, "Couldn't record this receipt. Please try again.")),
 		onSettled: () => {
-			busyLeaseId = null;
+			busyAccountId = null;
 		},
 	}));
 
 	function submitMarkPaid() {
 		if (!markPaidTarget) return;
+		if (!markPaidForm.method) {
+			showError('Choose a payment method.');
+			return;
+		}
 		const data: Record<string, unknown> = {};
 		data.paidDate = markPaidForm.paidDate || todayLocal();
 		if (markPaidForm.method) data.method = markPaidForm.method;
@@ -163,10 +177,8 @@
 		window.location.href = phone ? `sms:${phone}?body=${body}` : `sms:?body=${body}`;
 	}
 
-	function openOldestPayment(lease: PastDueLease) {
-		if (lease.oldestPaymentId > 0) {
-			goto(recordHref('payment', { id: lease.oldestPaymentId, unitId: lease.unitId }));
-		}
+	function openTenantAccount(lease: PastDueLease) {
+		goto(`/units/${lease.unitId}?tab=ledger&ledger=rent`);
 	}
 </script>
 
@@ -181,7 +193,7 @@
 		art={3}
 		eyebrow="Money"
 		title="Who's behind"
-		description="Tenants currently behind on rent. Send a reminder or mark them caught up."
+		description="Tenants currently behind on rent. Send a reminder or record money received."
 		data-testid="past-due-header"
 	/>
 
@@ -220,17 +232,16 @@
 		</div>
 
 		<div class="space-y-3" data-testid="past-due-list">
-			{#each behind as lease (lease.leaseId)}
+			{#each behind as lease (lease.tenantAccountId)}
 				{@const days = daysLate(lease)}
 				{@const subtitle = rowSubtitle(lease)}
-				{@const busy = busyLeaseId === lease.leaseId}
-				<Card.Root data-testid="past-due-row" data-lease-id={lease.leaseId}>
+				{@const busy = busyAccountId === lease.tenantAccountId}
+				<Card.Root data-testid="past-due-row" data-tenant-account-id={lease.tenantAccountId}>
 					<Card.Content class="p-4">
 						<button
 							type="button"
-							class="flex w-full items-center gap-3 text-left {lease.oldestPaymentId > 0 ? 'cursor-pointer' : 'cursor-default'}"
-							onclick={() => openOldestPayment(lease)}
-							disabled={lease.oldestPaymentId <= 0}
+							class="flex w-full items-center gap-3 text-left"
+							onclick={() => openTenantAccount(lease)}
 							data-testid="past-due-row-open"
 						>
 							<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
@@ -245,9 +256,7 @@
 									<span class="block truncate text-xs text-muted-foreground">{subtitle}</span>
 								{/if}
 							</span>
-							{#if lease.oldestPaymentId > 0}
-								<ChevronRight class="h-5 w-5 shrink-0 text-muted-foreground" />
-							{/if}
+							<ChevronRight class="h-5 w-5 shrink-0 text-muted-foreground" />
 						</button>
 
 						<div class="mt-3 flex gap-2">
@@ -264,7 +273,7 @@
 								{:else}
 									<CheckCircle2 class="h-4 w-4" />
 								{/if}
-								{lease.overduePaymentCount > 1 ? 'Mark all paid' : 'Mark paid'}
+								Record receipt
 							</Button>
 							<Button
 								variant="outline"
@@ -292,7 +301,7 @@
 >
 	<Dialog.Content class="max-w-md" data-testid="past-due-mark-paid-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Mark paid</Dialog.Title>
+			<Dialog.Title>Record receipt</Dialog.Title>
 			{#if markPaidTarget}
 				<Dialog.Description data-testid="past-due-mark-paid-summary">
 					{displayName(markPaidTarget)} · {money(markPaidTarget.pastDueAmount)}
@@ -344,7 +353,7 @@
 		<Dialog.Footer>
 			<Button data-testid="past-due-mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
 			<Button data-testid="past-due-mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
-				{markPaidMutation.isPending ? 'Saving…' : 'Mark paid'}
+				{markPaidMutation.isPending ? 'Recording…' : 'Record receipt'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

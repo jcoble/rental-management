@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
-	import { portal } from '$lib/api/endpoints/portal';
+	import { portal, type PortalPayment } from '$lib/api/endpoints/portal';
 	import { ApiError } from '$lib/api/client';
 	import { showSuccess, showInfo, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
-	import type { Payment } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import { CreditCard, Repeat } from '@lucide/svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
@@ -33,8 +32,8 @@
 	}
 
 	// A payment the tenant can act on: still owed (not paid/waived/refunded).
-	const PAYABLE: Payment['status'][] = ['Scheduled', 'Late', 'Partial', 'Failed'];
-	function isPayable(p: Payment): boolean {
+	const PAYABLE: PortalPayment['status'][] = ['Scheduled', 'Late', 'Partial', 'Failed'];
+	function isPayable(p: PortalPayment): boolean {
 		return PAYABLE.includes(p.status);
 	}
 
@@ -123,7 +122,7 @@
 		Utility: 'utility charge',
 		Other: 'charge'
 	};
-	function explain(p: Payment): string {
+	function explain(p: PortalPayment): string {
 		const label = TYPE_LABEL[p.paymentType] ?? 'charge';
 		const amount = money(p.amount);
 		const due = dueDate(p.dueDate);

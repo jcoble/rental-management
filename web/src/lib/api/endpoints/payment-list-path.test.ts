@@ -3,18 +3,17 @@ import assert from 'node:assert/strict';
 import { buildPaymentListPagePath, buildPaymentListPath } from './payment-list-path.ts';
 
 describe('payment list paths', () => {
-	it('serializes lease and payment date filters', () => {
+	it('serializes canonical account and receipt date filters', () => {
 		assert.equal(
 			buildPaymentListPagePath(2, {
-				leaseId: 7,
+				tenantAccountId: 7,
+				leaseManagementId: 9,
 				take: 20,
-				sort: '-dueDate',
-				dueFrom: '2026-01-01',
-				dueTo: '2026-01-31',
+				sort: '-receivedOn',
 				paidFrom: '2026-01-05',
 				paidTo: '2026-01-25'
 			}),
-			'/payments/page?take=20&sort=-dueDate&portfolioId=2&leaseId=7&dueFrom=2026-01-01&dueTo=2026-01-31&paidFrom=2026-01-05&paidTo=2026-01-25'
+			'/payments/page?take=20&sort=-receivedOn&portfolioId=2&tenantAccountId=7&leaseManagementId=9&paidFrom=2026-01-05&paidTo=2026-01-25'
 		);
 	});
 
@@ -22,14 +21,4 @@ describe('payment list paths', () => {
 		assert.equal(buildPaymentListPath(2, { take: 20 }), '/payments?take=20&portfolioId=2');
 	});
 
-	it('serializes application payment filters', () => {
-		assert.equal(
-			buildPaymentListPagePath(2, {
-				applicationId: 40,
-				take: 10,
-				sort: '-createdAt'
-			}),
-			'/payments/page?take=10&sort=-createdAt&portfolioId=2&applicationId=40'
-		);
-	});
 });

@@ -15,29 +15,21 @@ const paymentDetailSource = readFileSync(
 	'utf8'
 );
 
-describe('unit rent quick payment create form', () => {
-	it('captures method, reference, and notes before posting a payment', () => {
+describe('unit rent canonical receipt and charge commands', () => {
+	it('captures receipt metadata and posts with an idempotency key', () => {
 		assert.match(source, /method: ''/);
-		assert.match(source, /externalReference: ''/);
-		assert.match(source, /notes: ''/);
-		assert.match(source, /data-testid="rent-method-input"/);
-		assert.match(source, /data-testid="rent-reference-input"/);
-		assert.match(source, /data-testid="rent-notes-input"/);
+		assert.match(source, /reference: ''/);
+		assert.match(source, /operationKey \?\?= crypto\.randomUUID\(\)/);
+		assert.match(source, /payments\.recordReceipt\(tenantAccountId, operationKey/);
 	});
 
-	it('renders the created payment immediately after the post succeeds', () => {
-		assert.match(source, /onSuccess: \(payment: Payment\) =>/);
-		assert.match(source, /paymentItems = \[payment, \.\.\.paymentItems\.filter\(\(item\) => item\.id !== payment\.id\)\]/);
+	it('offers a manual charge only from tenant-account context', () => {
+		assert.match(source, /payments\.postCharge\(tenantAccountId, operationKey/);
+		assert.match(source, /Use this only for a true one-off charge/);
 	});
 
-	it('shows and edits reference and notes from the folded payment detail', () => {
-		// Re-homed (TSK-457): reference/notes editing moved from RentTab's inline expand into
-		// PaymentDetail. Assert the same capability there: the edit form seeds both fields from
-		// the payment, exposes editable inputs for each, and persists via the update mutation.
-		assert.match(paymentDetailSource, /externalReference: payment\.externalReference \?\? ''/);
-		assert.match(paymentDetailSource, /notes: payment\.notes \?\? ''/);
-		assert.match(paymentDetailSource, /bind:value=\{form\.externalReference\}[^>]*testid="payment-detail-reference"/);
-		assert.match(paymentDetailSource, /bind:value=\{form\.notes\}[^>]*testid="payment-detail-notes"/);
-		assert.match(paymentDetailSource, /payments\.update\(paymentId, data\)/);
+	it('renders immutable receipt detail without edit or delete actions', () => {
+		assert.match(paymentDetailSource, /A posted receipt is permanent/);
+		assert.doesNotMatch(paymentDetailSource, /payments\.(update|delete|markPaid)/);
 	});
 });

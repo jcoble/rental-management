@@ -2,7 +2,6 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { recordHref } from '$lib/navigation/record-href';
 	import { leases, type LeaseSignatureQueueItemResponse } from '$lib/api/endpoints/leases';
 	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import {
@@ -25,21 +24,17 @@
 	} from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import { payments } from '$lib/api/endpoints/payments';
 	import {
 		openingBalances,
 		type OpeningBalanceResponse,
 	} from '$lib/api/endpoints/opening-balances';
-	import type { Lease, Payment } from '$lib/types';
+	import type { Lease } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { addCalendarYear } from '$lib/utils/parse-date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
-	import { paymentTypeLabel } from '$lib/utils/payment-labels';
-	import { DataGrid } from '$lib/components/data-grid';
-	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
@@ -107,24 +102,6 @@
 
 	const leaseTemplateCount = $derived(leaseTemplatesQuery.data?.totalCount ?? 0);
 	const leaseTemplatePreview = $derived(leaseTemplatesQuery.data?.items ?? []);
-
-	// Payments for this lease — server-side paged/sorted (the browser never materializes or slices the
-	// whole payment history; the DB pages it).
-	const PAYMENTS_PAGE_SIZE = 50;
-	let paymentsPage = $state(1);
-	let paymentsSort = $state('-dueDate');
-	const paymentsQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, leaseId, 'page', paymentsPage, paymentsSort],
-		queryFn: () => payments.listPage(portfolioId, {
-			leaseId,
-			skip: (paymentsPage - 1) * PAYMENTS_PAGE_SIZE,
-			take: PAYMENTS_PAGE_SIZE,
-			sort: paymentsSort || undefined,
-		}),
-		enabled: portfolioId > 0 && leaseId > 0,
-	}));
-	const paymentRows = $derived(paymentsQuery.data?.items ?? []);
-	const paymentsTotal = $derived(paymentsQuery.data?.totalCount ?? 0);
 
 	// Plain-English account history (charges, payments, balance) with a "why" per entry. The payment
 	// rows are paged DB-side (Skip/Take), so a multi-year tenancy never loads its whole history at once.
@@ -369,71 +346,9 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	const markPaidMutation = createMutation(() => ({
-		mutationFn: (paymentId: number) => payments.markPaid(paymentId, {}),
-		onSuccess: () => {
-			showSuccess('Payment marked as paid.');
-			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, leaseId] });
-			queryClient.invalidateQueries({ queryKey: ['lease-ledger', leaseId] });
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	let showPastDuePaidDialog = $state(false);
-	let pastDuePaidDate = $state(new Date().toISOString().slice(0, 10));
-	let pastDueMethod = $state('');
-	let pastDueReference = $state('');
-	let pastDueNotes = $state('');
-	let pastDuePaidErrors = $state<{ paidDate?: string }>({});
-
 	// Past-due count comes from the ledger's server-side aggregate over the WHOLE lease (not a
 	// client-side scan of the current payments page, which would undercount past page 1).
 	const pastDuePaymentCount = $derived(ledger?.pastDueCount ?? 0);
-
-	function openPastDuePaidDialog() {
-		pastDuePaidDate = new Date().toISOString().slice(0, 10);
-		pastDueMethod = '';
-		pastDueReference = '';
-		pastDueNotes = '';
-		pastDuePaidErrors = {};
-		showPastDuePaidDialog = true;
-	}
-
-	function closePastDuePaidDialog() {
-		pastDuePaidErrors = {};
-		showPastDuePaidDialog = false;
-	}
-
-	const markLeasePastDuePaidMutation = createMutation(() => ({
-		mutationFn: (body: Record<string, unknown>) => payments.markLeasePastDuePaid(leaseId, body),
-		onSuccess: (result) => {
-			showSuccess(
-				result.markedPaidCount === 0
-					? 'No past-due rent charges needed settling.'
-					: `${result.markedPaidCount} past-due ${result.markedPaidCount === 1 ? 'charge' : 'charges'} marked paid.`
-			);
-			closePastDuePaidDialog();
-			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, leaseId] });
-			queryClient.invalidateQueries({ queryKey: ['lease-ledger', leaseId] });
-			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
-			queryClient.invalidateQueries({ queryKey: ['accounting'] });
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitPastDuePaid() {
-		if (!pastDuePaidDate) {
-			pastDuePaidErrors = { paidDate: 'Pick a paid date.' };
-			return;
-		}
-
-		const body: Record<string, unknown> = { paidDate: pastDuePaidDate };
-		if (pastDueMethod.trim()) body.method = pastDueMethod.trim();
-		if (pastDueReference.trim()) body.externalReference = pastDueReference.trim();
-		if (pastDueNotes.trim()) body.notes = pastDueNotes.trim();
-		pastDuePaidErrors = {};
-		markLeasePastDuePaidMutation.mutate(body);
-	}
 
 	// --- Lease agreement PDF (generate + authed blob download) ---
 	// Whether a generated agreement already exists. Status is checked without
@@ -709,45 +624,6 @@
 			lease?.unitNumber ? `Unit ${lease.unitNumber}` : ''
 		)
 	);
-	// Payments DataGrid columns
-	const paymentColumns: ColumnDef<Payment>[] = [
-		{
-			key: 'dueDate',
-			title: 'Due Date',
-			format: 'date',
-			sortable: true,
-			mobileRole: 'title',
-		},
-		{
-			key: 'type',
-			title: 'Type',
-			mobileRole: 'subtitle',
-			// Payment serializes the field as `paymentType` (not `type`); without this accessor the
-			// column rendered blank for every row. Humanize the enum for display (M-13).
-			accessor: (p) => paymentTypeLabel(p.paymentType),
-		},
-		{
-			key: 'amount',
-			title: 'Amount',
-			format: 'currency',
-			sortable: true,
-			mobileRole: 'metric',
-		},
-		{
-			key: 'status',
-			title: 'Status',
-			mobileRole: 'badge',
-			cell: paymentStatusCell,
-		},
-		{
-			key: 'actions',
-			title: '',
-			mobileRole: 'hidden',
-			align: 'right',
-			cell: paymentActionsCell,
-		},
-	];
-
 	function formatCurrency(val: number): string {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 	}
@@ -840,23 +716,6 @@
 		}
 	});
 </script>
-
-{#snippet paymentStatusCell(payment: Payment)}
-	<StatusBadge status={payment.status} />
-{/snippet}
-
-{#snippet paymentActionsCell(payment: Payment)}
-	{#if payment.status !== 'Paid' && payment.status !== 'Waived'}
-		<Button
-			variant="outline"
-			size="sm"
-			onclick={(e) => { e.stopPropagation(); markPaidMutation.mutate(payment.id); }}
-			disabled={markPaidMutation.isPending}
-		>
-			Mark paid
-		</Button>
-	{/if}
-{/snippet}
 
 <svelte:head>
 	<title>{lease ? `Lease ${lease.leaseNumber}` : 'Lease'} - Rental Command</title>
@@ -1516,11 +1375,11 @@
 								variant="outline"
 								size="sm"
 								class="gap-1.5"
-								onclick={openPastDuePaidDialog}
+							onclick={() => lease && goto(`/units/${lease.unitId}?tab=ledger&ledger=rent`)}
 								data-testid="lease-ledger-settle-past-due"
 							>
 								<DollarSign class="h-4 w-4" />
-								Settle past due
+							Record receipt in Unit Money
 							</Button>
 						{/if}
 					</div>
@@ -1633,29 +1492,12 @@
 			</Card.Content>
 		</Card.Root>
 
-		<!-- Payments section -->
-		<div>
-			<div class="mb-2 flex items-center justify-between">
-				<h2 class="text-lg font-semibold">Payments</h2>
-				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View deposits</a>
-			</div>
-			<DataGrid
-				data={paymentRows}
-				columns={paymentColumns}
-				loading={paymentsQuery.isLoading || paymentsQuery.isFetching}
-				emptyMessage="No payments recorded for this lease."
-				getRowKey={(p) => p.id}
-				onRowClick={(p) => goto(recordHref('payment', p))}
-				data-testid="lease-payments-grid"
-				pageSize={PAYMENTS_PAGE_SIZE}
-				page={paymentsPage}
-				totalCount={paymentsTotal}
-				serverSide
-				onPageChange={(page) => (paymentsPage = page)}
-				sort={paymentsSort}
-				onSortChange={(s) => { paymentsSort = s ?? ''; paymentsPage = 1; }}
-			/>
-		</div>
+		<Card.Root>
+			<Card.Content class="flex flex-wrap items-center justify-between gap-3 p-4">
+				<div><h2 class="font-semibold">Receipts and charges</h2><p class="text-sm text-muted-foreground">Money follows the continuous tenant account, not one agreement version.</p></div>
+				{#if lease}<Button variant="outline" onclick={() => goto(`/units/${lease.unitId}?tab=ledger&ledger=rent`)}>Open Unit Money</Button>{/if}
+			</Card.Content>
+		</Card.Root>
 
 		<!-- Documents section -->
 		<div data-testid="lease-detail-documents">
@@ -1784,51 +1626,6 @@
 			<Button variant="outline" onclick={closeOpeningDialog} data-testid="lease-opening-balance-cancel">Cancel</Button>
 			<Button onclick={submitOpeningBalance} disabled={saveOpeningMutation.isPending} data-testid="lease-opening-balance-save">
 				{saveOpeningMutation.isPending ? 'Saving…' : openingBalance ? 'Save changes' : 'Save opening balance'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<Dialog.Root open={showPastDuePaidDialog} onOpenChange={(v) => { if (!v) closePastDuePaidDialog(); }}>
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>Settle past-due rent</Dialog.Title>
-			<Dialog.Description>
-				Mark all currently past-due rent charges on this lease as paid.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="lease-past-due-paid-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
-				<DatePicker
-					testid="lease-past-due-paid-date"
-					bind:value={pastDuePaidDate}
-					placeholder="Paid date"
-				/>
-				{#if pastDuePaidErrors.paidDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-past-due-paid-date-error">{pastDuePaidErrors.paidDate}</p>{/if}
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
-				<Input data-testid="lease-past-due-paid-method" bind:value={pastDueMethod} placeholder="Cash, check, ACH" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
-				<Input data-testid="lease-past-due-paid-reference" bind:value={pastDueReference} placeholder="Check number or reference" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Note</span>
-				<textarea
-					data-testid="lease-past-due-paid-note"
-					bind:value={pastDueNotes}
-					rows="2"
-					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={closePastDuePaidDialog} data-testid="lease-past-due-paid-cancel">Cancel</Button>
-			<Button onclick={submitPastDuePaid} disabled={markLeasePastDuePaidMutation.isPending} data-testid="lease-past-due-paid-save">
-				{markLeasePastDuePaidMutation.isPending ? 'Saving…' : 'Mark paid'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

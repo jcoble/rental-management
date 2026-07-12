@@ -1,358 +1,102 @@
 <script lang="ts">
-	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { Pencil, Save, Trash2, X, Receipt, CircleCheck, FileText, BellRing } from '@lucide/svelte';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { Receipt, CircleCheck, FileText } from '@lucide/svelte';
 	import { payments } from '$lib/api/endpoints/payments';
-	import { leases } from '$lib/api/endpoints/leases';
-	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { paymentSchema, parseForm } from '$lib/schemas';
-	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
-	import {
-		formatLeasePickerLabel,
-		formatPaymentLeaseDisplay,
-		formatPaymentMoney
-	} from '$lib/accounting/payment-detail-display';
-	import { paymentTypeLabel } from '$lib/utils/payment-labels';
-	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
-	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
-	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
-	import { Button } from '$lib/components/ui/button';
+	import HeroCard from '$lib/components/shared/HeroCard.svelte';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
 	let {
 		paymentId,
-		onDeleted,
 		expectedUnitId,
 		onUnitMismatch,
 	}: {
 		paymentId: number;
-		onDeleted: () => void;
 		expectedUnitId?: number;
 		onUnitMismatch?: () => void;
 	} = $props();
 
-	const queryClient = useQueryClient();
-	const portfolioId = $derived(getCurrentPortfolioId());
-	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
-	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
-
-	let editing = $state(false);
-	let deleteTarget = $state<number | null>(null);
-	let showPaymentNoticeDialog = $state(false);
-	let selectedPaymentNoticeType = $state<string | undefined>(undefined);
-	let form = $state({
-		leaseId: '',
-		amount: '',
-		amountPaid: '',
-		dueDate: '',
-		paymentType: 'Rent',
-		status: 'Scheduled',
-		paidDate: '',
-		method: '',
-		externalReference: '',
-		notes: ''
-	});
-	let formErrors = $state<Record<string, string>>({});
-
-	const paymentQuery = createQuery(() => ({ queryKey: ['payment', paymentId], queryFn: () => payments.get(paymentId), enabled: paymentId > 0 }));
-	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
-
-	const payment = $derived(paymentQuery.data);
+	const paymentQuery = createQuery(() => ({
+		queryKey: ['payment-receipt', paymentId],
+		queryFn: () => payments.get(paymentId),
+		enabled: paymentId > 0
+	}));
+	const receipt = $derived(paymentQuery.data);
 
 	$effect(() => {
-		if (isMismatchedUnitSelection(payment, expectedUnitId)) onUnitMismatch?.();
+		if (isMismatchedUnitSelection(receipt, expectedUnitId)) onUnitMismatch?.();
 	});
 
-	const heroAmount = $derived(payment ? formatPaymentMoney(payment.amount) : '');
-	// Context tone keyed by collection status: green = money in, warning = owed,
-	// destructive = failed, primary otherwise.
-	const heroTone = $derived.by<HeroTone>(() => {
-		switch (payment?.status) {
-			case 'Paid': return 'success';
-			case 'Late':
-			case 'Partial': return 'warning';
-			case 'Failed': return 'destructive';
-			default: return 'primary';
-		}
-	});
-
-	const leaseDisplay = $derived(formatPaymentLeaseDisplay(payment));
-	const availablePaymentNoticeType = $derived(payment ? noticeTypeForPayment(payment) : undefined);
-
-	const typeOptions = $derived(PAYMENT_TYPES.map((value) => ({ value, label: value })));
-	const statusOptions = $derived(PAYMENT_STATUSES.map((value) => ({ value, label: value })));
-	const leaseOptions = $derived([{ value: '', label: 'Select property / unit' }, ...(leasesQuery.data ?? []).map((lease) => ({ value: String(lease.id), label: formatLeasePickerLabel(lease) }))]);
-
-	function noticeTypeForPayment(p: { paymentType?: string; status?: string; dueDate?: string }) {
-		const status = (p.status ?? '').toLowerCase();
-		if (['paid', 'waived', 'failed', 'refunded'].includes(status)) return undefined;
-
-		const paymentType = (p.paymentType ?? '').toLowerCase();
-		const dueDateText = p.dueDate?.slice(0, 10);
-		const dueDate = dueDateText ? new Date(`${dueDateText}T00:00:00`) : undefined;
-		const today = new Date();
-		today.setHours(0, 0, 0, 0);
-		const isPastDue = !!dueDate && dueDate < today;
-
-		if ((paymentType === 'rent' || paymentType === 'latefee') && (status === 'late' || status === 'partial' || isPastDue)) {
-			return 'LateRentNotice';
-		}
-
-		if (paymentType === 'rent' && status === 'scheduled' && !isPastDue) {
-			return 'RentReminder';
-		}
-
-		return undefined;
+	function money(value: number, currency = 'USD') {
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(value);
 	}
 
-	function openPaymentNoticeDialog() {
-		if (!availablePaymentNoticeType) return;
-		selectedPaymentNoticeType = availablePaymentNoticeType;
-		showPaymentNoticeDialog = true;
+	function postedAt(value: string) {
+		const date = new Date(value);
+		return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 	}
-
-	function startEditing() {
-		if (!payment) return;
-		form = {
-			leaseId: payment.leaseId == null ? '' : String(payment.leaseId),
-			amount: String(payment.amount),
-			amountPaid: payment.amountPaid != null ? String(payment.amountPaid) : '',
-			dueDate: payment.dueDate?.slice(0, 10) ?? '',
-			paymentType: payment.paymentType,
-			status: payment.status,
-			paidDate: payment.paidDate?.slice(0, 10) ?? '',
-			method: payment.method ?? '',
-			externalReference: payment.externalReference ?? '',
-			notes: payment.notes ?? ''
-		};
-		formErrors = {};
-		editing = true;
-	}
-
-	function cancelEditing() {
-		editing = false;
-		formErrors = {};
-	}
-
-	const saveMutation = createMutation(() => ({
-		mutationFn: (data: Record<string, unknown>) => payments.update(paymentId, data),
-		onSuccess: () => {
-			showSuccess('Payment updated.');
-			editing = false;
-			queryClient.invalidateQueries({ queryKey: ['payment', paymentId] });
-			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
-			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
-		},
-		onError: (err) => showError(apiErrorMessage(err))
-	}));
-
-	function savePayment() {
-		const result = parseForm(paymentSchema, form);
-		if (result.errors) {
-			formErrors = result.errors;
-			return;
-		}
-		formErrors = {};
-		// amountPaid only applies to a Partial payment; for any other status send null so the server
-		// clears a stale collected-so-far (mirrors PaymentService.NormalizeAmountPaid).
-		const { amountPaid, ...rest } = result.data;
-		saveMutation.mutate(
-			rest.status === 'Partial' ? { portfolioId, ...rest, amountPaid } : { portfolioId, ...rest, amountPaid: null }
-		);
-	}
-
-	const deleteMutation = createMutation(() => ({
-		mutationFn: () => payments.delete(paymentId),
-		onSuccess: () => {
-			showSuccess('Payment deleted.');
-			deleteTarget = null;
-			onDeleted();
-		},
-		onError: (err) => showError(apiErrorMessage(err))
-	}));
 </script>
 
 <svelte:head>
-	<title>Payment - Rental Command</title>
+	<title>Receipt - Rental Command</title>
 </svelte:head>
 
-<!-- Inline date field: mirrors InlineField's edit/display structure (same testids) but
-     uses the shared DatePicker when editing. value is bound `yyyy-MM-dd`. -->
-{#snippet dateField(opts: {
-	label: string;
-	value: string;
-	setValue: (v: string) => void;
-	display: string;
-	testid: string;
-	error?: string;
-})}
-	<div data-testid={`${opts.testid}-field`}>
-		{#if editing}
-			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
-			<DatePicker
-				id={`${opts.testid}-input`}
-				testid={`${opts.testid}-input`}
-				value={opts.value}
-				onchange={opts.setValue}
-				placeholder={opts.label}
-			/>
-			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
-		{:else}
-			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${opts.testid}-value`}>
-				<span class="m3-readonly-field__label">{opts.label}</span>
-				<span class="m3-readonly-field__value mt-1">{opts.display === '' ? '-' : opts.display}</span>
-			</div>
-		{/if}
-	</div>
-{/snippet}
-
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="payment-detail-page">
-	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">{payment?.tenantName || payment?.leaseNumber || 'Payment'}</h1>
-			<p class="text-sm text-muted-foreground">{payment ? `${paymentTypeLabel(payment.paymentType)} · ${formatPaymentMoney(payment.amount)} · ${payment.status}` : ''}</p>
-		</div>
-		{#if payment}
-			<div class="flex flex-wrap gap-2">
-				{#if editing}
-					<Button variant="outline" onclick={cancelEditing} disabled={saveMutation.isPending}><X class="h-4 w-4" />Cancel</Button>
-					<Button onclick={savePayment} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
-				{:else}
-					{#if availablePaymentNoticeType}
-						<Button variant="outline" onclick={openPaymentNoticeDialog}>
-							<BellRing class="h-4 w-4" />
-							Notice / reminder
-						</Button>
-					{/if}
-					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
-					<Button variant="destructive" onclick={() => (deleteTarget = paymentId)} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
-				{/if}
-			</div>
-		{/if}
+	<div class="mb-5">
+		<h1 class="text-2xl font-bold">Payment receipt</h1>
+		<p class="text-sm text-muted-foreground">A posted receipt is permanent. Corrections use a separate reversal or adjustment.</p>
 	</div>
 
 	{#if paymentQuery.isLoading}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Loading payment...</div>
-	{:else if !payment}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Payment not found.</div>
+		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Loading receipt...</div>
+	{:else if !receipt}
+		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Receipt not found.</div>
 	{:else}
-		<!-- Hero: the amount + how it's being collected, washed by collection status. -->
-		<HeroCard tone={heroTone} testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
-			<div class="min-w-0">
-				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{paymentTypeLabel(payment.paymentType)} payment</p>
-				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{heroAmount}</p>
-				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-					<StatusBadge status={payment.status} />
-					{#if leaseDisplay && payment.leaseId != null}
-						<span aria-hidden="true">·</span>
-						<a href="/leases/{payment.leaseId}" class="font-medium text-foreground underline-offset-4 hover:underline">{leaseDisplay}</a>
-					{/if}
-					{#if payment.tenantName}
-						<span aria-hidden="true">·</span>
-						<span>{payment.tenantName}</span>
-					{/if}
-				</div>
+		<HeroCard tone="success" testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
+			<div>
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Received</p>
+				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{money(receipt.amount, receipt.currency)}</p>
+				<p class="mt-2 text-sm text-muted-foreground">{formatDateOnly(receipt.receivedOn)} · {receipt.tenantName || receipt.relationshipNumber}</p>
 			</div>
-			{#if !editing && payment.status !== 'Paid' && payment.status !== 'Waived'}
-				<Button size="sm" data-testid="payment-hero-cta" onclick={startEditing}>
-					<Pencil class="h-4 w-4" />
-					Update payment
-				</Button>
-			{/if}
+			<p class="text-sm text-muted-foreground">Receipt #{receipt.id}</p>
 		</HeroCard>
 
 		<div class="grid gap-6 lg:grid-cols-2">
-			<DetailCard title="Charge" icon={Receipt} accent="primary" testid="payment-card-charge" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Property / unit" bind:value={form.leaseId} display={leaseDisplay} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={formatPaymentMoney(payment.amount)} {editing} type="number" error={formErrors.amount} testid="payment-detail-amount" />
-				<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} type="select" options={typeOptions} testid="payment-detail-type" />
-				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: formatDateOnly(payment.dueDate), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
+			<DetailCard title="Receipt" icon={Receipt} accent="success" testid="payment-card-receipt">
+				<dl class="grid gap-4 sm:grid-cols-2">
+					<div><dt class="text-xs text-muted-foreground">Date received</dt><dd class="font-medium">{formatDateOnly(receipt.receivedOn)}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Payment method</dt><dd class="font-medium">{receipt.paymentMethodSummary || 'Not specified'}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Reference</dt><dd class="font-medium">{receipt.providerReference || '—'}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Payer</dt><dd class="font-medium">{receipt.payerName || receipt.tenantName || '—'}</dd></div>
+					{#if receipt.checkNumber}<div><dt class="text-xs text-muted-foreground">Check number</dt><dd class="font-medium">{receipt.checkNumber}</dd></div>{/if}
+					{#if receipt.bankName}<div><dt class="text-xs text-muted-foreground">Bank</dt><dd class="font-medium">{receipt.bankName}</dd></div>{/if}
+					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Description</dt><dd class="font-medium">{receipt.description}</dd></div>
+				</dl>
 			</DetailCard>
 
-			<DetailCard title="Payment tracking" icon={CircleCheck} accent="success" testid="payment-card-tracking" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} type="select" options={statusOptions} testid="payment-detail-status" />
-				<!-- Amount paid (collected-so-far) only applies to a Partial payment. While editing show it
-				     only when the chosen status is Partial; read-only show it only when the payment IS
-				     Partial — every other status has no split to display. -->
-				{#if editing ? form.status === 'Partial' : payment.status === 'Partial'}
-					<InlineField label="Amount paid" bind:value={form.amountPaid} display={payment.amountPaid != null ? formatPaymentMoney(payment.amountPaid) : '-'} {editing} type="number" error={formErrors.amountPaid} testid="payment-detail-amount-paid" />
-				{/if}
-				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? formatDateOnly(payment.paidDate) : '', testid: 'payment-detail-paid-date' })}
-				<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />
-				<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} testid="payment-detail-reference" />
-				<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} type="textarea" testid="payment-detail-notes" class="sm:col-span-2" />
+			<DetailCard title="Account" icon={CircleCheck} accent="primary" testid="payment-card-account">
+				<dl class="grid gap-4 sm:grid-cols-2">
+					<div><dt class="text-xs text-muted-foreground">Property</dt><dd class="font-medium">{receipt.propertyName || `Property #${receipt.propertyId}`}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Unit</dt><dd class="font-medium">{receipt.unitNumber || `Unit #${receipt.unitId}`}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Tenant account</dt><dd class="font-mono text-sm">{receipt.accountNumber}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Relationship</dt><dd class="font-mono text-sm">{receipt.relationshipNumber}</dd></div>
+					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Posted</dt><dd class="font-medium">{postedAt(receipt.postedAtUtc)}</dd></div>
+				</dl>
 			</DetailCard>
 
-			<!-- Original scanned document this payment was created from (e.g. a paper check),
-			     served through the same-origin /payment-file proxy. Renders only when one exists. -->
-			{#if payment.hasScan}
-				<DetailCard title="Scanned document" icon={FileText} accent="muted" testid="payment-card-scanned-document" class="lg:col-span-2">
-					<div class="flex flex-col items-start gap-2">
-						<p class="text-xs text-muted-foreground">The original document this payment was created from.</p>
-						{#if payment.scanIsImage}
-							<a
-								href="/payment-file/{payment.id}"
-								target="_blank"
-								rel="noopener noreferrer"
-								data-testid="payment-detail-scanned-document-link"
-								aria-label="View scanned document full size"
-								class="group inline-block"
-							>
-								<img
-									src="/payment-file/{payment.id}?thumb=true"
-									alt="Scanned document preview"
-									class="max-h-80 w-auto rounded-md border border-border object-contain transition group-hover:ring-2 group-hover:ring-primary"
-									loading="lazy"
-								/>
-								<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">Open full size</span>
-							</a>
-						{:else}
-							<a
-								href="/payment-file/{payment.id}"
-								target="_blank"
-								rel="noopener noreferrer"
-								data-testid="payment-detail-scanned-document-link"
-								class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
-							>
-								<FileText class="h-5 w-5 shrink-0" />
-								<span>View scanned document</span>
-							</a>
-						{/if}
-					</div>
+			{#if receipt.sourceStoredFileId}
+				<DetailCard title="Source document" icon={FileText} accent="muted" testid="payment-card-scanned-document" class="lg:col-span-2">
+					<a href="/document-file/{receipt.sourceStoredFileId}" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-primary underline underline-offset-4">Open the scanned source</a>
 				</DetailCard>
 			{/if}
 		</div>
 
-		<!-- Per-record audit history -->
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="payment-history-section">
 			<h2 class="mb-1 text-base font-semibold">History</h2>
-			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this payment — who, what, and when.</p>
-			<RecordHistory entityType="Payment" entityId={paymentId} />
+			<p class="mb-3 text-sm text-muted-foreground">The append-only posting and its audit trail.</p>
+			<RecordHistory entityType="TenantLedgerEntry" entityId={paymentId} />
 		</div>
 	{/if}
 </div>
-
-<ConfirmDialog
-	open={deleteTarget !== null}
-	title="Delete payment"
-	message={payment ? `Delete this ${heroAmount} ${paymentTypeLabel(payment.paymentType).toLowerCase()} payment? This cannot be undone.` : ''}
-	busy={deleteMutation.isPending}
-	testid="payment-detail-delete"
-	onconfirm={() => deleteTarget !== null && deleteMutation.mutate()}
-	oncancel={() => (deleteTarget = null)}
-/>
-
-{#if payment}
-	<TenantNoticeDialog
-		bind:open={showPaymentNoticeDialog}
-		tenantName={payment.tenantName || payment.leaseNumber || 'this tenant'}
-		leaseId={payment.leaseId ?? undefined}
-		paymentId={payment.id}
-		initialNoticeType={selectedPaymentNoticeType}
-	/>
-{/if}
