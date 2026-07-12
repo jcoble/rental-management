@@ -74,6 +74,7 @@ public interface IAtomicWriteAttempt
     IAtomicLockingPersistence Locking { get; }
     IAtomicScanConfirmationPersistence ScanConfirmation { get; }
     IAtomicScheduledFinancePersistence ScheduledFinance { get; }
+    IAtomicProviderInboxPersistence ProviderInbox { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -118,6 +119,19 @@ public interface IAtomicScheduledFinancePersistence
 }
 
 public sealed record AtomicLoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);
+
+/// <summary>
+/// Transaction-scoped provider-inbox ownership boundary. PostgreSQL row-locks the event and
+/// rechecks its owner, opaque claim token, and live database-clock lease before returning a tracked row.
+/// </summary>
+public interface IAtomicProviderInboxPersistence
+{
+    Task<ProviderInboxEvent?> LockOwnedAsync(
+        long providerInboxEventId,
+        string claimOwner,
+        Guid claimToken,
+        CancellationToken ct = default);
+}
 
 /// <summary>Small, fixed namespace of transaction-scoped aggregate locks owned by the kernel.</summary>
 public enum AtomicLockResource

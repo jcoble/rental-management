@@ -114,11 +114,12 @@ public sealed record RecordVerifiedProviderPaymentEventResult(
     PaymentTransactionStatus? TransactionStatus) : IAtomicResultData;
 
 /// <summary>
-/// Reconciles one leased provider inbox row. Id plus claim token fence every completion, retry,
-/// and dead-letter transition against an expired worker claim.
+/// Reconciles one leased provider inbox row. Id, owner, and claim token fence every completion,
+/// retry, and dead-letter transition against an expired worker claim.
 /// </summary>
 public sealed record ReconcileClaimedProviderPaymentEventCommand(
     long ProviderInboxEventId,
+    string ClaimOwner,
     Guid ClaimToken,
     DateTime ReconciledAtUtc) : IAtomicCommandData;
 

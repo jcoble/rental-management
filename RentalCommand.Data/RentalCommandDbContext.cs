@@ -2036,8 +2036,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ProviderPaymentIntentId).HasMaxLength(200);
             entity.Property(e => e.IdempotencyKey).HasMaxLength(200);
             entity.Property(e => e.FailureReason).HasMaxLength(1000);
-            // Unique index on ProviderPaymentIntentId — filtered so nulls don't collide.
-            entity.HasIndex(e => e.ProviderPaymentIntentId)
+            // Provider object identifiers are unique inside their provider namespace. The
+            // composite fence prevents duplicate local financial application without assuming
+            // unrelated providers coordinate identifier formats.
+            entity.HasIndex(e => new { e.Provider, e.ProviderPaymentIntentId })
                   .IsUnique()
                   .HasFilter("\"ProviderPaymentIntentId\" IS NOT NULL");
             // Unique index on IdempotencyKey — DB-level backstop so a retry of the same charge can

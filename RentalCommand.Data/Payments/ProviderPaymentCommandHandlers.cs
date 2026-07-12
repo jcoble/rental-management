@@ -181,6 +181,32 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         CancellationToken ct)
     {
         var now = command.ReceivedAtUtc;
+        var existing = await (
+                from candidate in attempt.Persistence.Query<ProviderInboxEvent>().AsNoTracking()
+                join providerTransaction in attempt.Persistence.Query<PaymentTransaction>().AsNoTracking()
+                    on new { candidate.Provider, ProviderPaymentIntentId = candidate.ProviderObjectId }
+                    equals new
+                    {
+                        providerTransaction.Provider,
+                        ProviderPaymentIntentId = (string?)providerTransaction.ProviderPaymentIntentId,
+                    }
+                    into matchingTransactions
+                from providerTransaction in matchingTransactions.DefaultIfEmpty()
+                where candidate.Provider == command.Provider &&
+                      candidate.ProviderEventId == command.ProviderEventId
+                select new RecordVerifiedProviderPaymentEventResult(
+                    RecordProviderPaymentEventOutcome.Duplicate,
+                    candidate.Id,
+                    candidate.PortfolioId,
+                    providerTransaction == null ? null : providerTransaction.PaymentId,
+                    providerTransaction == null ? null : providerTransaction.Id,
+                    providerTransaction == null ? null : providerTransaction.Status))
+            .SingleOrDefaultAsync(ct);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
         var inbox = new ProviderInboxEvent
         {
             Provider = command.Provider,
@@ -216,6 +242,21 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         if (command.EventKind == ProviderPaymentEventKind.SetupCompleted)
         {
             return await ApplySetupCompletedAsync(command, attempt, inbox, now, ct);
+        }
+
+        if (string.IsNullOrWhiteSpace(command.ProviderPaymentId))
+        {
+            inbox.FailureKind = ProviderInboxFailureKind.Permanent;
+            inbox.LastError = "Verified payment event did not identify a provider payment object.";
+            inbox.DeadLetteredAtUtc = now;
+            await attempt.FlushBusinessAsync(ct);
+            return new RecordVerifiedProviderPaymentEventResult(
+                RecordProviderPaymentEventOutcome.Unmatched,
+                inbox.Id,
+                null,
+                null,
+                null,
+                null);
         }
 
         var transaction = await attempt.Persistence.Query<PaymentTransaction>()
@@ -434,16 +475,16 @@ public sealed class ReconcileClaimedProviderPaymentEventHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
-        var inbox = await attempt.Persistence.Query<ProviderInboxEvent>()
-            .SingleOrDefaultAsync(candidate =>
-                candidate.Id == command.ProviderInboxEventId &&
-                candidate.ClaimToken == command.ClaimToken &&
-                candidate.ProcessedAtUtc == null &&
-                candidate.DeadLetteredAtUtc == null, ct);
+        var inbox = await attempt.ProviderInbox.LockOwnedAsync(
+            command.ProviderInboxEventId,
+            command.ClaimOwner,
+            command.ClaimToken,
+            ct);
         if (inbox is null)
         {
             throw new AtomicReceiptInvariantException(
-                $"Provider inbox event {command.ProviderInboxEventId} is not owned by claim {command.ClaimToken}.");
+                $"Provider inbox event {command.ProviderInboxEventId} is not owned by " +
+                $"{command.ClaimOwner} with claim {command.ClaimToken}.");
         }
 
         if (inbox.EventKind is ProviderPaymentEventKind.SetupCompleted or ProviderPaymentEventKind.Ignored ||
