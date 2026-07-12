@@ -47,6 +47,20 @@ public sealed record WorkspaceCapabilityAuthorizationTarget(int PortfolioId)
 public sealed record PropertyCapabilityAuthorizationTarget(int PortfolioId, int PropertyId)
     : WorkspaceAuthorizationTarget(PortfolioId);
 
+/// <summary>
+/// A Unit-backed property capability target. The evaluator resolves the Unit's owning Property and
+/// proves both the requested capability and that Property's scope on the same assignment in SQL.
+/// </summary>
+public sealed record UnitCapabilityAuthorizationTarget(int PortfolioId, int UnitId)
+    : WorkspaceAuthorizationTarget(PortfolioId);
+
+/// <summary>
+/// An application-backed property capability target. Applications without an assigned Property
+/// fail closed because there is no property scope against which to authorize the Team assignment.
+/// </summary>
+public sealed record RentalApplicationCapabilityAuthorizationTarget(int PortfolioId, int ApplicationId)
+    : WorkspaceAuthorizationTarget(PortfolioId);
+
 public sealed record WorkOrderCapabilityAuthorizationTarget(int PortfolioId, int WorkOrderId)
     : WorkspaceAuthorizationTarget(PortfolioId);
 

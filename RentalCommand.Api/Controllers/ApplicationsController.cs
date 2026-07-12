@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Applications;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -28,19 +29,25 @@ public class ApplicationsController : ManagementControllerBase
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
+    private readonly IWorkspaceAuthorizationEvaluator _authorization;
+    private readonly TimeProvider _timeProvider;
 
     public ApplicationsController(
         IApplicationService service,
         IScreeningService screening,
         IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
-        IFileStorage files)
+        IFileStorage files,
+        IWorkspaceAuthorizationEvaluator authorization,
+        TimeProvider timeProvider)
     {
         _service = service;
         _screening = screening;
         _atomic = atomic;
         _db = db;
         _files = files;
+        _authorization = authorization;
+        _timeProvider = timeProvider;
     }
 
     /// <summary>Lists applications in the portfolio, newest first; optionally filtered by <c>?status=</c>.</summary>
@@ -317,6 +324,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> StartIntegratedScreening(
         int id, [FromBody] StartIntegratedScreeningRequest body, CancellationToken ct)
     {
+        if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
             var result = await _screening.StartIntegratedAsync(GetPortfolioId(), id, GetUserId(), body, ct);
@@ -341,6 +349,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> TrackExternalScreening(
         int id, [FromBody] TrackExternalScreeningRequest body, CancellationToken ct)
     {
+        if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
             var result = await _screening.TrackExternalAsync(GetPortfolioId(), id, GetUserId(), body, ct);
@@ -357,6 +366,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> UpdateExternalScreening(
         int id, int screeningId, [FromBody] UpdateExternalScreeningRequest body, CancellationToken ct)
     {
+        if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
             var result = await _screening.UpdateExternalAsync(GetPortfolioId(), id, screeningId, body, ct);
@@ -373,6 +383,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> RecordScreeningDecision(
         int id, int screeningId, [FromBody] RecordScreeningDecisionRequest body, CancellationToken ct)
     {
+        if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
             var result = await _screening.RecordDecisionAsync(
@@ -390,6 +401,7 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetScreening(int id, CancellationToken ct)
     {
+        if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         var results = await _screening.GetWorkspaceAsync(GetPortfolioId(), id, ct);
         return results == null ? NotFound(new { error = "Application not found" }) : Ok(results);
     }
@@ -404,6 +416,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> GenerateAdverseAction(
         int id, [FromBody] GenerateAdverseActionRequest body, CancellationToken ct)
     {
+        if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
             var result = await _screening.GenerateAdverseActionAsync(
@@ -426,5 +439,16 @@ public class ApplicationsController : ManagementControllerBase
     {
         var result = await _service.GenerateLinkAsync(GetPortfolioId(), ct);
         return Ok(result);
+    }
+
+    private Task<bool> CanManageScreeningAsync(int applicationId, CancellationToken ct)
+    {
+        var active = GetActiveAccessContext();
+        return _authorization.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingApplicationsManage,
+            new RentalApplicationCapabilityAuthorizationTarget(active.PortfolioId, applicationId),
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
     }
 }

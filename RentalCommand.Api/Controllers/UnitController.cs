@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,12 +18,21 @@ public class UnitController : ManagementControllerBase
     private readonly IUnitService _service;
     private readonly IUnitDashboardService _dashboard;
     private readonly IListingWorkspaceService _listings;
+    private readonly IWorkspaceAuthorizationEvaluator _authorization;
+    private readonly TimeProvider _timeProvider;
 
-    public UnitController(IUnitService service, IUnitDashboardService dashboard, IListingWorkspaceService listings)
+    public UnitController(
+        IUnitService service,
+        IUnitDashboardService dashboard,
+        IListingWorkspaceService listings,
+        IWorkspaceAuthorizationEvaluator authorization,
+        TimeProvider timeProvider)
     {
         _service = service;
         _dashboard = dashboard;
         _listings = listings;
+        _authorization = authorization;
+        _timeProvider = timeProvider;
     }
 
     [HttpGet]
@@ -85,6 +95,7 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ListingWorkspaceResponse?>> GetListingWorkspace(int id, CancellationToken ct)
     {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
         if (!await _listings.UnitExistsInPortfolioAsync(GetPortfolioId(), id, ct))
             return NotFound(new { error = "Unit not found" });
 
@@ -97,6 +108,7 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ListingWorkspaceResponse>> GenerateListingWorkspace(int id, CancellationToken ct)
     {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
         var listing = await _listings.GenerateAsync(GetPortfolioId(), id, GetUserId(), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
@@ -107,6 +119,7 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<ListingWorkspaceResponse>> SaveListingWorkspace(
         int id, [FromBody] SaveListingWorkspaceRequest request, CancellationToken ct)
     {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
         var listing = await _listings.SaveAsync(GetPortfolioId(), id, request, GetUserId(), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
@@ -116,6 +129,7 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<ExternalListingSignalResponse>> IngestListingSignal(
         int id, int publicationId, [FromBody] IngestExternalListingSignalRequest request, CancellationToken ct)
     {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
         var signal = await _listings.IngestSignalAsync(GetPortfolioId(), id, publicationId, request, ct);
         return signal is null ? NotFound(new { error = "Listing publication not found" }) : Ok(signal);
     }
@@ -125,8 +139,20 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<ListingWorkspaceResponse>> ConfirmListingSignal(
         int id, int signalId, [FromQuery] bool accept = true, CancellationToken ct = default)
     {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.ConfirmSignalAsync(GetPortfolioId(), id, signalId, accept, GetUserId(), ct);
         return workspace is null ? NotFound(new { error = "Listing signal not found" }) : Ok(workspace);
+    }
+
+    private Task<bool> CanManageListingAsync(int unitId, CancellationToken ct)
+    {
+        var active = GetActiveAccessContext();
+        return _authorization.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingListingsManage,
+            new UnitCapabilityAuthorizationTarget(active.PortfolioId, unitId),
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
     }
 
     /// <summary>

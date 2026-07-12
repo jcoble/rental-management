@@ -75,6 +75,18 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
         return accessContext.AccessContextId;
     }
 
+    /// <summary>The database-validated access context installed by canonical auth middleware.</summary>
+    protected ActiveAccessContext GetActiveAccessContext()
+    {
+        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
+            value is not ActiveAccessContext accessContext)
+        {
+            throw new MissingAuthContextException("Invalid access context");
+        }
+
+        return accessContext;
+    }
+
     /// <summary>
     /// True when the validated context has a Team membership. This is only a relationship-shape
     /// signal; endpoint admission still belongs to canonical capability authorization.
