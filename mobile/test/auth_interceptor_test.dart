@@ -11,8 +11,7 @@ import 'package:rental_command/core/auth/auth_interceptor.dart';
 /// relies on without standing up a full HTTP + secure-storage harness.
 void main() {
   group('AuthInterceptor.replayableBody', () {
-    test(
-        'a FormData consumed by the first send is rebuilt into a fresh, '
+    test('a FormData consumed by the first send is rebuilt into a fresh, '
         're-finalizable instance for the retry (no StateError)', () {
       final original = FormData.fromMap({
         'file': MultipartFile.fromBytes(
@@ -39,8 +38,10 @@ void main() {
       expect(replayForm.isFinalized, isFalse);
 
       // ...whose fields and files survived the clone...
-      expect(replayForm.fields.map((e) => '${e.key}=${e.value}'),
-          contains('targetEntityType=Expense'));
+      expect(
+        replayForm.fields.map((e) => '${e.key}=${e.value}'),
+        contains('targetEntityType=Expense'),
+      );
       expect(replayForm.files.single.key, 'file');
       expect(replayForm.files.single.value.filename, 'receipt.jpg');
 
@@ -49,17 +50,41 @@ void main() {
       expect(() => replayForm.finalize().drain<void>(), returnsNormally);
     });
 
-    test('non-multipart bodies are returned unchanged so JSON retries still work',
-        () {
-      const jsonBody = {'amount': 40, 'note': 'plumbing'};
-      expect(
-          identical(AuthInterceptor.replayableBody(jsonBody), jsonBody), isTrue);
+    test(
+      'non-multipart bodies are returned unchanged so JSON retries still work',
+      () {
+        const jsonBody = {'amount': 40, 'note': 'plumbing'};
+        expect(
+          identical(AuthInterceptor.replayableBody(jsonBody), jsonBody),
+          isTrue,
+        );
 
-      const stringBody = 'raw=payload';
-      expect(identical(AuthInterceptor.replayableBody(stringBody), stringBody),
-          isTrue);
+        const stringBody = 'raw=payload';
+        expect(
+          identical(AuthInterceptor.replayableBody(stringBody), stringBody),
+          isTrue,
+        );
 
-      expect(AuthInterceptor.replayableBody(null), isNull);
+        expect(AuthInterceptor.replayableBody(null), isNull);
+      },
+    );
+  });
+
+  group('stale access revision replay policy', () {
+    test('safe reads may be replayed after the envelope refreshes', () {
+      expect(AuthInterceptor.canReplayAfterAccessRefresh('GET'), isTrue);
+      expect(AuthInterceptor.canReplayAfterAccessRefresh('HEAD'), isTrue);
+      expect(AuthInterceptor.canReplayAfterAccessRefresh('OPTIONS'), isTrue);
+    });
+
+    test('mutations must return to the caller without automatic replay', () {
+      for (final method in ['POST', 'PUT', 'PATCH', 'DELETE']) {
+        expect(
+          AuthInterceptor.canReplayAfterAccessRefresh(method),
+          isFalse,
+          reason: '$method could duplicate or apply under changed authority',
+        );
+      }
     });
   });
 }

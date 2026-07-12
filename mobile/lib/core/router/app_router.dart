@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../auth/auth_controller.dart';
+import '../auth/auth_models.dart';
 import '../voice/voice_command.dart';
 import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
@@ -59,6 +60,68 @@ bool _isVoiceDeepLink(Uri uri) =>
     uri.pathSegments.contains('voice') ||
     parseVoiceCommand(uri) != null;
 
+bool _canOpenRoute(AuthStateAuthenticated auth, String path) {
+  if (path == _homePath ||
+      _publicAuthPaths.contains(path) ||
+      _onboardingGatePaths.contains(path) ||
+      path == _liveSetupPath) {
+    return true;
+  }
+
+  if (auth.activeExperience == WorkspaceExperience.tenant) {
+    return path == '/notifications' || path.startsWith('/messages/');
+  }
+
+  final capabilities = auth.capabilities;
+  bool hasAny(Iterable<String> keys) => keys.any(capabilities.contains);
+  if (path == '/rentals' || path == '/owners' || path.startsWith('/units/')) {
+    return hasAny(const [
+      'rentals.read',
+      'rentals.manage',
+      'leasing.listings.manage',
+      'leasing.applications.manage',
+    ]);
+  }
+  if (path == '/work' || path.startsWith('/work-orders/')) {
+    return hasAny(const [
+      'work.read',
+      'work.manage',
+      'maintenance.assigned-work.read',
+      'maintenance.assigned-work.update',
+    ]);
+  }
+  if (path == '/money' ||
+      path.startsWith('/payments/') ||
+      path.startsWith('/expenses/')) {
+    return hasAny(const [
+      'money.balances.read',
+      'money.payments.manage',
+      'money.expenses.manage',
+      'money.owner-reports.read',
+    ]);
+  }
+  if (path == '/inbox' ||
+      path == '/notifications' ||
+      path.startsWith('/messages/')) {
+    return hasAny(const [
+      'rentals.read',
+      'work.read',
+      'leasing.applications.manage',
+      'maintenance.assigned-work.converse',
+    ]);
+  }
+  if (path.startsWith('/scan/')) {
+    return hasAny(const [
+      'rentals.manage',
+      'work.manage',
+      'money.payments.manage',
+      'money.expenses.manage',
+      'leasing.agreements.prepare',
+    ]);
+  }
+  return false;
+}
+
 /// Application router with auth-based redirect guard.
 ///
 /// Unauthenticated users are redirected to `/login`.
@@ -106,6 +169,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // screens until it chooses. This catches login landing, deep links and cold starts alike.
       if (authState is AuthStateAuthenticated && authState.onboardingPending) {
         return onGatePage ? null : _chooseSetupPath;
+      }
+
+      if (authState is AuthStateAuthenticated &&
+          !_canOpenRoute(authState, state.matchedLocation)) {
+        return _homePath;
       }
 
       // Decided (or returning) user must not linger on the auth pages or the onboarding gate.

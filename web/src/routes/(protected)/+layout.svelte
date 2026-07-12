@@ -5,7 +5,7 @@
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { setOnAuthCleared, isTokenExpired } from '$lib/stores/auth.svelte';
 	import { initPortfolio } from '$lib/stores/portfolio.svelte';
-	import { refreshToken } from '$lib/api/client';
+	import { refreshToken, setAccessRecoveryCallback } from '$lib/api/client';
 	import { signalRService } from '$lib/realtime/signalr';
 	import { useInvalidateOnSignalR } from '$lib/realtime/invalidate';
 	import { CLIENT_HUB_URL } from '$lib/config';
@@ -32,6 +32,12 @@
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).
 	const queryClient = useQueryClient();
 	const disconnectQueryBridge = useInvalidateOnSignalR(queryClient);
+	setAccessRecoveryCallback(async () => {
+		await signalRService.disconnect();
+		queryClient.clear();
+		await invalidateAll();
+		await signalRService.connect(CLIENT_HUB_URL);
+	});
 
 	// Tear down the realtime connection when auth is cleared (logout / expiry),
 	// before the login redirect fires.
@@ -89,6 +95,7 @@
 
 	onDestroy(() => {
 		setOnAuthCleared(null);
+		setAccessRecoveryCallback(null);
 		disconnectQueryBridge();
 		signalRService.disconnect();
 	});

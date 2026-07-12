@@ -1,47 +1,36 @@
 <script lang="ts">
-	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { portfolios } from '$lib/api/endpoints/portfolios';
-	import { getAuthState } from '$lib/stores/auth.svelte';
-	import { getCurrentPortfolioId, setCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import type { Portfolio } from '$lib/types';
-	import { ChevronDown, Plus, Building2 } from '@lucide/svelte';
-	import CreatePortfolioDialog from './CreatePortfolioDialog.svelte';
+	import { createQuery } from '@tanstack/svelte-query';
+	import { auth } from '$lib/api/endpoints/auth';
+	import { adoptAccessSession } from '$lib/api/client';
+	import { getAuthState, selectExperience } from '$lib/stores/auth.svelte';
+	import { ChevronDown, Building2 } from '@lucide/svelte';
 
 	let { collapsed = false }: { collapsed?: boolean } = $props();
 
-	const queryClient = useQueryClient();
 	const authState = getAuthState();
 
-	const portfoliosQuery = createQuery(() => ({
-		queryKey: ['portfolios'],
+	const contextsQuery = createQuery(() => ({
+		queryKey: ['access-contexts'],
 		enabled: authState.isAuthenticated,
-		queryFn: () => portfolios.list(),
+		queryFn: () => auth.contexts(),
 	}));
 
 	let open = $state(false);
-	let showCreateDialog = $state(false);
+	let switching = $state(false);
+	const access = $derived(authState.accessEnvelope);
+	const choices = $derived(contextsQuery.data ?? []);
+	const canSwitch = $derived(choices.length > 1);
 
-	let currentPortfolio = $derived(
-		portfoliosQuery.data?.find((p: Portfolio) => p.id === getCurrentPortfolioId())
-	);
-
-	$effect(() => {
-		const list = portfoliosQuery.data;
-		if (list && list.length > 0 && !list.find((p: Portfolio) => p.id === getCurrentPortfolioId())) {
-			setCurrentPortfolioId(list[0].id);
+	async function selectContext(id: number) {
+		if (id === access?.selectedContext.accessContextId || switching) return;
+		switching = true;
+		try {
+			const result = await auth.selectContext(id);
+			await adoptAccessSession(result.accessToken, result.accessTokenExpiration, result.access);
+			open = false;
+		} finally {
+			switching = false;
 		}
-	});
-
-	function selectPortfolio(id: number) {
-		setCurrentPortfolioId(id);
-		open = false;
-		queryClient.invalidateQueries();
-	}
-
-	function handleCreated(portfolio: Portfolio) {
-		showCreateDialog = false;
-		queryClient.invalidateQueries({ queryKey: ['portfolios'] });
-		selectPortfolio(portfolio.id);
 	}
 
 	function handleClickOutside(e: MouseEvent) {
@@ -59,8 +48,9 @@
 		<button
 			onclick={() => (open = !open)}
 			class="m3-state-layer flex w-full items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-			aria-label={currentPortfolio?.name || 'Select portfolio'}
-			data-m3-tooltip={currentPortfolio?.name || 'Select portfolio'}
+			disabled={!canSwitch}
+			aria-label={access?.selectedContext.workspaceName || 'Current workspace'}
+			data-m3-tooltip={access?.selectedContext.workspaceName || 'Current workspace'}
 		>
 			<Building2 class="h-4 w-4 shrink-0" />
 		</button>
@@ -70,44 +60,44 @@
 			class="m3-field-surface m3-state-layer flex w-full items-center gap-2 px-3 py-1.5 text-sm text-foreground"
 		>
 			<Building2 class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-			<span class="flex-1 truncate text-left">{currentPortfolio?.name || 'Select portfolio'}</span>
-			<ChevronDown class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+			<span class="flex-1 truncate text-left">{access?.selectedContext.workspaceName || 'Workspace'}</span>
+			{#if canSwitch}<ChevronDown class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />{/if}
 		</button>
 	{/if}
 
-	{#if open}
+	{#if open && canSwitch}
 		<div class="absolute left-2 right-2 top-full z-50 mt-1 rounded-[var(--m3-shape-large)] border border-border bg-card shadow-[var(--m3-elevation-2)]">
-			{#if portfoliosQuery.data}
+			{#if contextsQuery.data}
 				<div class="max-h-48 overflow-y-auto py-1">
-					{#each portfoliosQuery.data as portfolio}
+					{#each choices as context}
 						<button
-							onclick={() => selectPortfolio(portfolio.id)}
-							class="flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-secondary {portfolio.id === getCurrentPortfolioId() ? 'text-primary' : 'text-foreground'}"
+							onclick={() => selectContext(context.accessContextId)}
+							disabled={switching}
+							class="flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-secondary {context.accessContextId === access?.selectedContext.accessContextId ? 'text-primary' : 'text-foreground'}"
 						>
-							<span class="truncate">{portfolio.name}</span>
-							{#if portfolio.id === getCurrentPortfolioId()}
+							<span class="truncate">{context.workspaceName}</span>
+							{#if context.accessContextId === access?.selectedContext.accessContextId}
 								<span class="ml-auto text-[10px] text-primary">current</span>
 							{/if}
 						</button>
 					{/each}
 				</div>
 			{/if}
-			<div class="border-t border-border py-1">
-				<button
-					onclick={() => { open = false; showCreateDialog = true; }}
-					class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-				>
-					<Plus class="h-3.5 w-3.5" />
-					New Portfolio
-				</button>
-			</div>
 		</div>
 	{/if}
 </div>
-
-{#if showCreateDialog}
-	<CreatePortfolioDialog
-		onCreated={handleCreated}
-		onClose={() => (showCreateDialog = false)}
-	/>
+{#if !collapsed && (access?.availableExperiences.length ?? 0) > 1}
+	<div class="px-2 pb-2">
+		<label for="active-experience" class="sr-only">Current work area</label>
+		<select
+			id="active-experience"
+			value={authState.activeExperience ?? ''}
+			onchange={(event) => selectExperience(event.currentTarget.value as import('$lib/types/user').WorkspaceExperience)}
+			class="m3-field-surface h-9 w-full px-3 text-sm text-foreground"
+		>
+			{#each access?.availableExperiences ?? [] as experience}
+				<option value={experience}>{experience}</option>
+			{/each}
+		</select>
+	</div>
 {/if}

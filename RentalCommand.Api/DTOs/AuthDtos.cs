@@ -81,6 +81,18 @@ public class LoginResponse
     public string? RefreshToken { get; set; }
 }
 
+/// <summary>
+/// Returned only after valid credentials identify more than one effective workspace context. The
+/// caller resubmits the same credentials with one opaque access-context id; no session or token is
+/// created until that choice is made.
+/// </summary>
+public sealed class AccessContextSelectionRequiredResponse
+{
+    public string Code { get; set; } = "ACCESS_CONTEXT_REQUIRED";
+    public string Error { get; set; } = "Select a workspace to continue.";
+    public IReadOnlyList<EffectiveAccessContextOption> Contexts { get; set; } = [];
+}
+
 public class ConfirmEmailRequest
 {
     [Required]

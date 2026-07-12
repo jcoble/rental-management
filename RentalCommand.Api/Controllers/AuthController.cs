@@ -110,6 +110,13 @@ public class AuthController : ControllerBase
             GetUserAgent());
         if (!result.Success)
         {
+            if (result.AccessContexts is { Count: > 1 } contexts)
+            {
+                return Conflict(new AccessContextSelectionRequiredResponse
+                {
+                    Contexts = contexts,
+                });
+            }
             return Unauthorized(new { error = result.Error ?? "Login failed" });
         }
 

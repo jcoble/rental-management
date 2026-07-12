@@ -2,8 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { Info, CheckCircle2, AlertTriangle, XCircle } from '@lucide/svelte';
 	import type { NotificationItem, NotificationSeverity } from '$lib/api/types/notification';
-	import { getCurrentUser } from '$lib/stores/auth.svelte';
-	import { isPortalUser, isStaff } from '$lib/types/user';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
 
 	type Props = {
@@ -13,8 +12,8 @@
 	};
 
 	let { notification, truncate = true, onRead }: Props = $props();
-	const currentUser = $derived(getCurrentUser());
-	const portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
+	const authState = getAuthState();
+	const portalUser = $derived(authState.activeExperience === 'Tenant');
 
 	const severityConfig: Record<
 		NotificationSeverity,

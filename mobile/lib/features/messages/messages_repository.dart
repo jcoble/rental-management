@@ -27,9 +27,10 @@ class MessagesRepository {
 
   static String createOperationKey() {
     final random = Random.secure();
-    return List.generate(16, (_) => random.nextInt(256))
-        .map((value) => value.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return List.generate(
+      16,
+      (_) => random.nextInt(256),
+    ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// GET /conversations → ConversationSummary[] (messages list empty).
@@ -146,7 +147,7 @@ class MessagesRepository {
 
 final messagesRepositoryProvider = Provider<MessagesRepository>((ref) {
   final auth = ref.watch(authControllerProvider);
-  final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
+  final tenantMode = auth is AuthStateAuthenticated && auth.isTenantExperience;
   return MessagesRepository(ref.watch(dioProvider), tenantMode: tenantMode);
 });
 

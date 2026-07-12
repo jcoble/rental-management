@@ -1,4 +1,4 @@
-import type { LoginRequest, LoginResponse, User } from '$lib/types/user';
+import type { AccessEnvelope, EffectiveAccessContextOption, LoginRequest, LoginResponse, User } from '$lib/types/user';
 import { api, fetchPublicApi } from '../client';
 
 /**
@@ -14,6 +14,13 @@ export const auth = {
 			body: JSON.stringify(data)
 		}),
 	me: () => api.get<User>('/auth/me'),
+	access: () => api.get<AccessEnvelope>('/auth/access'),
+	contexts: () => api.get<EffectiveAccessContextOption[]>('/auth/contexts'),
+	selectContext: (accessContextId: number) =>
+		api.post<{ accessToken: string; accessTokenExpiration: string; access: AccessEnvelope }>(
+			'/auth/contexts/select',
+			{ accessContextId }
+		),
 	/**
 	 * Re-send the email-verification message. Anonymous endpoint — the API always responds
 	 * with a neutral success (no account enumeration), so callers can fire-and-forget.

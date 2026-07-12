@@ -12,7 +12,8 @@
 import type { Handle, HandleFetch, RequestEvent } from '@sveltejs/kit';
 import type { Cookies } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
-import type { User } from '$lib/types/user';
+import type { AccessEnvelope, User } from '$lib/types/user';
+import { userFromAccessEnvelope } from '$lib/types/user';
 import { serverRefreshToken, applyRefreshCookies } from '$lib/server/token-refresh';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { userFromAccessToken } from '$lib/server/jwt-claims';
@@ -40,18 +41,20 @@ async function fetchWithAuthTimeout(input: string, init: RequestInit): Promise<R
 export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 	event.locals.accessToken = null;
+	event.locals.access = null;
 
 	const accessToken = getAccessToken(event.cookies);
 
 	if (accessToken) {
 		try {
-			const response = await fetchWithAuthTimeout(`${SERVER_API_BASE_URL}/auth/me`, {
+			const response = await fetchWithAuthTimeout(`${SERVER_API_BASE_URL}/auth/access`, {
 				headers: { Authorization: `Bearer ${accessToken}` }
 			});
 
 			if (response.ok) {
-				const user: User = await response.json();
-				event.locals.user = user;
+				const access: AccessEnvelope = await response.json();
+				event.locals.access = access;
+				event.locals.user = userFromAccessEnvelope(access);
 				event.locals.accessToken = accessToken;
 				const storedExpiration = getAccessTokenExpiration(event.cookies);
 				if (storedExpiration) {
@@ -62,6 +65,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				const refreshed = await tryRefreshToken(event.cookies);
 				if (refreshed) {
 					event.locals.user = refreshed.user;
+					event.locals.access = refreshed.access;
 					event.locals.accessToken = refreshed.accessToken;
 					event.locals.accessTokenExpiration = refreshed.accessTokenExpiration;
 				} else {
@@ -87,6 +91,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			const refreshed = await tryRefreshToken(event.cookies);
 			if (refreshed) {
 				event.locals.user = refreshed.user;
+				event.locals.access = refreshed.access;
 				event.locals.accessToken = refreshed.accessToken;
 				event.locals.accessTokenExpiration = refreshed.accessTokenExpiration;
 			}
@@ -131,7 +136,7 @@ function preserveSessionFromToken(event: RequestEvent, accessToken: string): voi
  */
 async function tryRefreshToken(
 	cookies: Cookies
-): Promise<{ user: User; accessToken: string; accessTokenExpiration: string } | null> {
+): Promise<{ user: User; access: AccessEnvelope; accessToken: string; accessTokenExpiration: string } | null> {
 	const refreshTokenValue = getRefreshToken(cookies);
 	if (!refreshTokenValue) return null;
 
@@ -142,6 +147,7 @@ async function tryRefreshToken(
 
 	return {
 		user: result.user,
+		access: result.access,
 		accessToken: result.accessToken,
 		accessTokenExpiration: result.accessTokenExpiration
 	};

@@ -54,8 +54,8 @@
 	import M3NavItem from '$lib/components/m3/NavItem.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
 	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
-	import { clearAuthState } from '$lib/stores/auth.svelte';
-	import { hasRole, isPortalUser, isStaff } from '$lib/types/user';
+	import { clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
+	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
@@ -88,7 +88,8 @@
 		href: string;
 		label: string;
 		icon: typeof Building;
-		roles?: string[];
+		capabilities?: string[];
+		experiences?: WorkspaceExperience[];
 	};
 
 	type NavGroup = {
@@ -101,9 +102,9 @@
 	// Pinned single links above all groups (IA Wave 1 §4.2): the dashboard + the flagship
 	// "Scan / Edit" action, one tap away and outside any group.
 	const pinnedNavItems: NavItem[] = [
-		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
-		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList },
-		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
+		{ href: '/', label: 'Dashboard', icon: LayoutDashboard, experiences: ['Management'] },
+		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList, capabilities: ['rentals.manage'] },
+		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, capabilities: ['rentals.manage', 'leasing.agreements.prepare', 'maintenance.assigned-work.update'] }
 	];
 
 	// Grouped navigation (IA Wave 1 §4.2): four landlord-noun groups in frequency order —
@@ -115,9 +116,9 @@
 			label: 'Money',
 			icon: Wallet,
 			items: [
-				{ href: '/accounting', label: 'Money', icon: Calculator, roles: ['Admin', 'Manager'] },
-				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank, roles: ['Admin', 'Manager'] },
-				{ href: '/reports', label: 'Reports', icon: BarChart3, roles: ['Admin', 'Manager'] }
+				{ href: '/accounting', label: 'Money', icon: Calculator, capabilities: ['money.balances.read'] },
+				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank, capabilities: ['money.deposits.manage', 'leasing.deposits.read'] },
+				{ href: '/reports', label: 'Reports', icon: BarChart3, capabilities: ['reports.read', 'money.owner-reports.read'] }
 			]
 		},
 		{
@@ -125,12 +126,12 @@
 			label: 'Rentals',
 			icon: Briefcase,
 			items: [
-				{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/units', label: 'Units', icon: Home, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/applications', label: 'Applications', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] }
+				{ href: '/properties', label: 'Properties', icon: Building, capabilities: ['rentals.read'] },
+				{ href: '/units', label: 'Units', icon: Home, capabilities: ['rentals.read'] },
+				{ href: '/tenants', label: 'Tenants', icon: Users, capabilities: ['rentals.read', 'leasing.onboarding.manage'] },
+				{ href: '/leases', label: 'Leases', icon: FileText, capabilities: ['rentals.read', 'leasing.terms.read'] },
+				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload, capabilities: ['rentals.manage', 'leasing.agreements.prepare'] },
+				{ href: '/applications', label: 'Applications', icon: ClipboardList, capabilities: ['leasing.applications.manage'] }
 			]
 		},
 		{
@@ -140,9 +141,9 @@
 			items: [
 				// A6: one professional term for the "things to fix" concept — "Work Orders" — used
 				// consistently across the staff nav, the page heading, and the dashboard.
-				{ href: '/maintenance', label: 'Work Orders', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/vendors', label: 'Vendors', icon: Contact, roles: ['Admin', 'Manager'] }
+				{ href: '/maintenance', label: 'Work Orders', icon: Wrench, capabilities: ['work.read', 'maintenance.assigned-work.read'] },
+				{ href: '/appointments', label: 'Appointments', icon: Calendar, capabilities: ['work.read', 'leasing.showings.manage'] },
+				{ href: '/vendors', label: 'Vendors', icon: Contact, capabilities: ['work.manage'] }
 			]
 		},
 		{
@@ -150,8 +151,8 @@
 			label: 'Inbox',
 			icon: MessageSquare,
 			items: [
-				{ href: '/messages', label: 'Messages', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/notices', label: 'Tenant notices', icon: BellRing, roles: ['Admin', 'Manager', 'Agent'] }
+				{ href: '/messages', label: 'Messages', icon: MessageSquare, capabilities: ['rentals.read', 'leasing.onboarding.manage', 'maintenance.assigned-work.converse'] },
+				{ href: '/notices', label: 'Tenant notices', icon: BellRing, capabilities: ['rentals.manage', 'leasing.onboarding.manage'] }
 			]
 		}
 	];
@@ -162,7 +163,7 @@
 	// A4: ONE AI entry point. "Ask" (→ /ai) is the single doorway to the assistant; the redundant
 	// floating AssistantBubble was removed from this shell so there aren't multiple competing doorways.
 	const bottomRailItems: NavItem[] = [
-		{ href: '/ai', label: 'Ask', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/ai', label: 'Ask', icon: Sparkles, capabilities: ['rentals.read', 'work.read', 'leasing.terms.read'] },
 		{ href: '/docs', label: 'Help', icon: BookOpen }
 	];
 
@@ -173,10 +174,10 @@
 		label: 'Settings',
 		icon: Settings,
 		items: [
-			{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] },
-			{ href: '/admin/users', label: 'Team', icon: Shield, roles: ['Admin'] },
-			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
-			{ href: '/audit', label: 'Activity history', icon: History, roles: ['Admin', 'Manager'] }
+			{ href: '/settings', label: 'Settings', icon: Settings, capabilities: ['security.manage', 'billing.manage', 'integrations.manage'] },
+			{ href: '/admin/users', label: 'Team', icon: Shield, capabilities: ['team.read', 'team.manage'] },
+			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign, capabilities: ['money.owner-reports.read'] },
+			{ href: '/audit', label: 'Activity history', icon: History, capabilities: ['reports.read'] }
 		]
 	};
 
@@ -226,7 +227,13 @@
 	// wrong-state flash plus server/client markup divergence (M-15). The client store stays the
 	// source for outgoing Authorization headers and post-login mutations, not for shell rendering.
 	let currentUser = $derived(page.data.user ?? null);
-	let portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
+	const authState = getAuthState();
+	let currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
+	let activeExperience = $derived(authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null);
+	let activeCapabilities = $derived(new Set(
+		currentAccess?.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
+	));
+	let portalUser = $derived(activeExperience === 'Tenant');
 	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
 
 	const portalNavItems: NavItem[] = [
@@ -245,8 +252,9 @@
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
-		if (!item.roles || item.roles.length === 0) return true;
-		return hasRole(currentUser, ...item.roles);
+		if (item.experiences && (!activeExperience || !item.experiences.includes(activeExperience))) return false;
+		if (!item.capabilities || item.capabilities.length === 0) return true;
+		return item.capabilities.some((capability) => activeCapabilities.has(capability));
 	}
 
 	// Staff groups filtered to the items the current user may see; empty groups dropped.
@@ -261,7 +269,7 @@
 
 	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Edit;
 	// staff-only, gated to the same roles as the Units nav item.
-	let canSeeCommandCenter = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
+	let canSeeCommandCenter = $derived(activeCapabilities.has('rentals.read'));
 
 	// Bottom-rail standalone links (Assistant, Help).
 	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
@@ -441,12 +449,20 @@
 	// Gate the live-count queries on the server-sourced identity too, so they don't fire a
 	// 401-bound request during the brief pre-hydration window. `enabled` is reactive (createQuery
 	// takes a thunk), so it flips on once page.data.user is present.
-	const isStaffSession = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
+	const isStaffSession = $derived(activeExperience !== 'Tenant' && activeCapabilities.size > 0);
 	const showStaffHeader = $derived(!portalUser);
+	const canReadMessages = $derived(
+		['rentals.read', 'leasing.onboarding.manage', 'maintenance.assigned-work.converse'].some(
+			(key) => activeCapabilities.has(key)
+		)
+	);
+	const canReadAppointments = $derived(
+		['work.read', 'leasing.showings.manage'].some((key) => activeCapabilities.has(key))
+	);
 
 	const unreadMessagesQuery = createQuery(() => ({
 		queryKey: ['header-unread-messages'],
-		enabled: isStaffSession && !portalUser,
+		enabled: isStaffSession && !portalUser && canReadMessages,
 		queryFn: () => messagesApi.unreadCount(),
 		staleTime: 30_000,
 		refetchInterval: 60_000
@@ -455,7 +471,7 @@
 
 	const upcomingApptsQuery = createQuery(() => ({
 		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],
-		enabled: isStaffSession && !portalUser,
+		enabled: isStaffSession && !portalUser && canReadAppointments,
 		queryFn: () => appointmentsApi.list(getCurrentPortfolioId(), { take: 100 }),
 		staleTime: 60_000,
 		refetchInterval: 120_000

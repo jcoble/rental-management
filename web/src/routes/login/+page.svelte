@@ -14,6 +14,8 @@
 	// Field values are bound so the dev quick-fill button below can populate them.
 	let email = $state('');
 	let password = $state('');
+	let accessContextId = $state('');
+	const contextChoices = $derived(form?.contexts ?? []);
 
 	// "Resend verification" affordance, shown only when the API flags the login as EMAIL_NOT_VERIFIED.
 	let resendingVerification = $state(false);
@@ -87,6 +89,28 @@
 			>
 				{#if data.redirectTo}
 					<input type="hidden" name="redirectTo" value={data.redirectTo} />
+				{/if}
+				{#if contextChoices.length > 1}
+					<div class="rounded-lg border border-border bg-card/60 p-3">
+						<label for="login-context" class="mb-1.5 block text-sm font-medium text-foreground">
+							Which workspace do you want to open?
+						</label>
+						<select
+							id="login-context"
+							name="accessContextId"
+							bind:value={accessContextId}
+							required
+							class="h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
+						>
+							<option value="" disabled>Select a workspace</option>
+							{#each contextChoices as context}
+								<option value={context.accessContextId}>{context.workspaceName}</option>
+							{/each}
+						</select>
+						<p class="mt-1.5 text-xs text-muted-foreground">
+							You can switch workspaces later from the app menu.
+						</p>
+					</div>
 				{/if}
 
 				<div>

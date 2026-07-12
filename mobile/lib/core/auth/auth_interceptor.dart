@@ -62,6 +62,7 @@ class AuthInterceptor extends Interceptor {
     required this.tokenStore,
     required this.dio,
     required this.onLogout,
+    required this.onAccessChanged,
   });
 
   final TokenStore tokenStore;
@@ -74,8 +75,13 @@ class AuthInterceptor extends Interceptor {
   /// and navigate to the login screen.
   final void Function() onLogout;
 
+  /// Called after refresh returns a new canonical access envelope. The auth
+  /// controller uses this signal to replace shell authority, purge scoped
+  /// caches, and reconnect realtime before any further mutation is allowed.
+  final void Function(Map<String, dynamic> access) onAccessChanged;
+
   /// Single-flight guard: ensures only one refresh is in-flight at a time.
-  Completer<String?>? _refreshCompleter;
+  Completer<_RefreshResult?>? _refreshCompleter;
 
   @override
   Future<void> onRequest(
@@ -110,8 +116,8 @@ class AuthInterceptor extends Interceptor {
 
     // Refresh the access token (single-flight). Only a FAILED refresh means the
     // session is dead — that is the sole condition under which we log out.
-    final newToken = await _singleFlightRefresh();
-    if (newToken == null) {
+    final refresh = await _singleFlightRefresh();
+    if (refresh == null) {
       await tokenStore.clearTokens();
       onLogout();
       handler.next(err);
@@ -123,8 +129,29 @@ class AuthInterceptor extends Interceptor {
     // timeout, a 5xx, …) the session is still valid — propagate the error to the
     // caller instead of logging the user out. Logging out here is the bug that
     // killed valid sessions on any flaky retry.
+    onAccessChanged(refresh.access);
+
     final opts = err.requestOptions;
-    opts.headers['Authorization'] = 'Bearer $newToken';
+    if (_requiresAccessRefresh(response) && _isMutation(opts.method)) {
+      handler.next(
+        DioException.badResponse(
+          statusCode: 409,
+          requestOptions: opts,
+          response: Response<dynamic>(
+            requestOptions: opts,
+            statusCode: 409,
+            data: const {
+              'code': 'ACCESS_REVISION_CHANGED',
+              'error':
+                  'Your access changed while this action was open. Nothing was submitted; review the refreshed screen and try again.',
+            },
+          ),
+        ),
+      );
+      return;
+    }
+
+    opts.headers['Authorization'] = 'Bearer ${refresh.accessToken}';
     // A multipart `FormData` body is single-use: dispatching the original
     // request finalized it (and each of its `MultipartFile`s) in place, so
     // re-sending the same instance throws `StateError: already finalized` and
@@ -160,14 +187,28 @@ class AuthInterceptor extends Interceptor {
     return data;
   }
 
+  static bool _requiresAccessRefresh(Response<dynamic> response) =>
+      response.headers.value('X-Access-Envelope-Refresh') == 'required';
+
+  static bool _isMutation(String method) {
+    final normalized = method.toUpperCase();
+    return normalized != 'GET' &&
+        normalized != 'HEAD' &&
+        normalized != 'OPTIONS';
+  }
+
+  @visibleForTesting
+  static bool canReplayAfterAccessRefresh(String method) =>
+      !_isMutation(method);
+
   /// Ensures only one refresh call happens even when multiple 401s arrive
   /// concurrently. All callers await the same [Completer].
-  Future<String?> _singleFlightRefresh() async {
+  Future<_RefreshResult?> _singleFlightRefresh() async {
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
 
-    _refreshCompleter = Completer<String?>();
+    _refreshCompleter = Completer<_RefreshResult?>();
     try {
       final refreshToken = await tokenStore.getRefreshToken();
       if (refreshToken == null) {
@@ -200,10 +241,11 @@ class AuthInterceptor extends Interceptor {
       }
 
       final newAccessToken = data['accessToken'] as String?;
+      final access = data['access'];
       // Body-first (mobile), Set-Cookie fallback.
       final newRefreshToken = resolveRefreshToken(response);
 
-      if (newAccessToken == null) {
+      if (newAccessToken == null || access is! Map) {
         final c = _refreshCompleter!;
         _refreshCompleter = null;
         c.complete(null);
@@ -214,11 +256,14 @@ class AuthInterceptor extends Interceptor {
         accessToken: newAccessToken,
         refreshToken: newRefreshToken ?? refreshToken,
       );
+      final accessJson = Map<String, dynamic>.from(access);
+      await tokenStore.saveAccessEnvelope(accessJson);
 
       final c = _refreshCompleter!;
       _refreshCompleter = null;
-      c.complete(newAccessToken);
-      return newAccessToken;
+      final result = _RefreshResult(newAccessToken, accessJson);
+      c.complete(result);
+      return result;
     } catch (e) {
       final c = _refreshCompleter;
       _refreshCompleter = null;
@@ -226,4 +271,11 @@ class AuthInterceptor extends Interceptor {
       return null;
     }
   }
+}
+
+final class _RefreshResult {
+  const _RefreshResult(this.accessToken, this.access);
+
+  final String accessToken;
+  final Map<String, dynamic> access;
 }

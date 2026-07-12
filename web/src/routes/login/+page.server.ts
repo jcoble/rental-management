@@ -8,7 +8,7 @@
 
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import type { LoginResponse } from '$lib/types/user';
+import type { AccessContextSelectionRequiredResponse, LoginResponse, WorkspaceExperience } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { AUTH_COOKIE_NAMES, deleteLegacyAuthCookies } from '$lib/server/auth-cookies';
 import { env } from '$env/dynamic/public';
@@ -31,17 +31,14 @@ function safeRedirectPath(path: string | null, fallback: string): string {
 }
 
 /** Where to send a user after login when no explicit redirect is requested. */
-function defaultLandingFor(roles: string[]): string {
-	// Owners/tenants live in the portal. Staff land on the dashboard (IA Wave 1, F8): the
-	// "Explore sandbox vs set up real portfolio" fork used to be the forced landing every
-	// session — now it's optional (still reachable, and Go Live lives in the sandbox banner).
-	if (roles.includes('Owner') || roles.includes('Tenant')) return '/portal';
+function defaultLandingFor(experience: WorkspaceExperience): string {
+	if (experience === 'Tenant') return '/portal';
 	return '/';
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (locals.user) {
-		const fallback = defaultLandingFor(locals.user.roles);
+		const fallback = defaultLandingFor(locals.access?.selectedContext.activeExperience ?? 'Management');
 		throw redirect(303, safeRedirectPath(url.searchParams.get('redirectTo'), fallback));
 	}
 	return {
@@ -57,6 +54,8 @@ export const actions: Actions = {
 		const email = formData.get('email')?.toString();
 		const password = formData.get('password')?.toString();
 		const requestedRedirect = formData.get('redirectTo')?.toString() ?? null;
+		const accessContextValue = formData.get('accessContextId')?.toString();
+		const accessContextId = accessContextValue ? Number(accessContextValue) : undefined;
 
 		if (!email || !password) {
 			return fail(400, { error: 'Email and password are required', emailNotVerified: false, email });
@@ -67,11 +66,20 @@ export const actions: Actions = {
 			const response = await fetch(`${SERVER_API_BASE_URL}/auth/login`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email, password })
+				body: JSON.stringify({ email, password, accessContextId })
 			});
 
 			if (!response.ok) {
 				const errorData = await response.json().catch(() => ({ error: 'Login failed' }));
+				if (response.status === 409 && errorData.code === 'ACCESS_CONTEXT_REQUIRED') {
+					const selection = errorData as AccessContextSelectionRequiredResponse;
+					return fail(409, {
+						error: selection.error,
+						emailNotVerified: false,
+						email,
+						contexts: selection.contexts
+					});
+				}
 				const errorMessage =
 					typeof errorData.error === 'object'
 						? errorData.error?.message
@@ -140,7 +148,7 @@ export const actions: Actions = {
 			return fail(500, { error: userMessage, emailNotVerified: false, email });
 		}
 
-		const fallback = defaultLandingFor(data.user.roles);
+		const fallback = defaultLandingFor(data.access.selectedContext.activeExperience);
 		throw redirect(303, safeRedirectPath(requestedRedirect, fallback));
 	}
 };

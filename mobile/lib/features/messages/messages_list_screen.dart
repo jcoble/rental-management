@@ -147,7 +147,8 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
   Widget build(BuildContext context) {
     final convosAsync = ref.watch(conversationsProvider);
     final auth = ref.watch(authControllerProvider);
-    final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
+    final tenantMode =
+        auth is AuthStateAuthenticated && auth.isTenantExperience;
     final routeIsCurrent = ModalRoute.isCurrentOf(context) ?? true;
 
     return Scaffold(

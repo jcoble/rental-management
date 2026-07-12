@@ -30,6 +30,7 @@ public class AuthResult
     public TokenResult? Tokens { get; set; }
     public IEnumerable<string>? ValidationErrors { get; set; }
     public AuthErrorType ErrorType { get; set; }
+    public IReadOnlyList<EffectiveAccessContextOption>? AccessContexts { get; set; }
 
     /// <summary>
     /// Email-confirmation token surfaced to the controller. Since no email transport is wired in
@@ -46,6 +47,16 @@ public class AuthResult
 
     public static AuthResult ValidationFail(string error, IEnumerable<string> details) =>
         new() { Success = false, Error = error, ValidationErrors = details, ErrorType = AuthErrorType.BadRequest };
+
+    public static AuthResult ContextSelectionRequired(
+        IReadOnlyList<EffectiveAccessContextOption> contexts) =>
+        new()
+        {
+            Success = false,
+            Error = "Select a workspace to continue.",
+            ErrorType = AuthErrorType.BadRequest,
+            AccessContexts = contexts,
+        };
 
     /// <summary>Registration succeeded but the user must confirm their email before logging in.</summary>
     public static AuthResult RegistrationPending(int userId, string emailConfirmationToken) =>
@@ -223,11 +234,9 @@ public class AuthService : IAuthService
             : contexts.SingleOrDefault(item => item.AccessContextId == accessContextId.Value);
         if (selected is null)
         {
-            return AuthResult.Fail(
-                contexts.Count > 1
-                    ? "ACCESS_CONTEXT_REQUIRED: Select one of this account's active workspaces."
-                    : "The selected workspace is not available.",
-                AuthErrorType.BadRequest);
+            return contexts.Count > 1 && accessContextId is null
+                ? AuthResult.ContextSelectionRequired(contexts)
+                : AuthResult.Fail("The selected workspace is not available.", AuthErrorType.BadRequest);
         }
 
         Guid? challengeId = null;

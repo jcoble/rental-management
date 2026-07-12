@@ -541,6 +541,7 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(corsOrigins)
             .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
             .AllowAnyHeader()
+            .WithExposedHeaders("X-Access-Envelope-Refresh")
             .AllowCredentials();
     });
 });

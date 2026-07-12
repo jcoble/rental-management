@@ -32,13 +32,21 @@ final class AuthStateUnknown extends AuthState {
 /// re-checked and gated almost immediately rather than slipping past once. See I7.
 final class AuthStateAuthenticated extends AuthState {
   const AuthStateAuthenticated(
-    this.user, {
+    this.user,
+    this.access, {
+    required this.activeExperience,
     this.onboardingPending = false,
     this.onboardingResolved = true,
   });
   final AuthUser user;
+  final AccessEnvelope access;
+  final WorkspaceExperience activeExperience;
   final bool onboardingPending;
   final bool onboardingResolved;
+
+  Set<String> get capabilities => access.capabilitiesFor(activeExperience);
+  bool hasCapability(String capability) => capabilities.contains(capability);
+  bool get isTenantExperience => activeExperience == WorkspaceExperience.tenant;
 }
 
 /// No valid session.
@@ -61,12 +69,16 @@ class AuthController extends Notifier<AuthState> {
         notifyLogout();
       }
     });
+    ref.listen<AccessEnvelope?>(accessChangeSignalProvider, (previous, next) {
+      if (next != null) notifyAccessChanged(next);
+    });
     return const AuthStateUnknown();
   }
 
   AuthRepository get _repository => ref.read(authRepositoryProvider);
   TokenStore get _tokenStore => ref.read(tokenStoreProvider);
-  OnboardingRepository get _onboarding => ref.read(onboardingRepositoryProvider);
+  OnboardingRepository get _onboarding =>
+      ref.read(onboardingRepositoryProvider);
 
   /// Resolves whether the freshly-authenticated user still owes the first-login Sandbox-vs-Live
   /// choice.
@@ -96,9 +108,12 @@ class AuthController extends Notifier<AuthState> {
 
     try {
       final user = await _repository.currentUser();
+      final access = await _repository.currentAccess();
       final onboarding = await _resolveOnboardingPending();
       state = AuthStateAuthenticated(
         user,
+        access,
+        activeExperience: access.selectedContext.activeExperience,
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
@@ -112,17 +127,27 @@ class AuthController extends Notifier<AuthState> {
   /// Signs in with [email] and [password].
   ///
   /// Throws [ApiException] on failure so the UI can display the error.
-  Future<void> login(String email, String password) async {
+  Future<void> login(
+    String email,
+    String password, {
+    int? accessContextId,
+  }) async {
     // Do NOT flip to AuthStateUnknown here: the router shows a full-screen splash
     // for that state, which unmounts the login screen. On failure the router then
     // rebuilds a FRESH /login with no error, swallowing the message. The login
     // screen owns its own `_isLoading` spinner and stays mounted, so its local
     // error (and our AuthStateUnauthenticated.error backstop) render correctly.
     try {
-      final response = await _repository.login(email, password);
+      final response = await _repository.login(
+        email,
+        password,
+        accessContextId: accessContextId,
+      );
       final onboarding = await _resolveOnboardingPending();
       state = AuthStateAuthenticated(
         response.user,
+        response.access,
+        activeExperience: response.access.selectedContext.activeExperience,
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
@@ -204,6 +229,8 @@ class AuthController extends Notifier<AuthState> {
       final onboarding = await _resolveOnboardingPending();
       state = AuthStateAuthenticated(
         response.user,
+        response.access,
+        activeExperience: response.access.selectedContext.activeExperience,
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
@@ -232,6 +259,8 @@ class AuthController extends Notifier<AuthState> {
     if (latest is! AuthStateAuthenticated) return;
     state = AuthStateAuthenticated(
       latest.user,
+      latest.access,
+      activeExperience: latest.activeExperience,
       onboardingPending: onboarding.pending,
       onboardingResolved: true,
     );
@@ -245,6 +274,8 @@ class AuthController extends Notifier<AuthState> {
     if (current is AuthStateAuthenticated && current.onboardingPending) {
       state = AuthStateAuthenticated(
         current.user,
+        current.access,
+        activeExperience: current.activeExperience,
         onboardingPending: false,
         onboardingResolved: true,
       );
@@ -269,6 +300,55 @@ class AuthController extends Notifier<AuthState> {
   /// extra server call (tokens are already invalid).
   void notifyLogout() {
     state = const AuthStateUnauthenticated();
+  }
+
+  /// Replaces the client authority snapshot after a refresh detects that the
+  /// server-side access revision changed. Shell listeners own cache and
+  /// realtime cleanup; this state transition supplies the new revision.
+  void notifyAccessChanged(AccessEnvelope access) {
+    final current = state;
+    if (current is! AuthStateAuthenticated) return;
+    if (current.access.selectedContext.accessContextId ==
+            access.selectedContext.accessContextId &&
+        current.access.selectedContext.accessRevision ==
+            access.selectedContext.accessRevision) {
+      return;
+    }
+    state = AuthStateAuthenticated(
+      current.user,
+      access,
+      activeExperience: access.selectedContext.activeExperience,
+      onboardingPending: current.onboardingPending,
+      onboardingResolved: current.onboardingResolved,
+    );
+  }
+
+  void selectExperience(WorkspaceExperience experience) {
+    final current = state;
+    if (current is! AuthStateAuthenticated ||
+        !current.access.availableExperiences.contains(experience)) {
+      return;
+    }
+    state = AuthStateAuthenticated(
+      current.user,
+      current.access,
+      activeExperience: experience,
+      onboardingPending: current.onboardingPending,
+      onboardingResolved: current.onboardingResolved,
+    );
+  }
+
+  Future<void> selectContext(int accessContextId) async {
+    final current = state;
+    if (current is! AuthStateAuthenticated) return;
+    final result = await _repository.selectContext(accessContextId);
+    state = AuthStateAuthenticated(
+      current.user,
+      result.access,
+      activeExperience: result.access.selectedContext.activeExperience,
+      onboardingPending: current.onboardingPending,
+      onboardingResolved: current.onboardingResolved,
+    );
   }
 }
 

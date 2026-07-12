@@ -62,6 +62,61 @@ final realtimeWatcherProvider = Provider<void>((ref) {
   }
 });
 
+/// Clears every access-scoped cache and reconnects SignalR with the token that
+/// carries the replacement context/revision. Called only after the auth
+/// controller has installed a different canonical access boundary.
+Future<void> resetAccessScopedClient(WidgetRef ref) async {
+  ref.invalidate(activityHistoryProvider);
+  ref.invalidate(paymentsProvider);
+  ref.invalidate(paymentsPageProvider);
+  ref.invalidate(accountingSummaryProvider);
+  ref.invalidate(expensesPageProvider);
+  ref.invalidate(expensesListProvider);
+  ref.invalidate(leasesProvider);
+  ref.invalidate(leasesPageProvider);
+  ref.invalidate(propertyLeasesProvider);
+  ref.invalidate(tenantLeasesProvider);
+  ref.invalidate(leaseDetailProvider);
+  ref.invalidate(propertiesProvider);
+  ref.invalidate(propertyDetailProvider);
+  ref.invalidate(unitsProvider);
+  ref.invalidate(tenantsProvider);
+  ref.invalidate(tenantsPageProvider);
+  ref.invalidate(tenantDetailProvider);
+  ref.invalidate(workOrdersProvider);
+  ref.invalidate(workOrdersPageProvider);
+  ref.invalidate(workOrderDetailProvider);
+  ref.invalidate(applicationsProvider);
+  ref.invalidate(applicationsPageProvider);
+  ref.invalidate(applicationDetailProvider);
+  ref.invalidate(inspectionsProvider);
+  ref.invalidate(inspectionsPageProvider);
+  ref.invalidate(inspectionDetailProvider);
+  ref.invalidate(ownersPageProvider);
+  ref.invalidate(ownerDetailProvider);
+  ref.invalidate(ownerSummariesProvider);
+  ref.invalidate(ownerStatementProvider);
+  ref.invalidate(ownerDistributionsProvider);
+  ref.invalidate(propertyLoansProvider);
+  ref.invalidate(propertyCapitalAssetsProvider);
+  ref.invalidate(propertyDispositionsProvider);
+  ref.invalidate(leaseEvictionCasesProvider);
+  ref.invalidate(vendorsProvider);
+  ref.invalidate(vendorsPageProvider);
+  ref.invalidate(appointmentsProvider);
+  ref.invalidate(appointmentDetailProvider);
+  ref.invalidate(scanListFamilyProvider);
+  ref.invalidate(conversationsProvider);
+  ref.invalidate(conversationProvider);
+  ref.invalidate(unreadCountProvider);
+  ref.invalidate(inboxProvider);
+  ref.invalidate(gettingStartedSignalsProvider);
+
+  final service = ref.read(signalrServiceProvider);
+  await service.disconnect();
+  await service.connect();
+}
+
 // ---------------------------------------------------------------------------
 // Entity → provider invalidation map
 // ---------------------------------------------------------------------------
