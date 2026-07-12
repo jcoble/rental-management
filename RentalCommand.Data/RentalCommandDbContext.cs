@@ -557,10 +557,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<NotificationSettings>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.SignalWireProjectIdCipherText).HasMaxLength(4000);
-            entity.Property(e => e.SignalWireTokenCipherText).HasMaxLength(4000);
-            entity.Property(e => e.SignalWireSpaceUrlCipherText).HasMaxLength(4000);
-            entity.Property(e => e.SignalWireFromNumberCipherText).HasMaxLength(4000);
             // Pluggable SMS provider (BYO): provider name + generic encrypted credential slots.
             entity.Property(e => e.SmsProvider).HasMaxLength(32);
             entity.Property(e => e.SmsCredentialACipherText).HasMaxLength(4000);
