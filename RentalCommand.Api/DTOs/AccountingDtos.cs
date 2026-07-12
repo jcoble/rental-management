@@ -232,7 +232,7 @@ public class AccountingTransactionsResponse
 public class AccountingTransactionResponse
 {
     public string Kind { get; set; } = string.Empty;
-    public int Id { get; set; }
+    public long Id { get; set; }
     public DateTime Date { get; set; }
 
     /// <summary>When the row entered the system (created). Powers the ledger's "Entered" column and the

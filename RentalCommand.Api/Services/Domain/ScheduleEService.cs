@@ -38,23 +38,33 @@ public class ScheduleEService : IScheduleEService
         // ── Income ──────────────────────────────────────────────────────────────────────────────
         // Taxable income is projected from tenant cash receipts plus the separate pre-tenancy
         // application subledger. The UNION, filters, correlated sums, and total all remain SQL-side.
-        var tenantIncomeQuery = _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.LeaseId != null &&
-                (p.PaymentType == PaymentType.Rent ||
-                 p.PaymentType == PaymentType.LateFee ||
-                 p.PaymentType == PaymentType.Utility) &&
-                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                p.PaidDate != null &&
-                p.PaidDate.Value >= yearStart &&
-                p.PaidDate.Value < yearEndExclusive)
-            .Select(p => new
+        var tenantIncomeQuery =
+            from allocation in _db.TenantLedgerAllocations.AsNoTracking()
+            join receipt in _db.TenantLedgerEntries.AsNoTracking()
+                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.CreditEntryId }
+                equals new { receipt.PortfolioId, receipt.TenantAccountId, receipt.Id }
+            join charge in _db.TenantLedgerEntries.AsNoTracking()
+                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.DebitEntryId }
+                equals new { charge.PortfolioId, charge.TenantAccountId, charge.Id }
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            where allocation.PortfolioId == portfolioId
+                && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
+                && receipt.EffectiveOn >= yearStartDate
+                && receipt.EffectiveOn < yearEndExclusiveDate
+                && (charge.EntryType == TenantLedgerEntryType.RentCharge
+                    || charge.EntryType == TenantLedgerEntryType.LateFeeCharge
+                    || charge.EntryType == TenantLedgerEntryType.AddendumCharge
+                    || charge.EntryType == TenantLedgerEntryType.ManualCharge)
+            select new
             {
-                PropertyId = (int?)p.Lease!.PropertyId,
-                Amount = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount,
-            });
+                PropertyId = (int?)management.PropertyId,
+                Amount = allocation.Amount,
+            };
         var applicationIncomeQuery = _db.ApplicationFinancialEntries
             .IgnoreQueryFilters()
             .AsNoTracking()
