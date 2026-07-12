@@ -23,27 +23,29 @@ void main() {
   });
 
   test(
-    'generate sends tenant, lease, payment, and notice type scope',
+    'generate sends canonical recipient, relationship, account, and ledger scope',
     () async {
       final adapter = _Adapter();
       final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
         ..httpClientAdapter = adapter;
       final repo = NoticesRepository(dio);
 
-      final drafts = await repo.generateForTenant(
+      final drafts = await repo.generateScoped(
         3,
-        leaseId: 10,
-        paymentId: 8,
+        leaseManagementId: 10,
+        tenantAccountId: 12,
+        tenantLedgerEntryId: 8,
         noticeType: 'RentReminder',
       );
 
       expect(adapter.method, 'POST');
       expect(adapter.path, '/notices/generate');
-      expect(adapter.data, containsPair('tenantId', 3));
-      expect(adapter.data, containsPair('leaseId', 10));
-      expect(adapter.data, containsPair('paymentId', 8));
+      expect(adapter.data, containsPair('recipientTenantId', 3));
+      expect(adapter.data, containsPair('leaseManagementId', 10));
+      expect(adapter.data, containsPair('tenantAccountId', 12));
+      expect(adapter.data, containsPair('tenantLedgerEntryId', 8));
       expect(adapter.data, containsPair('noticeType', 'RentReminder'));
-      expect(drafts.single.paymentId, 8);
+      expect(drafts.single.tenantLedgerEntryId, 8);
     },
   );
 }
@@ -69,9 +71,10 @@ class _Adapter implements HttpClientAdapter {
           'drafts': [
             {
               'id': 9,
-              'leaseId': 10,
-              'paymentId': 8,
-              'tenantId': 3,
+              'leaseManagementId': 10,
+              'tenantAccountId': 12,
+              'tenantLedgerEntryId': 8,
+              'recipientTenantId': 3,
               'tenantName': 'Jordan Lee',
               'noticeType': 'RentReminder',
               'status': 'Draft',
@@ -91,8 +94,9 @@ class _Adapter implements HttpClientAdapter {
     return ResponseBody.fromString(
       jsonEncode({
         'id': 7,
-        'leaseId': 10,
-        'tenantId': 3,
+        'leaseManagementId': 10,
+        'tenantAccountId': 12,
+        'recipientTenantId': 3,
         'tenantName': 'Jordan Lee',
         'noticeType': 'RentReminder',
         'status': 'Draft',
