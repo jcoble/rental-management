@@ -1,0 +1,436 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Leasing;
+
+namespace RentalCommand.Data.Leasing;
+
+/// <summary>Pure database implementation of the pre-possession relationship command.</summary>
+public sealed class PrepareMoveInHandler
+    : IAtomicCommandHandler<PrepareMoveInCommand, PrepareMoveInResult>
+{
+    public async Task<PrepareMoveInResult> HandleAsync(
+        PrepareMoveInCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        ValidateCommandShape(command);
+
+        // Every command taking both locks uses this order. The Unit id is explicit in the request
+        // so no unlocked application read is needed to discover the first aggregate lock.
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, command.ApplicationId, ct);
+
+        // Query 1: active session/context/revision, same-assignment capability/property scope, and
+        // application conversion facts in one translated statement.
+        var now = command.PreparedAtUtc;
+        var effectiveAssignments = attempt.Persistence.Query<MembershipRoleAssignment>()
+            .Where(assignment =>
+                assignment.Status == MembershipRoleAssignmentStatus.Active
+                && assignment.SuspendedAtUtc == null
+                && assignment.RevokedAtUtc == null
+                && assignment.EffectiveFromUtc <= now
+                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
+        var application = await attempt.Persistence.Query<RentalApplication>()
+            .Where(candidate =>
+                candidate.Id == command.ApplicationId
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.PropertyId != null
+                && candidate.UnitId == command.UnitId
+                && candidate.Unit != null
+                && candidate.Unit.PortfolioId == command.PortfolioId
+                && candidate.Unit.PropertyId == candidate.PropertyId
+                && candidate.Property != null
+                && candidate.Property.PortfolioId == command.PortfolioId
+                && attempt.Persistence.Query<AuthSession>().Any(session =>
+                    session.Id == command.AuthSessionId
+                    && session.UserId == command.CreatedByUserId
+                    && session.ActiveAccessContextId == command.AccessContextId
+                    && session.Status == AuthSessionStatus.Active
+                    && session.RevokedAtUtc == null
+                    && session.ExpiresAtUtc > now)
+                && attempt.Persistence.Query<WorkspaceAccessContext>().Any(context =>
+                    context.Id == command.AccessContextId
+                    && context.UserId == command.CreatedByUserId
+                    && context.PortfolioId == command.PortfolioId
+                    && context.AccessRevision == command.ExpectedAccessRevision
+                    && context.Status == WorkspaceAccessContextStatus.Active
+                    && context.SuspendedAtUtc == null
+                    && context.RevokedAtUtc == null)
+                && attempt.Persistence.Query<WorkspaceMembership>().Any(membership =>
+                    membership.AccessContextId == command.AccessContextId
+                    && membership.PortfolioId == command.PortfolioId
+                    && membership.Status == WorkspaceMembershipStatus.Active
+                    && membership.SuspendedAtUtc == null
+                    && membership.RevokedAtUtc == null
+                    && membership.EffectiveFromUtc <= now
+                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
+                    && effectiveAssignments.Any(assignment =>
+                        assignment.WorkspaceMembershipId == membership.Id
+                        && assignment.PortfolioId == command.PortfolioId
+                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                                && assignment.SelectedProperties.Any(scope =>
+                                    scope.PropertyId == candidate.PropertyId
+                                    && scope.PortfolioId == command.PortfolioId)))
+                        && (assignment.RoleProfile!.Capabilities.Any(capability =>
+                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                            || (assignment.RoleProfile.Capabilities.Any(capability =>
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingApplicationsManage)
+                                && assignment.RoleProfile.Capabilities.Any(capability =>
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare)
+                                && assignment.RoleProfile.Capabilities.Any(capability =>
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage))))))
+            .Select(candidate => new ApplicationPreparationTarget(
+                candidate,
+                candidate.PropertyId!.Value,
+                candidate.UnitId!.Value,
+                candidate.Portfolio!.Currency,
+                attempt.Persistence.Query<DocumentTemplate>().Any(template =>
+                    template.Id == command.DocumentTemplateId
+                    && template.PortfolioId == command.PortfolioId
+                    && template.Kind == DocumentTemplateKind.Lease
+                    && template.Status == DocumentTemplateStatus.Active
+                    && template.Version == command.DocumentTemplateVersion
+                    && template.ArchivedAtUtc == null
+                    && (template.PropertyId == null || template.PropertyId == candidate.PropertyId))))
+            .SingleOrDefaultAsync(ct);
+
+        if (application is null)
+        {
+            // Cross-scope and mismatched-context references are authorization failures. Throwing
+            // rolls back the pending receipt, so an unauthorized caller cannot reserve a key.
+            throw new UnauthorizedAccessException(
+                "The application, property, and unit are not authorized in the current portfolio context.");
+        }
+
+        if (application.Entity.PreparedLeaseManagementId.HasValue)
+        {
+            return Empty(
+                PrepareMoveInOutcome.AlreadyPrepared,
+                command,
+                "This application has already been prepared for move-in.",
+                application.Entity.PreparedLeaseManagementId.Value);
+        }
+
+        if (application.Entity.Status != ApplicationStatus.Approved
+            || application.Entity.ApprovedTenantId is null)
+        {
+            return Empty(
+                PrepareMoveInOutcome.ApplicationNotApproved,
+                command,
+                "Only an approved application with an approved tenant can be prepared for move-in.");
+        }
+
+        if (!application.TemplateIsValid)
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidTemplate,
+                command,
+                "The selected lease template is not active at the requested version for this property.");
+        }
+
+        var requestedTenantIds = command.Parties.Select(party => party.TenantId).Distinct().ToArray();
+
+        // Query 2: every chosen Tenant is resolved in one bounded translated query. No per-row reads.
+        var tenants = await attempt.Persistence.Query<Tenant>()
+            .Where(candidate =>
+                candidate.PortfolioId == command.PortfolioId
+                && requestedTenantIds.Contains(candidate.Id))
+            .Select(candidate => new TenantFacts(
+                candidate.Id,
+                candidate.FirstName,
+                candidate.LastName,
+                candidate.Email))
+            .ToListAsync(ct);
+
+        if (tenants.Count != requestedTenantIds.Length
+            || !requestedTenantIds.Contains(application.Entity.ApprovedTenantId.Value))
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidParties,
+                command,
+                "Every chosen person must be an active Tenant in this portfolio, including the approved applicant.");
+        }
+
+        var primary = command.Parties.Single(party => party.Role == LeaseManagementPartyRole.PrimaryTenant);
+        if (primary.TenantId != application.Entity.ApprovedTenantId.Value)
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidParties,
+                command,
+                "The application's approved Tenant must be the initial primary tenant.");
+        }
+
+        var tenantById = tenants.ToDictionary(tenant => tenant.Id);
+        if (command.Parties.Any(party => party.IsAgreementSigner
+                && string.IsNullOrWhiteSpace(tenantById[party.TenantId].Email)))
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidParties,
+                command,
+                "Every selected agreement signer must have an email address.");
+        }
+
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = application.PropertyId,
+            UnitId = application.UnitId,
+            RelationshipNumber = $"LM-{application.Entity.Id:D8}",
+            PlannedPossessionAtUtc = command.PlannedPossessionAtUtc,
+            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedByUserId = command.CreatedByUserId,
+            UpdatedAtUtc = command.PreparedAtUtc,
+            RowVersion = Guid.NewGuid(),
+        };
+        var account = new TenantAccount
+        {
+            PortfolioId = command.PortfolioId,
+            LeaseManagement = relationship,
+            AccountNumber = $"TA-{application.Entity.Id:D8}",
+            Currency = application.Currency,
+            OpenedAtUtc = command.PreparedAtUtc,
+            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedByUserId = command.CreatedByUserId,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PortfolioId = command.PortfolioId,
+            LeaseManagement = relationship,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{application.Entity.Id:D8}-V1",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = command.TermType,
+            TermStartOn = command.TermStartOn,
+            TermEndOn = command.TermEndOn,
+            GoverningFromOn = command.TermStartOn,
+            BaseRentAmount = command.BaseRentAmount,
+            RentDueDay = command.RentDueDay,
+            SecurityDepositObligation = command.SecurityDepositObligation,
+            LateFeeAmount = command.LateFeeAmount,
+            GracePeriodDays = command.GracePeriodDays,
+            Currency = application.Currency,
+            TermsSchemaVersion = command.TermsSchemaVersion,
+            TermsPayload = command.TermsPayload,
+            DocumentTemplateId = command.DocumentTemplateId,
+            DocumentTemplateVersion = command.DocumentTemplateVersion,
+            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedByUserId = command.CreatedByUserId,
+            UpdatedAtUtc = command.PreparedAtUtc,
+            DraftRevision = 1,
+        };
+
+        var partyRows = command.Parties.Select(party => new LeaseManagementParty
+        {
+            PortfolioId = command.PortfolioId,
+            LeaseManagement = relationship,
+            TenantId = party.TenantId,
+            Role = party.Role,
+            EffectiveFrom = command.PartyEffectiveFrom,
+            GuarantorLegalNoticeEligible = party.GuarantorLegalNoticeEligible,
+            ChangeReason = party.ChangeReason.Trim(),
+            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedByUserId = command.CreatedByUserId,
+        }).ToArray();
+        var partyByTenantId = partyRows.ToDictionary(party => party.TenantId);
+        var signerRows = command.Parties
+            .Where(party => party.IsAgreementSigner)
+            .OrderBy(party => party.SigningOrder)
+            .Select(party =>
+            {
+                var tenant = tenantById[party.TenantId];
+                return new LeaseAgreementSigner
+                {
+                    PortfolioId = command.PortfolioId,
+                    LeaseAgreement = agreement,
+                    LeaseManagementParty = partyByTenantId[party.TenantId],
+                    TenantId = party.TenantId,
+                    SignerRole = ToSignerRole(party.Role),
+                    NameSnapshot = $"{tenant.FirstName} {tenant.LastName}".Trim(),
+                    EmailSnapshot = tenant.Email!.Trim(),
+                    SigningOrder = party.SigningOrder!.Value,
+                    IsRequired = party.IsRequiredSigner,
+                };
+            })
+            .ToArray();
+
+        attempt.Persistence.Add(relationship);
+        attempt.Persistence.Add(account);
+        attempt.Persistence.Add(agreement);
+        attempt.Persistence.AddRange(partyRows);
+        attempt.Persistence.AddRange(signerRows);
+        SecurityDepositAccount? depositAccount = null;
+        if (command.CreateSecurityDepositAccount)
+        {
+            depositAccount = new SecurityDepositAccount
+            {
+                PortfolioId = command.PortfolioId,
+                TenantAccount = account,
+                OriginatingAgreement = agreement,
+                Currency = application.Currency,
+                CreatedAtUtc = command.PreparedAtUtc,
+                CreatedByUserId = command.CreatedByUserId,
+            };
+            attempt.Persistence.Add(depositAccount);
+        }
+
+        var trackedApplication = application.Entity;
+        trackedApplication.PreparedLeaseManagement = relationship;
+        trackedApplication.UpdatedAt = command.PreparedAtUtc;
+
+        attempt.BindSemanticAudit(relationship, CreatedAudit(
+            command, nameof(LeaseManagement), "Prepared lease relationship from approved application."));
+        attempt.BindSemanticAudit(account, CreatedAudit(
+            command, nameof(TenantAccount), "Opened tenant account during move-in preparation."));
+        attempt.BindSemanticAudit(agreement, CreatedAudit(
+            command, nameof(LeaseAgreement), "Created initial lease agreement draft."));
+        attempt.BindSemanticAudit(trackedApplication, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(RentalApplication),
+            command.ApplicationId,
+            AuditLogOperation.Updated,
+            UserId: command.CreatedByUserId,
+            ChangeReason: "Application prepared for move-in."));
+
+        await attempt.FlushBusinessAsync(ct);
+
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(LeaseManagement),
+                entityId = relationship.Id,
+                data = new
+                {
+                    relationship.Id,
+                    relationship.PublicId,
+                    relationship.PropertyId,
+                    relationship.UnitId,
+                    TenantAccountId = account.Id,
+                    LeaseAgreementId = agreement.Id,
+                },
+            }),
+            IdempotencyKey = command.DeliveryIdempotencyKey,
+            CreatedAtUtc = command.PreparedAtUtc,
+            NextAttemptAtUtc = command.PreparedAtUtc,
+        });
+
+        return new PrepareMoveInResult(
+            PrepareMoveInOutcome.Prepared,
+            command.ApplicationId,
+            relationship.Id,
+            account.Id,
+            agreement.Id,
+            depositAccount?.Id,
+            partyRows.Select(party => party.Id).ToArray(),
+            signerRows.Select(signer => signer.Id).ToArray(),
+            null);
+    }
+
+    private static void ValidateCommandShape(PrepareMoveInCommand command)
+    {
+        if (command.ApplicationId <= 0 || command.UnitId <= 0 || command.PortfolioId <= 0
+            || command.CreatedByUserId <= 0 || command.AuthSessionId == Guid.Empty
+            || command.AccessContextId <= 0 || command.ExpectedAccessRevision <= 0
+            || command.PreparedAtUtc == default || command.PartyEffectiveFrom == default
+            || command.TermStartOn == default)
+        {
+            throw new ArgumentException("Portfolio, application, unit, and actor ids are required.");
+        }
+        if (command.Parties.Count == 0
+            || command.Parties.Select(party => party.TenantId).Distinct().Count() != command.Parties.Count
+            || command.Parties.Count(party => party.Role == LeaseManagementPartyRole.PrimaryTenant) != 1
+            || command.Parties.Any(party => party.TenantId <= 0
+                || string.IsNullOrWhiteSpace(party.ChangeReason)
+                || (party.Role != LeaseManagementPartyRole.Guarantor && party.GuarantorLegalNoticeEligible))
+            || !command.Parties.Any(party => party.Role == LeaseManagementPartyRole.PrimaryTenant
+                && party.IsAgreementSigner
+                && party.IsRequiredSigner))
+        {
+            throw new ArgumentException(
+                "Parties must be unique and include exactly one required primary-tenant signer.");
+        }
+        var signerOrders = command.Parties
+            .Where(party => party.IsAgreementSigner)
+            .Select(party => party.SigningOrder)
+            .ToArray();
+        if (signerOrders.Length == 0
+            || signerOrders.Any(order => order is null or <= 0)
+            || signerOrders.Distinct().Count() != signerOrders.Length
+            || command.Parties.Any(party => !party.IsAgreementSigner && party.SigningOrder is not null)
+            || command.Parties.Any(party => party.IsAgreementSigner
+                && party.Role == LeaseManagementPartyRole.Occupant))
+        {
+            throw new ArgumentException("Agreement signer order and party role are invalid.");
+        }
+        if (command.DocumentTemplateId <= 0 || command.DocumentTemplateVersion <= 0
+            || command.TermsSchemaVersion <= 0 || string.IsNullOrWhiteSpace(command.TermsPayload)
+            || command.BaseRentAmount < 0 || command.SecurityDepositObligation < 0
+            || command.LateFeeAmount < 0 || command.RentDueDay is < 1 or > 31
+            || command.GracePeriodDays is < 0 or > 31
+            || (command.TermType == LeaseAgreementTermType.FixedTerm
+                && (command.TermEndOn is null || command.TermEndOn < command.TermStartOn))
+            || (command.TermType == LeaseAgreementTermType.MonthToMonth && command.TermEndOn is not null))
+        {
+            throw new ArgumentException("Initial agreement terms are invalid.");
+        }
+        using var payload = JsonDocument.Parse(command.TermsPayload);
+        if (payload.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("TermsPayload must be a JSON object.");
+        }
+        if (command.DeliveryIdempotencyKey.Length is 0 or > 200)
+        {
+            throw new ArgumentException("Delivery idempotency key is invalid.");
+        }
+    }
+
+    private static LeaseLegalSignerRole ToSignerRole(LeaseManagementPartyRole role) => role switch
+    {
+        LeaseManagementPartyRole.PrimaryTenant => LeaseLegalSignerRole.PrimaryTenant,
+        LeaseManagementPartyRole.CoTenant => LeaseLegalSignerRole.CoTenant,
+        LeaseManagementPartyRole.Guarantor => LeaseLegalSignerRole.Guarantor,
+        _ => throw new ArgumentOutOfRangeException(nameof(role), "Occupants cannot be agreement signers."),
+    };
+
+    private static AtomicSemanticAudit CreatedAudit(
+        PrepareMoveInCommand command,
+        string entityType,
+        string reason) => new(
+            command.PortfolioId,
+            entityType,
+            0,
+            AuditLogOperation.Created,
+            UserId: command.CreatedByUserId,
+            ChangeReason: reason);
+
+    private static PrepareMoveInResult Empty(
+        PrepareMoveInOutcome outcome,
+        PrepareMoveInCommand command,
+        string error,
+        int leaseManagementId = 0) => new(
+            outcome,
+            command.ApplicationId,
+            leaseManagementId,
+            0,
+            0,
+            null,
+            Array.Empty<int>(),
+            Array.Empty<int>(),
+            error);
+
+    private sealed record ApplicationPreparationTarget(
+        RentalApplication Entity,
+        int PropertyId,
+        int UnitId,
+        string Currency,
+        bool TemplateIsValid);
+
+    private sealed record TenantFacts(int Id, string FirstName, string LastName, string? Email);
+}
