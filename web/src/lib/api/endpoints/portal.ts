@@ -37,9 +37,9 @@ export interface CheckoutSession {
 	checkoutUrl: string;
 }
 
-/** Autopay enrollment state for one lease. */
+/** Autopay enrollment state for one canonical tenant account. */
 export interface AutopayStatus {
-	leaseId: number;
+	tenantAccountId: number;
 	active: boolean;
 	onlinePaymentsAvailable: boolean;
 	enrolledAt?: string | null;
@@ -48,7 +48,8 @@ export interface AutopayStatus {
 /** Tenant-facing payable charge shape. This is not the management receipt projection. */
 export interface PortalPayment {
 	id: number;
-	leaseId?: number | null;
+	tenantAccountId: number;
+	leaseManagementId: number;
 	paymentType: PaymentType;
 	status: PaymentStatus;
 	amount: number;
@@ -82,20 +83,23 @@ export const portal = {
 	 * return the URL to redirect to. Throws an {@link ApiError} with status 503
 	 * when online payments aren't configured, or 404 if the payment isn't theirs.
 	 */
-	payCheckout: (paymentId: number, body: CheckoutUrls = {}) =>
-		api.post<CheckoutSession>(`/portal/payments/${paymentId}/checkout`, body),
-	/** Current autopay enrollment for a lease (omit `leaseId` to use the default lease). */
-	autopayStatus: (leaseId?: number) =>
-		api.get<AutopayStatus>(`/portal/autopay${leaseId != null ? `?leaseId=${leaseId}` : ''}`),
+	payCheckout: (tenantAccountId: number, chargeLedgerEntryId: number, body: CheckoutUrls = {}) =>
+		api.post<CheckoutSession>(
+			`/portal/tenant-accounts/${tenantAccountId}/charges/${chargeLedgerEntryId}/checkout`,
+			body
+		),
+	/** Current autopay enrollment for a canonical tenant account. */
+	autopayStatus: (tenantAccountId: number) =>
+		api.get<AutopayStatus>(`/portal/tenant-accounts/${tenantAccountId}/autopay`),
 	/**
 	 * Begin autopay enrollment via a setup-mode Checkout; redirect to the returned
 	 * `checkoutUrl`. Throws 503 when online payments aren't configured.
 	 */
-	autopayEnroll: (body: { leaseId: number } & CheckoutUrls) =>
-		api.post<CheckoutSession>('/portal/autopay/enroll', body),
-	/** Cancel autopay for a lease. */
-	autopayCancel: (body: { leaseId: number }) =>
-		api.post<AutopayStatus>('/portal/autopay/cancel', body),
+	autopayEnroll: (tenantAccountId: number, body: { operationKey: string } & CheckoutUrls) =>
+		api.post<CheckoutSession>(`/portal/tenant-accounts/${tenantAccountId}/autopay/enroll`, body),
+	/** Cancel autopay for a canonical tenant account. */
+	autopayCancel: (tenantAccountId: number) =>
+		api.post<AutopayStatus>(`/portal/tenant-accounts/${tenantAccountId}/autopay/cancel`),
 
 	/**
 	 * Tenant-scoped messaging. The tenant's JWT scopes every call to their own

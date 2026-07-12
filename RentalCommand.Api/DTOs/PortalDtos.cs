@@ -67,8 +67,6 @@ public class CheckoutSessionResponse
 /// <summary>Request to enroll the tenant's own canonical account in autopay.</summary>
 public class AutopayEnrollRequest
 {
-    public int TenantAccountId { get; set; }
-
     [Required, MaxLength(186)]
     public string OperationKey { get; set; } = string.Empty;
 
@@ -79,16 +77,10 @@ public class AutopayEnrollRequest
     public string? CancelUrl { get; set; }
 }
 
-/// <summary>Request to cancel autopay for one of the tenant's leases.</summary>
-public class AutopayCancelRequest
-{
-    public int LeaseId { get; set; }
-}
-
-/// <summary>The tenant's autopay enrollment status for a lease.</summary>
+/// <summary>The tenant's autopay enrollment status for a canonical tenant account.</summary>
 public class AutopayStatusResponse
 {
-    public int LeaseId { get; set; }
+    public int TenantAccountId { get; set; }
     public bool Active { get; set; }
     public DateTime? EnrolledAt { get; set; }
     public bool OnlinePaymentsAvailable { get; set; }

@@ -936,7 +936,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
   int? _payingPaymentId;
 
   /// Lease id whose autopay enroll/cancel is in flight.
-  int? _busyAutopayLeaseId;
+  int? _busyAutopayAccountId;
 
   AuthUser? get user => widget.user;
 
@@ -986,7 +986,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
     try {
       final url = await ref
           .read(tenantPortalRepositoryProvider)
-          .payCheckout(payment.id);
+          .payCheckout(payment.tenantAccountId, payment.id);
       if (url.isEmpty) return;
       await _open(url);
     } on ApiException catch (e) {
@@ -1006,21 +1006,21 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
     }
   }
 
-  /// Enrolls the lease in autopay and opens the setup Checkout in the browser.
-  Future<void> _enrollAutopay(int leaseId) async {
-    if (_busyAutopayLeaseId != null) return;
+  /// Enrolls the tenant account in autopay and opens setup Checkout in the browser.
+  Future<void> _enrollAutopay(int tenantAccountId) async {
+    if (_busyAutopayAccountId != null) return;
     final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busyAutopayLeaseId = leaseId);
+    setState(() => _busyAutopayAccountId = tenantAccountId);
     try {
       final url = await ref
           .read(tenantPortalRepositoryProvider)
-          .autopayEnroll(leaseId);
+          .autopayEnroll(tenantAccountId);
       // Only refresh status if the browser actually opened — otherwise the
       // tenant never reached the hosted setup, so there's nothing new to read
       // (and _open has already told them the browser couldn't open).
       if (url.isNotEmpty && await _open(url)) {
         // The tenant finishes setup in the browser; refresh status on return.
-        ref.invalidate(tenantAutopayStatusProvider(leaseId));
+        ref.invalidate(tenantAutopayStatusProvider(tenantAccountId));
       }
     } on ApiException catch (e) {
       messenger
@@ -1035,18 +1035,18 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
           ),
         );
     } finally {
-      if (mounted) setState(() => _busyAutopayLeaseId = null);
+      if (mounted) setState(() => _busyAutopayAccountId = null);
     }
   }
 
-  /// Turns autopay off for the lease, then refreshes the status.
-  Future<void> _cancelAutopay(int leaseId) async {
-    if (_busyAutopayLeaseId != null) return;
+  /// Turns autopay off for the tenant account, then refreshes the status.
+  Future<void> _cancelAutopay(int tenantAccountId) async {
+    if (_busyAutopayAccountId != null) return;
     final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busyAutopayLeaseId = leaseId);
+    setState(() => _busyAutopayAccountId = tenantAccountId);
     try {
-      await ref.read(tenantPortalRepositoryProvider).autopayCancel(leaseId);
-      ref.invalidate(tenantAutopayStatusProvider(leaseId));
+      await ref.read(tenantPortalRepositoryProvider).autopayCancel(tenantAccountId);
+      ref.invalidate(tenantAutopayStatusProvider(tenantAccountId));
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('Autopay turned off.')));
@@ -1055,7 +1055,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
-      if (mounted) setState(() => _busyAutopayLeaseId = null);
+      if (mounted) setState(() => _busyAutopayAccountId = null);
     }
   }
 
@@ -1082,14 +1082,14 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
           ref.invalidate(tenantPortalSnapshotProvider);
           // Refresh autopay state too; the tenant may have just returned from
           // a hosted Checkout in the browser.
-          final leaseId = ref
+          final tenantAccountId = ref
               .read(tenantPortalSnapshotProvider)
               .value
-              ?.leases
+              ?.payments
               .firstOrNull
-              ?.id;
-          if (leaseId != null) {
-            ref.invalidate(tenantAutopayStatusProvider(leaseId));
+              ?.tenantAccountId;
+          if (tenantAccountId != null) {
+            ref.invalidate(tenantAutopayStatusProvider(tenantAccountId));
           }
         },
         child: snapshot.when(
@@ -1124,7 +1124,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
             final unreadNotifications = data.notifications
                 .where((n) => !n.isRead)
                 .length;
-            final primaryLeaseId = data.leases.firstOrNull?.id;
+            final primaryTenantAccountId = data.payments.firstOrNull?.tenantAccountId;
 
             return ListView(
               padding: const EdgeInsets.all(20),
@@ -1195,15 +1195,15 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                 ],
 
                 // ── Autopay ───────────────────────────────────────────────
-                if (primaryLeaseId != null) ...[
+                if (primaryTenantAccountId != null) ...[
                   const SizedBox(height: 8),
                   _AutopayCard(
                     statusAsync: ref.watch(
-                      tenantAutopayStatusProvider(primaryLeaseId),
+                      tenantAutopayStatusProvider(primaryTenantAccountId),
                     ),
-                    busy: _busyAutopayLeaseId == primaryLeaseId,
-                    onEnroll: () => _enrollAutopay(primaryLeaseId),
-                    onCancel: () => _cancelAutopay(primaryLeaseId),
+                    busy: _busyAutopayAccountId == primaryTenantAccountId,
+                    onEnroll: () => _enrollAutopay(primaryTenantAccountId),
+                    onCancel: () => _cancelAutopay(primaryTenantAccountId),
                   ),
                 ],
 
