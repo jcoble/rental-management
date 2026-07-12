@@ -398,7 +398,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
             return _db.Database
-                .SqlQuery<DateOnly>($$"SELECT rc_business_date({{portfolioId}}) AS \"Value\"")
+                .SqlQuery<DateOnly>($"SELECT rc_business_date({portfolioId}) AS \"Value\"")
                 .SingleAsync(ct);
         }
 
