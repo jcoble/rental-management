@@ -1,6 +1,8 @@
+using System.Net;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data.Authorization;
 
@@ -177,6 +179,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.ConfigureTenantAccountKernel();
         modelBuilder.ConfigureLeaseLifecycleProjections();
         modelBuilder.ConfigureAccountStatusProjections();
+
+        // Npgsql's inet type is represented by IPAddress. Keep the HTTP/domain boundary as a
+        // normalized string while making the provider mapping explicit; EF handles nulls before
+        // invoking the converter.
+        var ipAddressConverter = new ValueConverter<string, IPAddress>(
+            value => IPAddress.Parse(value),
+            value => value.ToString());
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
@@ -1033,7 +1042,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.EmailSnapshot).IsRequired().HasMaxLength(320);
             entity.Property(e => e.TokenHash).IsRequired().HasColumnType("char(64)");
             entity.Property(e => e.TypedName).HasMaxLength(200);
-            entity.Property(e => e.IpAddress).HasColumnType("inet");
+            entity.Property(e => e.IpAddress).HasConversion(ipAddressConverter).HasColumnType("inet");
             entity.Property(e => e.UserAgent).HasMaxLength(1000);
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.SignatureType).HasConversion<string>().HasMaxLength(40);
@@ -1059,7 +1068,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Type).HasConversion<string>().HasMaxLength(40);
-            entity.Property(e => e.IpAddress).HasColumnType("inet");
+            entity.Property(e => e.IpAddress).HasConversion(ipAddressConverter).HasColumnType("inet");
             entity.Property(e => e.UserAgent).HasMaxLength(1000);
             entity.Property(e => e.Detail).HasMaxLength(2000);
             entity.HasIndex(e => new { e.PortfolioId, e.SignatureRequestId, e.OccurredAtUtc, e.Id });
