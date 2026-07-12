@@ -10,8 +10,8 @@ namespace RentalCommand.Api.Services.Auth;
 
 /// <summary>
 /// Idempotent demo-data seeder. Creates a rich interlinked dataset (properties, units, tenants,
-/// leases, 12 months of payments, expenses, work orders, appointments, inspections, and security
-/// deposit holdings) for a given portfolio so every report and analytics screen has realistic data.
+/// leases, 12 months of payments, expenses, work orders, appointments, inspections, and canonical
+/// tenant/deposit ledger facts) for a given portfolio so every report and analytics screen has realistic data.
 ///
 /// Two callers: startup (seeds portfolio 1 = the dev admin when <c>Seed:DemoData=true</c>), and new
 /// signups (each new portfolio is seeded as a Sandbox to explore). Every row is parameterized on the
@@ -48,6 +48,23 @@ public class DemoDataSeeder
         }
 
         var now = _timeProvider.UtcNow();
+
+        var seedContext = await _db.Portfolios
+            .Where(portfolio => portfolio.Id == portfolioId)
+            .Select(portfolio => new
+            {
+                Currency = portfolio.Currency,
+                ActorUserId = _db.Users
+                    .Where(user => user.PortfolioId == portfolioId && user.TenantId == null)
+                    .OrderBy(user => user.Id)
+                    .Select(user => (int?)user.Id)
+                    .FirstOrDefault(),
+            })
+            .SingleOrDefaultAsync(ct)
+            ?? throw new InvalidOperationException($"Portfolio {portfolioId} does not exist.");
+        var actorUserId = seedContext.ActorUserId
+            ?? throw new InvalidOperationException($"Portfolio {portfolioId} has no administering user for demo facts.");
+        var currency = seedContext.Currency.Trim().ToUpperInvariant();
 
         // Seed atomically: if any step fails the whole thing rolls back, so a partial
         // dataset can never strand the idempotency guard (which checks for any property).
@@ -588,19 +605,110 @@ public class DemoDataSeeder
         await _db.SaveChangesAsync(ct);
 
         // ── 7. SecurityDepositHoldings ────────────────────────────────────────────────
-        var holdings = activeLeasesForPayments.Select(l => new SecurityDepositHolding
+        var demoLeaseTemplate = new DocumentTemplate
         {
-            PortfolioId    = portfolioId,
-            LeaseId        = l.Id,
-            Amount         = l.SecurityDeposit,
-            Status         = SecurityDepositStatus.Held,
-            HeldAt         = l.StartDate,
-            DeductionsJson = "[]",
-            CreatedAt      = l.StartDate,
-            UpdatedAt      = now
-        }).ToList();
+            PortfolioId = portfolioId,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Active,
+            RenderMode = DocumentTemplateRenderMode.Restyle,
+            Name = "Demo lease template",
+            Description = "Seed-only template backing canonical demo agreements.",
+            DraftHtml = "<p>Demo lease agreement</p>",
+            Version = 1,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _db.DocumentTemplates.Add(demoLeaseTemplate);
 
-        _db.SecurityDepositHoldings.AddRange(holdings);
+        foreach (var lease in activeLeasesForPayments.Where(candidate => candidate.SecurityDeposit > 0m))
+        {
+            var effectiveOn = DateOnly.FromDateTime(lease.StartDate);
+            var management = new LeaseManagement
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, PropertyId = lease.PropertyId,
+                UnitId = lease.UnitId, RelationshipNumber = $"DEMO-LM-{lease.Id:D8}",
+                PlannedPossessionAtUtc = lease.MoveInDate ?? lease.StartDate,
+                PossessionGivenAtUtc = lease.MoveInDate ?? lease.StartDate,
+                PossessionAgreementExceptionReason = "Canonical demo relationship seeded from fixture.",
+                PossessionAgreementExceptionAuthorizedByUserId = actorUserId,
+                CreatedAtUtc = lease.CreatedAt, CreatedByUserId = actorUserId,
+                UpdatedAtUtc = now, RowVersion = Guid.NewGuid(),
+            };
+            var account = new TenantAccount
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, LeaseManagement = management,
+                AccountNumber = $"DEMO-TA-{lease.Id:D8}", Currency = currency,
+                OpenedAtUtc = lease.StartDate, CreatedAtUtc = lease.CreatedAt,
+                CreatedByUserId = actorUserId,
+            };
+            var agreement = new LeaseAgreement
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, LeaseManagement = management,
+                VersionNumber = 1, AgreementNumber = $"DEMO-AGR-{lease.Id:D8}-V1",
+                ChangeType = LeaseAgreementChangeType.Initial, TermType = LeaseAgreementTermType.FixedTerm,
+                TermStartOn = effectiveOn, TermEndOn = DateOnly.FromDateTime(lease.EndDate),
+                GoverningFromOn = effectiveOn, BaseRentAmount = lease.MonthlyRent,
+                RentDueDay = checked((short)lease.RentDueDay), SecurityDepositObligation = lease.SecurityDeposit,
+                LateFeeAmount = lease.LateFeeAmount, GracePeriodDays = 0, Currency = currency,
+                TermsSchemaVersion = 1,
+                TermsPayload = JsonSerializer.Serialize(new { source = "demo-seed", legacyLeaseId = lease.Id }),
+                DocumentTemplate = demoLeaseTemplate, DocumentTemplateVersion = 1,
+                CreatedAtUtc = lease.CreatedAt, CreatedByUserId = actorUserId, UpdatedAtUtc = now,
+            };
+            var party = new LeaseManagementParty
+            {
+                PortfolioId = portfolioId, LeaseManagement = management, TenantId = lease.TenantId,
+                Role = LeaseManagementPartyRole.PrimaryTenant, EffectiveFrom = effectiveOn,
+                ChangeReason = "Canonical demo household seeded from lease fixture.",
+                CreatedAtUtc = lease.CreatedAt, CreatedByUserId = actorUserId,
+            };
+            var depositAccount = new SecurityDepositAccount
+            {
+                PortfolioId = portfolioId, TenantAccount = account, OriginatingAgreement = agreement,
+                Currency = currency, CreatedAtUtc = lease.StartDate, CreatedByUserId = actorUserId,
+            };
+            var depositCharge = new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, TenantAccount = account,
+                EntryType = TenantLedgerEntryType.DepositCharge, Direction = TenantLedgerDirection.Debit,
+                Amount = lease.SecurityDeposit, Currency = currency, EffectiveOn = effectiveOn, DueOn = effectiveOn,
+                PostedAtUtc = lease.StartDate, Description = "Security deposit due",
+                BusinessKey = $"demo:{lease.Id}:deposit-charge", LeaseAgreement = agreement,
+                CreatedByUserId = actorUserId,
+            };
+            var depositReceipt = new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, TenantAccount = account,
+                EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
+                Amount = lease.SecurityDeposit, Currency = currency, EffectiveOn = effectiveOn,
+                PostedAtUtc = lease.StartDate, Description = "Security deposit received",
+                BusinessKey = $"demo:{lease.Id}:deposit-receipt", CreatedByUserId = actorUserId,
+            };
+            var allocation = new TenantLedgerAllocation
+            {
+                PortfolioId = portfolioId, TenantAccount = account, DebitEntry = depositCharge,
+                CreditEntry = depositReceipt, Amount = lease.SecurityDeposit, AllocatedAtUtc = lease.StartDate,
+                BusinessKey = $"demo:{lease.Id}:deposit-allocation", CreatedByUserId = actorUserId,
+            };
+            var depositEntry = new SecurityDepositEntry
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, SecurityDepositAccount = depositAccount,
+                EntryType = SecurityDepositEntryType.Receipt, Direction = SecurityDepositDirection.Increase,
+                Amount = lease.SecurityDeposit, Currency = currency, EffectiveOn = effectiveOn,
+                PostedAtUtc = lease.StartDate, BusinessKey = $"demo:{lease.Id}:deposit-fund",
+                Description = "Security deposit funded", LeaseAgreement = agreement,
+                TenantLedgerEntry = depositReceipt, CreatedByUserId = actorUserId,
+            };
+
+            _db.LeaseManagements.Add(management);
+            _db.TenantAccounts.Add(account);
+            _db.LeaseAgreements.Add(agreement);
+            _db.LeaseManagementParties.Add(party);
+            _db.SecurityDepositAccounts.Add(depositAccount);
+            _db.TenantLedgerEntries.AddRange(depositCharge, depositReceipt);
+            _db.TenantLedgerAllocations.Add(allocation);
+            _db.SecurityDepositEntries.Add(depositEntry);
+        }
         await _db.SaveChangesAsync(ct);
 
         // ── 8. Expenses (~35) ─────────────────────────────────────────────────────────

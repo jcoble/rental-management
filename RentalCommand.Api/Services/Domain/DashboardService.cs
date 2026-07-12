@@ -481,9 +481,13 @@ public class DashboardService : IDashboardService
 
         if (Ids("SecurityDeposit") is { Count: > 0 } depositIds)
         {
-            var found = await _db.SecurityDepositHoldings.AsNoTracking()
-                .Where(d => depositIds.Contains(d.Id) && d.PortfolioId == portfolioId)
-                .Select(d => new { d.Id, d.Amount })
+            var found = await (
+                    from account in _db.SecurityDepositAccounts.AsNoTracking()
+                    join balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+                        on new { account.PortfolioId, SecurityDepositAccountId = account.Id }
+                        equals new { balance.PortfolioId, balance.SecurityDepositAccountId }
+                    where depositIds.Contains(account.Id) && account.PortfolioId == portfolioId
+                    select new { account.Id, Amount = balance.HeldBalance })
                 .ToListAsync(ct);
             foreach (var d in found)
             {

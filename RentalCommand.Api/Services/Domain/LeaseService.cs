@@ -19,8 +19,6 @@ public class LeaseService : ILeaseService
 {
     private const string EntityType = "Lease";
     private const string PaymentEntityType = "Payment";
-    private const string SecurityDepositEntityType = "SecurityDeposit";
-    private const string LeaseDepositHoldingNote = "Created from lease security deposit.";
     private const string GeneratedAgreementContentType = "application/pdf";
 
     // Allowed lease lifecycle transitions. A lease is a legal contract, so status may only move along
@@ -488,59 +486,6 @@ public class LeaseService : ILeaseService
         }
 
         return created;
-    }
-
-    private async Task<SecurityDepositHolding?> EnsureSecurityDepositHoldingAsync(
-        Lease lease,
-        CancellationToken ct)
-    {
-        if (!OccupiesUnit(lease.Status) || lease.SecurityDeposit <= 0m)
-        {
-            return null;
-        }
-
-        var exists = await _db.SecurityDepositHoldings
-            .AsNoTracking()
-            .AnyAsync(h => h.PortfolioId == lease.PortfolioId && h.LeaseId == lease.Id, ct);
-        if (exists)
-        {
-            return null;
-        }
-
-        var now = _timeProvider.UtcNow();
-        var holding = new SecurityDepositHolding
-        {
-            PortfolioId = lease.PortfolioId,
-            LeaseId = lease.Id,
-            Amount = lease.SecurityDeposit,
-            Status = SecurityDepositStatus.Held,
-            HeldAt = now,
-            DeductionsJson = "[]",
-            Notes = LeaseDepositHoldingNote,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.SecurityDepositHoldings.Add(holding);
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            lease.PortfolioId,
-            SecurityDepositEntityType,
-            holding.Id,
-            AuditLogOperation.Created,
-            newValues: JsonSerializer.Serialize(new
-            {
-                leaseId = holding.LeaseId,
-                amount = holding.Amount,
-                status = holding.Status.ToString(),
-                heldAt = holding.HeldAt,
-                notes = holding.Notes,
-            }),
-            changeReason: $"Security deposit holding created from lease {lease.LeaseNumber} (${holding.Amount:0.##})",
-            ct: ct);
-
-        return holding;
     }
 
     // Reject a status move that isn't on the lifecycle graph. A same→same move is always allowed (a PATCH
@@ -1312,7 +1257,6 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Created,
             changeReason: $"Lease {entity.LeaseNumber} created (status {entity.Status})", ct: ct);
 
-        await EnsureSecurityDepositHoldingAsync(entity, ct);
         var openingBalance = await UpsertOpeningBalanceAsync(
             entity,
             request.OpeningBalanceAmount,
@@ -1581,7 +1525,6 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
 
-        await EnsureSecurityDepositHoldingAsync(entity, ct);
         var openingBalance = await UpsertOpeningBalanceAsync(
             entity,
             request.OpeningBalanceAmount,
