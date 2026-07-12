@@ -13,8 +13,6 @@ String paymentTypeLabel(String type) {
       return 'Late fee';
     case 'Utility':
       return 'Utility';
-    case 'ApplicationFee':
-      return 'Application fee';
     case 'Other':
       return 'Other';
     default:

@@ -13,7 +13,6 @@ export const PAYMENT_TYPE_LABELS: Record<string, string> = {
 	SecurityDeposit: 'Security deposit',
 	LateFee: 'Late fee',
 	Utility: 'Utility',
-	ApplicationFee: 'Application fee',
 	Other: 'Other'
 };
 
