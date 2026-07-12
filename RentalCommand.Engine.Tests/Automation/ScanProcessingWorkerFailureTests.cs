@@ -285,6 +285,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             db.Units.Add(new Unit
             {
                 Id = 20,
+                PortfolioId = 1,
                 PropertyId = 10,
                 UnitNumber = "1A",
                 Bedrooms = 2,

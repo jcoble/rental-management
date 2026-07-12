@@ -796,10 +796,11 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
       _loadedContentVersion = null;
       _syncFromListing(workspace);
     } on ApiException catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -813,10 +814,11 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
           .removeListingPhoto(widget.dashboard.unit.id, photo.id);
       ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
     } on ApiException catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -840,10 +842,11 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
           .reorderListingPhotos(widget.dashboard.unit.id, ids);
       ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
     } on ApiException catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }

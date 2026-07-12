@@ -54,7 +54,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                     && existingAgreement.LeaseManagement.UnitId == target.UnitId
                 select new ScanConfirmationTargetWriteResult(
                     existingAgreement.Id,
-                    existingAgreement.LeaseManagement.UnitId,
+                    existingAgreement.LeaseManagement!.UnitId,
                     nameof(LeaseAgreement)))
                 .SingleOrDefaultAsync(ct);
             if (existing is not null)
