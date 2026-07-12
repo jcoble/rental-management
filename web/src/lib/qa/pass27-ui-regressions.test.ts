@@ -11,9 +11,11 @@ const importSource = readFileSync('src/routes/(protected)/import/+page.svelte', 
 const taxSource = readFileSync('src/routes/(protected)/tax/+page.svelte', 'utf8');
 
 describe('pass 27 UI regressions', () => {
-	it('labels the deposit return confirmation as a return action instead of delete', () => {
-		assert.match(depositDetailSource, /confirmLabel="Process return"/);
-		assert.match(depositListSource, /confirmLabel="Process return"/);
+	it('uses the canonical append-only refund command instead of legacy return/delete confirmation', () => {
+		assert.match(depositDetailSource, /securityDeposits\.refund/);
+		assert.match(depositDetailSource, />Record refund</);
+		assert.doesNotMatch(depositDetailSource, /confirmLabel="Process return"/);
+		assert.doesNotMatch(depositListSource, /confirmLabel="Process return"/);
 	});
 
 	it('shows the same tenant CSV columns that the downloaded template accepts', () => {

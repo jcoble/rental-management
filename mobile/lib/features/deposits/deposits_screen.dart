@@ -878,8 +878,9 @@ class _MoneyField extends StatelessWidget {
     decoration: const InputDecoration(labelText: 'Amount', prefixText: '\$'),
     validator: (value) {
       final parsed = double.tryParse(value?.trim() ?? '');
-      if (parsed == null || parsed <= 0)
+      if (parsed == null || parsed <= 0) {
         return 'Enter an amount greater than zero';
+      }
       if (maximum != null && parsed > maximum!) {
         return 'Amount cannot exceed ${_fmtCurrency(maximum!)}';
       }
