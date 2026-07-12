@@ -118,7 +118,7 @@ public sealed class RecordNativeSignatureHandler
     }
 
     private static NativeSignerActionResult Missing() => new(
-        NativeSignerActionOutcome.NotFound, "This signing link is invalid.", 0, null, 0,
+        NativeSignerActionOutcome.NotFound, "This signing link is invalid.", 0, null, null, null,
         SignatureSignerStatus.Pending, SignatureRequestStatus.AwaitingSignatures, false);
 
     private static NativeSignerActionResult Unavailable(SignatureSigner signer, SignatureRequest request) => new(
@@ -126,13 +126,15 @@ public sealed class RecordNativeSignatureHandler
         signer.Status == SignatureSignerStatus.Signed
             ? "You have already signed this document."
             : "This signing request is no longer active.",
-        request.Id, request.PublicId, request.LeaseAgreementId!.Value, signer.Status, request.Status, false);
+        request.Id, request.PublicId, request.LeaseAgreementId, request.LeaseAddendumId,
+        signer.Status, request.Status, false);
 
     private static NativeSignerActionResult Applied(
         SignatureSigner signer,
         SignatureRequest request,
         bool executionRequired) => new(
-            NativeSignerActionOutcome.Applied, null, request.Id, request.PublicId, request.LeaseAgreementId!.Value,
+            NativeSignerActionOutcome.Applied, null, request.Id, request.PublicId,
+            request.LeaseAgreementId, request.LeaseAddendumId,
             signer.Status, request.Status, executionRequired);
 
     internal static void StageSignerAndRequestAudits(
@@ -183,7 +185,7 @@ public sealed class RecordNativeDeclineHandler
         if (target is null)
         {
             return new NativeSignerActionResult(
-                NativeSignerActionOutcome.NotFound, "This signing link is invalid.", 0, null, 0,
+                NativeSignerActionOutcome.NotFound, "This signing link is invalid.", 0, null, null, null,
                 SignatureSignerStatus.Pending, SignatureRequestStatus.AwaitingSignatures, false);
         }
 
@@ -202,7 +204,8 @@ public sealed class RecordNativeDeclineHandler
             return new NativeSignerActionResult(
                 NativeSignerActionOutcome.Expired,
                 "This signing request is no longer active.",
-                request.Id, request.PublicId, request.LeaseAgreementId!.Value, signer.Status, request.Status, false);
+                request.Id, request.PublicId, request.LeaseAgreementId, request.LeaseAddendumId,
+                signer.Status, request.Status, false);
         }
 
         signer.Status = SignatureSignerStatus.Declined;
@@ -230,7 +233,8 @@ public sealed class RecordNativeDeclineHandler
             attempt, request, signer, "Signer declined the electronic signature request.");
 
         return new NativeSignerActionResult(
-            NativeSignerActionOutcome.Applied, null, request.Id, request.PublicId, request.LeaseAgreementId!.Value,
+            NativeSignerActionOutcome.Applied, null, request.Id, request.PublicId,
+            request.LeaseAgreementId, request.LeaseAddendumId,
             signer.Status, request.Status, false);
     }
 }

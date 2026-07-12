@@ -173,6 +173,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.IssueLeaseAddendumCommand,
+    RentalCommand.Core.Esign.IssueLeaseAddendumResult,
+    RentalCommand.Data.Esign.IssueLeaseAddendumHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.RecordNativeEsignViewCommand,
     RentalCommand.Core.Esign.RecordNativeEsignViewResult,
     RentalCommand.Data.Esign.RecordNativeEsignViewHandler>();
@@ -384,6 +388,30 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreateLeaseAgreementSuccessorDraftCommand,
     RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
     RentalCommand.Data.Leasing.CreateLeaseAgreementSuccessorDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CreateLeaseAddendumDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
+    RentalCommand.Data.Leasing.CreateLeaseAddendumDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.EditLeaseAddendumDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
+    RentalCommand.Data.Leasing.EditLeaseAddendumDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CorrectLeaseAddendumDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
+    RentalCommand.Data.Leasing.CorrectLeaseAddendumDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.VoidLeaseAgreementCommand,
+    RentalCommand.Core.Leasing.VoidLegalArtifactResult,
+    RentalCommand.Data.Leasing.VoidLeaseAgreementHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.VoidLeaseAddendumCommand,
+    RentalCommand.Core.Leasing.VoidLegalArtifactResult,
+    RentalCommand.Data.Leasing.VoidLeaseAddendumHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CloseTenantAccountCommand,
+    RentalCommand.Core.Leasing.CloseTenantAccountResult,
+    RentalCommand.Data.Leasing.CloseTenantAccountHandler>();
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CompleteTurnoverCommand,
     RentalCommand.Core.Leasing.CompleteTurnoverResult,

@@ -37,7 +37,8 @@ public sealed record NativeSignerActionResult(
     string? Error,
     int SignatureRequestId,
     Guid? PublicId,
-    int LeaseAgreementId,
+    int? LeaseAgreementId,
+    int? LeaseAddendumId,
     SignatureSignerStatus SignerStatus,
     SignatureRequestStatus RequestStatus,
     bool ExecutionRequired) : IAtomicResultData;

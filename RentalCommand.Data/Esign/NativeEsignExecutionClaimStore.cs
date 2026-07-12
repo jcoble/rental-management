@@ -37,10 +37,14 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         ), candidates AS (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
-            INNER JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
+            LEFT JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
+            LEFT JOIN "LeaseAddenda" AS addendum ON addendum."Id" = request."LeaseAddendumId"
             CROSS JOIN clock
             WHERE request."Status" = 'ExecutionPending'
-              AND agreement."VoidedAtUtc" IS NULL
+              AND ((request."LeaseAgreementId" IS NOT NULL AND agreement."Id" IS NOT NULL
+                    AND agreement."VoidedAtUtc" IS NULL)
+                   OR (request."LeaseAddendumId" IS NOT NULL AND addendum."Id" IS NOT NULL
+                       AND addendum."VoidedAtUtc" IS NULL))
               AND (request."ExecutionClaimToken" IS NULL
                    OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
               AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")
@@ -71,11 +75,15 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         ), candidate AS (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
-            INNER JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
+            LEFT JOIN "LeaseAgreements" AS agreement ON agreement."Id" = request."LeaseAgreementId"
+            LEFT JOIN "LeaseAddenda" AS addendum ON addendum."Id" = request."LeaseAddendumId"
             CROSS JOIN clock
             WHERE request."Id" = @signatureRequestId
               AND request."Status" = 'ExecutionPending'
-              AND agreement."VoidedAtUtc" IS NULL
+              AND ((request."LeaseAgreementId" IS NOT NULL AND agreement."Id" IS NOT NULL
+                    AND agreement."VoidedAtUtc" IS NULL)
+                   OR (request."LeaseAddendumId" IS NOT NULL AND addendum."Id" IS NOT NULL
+                       AND addendum."VoidedAtUtc" IS NULL))
               AND (request."ExecutionClaimToken" IS NULL
                    OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
               AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")

@@ -22,5 +22,6 @@ public sealed class NativeEsignExecutionClaimLostException : InvalidOperationExc
 public sealed record FinalizeNativeEsignRequestResult(
     Guid PublicId,
     int SignatureRequestId,
-    int LeaseAgreementId,
+    int? LeaseAgreementId,
+    int? LeaseAddendumId,
     int ExecutedArtifactId) : IAtomicResultData;

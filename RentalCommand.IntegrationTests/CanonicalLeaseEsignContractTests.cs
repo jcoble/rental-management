@@ -35,13 +35,15 @@ public sealed class CanonicalLeaseEsignContractTests
     [Fact]
     public void Execution_claims_are_one_postgres_statement_against_agreements_and_database_time()
     {
-        NativeEsignExecutionClaimStore.BatchClaimSql.Should().Contain("INNER JOIN \"LeaseAgreements\"");
+        NativeEsignExecutionClaimStore.BatchClaimSql.Should().Contain("LEFT JOIN \"LeaseAgreements\"");
+        NativeEsignExecutionClaimStore.BatchClaimSql.Should().Contain("LEFT JOIN \"LeaseAddenda\"");
         NativeEsignExecutionClaimStore.BatchClaimSql.Should().Contain("clock_timestamp()");
         NativeEsignExecutionClaimStore.BatchClaimSql.Should().Contain("FOR UPDATE OF request SKIP LOCKED");
         NativeEsignExecutionClaimStore.BatchClaimSql.Should().Contain("pg_try_advisory_xact_lock");
         NativeEsignExecutionClaimStore.BatchClaimSql.Should().NotContain("\"Leases\"");
 
-        NativeEsignExecutionClaimStore.SingleClaimSql.Should().Contain("INNER JOIN \"LeaseAgreements\"");
+        NativeEsignExecutionClaimStore.SingleClaimSql.Should().Contain("LEFT JOIN \"LeaseAgreements\"");
+        NativeEsignExecutionClaimStore.SingleClaimSql.Should().Contain("LEFT JOIN \"LeaseAddenda\"");
         NativeEsignExecutionClaimStore.SingleClaimSql.Should().Contain("clock_timestamp()");
         NativeEsignExecutionClaimStore.SingleClaimSql.Should().NotContain("\"Leases\"");
     }
