@@ -22,6 +22,7 @@ public sealed class PendingFileUpload : IPortfolioScoped
     public long SizeBytes { get; set; }
     public PendingFileUploadState State { get; set; }
     public int? StoredFileId { get; set; }
+    public string? CleanupClaimOwner { get; set; }
     public Guid? CleanupClaimToken { get; set; }
     public DateTime? CleanupClaimExpiresAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; }

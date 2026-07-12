@@ -23,7 +23,8 @@ public sealed record PendingFileUploadAdmission(
     int? StoredFileId,
     string RequestFingerprint);
 
-public sealed record PendingFileUploadCleanupClaim(Guid Id, Guid ClaimToken, string StoragePath);
+public sealed record PendingFileUploadCleanupClaim(
+    Guid Id, string ClaimOwner, Guid ClaimToken, string StoragePath);
 
 public interface IPendingFileUploadStore
 {
@@ -40,14 +41,16 @@ public interface IPendingFileUploadStore
         CancellationToken ct = default);
 
     Task<IReadOnlyList<PendingFileUploadCleanupClaim>> ClaimExpiredAsync(
-        DateTime nowUtc,
-        DateTime preparedBeforeUtc,
+        string claimOwner,
+        TimeSpan preparedRetention,
         TimeSpan claimLease,
         int batchSize,
         CancellationToken ct = default);
 
-    Task<int> MarkAbandonedAsync(Guid id, Guid claimToken, DateTime nowUtc, CancellationToken ct = default);
-    Task<int> ReleaseCleanupClaimAsync(Guid id, Guid claimToken, CancellationToken ct = default);
+    Task<int> MarkAbandonedAsync(
+        Guid id, string claimOwner, Guid claimToken, CancellationToken ct = default);
+    Task<int> ReleaseCleanupClaimAsync(
+        Guid id, string claimOwner, Guid claimToken, CancellationToken ct = default);
 }
 
 public sealed class PendingFileUploadStore : IPendingFileUploadStore
@@ -124,16 +127,17 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
     }
 
     public async Task<IReadOnlyList<PendingFileUploadCleanupClaim>> ClaimExpiredAsync(
-        DateTime nowUtc,
-        DateTime preparedBeforeUtc,
+        string claimOwner,
+        TimeSpan preparedRetention,
         TimeSpan claimLease,
         int batchSize,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
+        if (claimOwner.Length > 200) throw new ArgumentOutOfRangeException(nameof(claimOwner));
+        if (preparedRetention < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(preparedRetention));
+        if (claimLease <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(claimLease));
         if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
-        var now = AsUtc(nowUtc);
-        var preparedBefore = AsUtc(preparedBeforeUtc);
-        var token = Guid.NewGuid();
         var connection = _db.Database.GetDbConnection();
         var close = connection.State != ConnectionState.Open;
         if (close) await _db.Database.OpenConnectionAsync(ct);
@@ -141,35 +145,41 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         {
             await using var command = connection.CreateCommand();
             command.CommandText = """
-                WITH candidates AS (
+                WITH clock AS MATERIALIZED (
+                    SELECT clock_timestamp() AS now_utc
+                ), candidates AS (
                     SELECT upload."Id"
                     FROM "PendingFileUploads" AS upload
+                    CROSS JOIN clock
                     WHERE upload."State" = @prepared
-                      AND upload."CreatedAtUtc" <= @preparedBefore
-                      AND (upload."CleanupClaimToken" IS NULL OR upload."CleanupClaimExpiresAtUtc" <= @now)
+                      AND upload."CreatedAtUtc" <= clock.now_utc - @preparedRetention
+                      AND (upload."CleanupClaimToken" IS NULL
+                           OR upload."CleanupClaimExpiresAtUtc" <= clock.now_utc)
                     ORDER BY upload."CreatedAtUtc", upload."Id"
-                    FOR UPDATE SKIP LOCKED
+                    FOR UPDATE OF upload SKIP LOCKED
                     LIMIT @batchSize
                 )
                 UPDATE "PendingFileUploads" AS upload
-                SET "CleanupClaimToken" = @token,
-                    "CleanupClaimExpiresAtUtc" = @claimExpires,
-                    "UpdatedAtUtc" = @now
-                FROM candidates
+                SET "CleanupClaimOwner" = @claimOwner,
+                    "CleanupClaimToken" = gen_random_uuid(),
+                    "CleanupClaimExpiresAtUtc" = clock.now_utc + @claimLease,
+                    "UpdatedAtUtc" = clock.now_utc
+                FROM candidates, clock
                 WHERE upload."Id" = candidates."Id"
-                RETURNING upload."Id", upload."CleanupClaimToken", upload."StoragePath";
+                RETURNING upload."Id", upload."CleanupClaimOwner",
+                          upload."CleanupClaimToken", upload."StoragePath";
                 """;
             command.Parameters.Add(new NpgsqlParameter("prepared", NpgsqlDbType.Integer) { Value = (int)PendingFileUploadState.Prepared });
-            command.Parameters.Add(new NpgsqlParameter("preparedBefore", NpgsqlDbType.TimestampTz) { Value = preparedBefore });
-            command.Parameters.Add(new NpgsqlParameter("now", NpgsqlDbType.TimestampTz) { Value = now });
+            command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
+            command.Parameters.Add(new NpgsqlParameter("preparedRetention", NpgsqlDbType.Interval) { Value = preparedRetention });
+            command.Parameters.Add(new NpgsqlParameter("claimLease", NpgsqlDbType.Interval) { Value = claimLease });
             command.Parameters.Add(new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize });
-            command.Parameters.Add(new NpgsqlParameter("token", NpgsqlDbType.Uuid) { Value = token });
-            command.Parameters.Add(new NpgsqlParameter("claimExpires", NpgsqlDbType.TimestampTz) { Value = now.Add(claimLease) });
             var claims = new List<PendingFileUploadCleanupClaim>();
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                claims.Add(new PendingFileUploadCleanupClaim(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2)));
+                claims.Add(new PendingFileUploadCleanupClaim(
+                    reader.GetGuid(0), reader.GetString(1), reader.GetGuid(2), reader.GetString(3)));
             }
             return claims;
         }
@@ -179,25 +189,68 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         }
     }
 
-    public Task<int> MarkAbandonedAsync(Guid id, Guid claimToken, DateTime nowUtc, CancellationToken ct = default) =>
-        _db.PendingFileUploads
-            .Where(upload => upload.Id == id
-                && upload.State == PendingFileUploadState.Prepared
-                && upload.CleanupClaimToken == claimToken)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(upload => upload.State, PendingFileUploadState.Abandoned)
-                .SetProperty(upload => upload.UpdatedAtUtc, AsUtc(nowUtc))
-                .SetProperty(upload => upload.CleanupClaimToken, (Guid?)null)
-                .SetProperty(upload => upload.CleanupClaimExpiresAtUtc, (DateTime?)null), ct);
+    public Task<int> MarkAbandonedAsync(
+        Guid id, string claimOwner, Guid claimToken, CancellationToken ct = default) =>
+        ExecuteCleanupMutationAsync("""
+            WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+            UPDATE "PendingFileUploads" AS upload
+            SET "State" = @abandoned,
+                "UpdatedAtUtc" = clock.now_utc,
+                "CleanupClaimOwner" = NULL,
+                "CleanupClaimToken" = NULL,
+                "CleanupClaimExpiresAtUtc" = NULL
+            FROM clock
+            WHERE upload."Id" = @id
+              AND upload."State" = @prepared
+              AND upload."CleanupClaimOwner" = @claimOwner
+              AND upload."CleanupClaimToken" = @claimToken
+              AND upload."CleanupClaimExpiresAtUtc" > clock.now_utc;
+            """, id, claimOwner, claimToken, ct,
+            new NpgsqlParameter("abandoned", NpgsqlDbType.Integer)
+                { Value = (int)PendingFileUploadState.Abandoned });
 
-    public Task<int> ReleaseCleanupClaimAsync(Guid id, Guid claimToken, CancellationToken ct = default) =>
-        _db.PendingFileUploads
-            .Where(upload => upload.Id == id
-                && upload.State == PendingFileUploadState.Prepared
-                && upload.CleanupClaimToken == claimToken)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(upload => upload.CleanupClaimToken, (Guid?)null)
-                .SetProperty(upload => upload.CleanupClaimExpiresAtUtc, (DateTime?)null), ct);
+    public Task<int> ReleaseCleanupClaimAsync(
+        Guid id, string claimOwner, Guid claimToken, CancellationToken ct = default) =>
+        ExecuteCleanupMutationAsync("""
+            WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+            UPDATE "PendingFileUploads" AS upload
+            SET "CleanupClaimOwner" = NULL,
+                "CleanupClaimToken" = NULL,
+                "CleanupClaimExpiresAtUtc" = NULL,
+                "UpdatedAtUtc" = clock.now_utc
+            FROM clock
+            WHERE upload."Id" = @id
+              AND upload."State" = @prepared
+              AND upload."CleanupClaimOwner" = @claimOwner
+              AND upload."CleanupClaimToken" = @claimToken
+              AND upload."CleanupClaimExpiresAtUtc" > clock.now_utc;
+            """, id, claimOwner, claimToken, ct);
+
+    private async Task<int> ExecuteCleanupMutationAsync(
+        string sql, Guid id, string claimOwner, Guid claimToken, CancellationToken ct,
+        params NpgsqlParameter[] parameters)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
+        var connection = _db.Database.GetDbConnection();
+        var close = connection.State != ConnectionState.Open;
+        if (close) await _db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.Add(new NpgsqlParameter("id", NpgsqlDbType.Uuid) { Value = id });
+            command.Parameters.Add(new NpgsqlParameter("prepared", NpgsqlDbType.Integer)
+                { Value = (int)PendingFileUploadState.Prepared });
+            command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
+            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken });
+            foreach (var parameter in parameters) command.Parameters.Add(parameter);
+            return await command.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (close) await _db.Database.CloseConnectionAsync();
+        }
+    }
 
     internal static string ComputeOperationKeyHash(string value)
     {

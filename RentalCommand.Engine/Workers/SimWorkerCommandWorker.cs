@@ -37,8 +37,7 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
     internal async Task<int> ProcessOldestPendingAsync(IServiceProvider scopedProvider, CancellationToken cancellationToken)
     {
         var claimStore = scopedProvider.GetRequiredService<ISimWorkerCommandClaimStore>();
-        var now = TimeProvider.System.GetUtcNow().UtcDateTime;
-        var command = await claimStore.ClaimOldestAsync(_claimOwner, now, ClaimLease, cancellationToken);
+        var command = await claimStore.ClaimOldestAsync(_claimOwner, ClaimLease, cancellationToken);
         if (command is null)
             return 0;
 
@@ -56,7 +55,8 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
             var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime; // real stamp, hoisted for ExecuteUpdate
 
             var finalized = await claimStore.MarkDoneAsync(
-                command.Id, command.ClaimToken, resultJson, completedRealUtc, cancellationToken);
+                command.Id, command.ClaimOwner, command.ClaimToken,
+                resultJson, completedRealUtc, cancellationToken);
             if (finalized == 0)
             {
                 _logger.LogWarning(
@@ -71,7 +71,8 @@ public sealed class SimWorkerCommandWorker : EngineWorkerBase
             var completedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
 
             var finalized = await claimStore.MarkErrorAsync(
-                command.Id, command.ClaimToken, error, completedRealUtc, cancellationToken);
+                command.Id, command.ClaimOwner, command.ClaimToken,
+                error, completedRealUtc, cancellationToken);
             if (finalized == 0)
             {
                 _logger.LogWarning(

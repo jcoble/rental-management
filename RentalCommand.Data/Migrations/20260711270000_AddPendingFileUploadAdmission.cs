@@ -27,6 +27,7 @@ public sealed class AddPendingFileUploadAdmission : Migration
                 SizeBytes = table.Column<long>(type: "bigint", nullable: false),
                 State = table.Column<int>(type: "integer", nullable: false),
                 StoredFileId = table.Column<int>(type: "integer", nullable: true),
+                CleanupClaimOwner = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
                 CleanupClaimToken = table.Column<Guid>(type: "uuid", nullable: true),
                 CleanupClaimExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                 CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),

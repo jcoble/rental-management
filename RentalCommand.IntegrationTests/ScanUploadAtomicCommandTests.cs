@@ -241,10 +241,9 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             await Probe.WaitForAdmissionLockAsync();
             await using var scope = _services!.CreateAsyncScope();
             var store = scope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>();
-            var future = DateTime.UtcNow.AddDays(2);
             var claims = await store.ClaimExpiredAsync(
-                future,
-                future,
+                "cleanup-lock-test",
+                TimeSpan.Zero,
                 TimeSpan.FromMinutes(5),
                 batchSize: 10);
             claims.Should().BeEmpty("FOR UPDATE SKIP LOCKED must skip admissions owned by the finalizer");
@@ -264,8 +263,64 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         admission.CleanupClaimToken.Should().BeNull();
         var abandoned = await verifyScope.ServiceProvider
             .GetRequiredService<IPendingFileUploadStore>()
-            .MarkAbandonedAsync(admission.Id, Guid.NewGuid(), DateTime.UtcNow);
+            .MarkAbandonedAsync(admission.Id, "not-the-owner", Guid.NewGuid());
         abandoned.Should().Be(0, "a finalized admission cannot later be abandoned");
+    }
+
+    [SkippableFact]
+    public async Task Cleanup_claim_uses_database_clock_and_stale_owner_token_cannot_mutate_after_takeover()
+    {
+        SkipIfNoDocker();
+        PendingFileUploadAdmission admission;
+        await using (var prepareScope = _services!.CreateAsyncScope())
+        {
+            admission = await prepareScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>().PrepareAsync(
+                _portfolioId,
+                actorScopeId: 73,
+                purpose: "scan-source",
+                clientOperationId: "cleanup-db-clock",
+                requestFingerprint: "cleanup-db-clock-fingerprint",
+                fileName: "orphan.pdf",
+                contentType: "application/pdf",
+                sizeBytes: 12,
+                nowUtc: DateTime.UtcNow.AddDays(-2));
+        }
+
+        PendingFileUploadCleanupClaim first;
+        await using (var firstScope = _services!.CreateAsyncScope())
+        {
+            first = (await firstScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>()
+                .ClaimExpiredAsync(
+                    "cleanup-a", TimeSpan.FromHours(24), TimeSpan.FromMinutes(5), batchSize: 1))
+                .Single();
+        }
+
+        await using (var expireScope = _services!.CreateAsyncScope())
+        {
+            var db = expireScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                UPDATE "PendingFileUploads"
+                SET "CleanupClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
+                WHERE "Id" = {{admission.Id}}
+                """);
+        }
+
+        PendingFileUploadCleanupClaim replacement;
+        await using (var replacementScope = _services!.CreateAsyncScope())
+        {
+            replacement = (await replacementScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>()
+                .ClaimExpiredAsync(
+                    "cleanup-b", TimeSpan.FromHours(24), TimeSpan.FromMinutes(5), batchSize: 1))
+                .Single();
+            replacement.ClaimToken.Should().NotBe(first.ClaimToken);
+        }
+
+        await using var finishScope = _services!.CreateAsyncScope();
+        var store = finishScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>();
+        (await store.ReleaseCleanupClaimAsync(
+            first.Id, first.ClaimOwner, first.ClaimToken)).Should().Be(0);
+        (await store.MarkAbandonedAsync(
+            replacement.Id, replacement.ClaimOwner, replacement.ClaimToken)).Should().Be(1);
     }
 
     [SkippableTheory]
