@@ -38,6 +38,15 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
 
         await using var db = NewContext();
         await db.Database.MigrateAsync();
+        db.Portfolios.Add(new Portfolio
+        {
+            Id = 17,
+            Name = "Outbox test portfolio",
+            ManagementCompanyName = "Outbox test",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 
     public async Task DisposeAsync()
@@ -270,7 +279,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         await SeedAsync(new OutboxMessage
         {
             MessageType = "blob-delete",
-            Payload = """{"storagePath":"stored/document.pdf"}""",
+            Payload = """{"storagePath":"stored/document.pdf","storedFileId":41}""",
             IdempotencyKey = "stored-file-delete:41",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
