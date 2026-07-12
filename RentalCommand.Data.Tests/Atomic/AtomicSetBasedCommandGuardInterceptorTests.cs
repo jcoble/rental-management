@@ -27,6 +27,33 @@ public sealed class AtomicSetBasedCommandGuardInterceptorTests
     }
 
     [Fact]
+    public void ClassifyRawDmlTargets_finds_every_cancellation_graph_mutation()
+    {
+        const string sql = """
+            WITH agreements AS (
+                UPDATE "LeaseAgreements" SET "DraftCancellationReason" = 'x' RETURNING "Id"
+            ), addenda AS (
+                UPDATE "LeaseAddenda" SET "DraftCancellationReason" = 'x' RETURNING "Id"
+            ), access AS (
+                UPDATE "TenantUserAccesses" SET "Reason" = 'x' RETURNING "Id"
+            ), account AS (
+                UPDATE "TenantAccounts" SET "CloseReasonCode" = 'x' RETURNING "Id"
+            )
+            UPDATE "LeaseManagements" SET "CancellationReasonCode" = 'x'
+            """;
+
+        AtomicSetBasedCommandGuardInterceptor.ClassifyRawDmlTargets(sql)
+            .Should().BeEquivalentTo(
+            [
+                new AtomicRawDmlTarget("LeaseAgreements", AtomicRawDmlOperation.Update),
+                new AtomicRawDmlTarget("LeaseAddenda", AtomicRawDmlOperation.Update),
+                new AtomicRawDmlTarget("TenantUserAccesses", AtomicRawDmlOperation.Update),
+                new AtomicRawDmlTarget("TenantAccounts", AtomicRawDmlOperation.Update),
+                new AtomicRawDmlTarget("LeaseManagements", AtomicRawDmlOperation.Update),
+            ]);
+    }
+
+    [Fact]
     public void For_update_row_lock_is_not_classified_as_raw_update_dml()
     {
         const string sql = """

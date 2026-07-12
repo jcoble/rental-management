@@ -30,6 +30,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.give-possession.v1");
     private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
         new("lease-management.return-possession.v1");
+    private static readonly AtomicJsonResultCodec<CancelPlannedRelationshipResult> CancelCodec =
+        new("lease-management.cancel-planned.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
@@ -583,6 +585,92 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 ReturnPossessionOutcome.PossessionNotGiven
                     or ReturnPossessionOutcome.InvalidPartyDisposition
                     or ReturnPossessionOutcome.InvalidAccessDisposition =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseManagementId:int}/cancel")]
+    [ProducesResponseType(typeof(CancelPlannedRelationshipResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> CancelPlannedRelationship(
+        int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] CancelPlannedRelationshipRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+        if (request.Accesses.Any(item => item.Disposition is null))
+        {
+            return BadRequest(new { error = "Every active tenant access disposition is required." });
+        }
+        if (!HasRequiredTextWithinLimit(request.CancellationReasonCode, 40)
+            || !HasRequiredTextWithinLimit(request.DraftCancellationReason, 1000)
+            || request.CancellationNote?.Trim().Length > 2000)
+        {
+            return BadRequest(new
+            {
+                error = "CancellationReasonCode, DraftCancellationReason, and CancellationNote are invalid.",
+            });
+        }
+
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-management.cancel-planned",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new CancelPlannedRelationshipCommand(
+                    portfolioId,
+                    leaseManagementId,
+                    request.UnitId,
+                    userId,
+                    sessionId,
+                    accessContextId,
+                    accessRevision,
+                    request.CancellationReasonCode,
+                    request.CancellationNote,
+                    request.DraftCancellationReason,
+                    request.Accesses.Select(item => new CancelPlannedRelationshipAccess(
+                        item.TenantUserAccessId, item.Disposition!.Value)).ToArray(),
+                    $"cancel-planned:{portfolioId}:{leaseManagementId}:{digest}"),
+                CancelCodec,
+                ct);
+
+            return outcome.Value.Outcome switch
+            {
+                CancelPlannedRelationshipOutcome.Canceled
+                    when outcome.Value.CanceledAtUtc.HasValue
+                        && outcome.Value.AccountClosedAtUtc.HasValue => Ok(
+                        new CancelPlannedRelationshipResponse(
+                            outcome.Value.LeaseManagementId,
+                            outcome.Value.UnitId,
+                            outcome.Value.CanceledAtUtc.Value,
+                            outcome.Value.AccountClosedAtUtc.Value,
+                            outcome.Value.CanceledAgreementDraftIds,
+                            outcome.Value.CanceledAddendumDraftIds,
+                            outcome.Value.RevokedAccessIds,
+                            outcome.Value.RetainedAccessIds,
+                            outcome.Disposition != AtomicCommandDisposition.Executed)),
+                CancelPlannedRelationshipOutcome.AlreadyCanceled
+                    or CancelPlannedRelationshipOutcome.IssuedArtifactsRequireResolution
+                    or CancelPlannedRelationshipOutcome.FinancialResolutionRequired =>
+                    Conflict(new { error = outcome.Value.Error }),
+                CancelPlannedRelationshipOutcome.PossessionAlreadyGiven
+                    or CancelPlannedRelationshipOutcome.InvalidAccessPolicy =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
                 _ => StatusCode(StatusCodes.Status500InternalServerError),
             };

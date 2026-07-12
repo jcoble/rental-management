@@ -32,6 +32,19 @@ public sealed record AtomicReturnPossessionMutationResult(
     IReadOnlyList<int> EndedPartyIds,
     IReadOnlyList<int> RevokedAccessIds);
 
+public sealed record AtomicCancelPlannedAccessInput(
+    int AccessId,
+    CancelPlannedAccessDisposition Disposition);
+
+public sealed record AtomicCancelPlannedRelationshipMutationResult(
+    CancelPlannedRelationshipOutcome Outcome,
+    DateTime? CanceledAtUtc,
+    int? TenantAccountId,
+    IReadOnlyList<int> CanceledAgreementDraftIds,
+    IReadOnlyList<int> CanceledAddendumDraftIds,
+    IReadOnlyList<int> RevokedAccessIds,
+    IReadOnlyList<int> RetainedAccessIds);
+
 /// <summary>
 /// PostgreSQL-owned lease graph mutations. Input sets are validated, joined, partitioned, and
 /// applied by one statement per operation; handlers never materialize a relationship graph.
@@ -57,5 +70,16 @@ public interface IAtomicLeaseMutationPersistence
         int actorUserId,
         DateTime changedAtUtc,
         string turnoverReason,
+        CancellationToken ct = default);
+
+    Task<AtomicCancelPlannedRelationshipMutationResult> CancelPlannedRelationshipAsync(
+        int portfolioId,
+        int leaseManagementId,
+        IReadOnlyList<AtomicCancelPlannedAccessInput> accesses,
+        int actorUserId,
+        DateTime changedAtUtc,
+        string cancellationReasonCode,
+        string? cancellationNote,
+        string draftCancellationReason,
         CancellationToken ct = default);
 }
