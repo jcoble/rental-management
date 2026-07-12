@@ -79,7 +79,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         });
 
         await using var db = NewContext();
-        await db.Database.MigrateAsync();
+        await db.Database.EnsureCreatedAsync();
         var now = DateTime.UtcNow;
         var portfolio = new Portfolio
         {
