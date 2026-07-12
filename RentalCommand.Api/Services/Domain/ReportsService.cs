@@ -1413,13 +1413,7 @@ public class ReportsService : IReportsService
                     + (h.Balance.NetAdjustments > 0m ? h.Balance.NetAdjustments : 0m),
                 DeductionsTotal = h.Balance.TotalDeductions,
                 ReturnedAmount = h.Balance.TotalRefunded + h.Balance.TotalTransferredOut,
-                Status = h.Balance.DepositStatus == "Returned"
-                    ? SecurityDepositStatus.Returned
-                    : h.Balance.DepositStatus == "PartiallyReturned"
-                        ? SecurityDepositStatus.PartiallyReturned
-                        : h.Balance.DepositStatus == "Withheld"
-                            ? SecurityDepositStatus.Withheld
-                            : SecurityDepositStatus.Held,
+                Status = h.Balance.DepositStatus,
                 HeldAt = _db.SecurityDepositEntries
                     .Where(entry => entry.PortfolioId == h.Account.PortfolioId
                         && entry.SecurityDepositAccountId == h.Account.Id
@@ -1480,10 +1474,11 @@ public class ReportsService : IReportsService
         };
     }
 
-    private static string FormatSecurityDepositStatus(SecurityDepositStatus status) => status switch
+    private static string FormatSecurityDepositStatus(string status) => status switch
     {
-        SecurityDepositStatus.PartiallyReturned => "Partially Returned",
-        _ => status.ToString(),
+        "NotFunded" => "Not funded",
+        "PartiallyReturned" => "Partially returned",
+        _ => status,
     };
 
     // ── Vendor 1099 & Payments ─────────────────────────────────────────────────────────────────────
