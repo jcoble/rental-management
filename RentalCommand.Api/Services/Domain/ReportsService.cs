@@ -111,7 +111,7 @@ public class ReportsService : IReportsService
                         {
                             Key = "rent-roll",
                             Title = "Rent Roll",
-                            Description = "Current snapshot of every active lease: tenant, rent, deposit, term, status.",
+                            Description = "Current snapshot of the governing agreement for every occupied unit: tenant, rent, deposit, term, status.",
                             Endpoint = "/api/v1/reports/rent-roll",
                             Params = [ReportParamKeys.PropertyIds],
                         },
@@ -221,6 +221,9 @@ public class ReportsService : IReportsService
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { lifecycle.PortfolioId, lifecycle.UnitId }
+                equals new { occupancy.PortfolioId, occupancy.UnitId }
             join agreement in _db.LeaseAgreements.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
                 equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
@@ -231,6 +234,8 @@ public class ReportsService : IReportsService
                 on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
                 equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
             where lifecycle.PortfolioId == portfolioId
+                && occupancy.IsOccupied
+                && occupancy.CurrentLeaseManagementId == lifecycle.LeaseManagementId
                 && agreementStatus.IsGoverning
                 && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
             select new { lifecycle, management, agreement, account, agreementStatus };
@@ -955,6 +960,9 @@ public class ReportsService : IReportsService
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { lifecycle.PortfolioId, lifecycle.UnitId }
+                equals new { occupancy.PortfolioId, occupancy.UnitId }
             join agreement in _db.LeaseAgreements.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
                 equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
@@ -965,6 +973,8 @@ public class ReportsService : IReportsService
                 on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
                 equals new { balance.PortfolioId, balance.LeaseManagementId }
             where lifecycle.PortfolioId == portfolioId
+                && occupancy.IsOccupied
+                && occupancy.CurrentLeaseManagementId == lifecycle.LeaseManagementId
                 && status.IsGoverning
                 && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
             select new { lifecycle, management, agreement, status, balance };
@@ -1256,21 +1266,23 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
 
-        // Per-property unit counts. "Occupied" = Unit.Status is Occupied; everything else (Vacant,
-        // Reserved, Offline) counts as not-occupied for the vacancy split. Soft-deleted units are
-        // excluded by the global query filter.
-        var rows = await propertyQuery
-            .OrderBy(p => p.Name)
+        // The projection has exactly one row per live Unit. Keep both per-property and portfolio
+        // aggregation in PostgreSQL; the mutable Unit.Status column is not part of this read path.
+        var perPropertyQuery = propertyQuery
             .Select(p => new
             {
                 p.Id,
                 p.Name,
-                TotalUnits = p.Units.Count,
-                OccupiedUnits = p.Units.Count(u => u.Status == UnitStatus.Occupied),
-            })
-            .ToListAsync(ct);
+                TotalUnits = _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id),
+                OccupiedUnits = _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId
+                    && occupancy.PropertyId == p.Id
+                    && occupancy.IsOccupied),
+            });
 
-        var occRows = rows
+        var occRows = await perPropertyQuery
+            .OrderBy(p => p.Name)
             .Select(p => new OccupancyRow
             {
                 PropertyId = p.Id,
@@ -1278,16 +1290,18 @@ public class ReportsService : IReportsService
                 TotalUnits = p.TotalUnits,
                 OccupiedUnits = p.OccupiedUnits,
                 VacantUnits = p.TotalUnits - p.OccupiedUnits,
-                OccupancyPercent = Percent(p.OccupiedUnits, p.TotalUnits),
+                OccupancyPercent = p.TotalUnits == 0
+                    ? 0m
+                    : Math.Round(p.OccupiedUnits * 100m / p.TotalUnits, 1),
             })
-            .ToList();
+            .ToListAsync(ct);
 
-        var totals = await propertyQuery
+        var totals = await perPropertyQuery
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                TotalUnits = g.Sum(p => p.Units.Count),
-                OccupiedUnits = g.Sum(p => p.Units.Count(u => u.Status == UnitStatus.Occupied)),
+                TotalUnits = g.Sum(p => p.TotalUnits),
+                OccupiedUnits = g.Sum(p => p.OccupiedUnits),
             })
             .SingleOrDefaultAsync(ct);
 
