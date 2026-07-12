@@ -684,7 +684,7 @@ export interface LedgerTransaction {
 }
 
 /** Tenant-facing projection of one continuous TenantAccount. */
-export interface LeaseLedger {
+export interface LeaseManagementLedger {
 	leaseManagementId: number;
 	tenantAccountId: number;
 	accountNumber: string;

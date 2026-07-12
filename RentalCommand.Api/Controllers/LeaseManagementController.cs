@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
 
@@ -37,11 +38,34 @@ public sealed class LeaseManagementController : ManagementControllerBase
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
+    private readonly ILeaseService _leaseService;
 
-    public LeaseManagementController(IAtomicUnitOfWork atomic, TimeProvider timeProvider)
+    public LeaseManagementController(
+        IAtomicUnitOfWork atomic,
+        TimeProvider timeProvider,
+        ILeaseService leaseService)
     {
         _atomic = atomic;
         _timeProvider = timeProvider;
+        _leaseService = leaseService;
+    }
+
+    /// <summary>
+    /// Tenant-facing ledger for one LeaseManagement's continuous TenantAccount. Authorization,
+    /// aggregation, ordering, and paging remain database-side in the canonical reader.
+    /// </summary>
+    [HttpGet("{leaseManagementId:int}/ledger")]
+    [ProducesResponseType(typeof(LeaseLedgerResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseLedgerResponse>> Ledger(
+        int leaseManagementId,
+        CancellationToken ct,
+        [FromQuery] int skip = 0,
+        [FromQuery] int? take = null)
+    {
+        var ledger = await _leaseService.GetLedgerAsync(
+            GetPortfolioId(), leaseManagementId, GetTenantIdOrNull(), skip, take, ct);
+        return ledger == null ? NotFound(new { error = "Tenant account not found" }) : Ok(ledger);
     }
 
     [HttpPost("prepare-move-in")]

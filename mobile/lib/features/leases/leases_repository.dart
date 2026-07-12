@@ -338,17 +338,19 @@ class LeasesRepository {
     }
   }
 
-  /// Transparent ledger for a lease: every charge and payment, newest first,
-  /// each with a plain-English explanation of what it is plus running totals.
+  /// Canonical ledger for one LeaseManagement's continuous TenantAccount.
   ///
   /// The API pages the payment rows DB-side (default 50). This view has no pager
   /// yet, so it requests a bounded recent window (the API's max page) — enough
   /// for essentially every real lease. Full load-more paging is tracked as a
   /// follow-up (see TSK deferral); the request stays bounded either way.
-  Future<LeaseLedger> ledger(int id, {int take = 200}) async {
+  Future<LeaseManagementLedger> ledger(
+    int leaseManagementId, {
+    int take = 200,
+  }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
-        '/leases/$id/ledger',
+        '/lease-managements/$leaseManagementId/ledger',
         queryParameters: {'take': take},
       );
       final data = response.data;
@@ -358,7 +360,7 @@ class LeasesRepository {
           message: 'Empty response from server.',
         );
       }
-      return LeaseLedger.fromJson(data);
+      return LeaseManagementLedger.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -489,8 +491,8 @@ class LeaseLedgerEntry {
 }
 
 /// Tenant-facing projection of one continuous TenantAccount.
-class LeaseLedger {
-  const LeaseLedger({
+class LeaseManagementLedger {
+  const LeaseManagementLedger({
     required this.leaseManagementId,
     required this.tenantAccountId,
     required this.accountNumber,
@@ -519,7 +521,7 @@ class LeaseLedger {
   final String? tenantName;
   final String? propertyName;
 
-  factory LeaseLedger.fromJson(Map<String, dynamic> json) {
+  factory LeaseManagementLedger.fromJson(Map<String, dynamic> json) {
     final rawEntries = json['entries'];
     final entries = rawEntries is List
         ? rawEntries
@@ -528,7 +530,7 @@ class LeaseLedger {
               .toList()
         : <LeaseLedgerEntry>[];
 
-    return LeaseLedger(
+    return LeaseManagementLedger(
       leaseManagementId:
           (json['leaseManagementId'] as num?)?.toInt() ?? 0,
       tenantAccountId: (json['tenantAccountId'] as num?)?.toInt() ?? 0,
@@ -734,10 +736,11 @@ final leaseDetailProvider =
 
 // ── Lease ledger ──────────────────────────────────────────────────────────────
 
-/// Transparent ledger for a single lease, keyed by lease id. autoDispose so it
-/// refreshes whenever the ledger view is reopened.
-final leaseLedgerProvider = FutureProvider.autoDispose.family<LeaseLedger, int>(
-  (ref, leaseId) {
-    return ref.watch(leasesRepositoryProvider).ledger(leaseId);
+/// Canonical ledger keyed by LeaseManagement id. autoDispose so it refreshes
+/// whenever the ledger view is reopened.
+final leaseLedgerProvider =
+    FutureProvider.autoDispose.family<LeaseManagementLedger, int>(
+  (ref, leaseManagementId) {
+    return ref.watch(leasesRepositoryProvider).ledger(leaseManagementId);
   },
 );
