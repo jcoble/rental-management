@@ -5,176 +5,214 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
-import '../../core/models/models.dart';
 
-// ── Models ────────────────────────────────────────────────────────────────────
-
-class DepositDeduction {
-  const DepositDeduction({
-    required this.reason,
-    required this.amount,
-    this.notes,
-  });
-
-  final String reason;
-  final double amount;
-  final String? notes;
-
-  factory DepositDeduction.fromJson(Map<String, dynamic> json) =>
-      DepositDeduction(
-        reason: json['reason'] as String? ?? '',
-        amount: (json['amount'] as num?)?.toDouble() ?? 0,
-        notes: json['notes'] as String?,
-      );
-}
-
-class SecurityDeposit {
-  const SecurityDeposit({
+class SecurityDepositAccount {
+  const SecurityDepositAccount({
     required this.id,
-    required this.leaseId,
-    this.leaseNumber,
-    required this.amount,
-    required this.status,
-    required this.heldAt,
-    this.returnedAt,
-    this.returnedAmount,
-    required this.deductions,
+    required this.tenantAccountId,
+    required this.leaseManagementId,
+    required this.originatingAgreementId,
+    required this.propertyId,
+    required this.unitId,
+    required this.accountNumber,
+    required this.relationshipNumber,
+    this.tenantName,
+    this.propertyName,
+    this.unitNumber,
+    required this.currency,
+    required this.totalReceived,
     required this.totalDeductions,
-    required this.netRefund,
-    this.notes,
+    required this.totalRefunded,
+    required this.heldBalance,
+    required this.status,
+    required this.createdAtUtc,
   });
 
   final int id;
-  final int leaseId;
-  final String? leaseNumber;
-  final double amount;
-  final String status;
-  final DateTime heldAt;
-  final DateTime? returnedAt;
-  final double? returnedAmount;
-  final List<DepositDeduction> deductions;
+  final int tenantAccountId;
+  final int leaseManagementId;
+  final int originatingAgreementId;
+  final int propertyId;
+  final int unitId;
+  final String accountNumber;
+  final String relationshipNumber;
+  final String? tenantName;
+  final String? propertyName;
+  final String? unitNumber;
+  final String currency;
+  final double totalReceived;
   final double totalDeductions;
-  final double netRefund;
-  final String? notes;
+  final double totalRefunded;
+  final double heldBalance;
+  final String status;
+  final DateTime createdAtUtc;
 
-  factory SecurityDeposit.fromJson(Map<String, dynamic> json) {
-    final deductions = (json['deductions'] as List<dynamic>? ?? [])
-        .whereType<Map<String, dynamic>>()
-        .map(DepositDeduction.fromJson)
-        .toList();
-    return SecurityDeposit(
-      id: (json['id'] as num).toInt(),
-      leaseId: (json['leaseId'] as num).toInt(),
-      leaseNumber: json['leaseNumber'] as String?,
-      amount: (json['amount'] as num?)?.toDouble() ?? 0,
-      status: json['status'] as String? ?? '',
-      heldAt: DateTime.tryParse(json['heldAt'] as String? ?? '') ??
-          DateTime(0),
-      returnedAt: DateTime.tryParse(json['returnedAt'] as String? ?? ''),
-      returnedAmount: (json['returnedAmount'] as num?)?.toDouble(),
-      deductions: deductions,
-      totalDeductions: (json['totalDeductions'] as num?)?.toDouble() ?? 0,
-      netRefund: (json['netRefund'] as num?)?.toDouble() ?? 0,
-      notes: json['notes'] as String?,
-    );
-  }
+  factory SecurityDepositAccount.fromJson(Map<String, dynamic> json) =>
+      SecurityDepositAccount(
+        id: (json['id'] as num).toInt(),
+        tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+        leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+        originatingAgreementId: (json['originatingAgreementId'] as num).toInt(),
+        propertyId: (json['propertyId'] as num).toInt(),
+        unitId: (json['unitId'] as num).toInt(),
+        accountNumber: json['accountNumber'] as String? ?? '',
+        relationshipNumber: json['relationshipNumber'] as String? ?? '',
+        tenantName: json['tenantName'] as String?,
+        propertyName: json['propertyName'] as String?,
+        unitNumber: json['unitNumber'] as String?,
+        currency: json['currency'] as String? ?? 'USD',
+        totalReceived: (json['totalReceived'] as num?)?.toDouble() ?? 0,
+        totalDeductions: (json['totalDeductions'] as num?)?.toDouble() ?? 0,
+        totalRefunded: (json['totalRefunded'] as num?)?.toDouble() ?? 0,
+        heldBalance: (json['heldBalance'] as num?)?.toDouble() ?? 0,
+        status: json['status'] as String? ?? 'NotFunded',
+        createdAtUtc:
+            DateTime.tryParse(json['createdAtUtc'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
 }
 
-// ── Repository ────────────────────────────────────────────────────────────────
+sealed class SecurityDepositMutationInput {
+  const SecurityDepositMutationInput({
+    required this.amount,
+    required this.effectiveOn,
+  });
 
-/// Manages security deposit API calls.
-///
-/// Endpoints:
-///   GET  /security-deposits              — list (JWT-scoped, ?leaseId=)
-///   POST /security-deposits              — create { leaseId, amount?, notes? }
-///   POST /security-deposits/{id}/deductions { reason, amount, notes? }
-///   POST /security-deposits/{id}/return  { notes? }
-///   GET  /security-deposits/{id}/move-out-statement — PDF bytes
-///   GET  /leases                         — for the lease picker
+  final double? amount;
+  final DateTime effectiveOn;
+
+  String get effectiveOnValue =>
+      '${effectiveOn.year.toString().padLeft(4, '0')}-'
+      '${effectiveOn.month.toString().padLeft(2, '0')}-'
+      '${effectiveOn.day.toString().padLeft(2, '0')}';
+}
+
+class FundSecurityDepositInput extends SecurityDepositMutationInput {
+  const FundSecurityDepositInput({
+    required double amount,
+    required super.effectiveOn,
+    required this.description,
+    required this.paymentMethodSummary,
+    this.externalReference,
+    this.sourceStoredFileId,
+  }) : super(amount: amount);
+
+  final String description;
+  final String paymentMethodSummary;
+  final String? externalReference;
+  final int? sourceStoredFileId;
+}
+
+class DeductSecurityDepositInput extends SecurityDepositMutationInput {
+  const DeductSecurityDepositInput({
+    required double amount,
+    required super.effectiveOn,
+    required this.reason,
+    this.notes,
+    this.sourceStoredFileId,
+  }) : super(amount: amount);
+
+  final String reason;
+  final String? notes;
+  final int? sourceStoredFileId;
+}
+
+class RefundSecurityDepositInput extends SecurityDepositMutationInput {
+  const RefundSecurityDepositInput({
+    double? amount,
+    required super.effectiveOn,
+    required this.description,
+    this.externalReference,
+  }) : super(amount: amount);
+
+  final String description;
+  final String? externalReference;
+}
+
 class DepositsRepository {
   DepositsRepository(this._dio);
 
   final Dio _dio;
 
-  Future<List<SecurityDeposit>> listDeposits({int? leaseId}) async {
+  Future<List<SecurityDepositAccount>> listDeposits({
+    int? leaseManagementId,
+  }) async {
     try {
-      final params = <String, dynamic>{};
-      if (leaseId != null) params['leaseId'] = leaseId;
       final response = await _dio.get<List<dynamic>>(
         '/security-deposits',
-        queryParameters: params.isEmpty ? null : params,
+        queryParameters: leaseManagementId == null
+            ? null
+            : {'leaseManagementId': leaseManagementId},
       );
-      final data = response.data ?? [];
-      return data
+      return (response.data ?? const [])
           .whereType<Map<String, dynamic>>()
-          .map(SecurityDeposit.fromJson)
+          .map(SecurityDepositAccount.fromJson)
           .toList();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  Future<SecurityDeposit> createDeposit(Map<String, dynamic> data) async {
-    try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/security-deposits',
-              data: data);
-      final responseData = response.data;
-      if (responseData == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return SecurityDeposit.fromJson(responseData);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
+  Future<void> fundDeposit(
+    SecurityDepositAccount account,
+    FundSecurityDepositInput input, {
+    required String operationKey,
+  }) => _postMutation(account, 'fund', operationKey, <String, dynamic>{
+    'securityDepositAccountId': account.id,
+    'amount': input.amount,
+    'effectiveOn': input.effectiveOnValue,
+    'description': input.description,
+    'paymentMethodSummary': input.paymentMethodSummary,
+    if (input.externalReference?.trim().isNotEmpty == true)
+      'externalReference': input.externalReference!.trim(),
+    if (input.sourceStoredFileId != null)
+      'sourceStoredFileId': input.sourceStoredFileId,
+  });
 
-  Future<SecurityDeposit> addDeduction(
-      int id, Map<String, dynamic> data) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/security-deposits/$id/deductions',
-        data: data,
-      );
-      final responseData = response.data;
-      if (responseData == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return SecurityDeposit.fromJson(responseData);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
+  Future<void> deductDeposit(
+    SecurityDepositAccount account,
+    DeductSecurityDepositInput input, {
+    required String operationKey,
+  }) => _postMutation(account, 'deductions', operationKey, <String, dynamic>{
+    'securityDepositAccountId': account.id,
+    'amount': input.amount,
+    'effectiveOn': input.effectiveOnValue,
+    'reason': input.reason,
+    if (input.notes?.trim().isNotEmpty == true) 'notes': input.notes!.trim(),
+    if (input.sourceStoredFileId != null)
+      'sourceStoredFileId': input.sourceStoredFileId,
+  });
 
-  Future<SecurityDeposit> processReturn(int id, {String? notes}) async {
+  Future<void> refundDeposit(
+    SecurityDepositAccount account,
+    RefundSecurityDepositInput input, {
+    required String operationKey,
+  }) => _postMutation(account, 'refunds', operationKey, <String, dynamic>{
+    'securityDepositAccountId': account.id,
+    if (input.amount != null) 'amount': input.amount,
+    'effectiveOn': input.effectiveOnValue,
+    'description': input.description,
+    if (input.externalReference?.trim().isNotEmpty == true)
+      'externalReference': input.externalReference!.trim(),
+  });
+
+  Future<void> _postMutation(
+    SecurityDepositAccount account,
+    String route,
+    String operationKey,
+    Map<String, dynamic> body,
+  ) async {
     try {
-      final body = <String, dynamic>{};
-      if (notes != null && notes.isNotEmpty) body['notes'] = notes;
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/security-deposits/$id/return',
+      await _dio.post<Map<String, dynamic>>(
+        '/tenant-accounts/${account.tenantAccountId}/deposit/$route',
         data: body,
+        options: Options(headers: {'Idempotency-Key': operationKey}),
       );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return SecurityDeposit.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// Fetches the security-deposit move-out statement PDF bytes (authed via the
-  /// shared Dio interceptor).
   Future<Uint8List> moveOutStatementBytes(int id) async {
     try {
       final response = await _dio.get<List<int>>(
@@ -186,99 +224,34 @@ class DepositsRepository {
       throw ApiException.fromDioException(e);
     }
   }
-
-  Future<List<Lease>> listLeases() async {
-    try {
-      final response = await _dio.get<List<dynamic>>('/leases');
-      final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(Lease.fromJson)
-          .toList();
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
 }
-
-// ── Providers ─────────────────────────────────────────────────────────────────
 
 final depositsRepositoryProvider = Provider<DepositsRepository>((ref) {
   return DepositsRepository(ref.watch(dioProvider));
 });
 
-class DepositsNotifier extends Notifier<AsyncValue<List<SecurityDeposit>>> {
+class DepositsNotifier
+    extends Notifier<AsyncValue<List<SecurityDepositAccount>>> {
   @override
-  AsyncValue<List<SecurityDeposit>> build() => const AsyncValue.loading();
+  AsyncValue<List<SecurityDepositAccount>> build() =>
+      const AsyncValue.loading();
 
   DepositsRepository get _repo => ref.read(depositsRepositoryProvider);
 
   Future<void> load() async {
     state = const AsyncValue.loading();
     try {
-      final list = await _repo.listDeposits();
-      state = AsyncValue.data(list);
+      state = AsyncValue.data(await _repo.listDeposits());
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
     }
   }
 
   Future<void> refresh() => load();
-
-  void _replace(SecurityDeposit updated) {
-    state.whenData((list) {
-      state = AsyncValue.data([
-        for (final d in list)
-          if (d.id == updated.id) updated else d,
-      ]);
-    });
-  }
-
-  Future<void> addDeduction(int depositId, Map<String, dynamic> data) async {
-    try {
-      final updated = await _repo.addDeduction(depositId, data);
-      _replace(updated);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-
-  Future<void> processReturn(int depositId, {String? notes}) async {
-    try {
-      final updated =
-          await _repo.processReturn(depositId, notes: notes);
-      _replace(updated);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
 }
 
 final depositsProvider =
-    NotifierProvider<DepositsNotifier, AsyncValue<List<SecurityDeposit>>>(
-  DepositsNotifier.new,
-);
-
-// ── Leases picker ─────────────────────────────────────────────────────────────
-
-class LeasesForDepositNotifier extends Notifier<AsyncValue<List<Lease>>> {
-  @override
-  AsyncValue<List<Lease>> build() => const AsyncValue.loading();
-
-  DepositsRepository get _repo => ref.read(depositsRepositoryProvider);
-
-  Future<void> load() async {
-    state = const AsyncValue.loading();
-    try {
-      final list = await _repo.listLeases();
-      state = AsyncValue.data(list);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-}
-
-final leasesForDepositProvider =
-    NotifierProvider<LeasesForDepositNotifier, AsyncValue<List<Lease>>>(
-  LeasesForDepositNotifier.new,
-);
+    NotifierProvider<
+      DepositsNotifier,
+      AsyncValue<List<SecurityDepositAccount>>
+    >(DepositsNotifier.new);
