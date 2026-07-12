@@ -6,10 +6,24 @@ type UnitRow = {
 	status?: string | number;
 };
 
-type UnitListing = {
+type ListingPublication = {
+	providerKey: string;
+	mode: 'Guided' | 'Connected';
+	status: string;
+	listingUrl?: string | null;
+	applicationUrl?: string | null;
+	lastConfirmedExternalStatus?: string | null;
+	copyConfirmed: boolean;
+	termsConfirmed: boolean;
+	photosConfirmed: boolean;
+	needsRepublish: boolean;
+	publishedContentVersion?: number | null;
+};
+
+type ListingWorkspace = {
 	id: number;
 	unitId: number;
-	status: string;
+	contentVersion: number;
 	headline: string;
 	description: string;
 	rent: number;
@@ -19,11 +33,9 @@ type UnitListing = {
 	utilities?: string | null;
 	parking?: string | null;
 	amenities?: string | null;
-	photoNotes?: string | null;
-	zillowListingUrl?: string | null;
-	zillowApplicationUrl?: string | null;
-	isPosted: boolean;
-	postedAtUtc?: string | null;
+	photoManifest: Array<{ position: number; category: string }>;
+	publications: ListingPublication[];
+	signedLeaseImportUrl: string;
 };
 
 async function findListingUnit(request: APIRequestContext, token: string): Promise<number> {
@@ -44,18 +56,28 @@ async function ensureSandboxChoice(request: APIRequestContext, token: string): P
 	expect(res.ok(), `sandbox choice failed: ${res.status()}`).toBeTruthy();
 }
 
-async function readListing(
+async function readListingWorkspace(
 	request: APIRequestContext,
 	token: string,
 	unitId: number
-): Promise<UnitListing> {
-	const res = await request.get(`/api/v1/units/${unitId}/listing`, { headers: bearer(token) });
-	expect(res.ok(), `listing lookup failed: ${res.status()}`).toBeTruthy();
-	return (await res.json()) as UnitListing;
+): Promise<ListingWorkspace> {
+	const res = await request.get(`/api/v1/units/${unitId}/listing-workspace`, {
+		headers: bearer(token),
+	});
+	expect(res.ok(), `listing workspace lookup failed: ${res.status()}`).toBeTruthy();
+	return (await res.json()) as ListingWorkspace;
 }
 
-test.describe('Unit listing handoff', () => {
-	test('generates, edits, saves, copies, and persists a Zillow manual listing packet', async ({
+function guidedPublication(workspace: ListingWorkspace): ListingPublication {
+	const publication = workspace.publications.find(
+		(item) => item.providerKey === 'Zillow' && item.mode === 'Guided'
+	);
+	expect(publication, 'workspace has no guided Zillow publication').toBeTruthy();
+	return publication!;
+}
+
+test.describe('Unit listing workspace', () => {
+	test('prepares, publishes, and flags changed Zillow Guided copy for republishing', async ({
 		page,
 		request,
 		context,
@@ -78,106 +100,132 @@ test.describe('Unit listing handoff', () => {
 			page.waitForResponse(
 				(response) =>
 					response.request().method() === 'POST' &&
-					response.url().includes(`/api/v1/units/${unitId}/listing/generate`)
+					response.url().includes(`/api/v1/units/${unitId}/listing-workspace/generate`)
 			),
-			page.getByTestId('listing-generate').click(),
+			page.getByRole('button', { name: /Prepare listing|Refresh from unit/ }).first().click(),
 		]);
-		expect(generateResponse.ok(), `generate failed: ${generateResponse.status()}`).toBeTruthy();
-		await expect(page.getByTestId('listing-editor')).toBeVisible({ timeout: 15_000 });
+		expect(generateResponse.ok(), `prepare failed: ${generateResponse.status()}`).toBeTruthy();
+		await expect(page.getByText('Listing copy', { exact: true })).toBeVisible({ timeout: 15_000 });
+
+		const prepared = await readListingWorkspace(request, token, unitId);
+		expect(prepared.unitId).toBe(unitId);
+		expect(prepared.photoManifest.length).toBeGreaterThan(0);
+		expect(prepared.photoManifest.map((photo) => photo.position)).toEqual(
+			[...prepared.photoManifest.map((photo) => photo.position)].sort((a, b) => a - b)
+		);
+		expect(prepared.publications).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ providerKey: 'Zillow', mode: 'Guided' }),
+				expect.objectContaining({ providerKey: 'Zillow', mode: 'Connected' }),
+			])
+		);
 
 		const marker = unique('zillow');
 		const headline = `Move-in ready rental ${marker}`;
+		const revisedHeadline = `${headline} updated`;
 		const description = `Zillow handoff description ${marker}. Confirmed through the browser flow.`;
 		const listingUrl = `https://www.zillow.com/homedetails/${marker}`;
 		const applicationUrl = `https://www.zillow.com/renter-hub/applications/${marker}`;
 
-		await page.getByTestId('listing-headline').fill(headline);
-		await page.getByTestId('listing-description').fill(description);
-		await page.getByTestId('listing-rent').fill('2125');
-		await page.getByTestId('listing-deposit').fill('2125');
-		await page.getByTestId('listing-lease-terms').fill('12-month lease; renter pays utilities');
-		await page.getByTestId('listing-pet-policy').fill('Pets considered case by case');
-		await page.getByTestId('listing-utilities').fill('Tenant pays electric and gas');
-		await page.getByTestId('listing-parking').fill('One off-street parking spot');
-		await page.getByTestId('listing-amenities').fill('In-unit laundry, central air, quiet street');
-		await page.getByTestId('listing-photo-notes').fill('Use exterior, kitchen, bath, and bedroom photos');
-		await page.getByTestId('listing-status').selectOption('Posted');
-		await page.getByTestId('listing-zillow-url').fill(listingUrl);
-		await page.getByTestId('listing-zillow-application-url').fill(applicationUrl);
+		await page.getByLabel('Headline').fill(headline);
+		await page.getByLabel('Description').fill(description);
+		await page.getByLabel('Rent').fill('2125');
+		await page.getByLabel('Deposit').fill('2125');
+		await page.getByLabel('Lease terms').fill('12-month lease; renter pays utilities');
+		await page.getByLabel('Pet policy').fill('Pets considered case by case');
+		await page.getByLabel('Utilities').fill('Tenant pays electric and gas');
+		await page.getByLabel('Parking').fill('One off-street parking spot');
+		await page.getByLabel('Amenities').fill('In-unit laundry, central air, quiet street');
+		await page.getByLabel('Publication state').selectOption('Published');
+		await page.getByLabel('Copy entered in Zillow').check();
+		await page.getByLabel('Terms reviewed in Zillow').check();
+		await page.getByLabel('Photos uploaded in order').check();
+		await page.getByLabel('Listing URL').fill(listingUrl);
+		await page.getByLabel('Application URL').fill(applicationUrl);
+		await page.getByLabel('Last status you confirmed').fill('Active');
 
-		await expect(page.getByTestId('listing-save')).toBeEnabled();
+		const [publishResponse] = await Promise.all([
+			page.waitForResponse(
+				(response) =>
+					response.request().method() === 'PUT' &&
+					response.url().includes(`/api/v1/units/${unitId}/listing-workspace`)
+			),
+			page.getByRole('button', { name: 'Save as published in Zillow' }).click(),
+		]);
+		expect(publishResponse.ok(), `publish save failed: ${publishResponse.status()}`).toBeTruthy();
+
+		await expect
+			.poll(async () => guidedPublication(await readListingWorkspace(request, token, unitId)))
+			.toMatchObject({
+				status: 'Published',
+				listingUrl,
+				applicationUrl,
+				lastConfirmedExternalStatus: 'Active',
+				copyConfirmed: true,
+				termsConfirmed: true,
+				photosConfirmed: true,
+				needsRepublish: false,
+			});
+		const published = await readListingWorkspace(request, token, unitId);
+		expect(published).toMatchObject({
+			headline,
+			description,
+			rent: 2125,
+			securityDeposit: 2125,
+			leaseTerms: '12-month lease; renter pays utilities',
+			petPolicy: 'Pets considered case by case',
+			utilities: 'Tenant pays electric and gas',
+			parking: 'One off-street parking spot',
+			amenities: 'In-unit laundry, central air, quiet street',
+		});
+
+		await page.getByLabel('Headline').fill(revisedHeadline);
 		const [saveResponse] = await Promise.all([
 			page.waitForResponse(
 				(response) =>
 					response.request().method() === 'PUT' &&
-					response.url().includes(`/api/v1/units/${unitId}/listing`)
+					response.url().includes(`/api/v1/units/${unitId}/listing-workspace`)
 			),
-			page.getByTestId('listing-save').click(),
+			page.getByRole('button', { name: 'Save', exact: true }).click(),
 		]);
-		expect(
-			saveResponse.ok(),
-			`save failed: ${saveResponse.status()} ${await saveResponse.text()}`
-		).toBeTruthy();
+		expect(saveResponse.ok(), `content save failed: ${saveResponse.status()}`).toBeTruthy();
 
-		await expect(async () => {
-			const saved = await readListing(request, token, unitId);
-			expect(saved.headline).toBe(headline);
-			expect(saved.description).toBe(description);
-			expect(saved.status).toBe('Posted');
-			expect(saved.isPosted).toBeTruthy();
-			expect(saved.rent).toBe(2125);
-			expect(saved.securityDeposit).toBe(2125);
-			expect(saved.leaseTerms).toBe('12-month lease; renter pays utilities');
-			expect(saved.petPolicy).toBe('Pets considered case by case');
-			expect(saved.utilities).toBe('Tenant pays electric and gas');
-			expect(saved.parking).toBe('One off-street parking spot');
-			expect(saved.amenities).toBe('In-unit laundry, central air, quiet street');
-			expect(saved.photoNotes).toBe('Use exterior, kitchen, bath, and bedroom photos');
-			expect(saved.zillowListingUrl).toBe(listingUrl);
-			expect(saved.zillowApplicationUrl).toBe(applicationUrl);
-			expect(saved.postedAtUtc).toBeTruthy();
-		}).toPass({ timeout: 10_000 });
+		await expect(page.getByText('Changes need republishing.')).toBeVisible();
+		const changed = await readListingWorkspace(request, token, unitId);
+		expect(changed.headline).toBe(revisedHeadline);
+		expect(changed.contentVersion).toBeGreaterThan(published.contentVersion);
+		expect(guidedPublication(changed).needsRepublish).toBeTruthy();
 
-		await page.reload();
-		await expect(page.getByTestId('unit-listing-tab')).toBeVisible({ timeout: 15_000 });
-		await expect(page.getByTestId('listing-headline')).toHaveValue(headline);
-		await expect(page.getByTestId('listing-description')).toHaveValue(description);
-		await expect(page.getByTestId('listing-status')).toHaveValue('Posted');
-		await expect(page.getByTestId('listing-open-zillow')).toHaveAttribute(
+		await page.getByLabel('Copy headline').click();
+		await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(revisedHeadline);
+
+		const signedLeaseLink = page.getByRole('link', { name: 'Import signed Zillow lease' });
+		await expect(signedLeaseLink).toHaveAttribute(
 			'href',
-			'https://www.zillow.com/rental-manager/properties'
+			`/scan?type=Lease&unitId=${unitId}&returnTo=/units/${unitId}?tab=lease`
 		);
-
-		await page.getByTestId('listing-copy-headline').click();
-		await expect
-			.poll(() => page.evaluate(() => navigator.clipboard.readText()))
-			.toBe(headline);
 	});
 
-	test('keeps save disabled when required listing copy is missing', async ({ page, request }) => {
+	test('does not save a listing workspace without required copy', async ({ page, request }) => {
 		const token = await apiToken(request);
 		await ensureSandboxChoice(request, token);
 		const unitId = await findListingUnit(request, token);
+
+		const prepare = await request.post(`/api/v1/units/${unitId}/listing-workspace/generate`, {
+			headers: bearer(token),
+		});
+		expect(prepare.ok(), `prepare failed: ${prepare.status()}`).toBeTruthy();
+
 		await login(page);
-
 		await page.goto(`/units/${unitId}?tab=listing`);
-		await expect(page.getByTestId('unit-listing-tab')).toBeVisible({ timeout: 15_000 });
-		const [generateResponse] = await Promise.all([
-			page.waitForResponse(
-				(response) =>
-					response.request().method() === 'POST' &&
-					response.url().includes(`/api/v1/units/${unitId}/listing/generate`)
-			),
-			page.getByTestId('listing-generate').click(),
-		]);
-		expect(generateResponse.ok(), `generate failed: ${generateResponse.status()}`).toBeTruthy();
-		await expect(page.getByTestId('listing-editor')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByText('Listing copy', { exact: true })).toBeVisible({ timeout: 15_000 });
 
-		await expect(page.getByTestId('listing-save')).toBeEnabled();
-		await page.getByTestId('listing-headline').fill('');
-		await expect(page.getByTestId('listing-save')).toBeDisabled();
-		await page.getByTestId('listing-headline').fill('Valid listing headline');
-		await page.getByTestId('listing-description').fill('');
-		await expect(page.getByTestId('listing-save')).toBeDisabled();
+		const save = page.getByRole('button', { name: 'Save', exact: true });
+		await expect(save).toBeEnabled();
+		await page.getByLabel('Headline').fill('');
+		await expect(save).toBeDisabled();
+		await page.getByLabel('Headline').fill('Valid listing headline');
+		await page.getByLabel('Description').fill('');
+		await expect(save).toBeDisabled();
 	});
 });
