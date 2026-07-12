@@ -789,6 +789,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
         var replacement = RefreshCredential(family.Id, "hash-replacement");
         first.ConsumedAtUtc = _now.AddMinutes(1);
+        first.ConsumedByOperationId = Guid.NewGuid();
         first.ReplacedByCredential = replacement;
         family.Credentials.Add(replacement);
         await db.SaveChangesAsync();
