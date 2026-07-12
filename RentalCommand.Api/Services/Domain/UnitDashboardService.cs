@@ -288,9 +288,7 @@ public class UnitDashboardService : IUnitDashboardService
             .Where(row => row.PortfolioId == unit.PortfolioId
                 && row.LeaseManagementId == selectedRelationshipId)
             .DefaultIfEmpty()
-        let selectedAgreementId = lifecycle == null
-            ? null
-            : lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId
+        let selectedAgreementId = lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId
         from agreement in _db.LeaseAgreements.AsNoTracking()
             .Where(row => row.PortfolioId == unit.PortfolioId && row.Id == selectedAgreementId)
             .DefaultIfEmpty()
@@ -324,27 +322,28 @@ public class UnitDashboardService : IUnitDashboardService
             },
             PropertyName = property.Name,
             EffectiveNowUtc = occupancy.EffectiveNowUtc,
-            BusinessDate = lifecycle == null ? DateOnly.FromDateTime(occupancy.EffectiveNowUtc) : lifecycle.BusinessDate,
+            BusinessDate = (DateOnly?)lifecycle.BusinessDate
+                ?? DateOnly.FromDateTime(occupancy.EffectiveNowUtc),
             IsOccupied = occupancy.IsOccupied,
             HasScheduledMoveIn = occupancy.HasScheduledMoveIn,
             IsInTurnover = occupancy.IsInTurnover,
             IsOutOfService = occupancy.IsOutOfService,
             IsOnManagementHold = occupancy.IsOnManagementHold,
             LeaseManagementId = selectedRelationshipId,
-            Lifecycle = lifecycle == null ? null : lifecycle.Lifecycle,
-            TenantAccountId = lifecycle == null ? null : lifecycle.TenantAccountId,
-            CurrentPrimaryTenantId = lifecycle == null ? null : lifecycle.CurrentPrimaryTenantId,
+            Lifecycle = lifecycle.Lifecycle,
+            TenantAccountId = lifecycle.TenantAccountId,
+            CurrentPrimaryTenantId = lifecycle.CurrentPrimaryTenantId,
             AgreementId = agreement == null ? null : agreement.Id,
             AgreementNumber = agreement == null ? null : agreement.AgreementNumber,
-            AgreementStatus = agreementStatus == null ? null : agreementStatus.AgreementStatus,
+            AgreementStatus = agreementStatus.AgreementStatus,
             AgreementStartOn = agreement == null ? null : agreement.TermStartOn,
             AgreementEndOn = agreement == null ? null : agreement.TermEndOn,
             BaseRentAmount = agreement == null ? null : agreement.BaseRentAmount,
             SecurityDepositObligation = agreement == null ? null : agreement.SecurityDepositObligation,
-            ReceivableBalance = balance == null ? 0m : balance.ReceivableBalance,
-            PastDueAmount = balance == null ? 0m : balance.PastDueAmount,
-            NextDueOn = balance == null ? null : balance.NextDueOn,
-            HeldDepositBalance = deposit == null ? 0m : deposit.HeldBalance,
+            ReceivableBalance = (decimal?)balance.ReceivableBalance ?? 0m,
+            PastDueAmount = (decimal?)balance.PastDueAmount ?? 0m,
+            NextDueOn = balance.NextDueOn,
+            HeldDepositBalance = (decimal?)deposit.HeldBalance ?? 0m,
         };
 
     private static UnitLifecycleStage ResolveCanonicalStage(
