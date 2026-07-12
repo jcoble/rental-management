@@ -1147,7 +1147,7 @@
 									value={tenantAccountSearch}
 									disabled={reviewControlsDisabled}
 									oninput={(event) => {
-										tenantAccountSearch = event.currentTarget.value;
+										tenantAccountSearch = (event.currentTarget as HTMLInputElement).value;
 										tenantAccountSkip = 0;
 									}}
 								/>
