@@ -7,7 +7,7 @@
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { auth } from '$lib/api/endpoints/auth';
-	import type { EffectiveAccessContextOption } from '$lib/types';
+	import type { EffectiveAccessContextOption } from '$lib/types/user';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
