@@ -29,6 +29,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<LeaseManagementParty> LeaseManagementParties => Set<LeaseManagementParty>();
     public DbSet<TenantUserAccess> TenantUserAccesses => Set<TenantUserAccess>();
     public DbSet<UnitOperationalPeriod> UnitOperationalPeriods => Set<UnitOperationalPeriod>();
+    public DbSet<UnitOccupancyProjection> UnitOccupancyProjections => Set<UnitOccupancyProjection>();
+    public DbSet<LeaseManagementLifecycleProjection> LeaseManagementLifecycleProjections =>
+        Set<LeaseManagementLifecycleProjection>();
     public DbSet<LegalDocumentArtifact> LegalDocumentArtifacts => Set<LegalDocumentArtifact>();
     public DbSet<LeaseAgreement> LeaseAgreements => Set<LeaseAgreement>();
     public DbSet<LeaseAgreementSigner> LeaseAgreementSigners => Set<LeaseAgreementSigner>();
@@ -162,6 +165,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.ConfigureLeaseRelationshipKernel();
         modelBuilder.ConfigureLeaseLegalArtifacts();
         modelBuilder.ConfigureTenantAccountKernel();
+        modelBuilder.ConfigureLeaseLifecycleProjections();
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
