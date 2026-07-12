@@ -78,9 +78,25 @@ public sealed class FundSecurityDepositHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.TenantAccount, command.TenantAccountId, ct);
         var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
         var target = await TenantMoneyCommandSupport.AuthorizedDepositAccounts(command, attempt.Persistence, times.WallClockUtc)
-            .Select(row => new { row.Id, row.Currency })
+            .Select(row => new
+            {
+                row.Id,
+                row.Currency,
+                OpenDepositCharges = attempt.Persistence.Query<TenantChargeBalanceProjection>()
+                    .Where(balance => balance.PortfolioId == command.PortfolioId
+                        && balance.TenantAccountId == command.TenantAccountId
+                        && balance.EntryType == nameof(TenantLedgerEntryType.DepositCharge)
+                        && balance.OpenAmount > 0m)
+                    .Sum(balance => (decimal?)balance.OpenAmount) ?? 0m,
+            })
             .SingleOrDefaultAsync(ct);
         if (target is null) throw TenantMoneyCommandSupport.Unauthorized();
+        if (target.OpenDepositCharges < command.Amount)
+        {
+            return TenantMoneyCommandSupport.DepositConflict(
+                command,
+                "The deposit funding amount exceeds the tenant account's open security-deposit charges.");
+        }
 
         var paymentAttempt = TenantMoneyCommandSupport.ManualAttempt(
             command, target.Currency, command.Amount, command.PaymentMethodSummary,
@@ -96,10 +112,15 @@ public sealed class FundSecurityDepositHandler
         attempt.Persistence.Add(receipt);
         await attempt.FlushBusinessAsync(ct);
 
-        await TenantMoneyCommandSupport.AllocateOldestAsync(
+        var allocation = await TenantMoneyCommandSupport.AllocateOldestAsync(
             command.PortfolioId, command.TenantAccountId, receipt.Id, command.Amount,
             $"{command.BusinessKey}:allocation", command.ActorUserId, times.WallClockUtc,
             attempt, ct, TenantLedgerEntryType.DepositCharge);
+        if (allocation.AllocatedAmount != command.Amount)
+        {
+            throw new InvalidOperationException(
+                "Security-deposit funding must allocate its full amount to open deposit charges.");
+        }
 
         var deposit = TenantMoneyCommandSupport.DepositEntry(
             command, SecurityDepositEntryType.Receipt, SecurityDepositDirection.Increase,
@@ -109,7 +130,14 @@ public sealed class FundSecurityDepositHandler
         await attempt.FlushBusinessAsync(ct);
         TenantMoneyCommandSupport.StageMutation(attempt, command, times.WallClockUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit funded",
-            new { deposit.Amount, deposit.EffectiveOn, TenantLedgerEntryId = receipt.Id });
+            new
+            {
+                deposit.Amount,
+                deposit.EffectiveOn,
+                TenantLedgerEntryId = receipt.Id,
+                allocation.AllocationCount,
+                allocation.AllocatedAmount,
+            });
         return new SecurityDepositMutationResult(true, true, command.TenantAccountId,
             command.SecurityDepositAccountId, deposit.Id, receipt.Id, deposit.Amount, null);
     }
@@ -217,24 +245,18 @@ public sealed class RefundSecurityDepositHandler
         if (amount <= 0m || amount > balance)
             return TenantMoneyCommandSupport.DepositConflict(command, "The refund must be positive and cannot exceed the held deposit balance.");
 
-        var refund = TenantMoneyCommandSupport.Ledger(
-            command, TenantLedgerEntryType.Refund, TenantLedgerDirection.Credit,
-            amount, target.Currency, command.EffectiveOn, null, command.Description,
-            $"{command.BusinessKey}:tenant-refund", times.WallClockUtc);
-        attempt.Persistence.Add(refund);
-        await attempt.FlushBusinessAsync(ct);
-
         var deposit = TenantMoneyCommandSupport.DepositEntry(
             command, SecurityDepositEntryType.Refund, SecurityDepositDirection.Decrease,
             amount, target.Currency, command.EffectiveOn, command.Description,
-            command.BusinessKey, times.WallClockUtc, refund.Id, null);
+            command.BusinessKey, times.WallClockUtc, null, null,
+            payoutExternalReference: TenantMoneyCommandSupport.Clean(command.ExternalReference));
         attempt.Persistence.Add(deposit);
         await attempt.FlushBusinessAsync(ct);
         TenantMoneyCommandSupport.StageMutation(attempt, command, times.WallClockUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit refund posted",
-            new { deposit.Amount, deposit.EffectiveOn, command.ExternalReference, TenantLedgerEntryId = refund.Id });
+            new { deposit.Amount, deposit.EffectiveOn, deposit.PayoutExternalReference });
         return new SecurityDepositMutationResult(true, true, command.TenantAccountId,
-            command.SecurityDepositAccountId, deposit.Id, refund.Id, amount, null);
+            command.SecurityDepositAccountId, deposit.Id, null, amount, null);
     }
 
     public Task AuthorizeReplayAsync(RefundSecurityDepositCommand command,
@@ -331,6 +353,9 @@ internal static class TenantMoneyCommandSupport
                 || string.IsNullOrWhiteSpace(receipt.PaymentMethodSummary)
                 || receipt.PaymentMethodSummary.Trim().Length > 200))
             throw new ArgumentException("Receipt date, description, and payment method are required and must fit their limits.");
+        if (command is RefundSecurityDepositCommand payout
+            && payout.ExternalReference?.Trim().Length > 200)
+            throw new ArgumentException("Payout reference cannot exceed 200 characters.");
     }
 
     internal static TenantPaymentAttempt ManualAttempt(ITenantMoneyCommand command, string currency,
@@ -383,7 +408,8 @@ internal static class TenantMoneyCommandSupport
     internal static SecurityDepositEntry DepositEntry(ISecurityDepositMoneyCommand command,
         SecurityDepositEntryType type, SecurityDepositDirection direction, decimal amount,
         string currency, DateOnly effectiveOn, string description, string businessKey,
-        DateTime now, long? tenantLedgerEntryId, int? sourceStoredFileId) => new()
+        DateTime now, long? tenantLedgerEntryId, int? sourceStoredFileId,
+        string? payoutExternalReference = null) => new()
     {
         PortfolioId = command.PortfolioId,
         SecurityDepositAccountId = command.SecurityDepositAccountId,
@@ -397,8 +423,12 @@ internal static class TenantMoneyCommandSupport
         Description = description.Trim(),
         TenantLedgerEntryId = tenantLedgerEntryId,
         SourceStoredFileId = sourceStoredFileId,
+        PayoutExternalReference = payoutExternalReference,
         CreatedByUserId = command.ActorUserId,
     };
+
+    internal static string? Clean(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     internal static Task<AtomicLedgerAllocationSummary> AllocateOldestAsync(
         int portfolioId, int accountId, long receiptId, decimal available, string businessKey,
@@ -430,7 +460,7 @@ internal static class TenantMoneyCommandSupport
 
     internal static SecurityDepositMutationResult DepositConflict(
         ISecurityDepositMoneyCommand command, string error) => new(true, false,
-            command.TenantAccountId, command.SecurityDepositAccountId, 0, 0, 0, error);
+            command.TenantAccountId, command.SecurityDepositAccountId, 0, null, 0, error);
 
     internal static UnauthorizedAccessException Unauthorized() => new(
         "The tenant account is not authorized in the current access context, capability, and property scope.");

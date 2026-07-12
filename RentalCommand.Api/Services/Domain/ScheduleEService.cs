@@ -56,6 +56,7 @@ public class ScheduleEService : IScheduleEService
                 Amount = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount,
             });
         var applicationIncomeQuery = _db.ApplicationFinancialEntries
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(entry => entry.PortfolioId == portfolioId
                 && entry.EffectiveOn >= yearStartDate

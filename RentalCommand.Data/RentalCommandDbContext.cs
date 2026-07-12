@@ -2254,10 +2254,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // Dependents of RentalApplication (RentalApplication has `DeletedAt == null`); nav is `Application`.
         modelBuilder.Entity<AdverseActionNotice>().HasQueryFilter(e => e.Application!.DeletedAt == null);
         modelBuilder.Entity<ScreeningResult>().HasQueryFilter(e => e.Application!.DeletedAt == null);
-        modelBuilder.Entity<ApplicationFinancialAccount>()
-            .HasQueryFilter(e => e.RentalApplication!.DeletedAt == null);
-        modelBuilder.Entity<ApplicationFinancialEntry>()
-            .HasQueryFilter(e => e.ApplicationFinancialAccount!.RentalApplication!.DeletedAt == null);
+        // Application financial accounts and entries are immutable accounting history. They remain
+        // queryable after the mutable application is soft-deleted; every reader must scope them by
+        // PortfolioId and must not recover deleted applicant PII through the application navigation.
 
         // Dependent of Expense (Expense has `DeletedAt == null`).
         modelBuilder.Entity<ExpenseLineItem>().HasQueryFilter(e => e.Expense!.DeletedAt == null);

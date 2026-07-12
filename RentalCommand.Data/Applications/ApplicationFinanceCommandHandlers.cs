@@ -24,7 +24,8 @@ public sealed class RecordApplicationFeeHandler
         var application = await ApplicationFinanceCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                allowApplicationManagement: true, attempt.Persistence, securityNowUtc)
+                additionalCapability: CapabilityKeys.LeasingApplicationFeesCollect,
+                attempt.Persistence, securityNowUtc)
             .Select(row => new { row.Id, row.PropertyId, row.UnitId })
             .SingleOrDefaultAsync(ct);
         if (application is null)
@@ -107,7 +108,8 @@ public sealed class RecordApplicationFeeHandler
         ApplicationFinanceCommandSupport.AuthorizeReplayAsync(
             command.PortfolioId, command.ApplicationId, command.ActorUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-            allowApplicationManagement: true, persistence, ct);
+            additionalCapability: CapabilityKeys.LeasingApplicationFeesCollect,
+            persistence, ct);
 }
 
 public sealed class RefundApplicationFeeHandler
@@ -126,7 +128,7 @@ public sealed class RefundApplicationFeeHandler
         var application = await ApplicationFinanceCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                allowApplicationManagement: false, attempt.Persistence, securityNowUtc)
+                additionalCapability: null, attempt.Persistence, securityNowUtc)
             .Select(row => new { row.PropertyId, row.UnitId })
             .SingleOrDefaultAsync(ct)
             ?? throw new UnauthorizedAccessException(
@@ -240,7 +242,7 @@ public sealed class RefundApplicationFeeHandler
         ApplicationFinanceCommandSupport.AuthorizeReplayAsync(
             command.PortfolioId, command.ApplicationId, command.ActorUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-            allowApplicationManagement: false, persistence, ct);
+            additionalCapability: null, persistence, ct);
 }
 
 internal static class ApplicationFinanceCommandSupport
@@ -395,7 +397,7 @@ internal static class ApplicationFinanceCommandSupport
         Guid authSessionId,
         int accessContextId,
         long expectedAccessRevision,
-        bool allowApplicationManagement,
+        string? additionalCapability,
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
@@ -405,7 +407,7 @@ internal static class ApplicationFinanceCommandSupport
         var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
         var authorized = await AuthorizedApplications(
                 portfolioId, applicationId, actorUserId, authSessionId, accessContextId,
-                expectedAccessRevision, allowApplicationManagement, persistence, nowUtc)
+                expectedAccessRevision, additionalCapability, persistence, nowUtc)
             .AnyAsync(ct);
         if (!authorized)
             throw new UnauthorizedAccessException();
@@ -418,7 +420,7 @@ internal static class ApplicationFinanceCommandSupport
         Guid authSessionId,
         int accessContextId,
         long expectedAccessRevision,
-        bool allowApplicationManagement,
+        string? additionalCapability,
         IAtomicPersistenceSession persistence,
         DateTime securityNowUtc)
     {
@@ -461,8 +463,8 @@ internal static class ApplicationFinanceCommandSupport
                                 && scope.PortfolioId == portfolioId)))
                     && assignment.RoleProfile!.Capabilities.Any(capability =>
                         capability.CapabilityDefinition!.Key == CapabilityKeys.MoneyPaymentsManage
-                        || (allowApplicationManagement
+                        || (additionalCapability != null
                             && capability.CapabilityDefinition.Key ==
-                                CapabilityKeys.LeasingApplicationsManage)))));
+                                additionalCapability)))));
     }
 }

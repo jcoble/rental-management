@@ -25,6 +25,8 @@ public class SecurityDepositEntry : IPortfolioScoped
     public long? ReversesEntryId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
     public int? SourceStoredFileId { get; set; }
+    /// <summary>Provider, bank, check, or other immutable provenance for a completed payout.</summary>
+    public string? PayoutExternalReference { get; set; }
     public int CreatedByUserId { get; set; }
 
     public Portfolio? Portfolio { get; set; }
