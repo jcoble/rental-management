@@ -270,10 +270,10 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         Failures.FailAtomicAudit = failure == "audit";
         Failures.FailReceiptCompletion = failure == "receipt";
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        var failureAssertion = await FluentActions.Invoking(() => Atomic.ExecuteAsync(
                 identity, ExpenseCommand(claim), ExpenseCodec))
-            .Should().ThrowAsync<DbUpdateException>()
-            .WithInnerException<InvalidOperationException>();
+            .Should().ThrowAsync<DbUpdateException>();
+        failureAssertion.Which.InnerException.Should().BeOfType<InvalidOperationException>();
         Failures.FailAtomicAudit = false;
         Failures.FailReceiptCompletion = false;
 
