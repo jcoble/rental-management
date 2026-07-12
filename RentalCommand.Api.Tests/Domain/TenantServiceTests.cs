@@ -245,7 +245,7 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ListPageAsync_AvailableForLeaseWithIncludeLeaseIdKeepsCurrentLeaseTenants()
+    public async Task ListPageAsync_AvailableForLeaseWithIncludedRelationshipKeepsCurrentParties()
     {
         SeedTenant("Avery", "Available", activeLeaseCount: 0);
         var currentPrimary = SeedTenant("Blair", "Current", activeLeaseCount: 0);
@@ -262,7 +262,7 @@ public class TenantServiceTests : IDisposable
         var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
         {
             AvailableForLease = true,
-            IncludeLeaseId = currentLease.Id,
+            IncludeLeaseManagementId = currentLease.Id,
             Sort = "name",
             Skip = 0,
             Take = 20,

@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -17,10 +16,16 @@ public class TenantResponse
     public DateTime? DateOfBirth { get; set; }
     public string? Notes { get; set; }
 
-    /// <summary>Number of this tenant's leases currently in <see cref="LeaseStatus.Active"/>. Computed DB-side.</summary>
+    /// <summary>
+    /// Number of Units this tenant currently possesses as a resident party through a canonical
+    /// LeaseManagement relationship. Guarantor-only relationships are excluded. Computed DB-side.
+    /// </summary>
     public int ActiveLeaseCount { get; set; }
 
-    /// <summary>Number of live or historical leases linked to this tenant as primary or co-tenant. Computed DB-side.</summary>
+    /// <summary>
+    /// Number of distinct live or historical LeaseManagement relationships linked to this tenant.
+    /// Agreement corrections and renewals do not inflate this count. Computed DB-side.
+    /// </summary>
     public int LeaseHistoryCount { get; set; }
 
     /// <summary>True only when this tenant has no lease history and can be safely deleted.</summary>
@@ -71,7 +76,11 @@ public class TenantListQuery : ListQuery
     public bool? AvailableForLease { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? IncludeLeaseId { get; set; }
+    /// <summary>
+    /// Keeps parties already attached to this canonical relationship selectable while editing it.
+    /// This is a LeaseManagement id, not a legal-agreement version id.
+    /// </summary>
+    public int? IncludeLeaseManagementId { get; set; }
 }
 
 public class CreateTenantRequest
