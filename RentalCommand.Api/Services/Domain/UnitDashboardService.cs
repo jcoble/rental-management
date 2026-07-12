@@ -225,12 +225,9 @@ public class UnitDashboardService : IUnitDashboardService
             ? null
             : string.Join(", ", currentTenants.Select(t => t.Name));
 
-        var unitResponse = unitRow.Unit;
-        unitResponse.Status = ResolveCanonicalUnitStatus(unitRow);
-
         return new UnitDashboardResponse
         {
-            Unit = unitResponse,
+            Unit = unitRow.Unit,
             PropertyName = unitRow.PropertyName,
             LifecycleStage = stage.ToString(),
             NextBestAction = nextBestAction,
@@ -315,7 +312,13 @@ public class UnitDashboardService : IUnitDashboardService
                 Bathrooms = unit.Bathrooms,
                 SquareFeet = unit.SquareFeet,
                 MarketRent = unit.MarketRent,
-                Status = UnitStatus.Vacant,
+                Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
+                    ? UnitStatus.Offline
+                    : occupancy.IsOccupied
+                        ? UnitStatus.Occupied
+                        : occupancy.HasScheduledMoveIn
+                            ? UnitStatus.Reserved
+                            : UnitStatus.Vacant,
                 Notes = unit.Notes,
                 CreatedAt = unit.CreatedAt,
                 UpdatedAt = unit.UpdatedAt,
@@ -359,12 +362,12 @@ public class UnitDashboardService : IUnitDashboardService
             return UnitLifecycleStage.Turnover;
         }
 
-        if (row.Lifecycle == "Ending")
+        if (row.IsOccupied && row.Lifecycle == "Ending")
         {
             return UnitLifecycleStage.MoveOut;
         }
 
-        if (row.IsOccupied || row.Lifecycle == "Occupied")
+        if (row.IsOccupied)
         {
             return row.AgreementEndOn is { } end
                 && end >= row.BusinessDate
@@ -417,15 +420,6 @@ public class UnitDashboardService : IUnitDashboardService
             UnitLifecycleStage.Turnover => "Track make-ready / mark rent-ready",
             _ => "Open unit",
         };
-
-    private static UnitStatus ResolveCanonicalUnitStatus(UnitDashboardReadRow row) =>
-        row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold
-            ? UnitStatus.Offline
-            : row.IsOccupied
-                ? UnitStatus.Occupied
-                : row.HasScheduledMoveIn
-                    ? UnitStatus.Reserved
-                    : UnitStatus.Vacant;
 
     private async Task<UnitTurnoverSummary> BuildTurnoverSummaryAsync(
         int portfolioId,

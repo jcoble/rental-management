@@ -49,7 +49,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_active_leases",
-            "Returns all active leases in the portfolio with tenant name, unit number, " +
+            "Returns governing agreements for currently occupied units with tenant name, unit number, " +
             "monthly rent, rent due day, lease start and end dates.",
             """{"type":"object","properties":{},"required":[]}"""),
 
@@ -62,21 +62,21 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_expiring_leases",
-            "Returns active leases whose end date falls within the next N days. " +
+            "Returns governing agreements for currently occupied units whose end date falls within the next N days. " +
             "Useful for 'any leases expiring soon?' questions.",
             """{"type":"object","properties":{"withinDays":{"type":"integer","description":"Number of days to look ahead. Defaults to 60."}},"required":[]}"""),
 
         new LlmToolSpec(
             "list_vacant_units",
-            "Returns all units with Vacant status across the portfolio, including the " +
+            "Returns rent-ready units with no current or scheduled possession across the portfolio, including the " +
             "unit number, property name, and market rent.",
             """{"type":"object","properties":{},"required":[]}"""),
 
         new LlmToolSpec(
             "list_tenants",
             "Returns all tenants in the portfolio: first and last name, email, phone, " +
-            "their current unit number and property name (from their active lease, if any), " +
-            "and whether they currently hold an active lease. " +
+            "their current unit number and property name (from current possession, if any), " +
+            "and whether they currently belong to an occupying household. " +
             "Use for 'who are my tenants?', 'what is tenant X's phone number?'.",
             """{"type":"object","properties":{},"required":[]}"""),
 
@@ -712,24 +712,34 @@ public class PortfolioQaService : IPortfolioQaService
 
     private async Task<string> ListActiveLeasesAsync(int portfolioId, CancellationToken ct)
     {
-        var rows = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active)
-            .Include(l => l.Tenant)
-            .Include(l => l.Unit)
-            .Select(l => new
+        var rows = await (
+            from occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { occupancy.PortfolioId, LeaseManagementId = occupancy.CurrentLeaseManagementId }
+                equals new { lifecycle.PortfolioId, LeaseManagementId = (int?)lifecycle.LeaseManagementId }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, AgreementId = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, AgreementId = (int?)agreement.Id }
+            join agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                on new { agreement.PortfolioId, AgreementId = agreement.Id }
+                equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { occupancy.PortfolioId, Id = occupancy.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            where occupancy.PortfolioId == portfolioId
+                && occupancy.IsOccupied
+                && agreementStatus.IsGoverning
+            orderby lifecycle.CurrentPrimaryTenantName, agreement.AgreementNumber
+            select new
             {
-                leaseNumber  = l.LeaseNumber,
-                tenantName   = l.Tenant != null
-                                   ? l.Tenant.FirstName + " " + l.Tenant.LastName
-                                   : "(unknown)",
-                unitNumber   = l.Unit != null ? l.Unit.UnitNumber : "(unknown)",
-                monthlyRent  = l.MonthlyRent,
-                rentDueDay   = l.RentDueDay,
-                startDate    = l.StartDate.ToString("yyyy-MM-dd"),
-                endDate      = l.EndDate.ToString("yyyy-MM-dd"),
+                leaseNumber = agreement.AgreementNumber,
+                tenantName = lifecycle.CurrentPrimaryTenantName ?? "(unknown)",
+                unitNumber = unit.UnitNumber,
+                monthlyRent = agreement.BaseRentAmount,
+                rentDueDay = agreement.RentDueDay,
+                startDate = agreement.TermStartOn,
+                endDate = agreement.TermEndOn,
             })
-            .OrderBy(r => r.tenantName)
             .ToListAsync(ct);
 
         return rows.Count == 0
@@ -817,30 +827,36 @@ public class PortfolioQaService : IPortfolioQaService
             catch { /* default: 60 */ }
         }
 
-        var today = _timeProvider.UtcNow().Date;
-        var cutoff = today.AddDays(withinDays);
-
-        var rows = await _db.Leases
-            .AsNoTracking()
-            .Where(l =>
-                l.PortfolioId == portfolioId &&
-                l.Status == LeaseStatus.Active &&
-                l.EndDate >= today &&
-                l.EndDate <= cutoff)
-            .Include(l => l.Tenant)
-            .Include(l => l.Unit)
-            .Select(l => new
+        var rows = await (
+            from occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { occupancy.PortfolioId, LeaseManagementId = occupancy.CurrentLeaseManagementId }
+                equals new { lifecycle.PortfolioId, LeaseManagementId = (int?)lifecycle.LeaseManagementId }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, AgreementId = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, AgreementId = (int?)agreement.Id }
+            join agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                on new { agreement.PortfolioId, AgreementId = agreement.Id }
+                equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { occupancy.PortfolioId, Id = occupancy.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            where occupancy.PortfolioId == portfolioId
+                && occupancy.IsOccupied
+                && agreementStatus.IsGoverning
+                && agreement.TermEndOn != null
+                && agreement.TermEndOn >= agreementStatus.BusinessDate
+                && agreement.TermEndOn <= agreementStatus.BusinessDate.AddDays(withinDays)
+            orderby agreement.TermEndOn, agreement.AgreementNumber
+            select new
             {
-                leaseNumber = l.LeaseNumber,
-                tenantName  = l.Tenant != null
-                                  ? l.Tenant.FirstName + " " + l.Tenant.LastName
-                                  : "(unknown)",
-                unitNumber  = l.Unit != null ? l.Unit.UnitNumber : "(unknown)",
-                monthlyRent = l.MonthlyRent,
-                endDate     = l.EndDate.ToString("yyyy-MM-dd"),
-                daysLeft    = (int)(l.EndDate.Date - today).TotalDays,
+                leaseNumber = agreement.AgreementNumber,
+                tenantName = lifecycle.CurrentPrimaryTenantName ?? "(unknown)",
+                unitNumber = unit.UnitNumber,
+                monthlyRent = agreement.BaseRentAmount,
+                endDate = agreement.TermEndOn!.Value,
+                daysLeft = agreement.TermEndOn.Value.DayNumber - agreementStatus.BusinessDate.DayNumber,
             })
-            .OrderBy(r => r.endDate)
             .ToListAsync(ct);
 
         return rows.Count == 0
@@ -850,20 +866,29 @@ public class PortfolioQaService : IPortfolioQaService
 
     private async Task<string> ListVacantUnitsAsync(int portfolioId, CancellationToken ct)
     {
-        var rows = await _db.Units
-            .AsNoTracking()
-            .Where(u => u.Status == UnitStatus.Vacant && u.Property != null && u.Property.PortfolioId == portfolioId)
-            .Include(u => u.Property)
-            .Select(u => new
+        var rows = await (
+            from occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+            join unit in _db.Units.AsNoTracking()
+                on new { occupancy.PortfolioId, Id = occupancy.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            where occupancy.PortfolioId == portfolioId
+                && !occupancy.IsOccupied
+                && !occupancy.HasScheduledMoveIn
+                && !occupancy.IsInTurnover
+                && !occupancy.IsOutOfService
+                && !occupancy.IsOnManagementHold
+            orderby property.Name, unit.UnitNumber
+            select new
             {
-                unitNumber   = u.UnitNumber,
-                propertyName = u.Property != null ? u.Property.Name : "(unknown)",
-                marketRent   = u.MarketRent,
-                bedrooms     = u.Bedrooms,
-                bathrooms    = u.Bathrooms,
+                unitNumber = unit.UnitNumber,
+                propertyName = property.Name,
+                marketRent = unit.MarketRent,
+                bedrooms = unit.Bedrooms,
+                bathrooms = unit.Bathrooms,
             })
-            .OrderBy(u => u.propertyName)
-            .ThenBy(u => u.unitNumber)
             .ToListAsync(ct);
 
         return rows.Count == 0
@@ -875,7 +900,8 @@ public class PortfolioQaService : IPortfolioQaService
     {
         const int maxRows = 50;
 
-        // Load tenants with their active lease (if any) for unit + property info.
+        // Current Unit context is a correlated SQL subquery over the effective-dated household
+        // and the canonical possession projection; legacy Lease.Status is intentionally absent.
         var tenants = await _db.Tenants
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId)
@@ -884,14 +910,32 @@ public class PortfolioQaService : IPortfolioQaService
                 name         = t.FirstName + " " + t.LastName,
                 email        = t.Email,
                 phone        = t.Phone,
-                activeLease  = t.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .Select(l => new
+                currentOccupancy = (
+                    from party in _db.LeaseManagementParties
+                    join occupancy in _db.UnitOccupancyProjections
+                        on new { party.PortfolioId, LeaseManagementId = (int?)party.LeaseManagementId }
+                        equals new { occupancy.PortfolioId, LeaseManagementId = occupancy.CurrentLeaseManagementId }
+                    join lifecycle in _db.LeaseManagementLifecycleProjections
+                        on new { party.PortfolioId, party.LeaseManagementId }
+                        equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                    join unit in _db.Units
+                        on new { occupancy.PortfolioId, Id = occupancy.UnitId }
+                        equals new { unit.PortfolioId, unit.Id }
+                    join property in _db.Properties
+                        on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
+                        equals new { property.PortfolioId, property.Id }
+                    where party.PortfolioId == portfolioId
+                        && party.TenantId == t.Id
+                        && party.Role != LeaseManagementPartyRole.Guarantor
+                        && occupancy.IsOccupied
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
+                    orderby party.Id
+                    select new
                     {
-                        unitNumber   = l.Unit != null ? l.Unit.UnitNumber : "(unknown)",
-                        propertyName = l.Property != null ? l.Property.Name : "(unknown)",
-                    })
-                    .FirstOrDefault(),
+                        unitNumber = unit.UnitNumber,
+                        propertyName = property.Name,
+                    }).FirstOrDefault(),
             })
             .OrderBy(t => t.name)
             .Take(maxRows + 1)
@@ -903,9 +947,9 @@ public class PortfolioQaService : IPortfolioQaService
             t.name,
             t.email,
             t.phone,
-            unitNumber   = t.activeLease != null ? t.activeLease.unitNumber : null as string,
-            propertyName = t.activeLease != null ? t.activeLease.propertyName : null as string,
-            hasActiveLease = t.activeLease != null,
+            unitNumber = t.currentOccupancy != null ? t.currentOccupancy.unitNumber : null as string,
+            propertyName = t.currentOccupancy != null ? t.currentOccupancy.propertyName : null as string,
+            hasCurrentOccupancy = t.currentOccupancy != null,
         }).ToList();
 
         var result = new { count = rows.Count, truncated, tenants = rows };
@@ -922,9 +966,20 @@ public class PortfolioQaService : IPortfolioQaService
                 name         = p.Name,
                 city         = p.City,
                 state        = p.State,
-                totalUnits   = p.Units.Count,
-                occupiedUnits = p.Units.Count(u => u.Status == UnitStatus.Occupied),
-                vacantUnits  = p.Units.Count(u => u.Status == UnitStatus.Vacant),
+                totalUnits = _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id),
+                occupiedUnits = _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId
+                    && occupancy.PropertyId == p.Id
+                    && occupancy.IsOccupied),
+                vacantUnits = _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId
+                    && occupancy.PropertyId == p.Id
+                    && !occupancy.IsOccupied
+                    && !occupancy.HasScheduledMoveIn
+                    && !occupancy.IsInTurnover
+                    && !occupancy.IsOutOfService
+                    && !occupancy.IsOnManagementHold),
             });
 
         var totals = await propertiesQuery

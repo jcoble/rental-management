@@ -305,15 +305,18 @@ public class UnitService : IUnitService
         return normalized switch
         {
             "turnover" => q.Where(row => row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold),
-            "moveout" => q.Where(row => row.Lifecycle == "Ending"
+            "moveout" => q.Where(row => row.IsOccupied
+                && row.Lifecycle == "Ending"
                 && !row.IsInTurnover && !row.IsOutOfService && !row.IsOnManagementHold),
-            "renewal" => q.Where(row => row.Lifecycle == "Occupied"
+            "renewal" => q.Where(row => row.IsOccupied
+                && row.Lifecycle == "Occupied"
                 && !row.IsInTurnover && !row.IsOutOfService && !row.IsOnManagementHold
                 && row.BusinessDate != null
                 && row.CurrentAgreementEndOn != null
                 && row.CurrentAgreementEndOn >= row.BusinessDate
                 && row.CurrentAgreementEndOn <= row.BusinessDate.Value.AddDays(90)),
-            "active" => q.Where(row => row.Lifecycle == "Occupied"
+            "active" => q.Where(row => row.IsOccupied
+                && row.Lifecycle == "Occupied"
                 && !row.IsInTurnover && !row.IsOutOfService && !row.IsOnManagementHold
                 && (row.CurrentAgreementEndOn == null
                     || row.BusinessDate == null
@@ -341,12 +344,12 @@ public class UnitService : IUnitService
             return "Turnover";
         }
 
-        if (row.Lifecycle == "Ending")
+        if (row.IsOccupied && row.Lifecycle == "Ending")
         {
             return "Move-Out";
         }
 
-        if (row.Lifecycle == "Occupied")
+        if (row.IsOccupied && row.Lifecycle == "Occupied")
         {
             return row.CurrentAgreementEndOn is { } end
                 && row.BusinessDate is { } businessDate
