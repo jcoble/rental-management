@@ -25,6 +25,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Lease> Leases => Set<Lease>();
     public DbSet<LeaseTenant> LeaseTenants => Set<LeaseTenant>();
+    public DbSet<LeaseManagement> LeaseManagements => Set<LeaseManagement>();
+    public DbSet<LeaseManagementParty> LeaseManagementParties => Set<LeaseManagementParty>();
+    public DbSet<TenantUserAccess> TenantUserAccesses => Set<TenantUserAccess>();
+    public DbSet<UnitOperationalPeriod> UnitOperationalPeriods => Set<UnitOperationalPeriod>();
     public DbSet<DocumentTemplate> DocumentTemplates => Set<DocumentTemplate>();
     public DbSet<DocumentTemplateField> DocumentTemplateFields => Set<DocumentTemplateField>();
     public DbSet<Payment> Payments => Set<Payment>();
@@ -137,6 +141,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
         base.OnModelCreating(modelBuilder);
         modelBuilder.ConfigureWorkspaceAccessKernel();
+        modelBuilder.ConfigureLeaseRelationshipKernel();
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
@@ -1119,6 +1124,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<Unit>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.HasAlternateKey(e => new { e.Id, e.PropertyId, e.PortfolioId });
             entity.Property(e => e.UnitNumber).IsRequired().HasMaxLength(50);
             entity.Property(e => e.FloorPlan).HasMaxLength(100);
             entity.Property(e => e.Bedrooms).HasPrecision(4, 1);
@@ -1126,7 +1133,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.MarketRent).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.Status).HasConversion<int>();
-            entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.PropertyId, e.PortfolioId });
             entity.HasIndex(e => e.Status);
             // Unique unit number within a property — filtered to live rows so a soft-deleted unit
             // (DeletedAt set) frees its number for reuse instead of permanently occupying the slot.
@@ -1134,13 +1142,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.Units)
-                .HasForeignKey(e => e.PropertyId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .HasForeignKey(e => new { e.PropertyId, e.PortfolioId })
+                .HasPrincipalKey(p => new { p.Id, p.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Tenant>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Email).HasMaxLength(200);

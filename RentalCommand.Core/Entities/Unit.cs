@@ -1,10 +1,12 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
-public class Unit
+public class Unit : IPortfolioScoped
 {
     public int Id { get; set; }
+    public int PortfolioId { get; set; }
     public int PropertyId { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
     public string? FloorPlan { get; set; }
@@ -26,4 +28,6 @@ public class Unit
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
+    public List<LeaseManagement> LeaseManagements { get; set; } = [];
+    public List<UnitOperationalPeriod> OperationalPeriods { get; set; } = [];
 }
