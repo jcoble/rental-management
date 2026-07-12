@@ -67,6 +67,138 @@ public sealed class RecordTenantReceiptHandler
         TenantMoneyCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
 }
 
+public sealed class PostTenantChargeHandler
+    : IAtomicCommandHandler<PostTenantChargeCommand, TenantChargeMutationResult>,
+      IAtomicReplayAuthorizer<PostTenantChargeCommand>
+{
+    public async Task<TenantChargeMutationResult> HandleAsync(
+        PostTenantChargeCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        TenantMoneyCommandSupport.Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.TenantAccount, command.TenantAccountId, ct);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var account = await TenantMoneyCommandSupport
+            .AuthorizedAccounts(command, attempt.Persistence, times.WallClockUtc)
+            .Select(row => new
+            {
+                row.Id,
+                row.Currency,
+                SourceAllowed = command.SourceStoredFileId == null
+                    || attempt.Persistence.Query<StoredFile>().Any(file =>
+                        file.Id == command.SourceStoredFileId.Value
+                        && file.PortfolioId == command.PortfolioId),
+            })
+            .SingleOrDefaultAsync(ct);
+        if (account is null) throw TenantMoneyCommandSupport.Unauthorized();
+        if (!account.SourceAllowed)
+            throw new ArgumentException("Charge source provenance must belong to the current portfolio.");
+
+        var charge = TenantMoneyCommandSupport.Ledger(
+            command, TenantLedgerEntryType.ManualCharge, TenantLedgerDirection.Debit, command.Amount,
+            account.Currency, command.EffectiveOn, command.DueOn, command.Description,
+            command.BusinessKey, times.WallClockUtc, sourceStoredFileId: command.SourceStoredFileId);
+        attempt.Persistence.Add(charge);
+        await attempt.FlushBusinessAsync(ct);
+
+        TenantMoneyCommandSupport.StageMutation(
+            attempt, command, times.WallClockUtc, nameof(TenantLedgerEntry), charge.Id,
+            "Tenant charge posted", new
+            {
+                entryType = nameof(TenantLedgerEntryType.ManualCharge),
+                charge.Amount,
+                charge.EffectiveOn,
+                charge.DueOn,
+                charge.SourceStoredFileId,
+            });
+        return new TenantChargeMutationResult(true, true, account.Id, charge.Id, null,
+            charge.Amount, null);
+    }
+
+    public Task AuthorizeReplayAsync(PostTenantChargeCommand command,
+        IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        TenantMoneyCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+}
+
+public sealed class ReverseTenantChargeHandler
+    : IAtomicCommandHandler<ReverseTenantChargeCommand, TenantChargeMutationResult>,
+      IAtomicReplayAuthorizer<ReverseTenantChargeCommand>
+{
+    public async Task<TenantChargeMutationResult> HandleAsync(
+        ReverseTenantChargeCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        TenantMoneyCommandSupport.Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.TenantAccount, command.TenantAccountId, ct);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var target = await (
+            from account in TenantMoneyCommandSupport.AuthorizedAccounts(
+                command, attempt.Persistence, times.WallClockUtc)
+            join entry in attempt.Persistence.Query<TenantLedgerEntry>()
+                on new { TenantAccountId = account.Id, account.PortfolioId }
+                equals new { entry.TenantAccountId, entry.PortfolioId }
+            where entry.Id == command.ReversesEntryId
+                && entry.Direction == TenantLedgerDirection.Debit
+                && (entry.EntryType == TenantLedgerEntryType.RentCharge
+                    || entry.EntryType == TenantLedgerEntryType.AddendumCharge
+                    || entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                    || entry.EntryType == TenantLedgerEntryType.DepositCharge
+                    || entry.EntryType == TenantLedgerEntryType.ManualCharge)
+            select new
+            {
+                account.Id,
+                EntryId = entry.Id,
+                entry.Amount,
+                entry.Currency,
+                ReversedAmount = attempt.Persistence.Query<TenantLedgerEntry>()
+                    .Where(reversal => reversal.PortfolioId == command.PortfolioId
+                        && reversal.TenantAccountId == command.TenantAccountId
+                        && reversal.EntryType == TenantLedgerEntryType.Reversal
+                        && reversal.ReversesEntryId == entry.Id)
+                    .Sum(reversal => (decimal?)reversal.Amount) ?? 0m,
+                SourceAllowed = command.SourceStoredFileId == null
+                    || attempt.Persistence.Query<StoredFile>().Any(file =>
+                        file.Id == command.SourceStoredFileId.Value
+                        && file.PortfolioId == command.PortfolioId),
+            }).SingleOrDefaultAsync(ct);
+        if (target is null) throw TenantMoneyCommandSupport.Unauthorized();
+        if (!target.SourceAllowed)
+            throw new ArgumentException("Reversal source provenance must belong to the current portfolio.");
+        if (target.ReversedAmount > 0m)
+        {
+            return new TenantChargeMutationResult(true, false, target.Id, 0, target.EntryId,
+                target.Amount, "The charge has already been reversed.");
+        }
+
+        var reversal = TenantMoneyCommandSupport.Ledger(
+            command, TenantLedgerEntryType.Reversal, TenantLedgerDirection.Credit,
+            target.Amount, target.Currency, command.EffectiveOn, null, command.Reason,
+            command.BusinessKey, times.WallClockUtc, sourceStoredFileId: command.SourceStoredFileId);
+        reversal.ReversesEntryId = target.EntryId;
+        attempt.Persistence.Add(reversal);
+        await attempt.FlushBusinessAsync(ct);
+
+        var reversedAllocations = await attempt.TenantMoney.ReverseChargeAllocationsAsync(
+            command.PortfolioId, command.TenantAccountId, target.EntryId,
+            $"{command.BusinessKey}:allocation", command.ActorUserId, times.WallClockUtc, ct);
+        TenantMoneyCommandSupport.StageMutation(
+            attempt, command, times.WallClockUtc, nameof(TenantLedgerEntry), reversal.Id,
+            "Tenant charge reversed", new
+            {
+                reversal.Amount,
+                reversal.EffectiveOn,
+                reversal.ReversesEntryId,
+                reason = command.Reason.Trim(),
+                reversedAllocations.AllocationCount,
+                reversedAllocations.AllocatedAmount,
+            });
+        return new TenantChargeMutationResult(true, true, target.Id, reversal.Id,
+            target.EntryId, reversal.Amount, null);
+    }
+
+    public Task AuthorizeReplayAsync(ReverseTenantChargeCommand command,
+        IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        TenantMoneyCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+}
+
 public sealed class FundSecurityDepositHandler
     : IAtomicCommandHandler<FundSecurityDepositCommand, SecurityDepositMutationResult>,
       IAtomicReplayAuthorizer<FundSecurityDepositCommand>
@@ -336,23 +468,42 @@ internal static class TenantMoneyCommandSupport
             throw new ArgumentException("Portfolio, tenant account, actor, access, capability, and operation key are required.");
         if (command is ISecurityDepositMoneyCommand deposit && deposit.SecurityDepositAccountId <= 0)
             throw new ArgumentException("Security deposit account is required.");
-        var amount = command switch
+        decimal? amount = command switch
         {
             RecordTenantReceiptCommand receiptCommand => receiptCommand.Amount,
+            PostTenantChargeCommand charge => charge.Amount,
+            ReverseTenantChargeCommand => null,
             FundSecurityDepositCommand fund => fund.Amount,
             DeductSecurityDepositCommand deduction => deduction.Amount,
             RefundSecurityDepositCommand refund => refund.Amount ?? 1m,
             _ => 0m,
         };
-        if (amount <= 0m) throw new ArgumentException("Amount must be positive.");
+        if (amount is <= 0m) throw new ArgumentException("Amount must be positive.");
         if (command.DeliveryIdempotencyKey.Length > 200)
             throw new ArgumentException("Operation key cannot exceed 200 characters.");
+        if ((command is PostTenantChargeCommand or ReverseTenantChargeCommand)
+            && command.RequiredCapability != CapabilityKeys.MoneyChargesManage)
+            throw new ArgumentException("Tenant charge mutations require the charge-management capability.");
         if (command is RecordTenantReceiptCommand receipt
             && (receipt.EffectiveOn == default || string.IsNullOrWhiteSpace(receipt.Description)
                 || receipt.Description.Trim().Length > 500
                 || string.IsNullOrWhiteSpace(receipt.PaymentMethodSummary)
                 || receipt.PaymentMethodSummary.Trim().Length > 200))
             throw new ArgumentException("Receipt date, description, and payment method are required and must fit their limits.");
+        if (command is PostTenantChargeCommand charge
+            && (charge.EffectiveOn == default || charge.DueOn == default
+                || string.IsNullOrWhiteSpace(charge.Description)
+                || charge.Description.Trim().Length > 500
+                || charge.SourceStoredFileId is <= 0))
+            throw new ArgumentException(
+                "Charge dates, description, and valid source provenance are required.");
+        if (command is ReverseTenantChargeCommand reversal
+            && (reversal.ReversesEntryId <= 0 || reversal.EffectiveOn == default
+                || string.IsNullOrWhiteSpace(reversal.Reason)
+                || reversal.Reason.Trim().Length > 500
+                || reversal.SourceStoredFileId is <= 0))
+            throw new ArgumentException(
+                "Charge entry, reversal date, reason, and valid source provenance are required.");
         if (command is RefundSecurityDepositCommand payout
             && payout.ExternalReference?.Trim().Length > 200)
             throw new ArgumentException("Payout reference cannot exceed 200 characters.");

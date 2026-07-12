@@ -44,6 +44,46 @@ public sealed record RecordTenantReceiptResult(
     decimal AllocatedAmount,
     int AllocationCount) : IAtomicResultData;
 
+public sealed record PostTenantChargeCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    decimal Amount,
+    DateOnly EffectiveOn,
+    DateOnly DueOn,
+    string Description,
+    int? SourceStoredFileId,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string RequiredCapability,
+    string BusinessKey,
+    string DeliveryIdempotencyKey) : ITenantMoneyCommand;
+
+public sealed record ReverseTenantChargeCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    long ReversesEntryId,
+    DateOnly EffectiveOn,
+    string Reason,
+    int? SourceStoredFileId,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string RequiredCapability,
+    string BusinessKey,
+    string DeliveryIdempotencyKey) : ITenantMoneyCommand;
+
+public sealed record TenantChargeMutationResult(
+    bool Found,
+    bool Applied,
+    int TenantAccountId,
+    long LedgerEntryId,
+    long? ReversesEntryId,
+    decimal Amount,
+    string? Error) : IAtomicResultData;
+
 public interface ISecurityDepositMoneyCommand : ITenantMoneyCommand
 {
     int SecurityDepositAccountId { get; }

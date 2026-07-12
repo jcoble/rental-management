@@ -177,6 +177,15 @@ public interface IAtomicTenantMoneyPersistence
         DateTime allocatedAtUtc,
         string? entryType = null,
         CancellationToken ct = default);
+
+    Task<AtomicLedgerAllocationSummary> ReverseChargeAllocationsAsync(
+        int portfolioId,
+        int tenantAccountId,
+        long debitEntryId,
+        string businessKeyPrefix,
+        int createdByUserId,
+        DateTime allocatedAtUtc,
+        CancellationToken ct = default);
 }
 
 public sealed class AtomicLedgerAllocationSummary

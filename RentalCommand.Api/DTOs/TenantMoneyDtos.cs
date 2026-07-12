@@ -16,6 +16,22 @@ public sealed class RecordTenantReceiptRequest
     public bool AllocateOldestCharges { get; set; } = true;
 }
 
+public sealed class PostTenantChargeRequest
+{
+    [Range(0.01, 99999999)] public decimal Amount { get; set; }
+    public DateOnly EffectiveOn { get; set; }
+    public DateOnly DueOn { get; set; }
+    [Required, MaxLength(500)] public string Description { get; set; } = string.Empty;
+    [Range(1, int.MaxValue)] public int? SourceStoredFileId { get; set; }
+}
+
+public sealed class ReverseTenantChargeRequest
+{
+    public DateOnly EffectiveOn { get; set; }
+    [Required, MaxLength(500)] public string Reason { get; set; } = string.Empty;
+    [Range(1, int.MaxValue)] public int? SourceStoredFileId { get; set; }
+}
+
 public sealed class FundSecurityDepositRequest
 {
     [Range(1, int.MaxValue)] public int SecurityDepositAccountId { get; set; }

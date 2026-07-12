@@ -16,6 +16,8 @@ public sealed class TenantAccountMoneyController : ManagementControllerBase
 {
     private static readonly AtomicJsonResultCodec<RecordTenantReceiptResult> ReceiptCodec =
         new("tenant-account.receipt.record.v1");
+    private static readonly AtomicJsonResultCodec<TenantChargeMutationResult> ChargeCodec =
+        new("tenant-account.charge.mutation.v1");
     private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
         new("tenant-account.deposit.mutation.v1");
     private readonly IAtomicUnitOfWork _atomic;
@@ -38,6 +40,42 @@ public sealed class TenantAccountMoneyController : ManagementControllerBase
             $"tenant-receipt:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}");
         return await Execute("tenant-account.receipt.record", command.DeliveryIdempotencyKey,
             command, ReceiptCodec, ct);
+    }
+
+    [HttpPost("charges")]
+    public async Task<IActionResult> PostCharge(int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PostTenantChargeRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        if (request.EffectiveOn == default || request.DueOn == default)
+            return BadRequest(new { error = "EffectiveOn and DueOn are required." });
+        var command = new PostTenantChargeCommand(envelope.PortfolioId, tenantAccountId,
+            request.Amount, request.EffectiveOn, request.DueOn, request.Description,
+            request.SourceStoredFileId, envelope.UserId, envelope.SessionId,
+            envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
+            $"tenant-charge:{envelope.KeyDigest}",
+            $"tenant-charge:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}");
+        return await ExecuteCharge("tenant-account.charge.post", command.DeliveryIdempotencyKey,
+            command, ct);
+    }
+
+    [HttpPost("charges/{chargeEntryId:long}/reversals")]
+    public async Task<IActionResult> ReverseCharge(int tenantAccountId, long chargeEntryId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReverseTenantChargeRequest request, CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        if (chargeEntryId <= 0 || request.EffectiveOn == default)
+            return BadRequest(new { error = "Charge entry and EffectiveOn are required." });
+        var command = new ReverseTenantChargeCommand(envelope.PortfolioId, tenantAccountId,
+            chargeEntryId, request.EffectiveOn, request.Reason,
+            request.SourceStoredFileId, envelope.UserId, envelope.SessionId,
+            envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
+            $"tenant-charge-reversal:{envelope.KeyDigest}",
+            $"tenant-charge-reversal:{envelope.PortfolioId}:{tenantAccountId}:{chargeEntryId}:{envelope.KeyDigest}");
+        return await ExecuteCharge("tenant-account.charge.reverse", command.DeliveryIdempotencyKey,
+            command, ct);
     }
 
     [HttpPost("deposit/fund")]
@@ -94,6 +132,20 @@ public sealed class TenantAccountMoneyController : ManagementControllerBase
         {
             var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(commandType,
                 command.DeliveryIdempotencyKey), command, DepositCodec, ct);
+            if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
+            return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    private async Task<IActionResult> ExecuteCharge<TCommand>(string commandType, string key,
+        TCommand command, CancellationToken ct) where TCommand : notnull, ITenantMoneyCommand
+    {
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(commandType, key),
+                command, ChargeCodec, ct);
             if (!outcome.Value.Applied) return Conflict(new { error = outcome.Value.Error });
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
