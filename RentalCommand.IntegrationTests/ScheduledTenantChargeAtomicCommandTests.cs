@@ -76,6 +76,14 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         });
 
         await using var db = NewContext();
+        await CreatePhysicalTestSchemaAsync(db);
+    }
+
+    private static async Task CreatePhysicalTestSchemaAsync(RentalCommandDbContext db)
+    {
+        // The foundation migration chain is intentionally temporary and will disappear at the
+        // final baseline squash. Build the EF-owned tables directly, then install only the
+        // canonical SQL objects used by rent and late-fee candidate generation.
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
@@ -203,8 +211,11 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         var command = RentCommand("rollback");
         Failures.FailAtomicAudit = true;
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, Codec))
-            .Should().ThrowAsync<InvalidOperationException>();
+        var failure = await FluentActions
+            .Invoking(() => Atomic.ExecuteAsync(identity, command, Codec))
+            .Should().ThrowAsync<DbUpdateException>();
+        failure.WithInnerException<InvalidOperationException>()
+            .WithMessage("injected scheduled tenant-charge audit failure");
 
         await using (var failed = NewContext())
         {
@@ -366,7 +377,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             BaseRentAmount = 3100m,
             RentDueDay = 1,
             SecurityDepositObligation = 0m,
-            LateFeeAmount = 100m,
+            LateFeeAmount = 500m,
             GracePeriodDays = 5,
             Currency = "USD",
             TermsSchemaVersion = 1,
