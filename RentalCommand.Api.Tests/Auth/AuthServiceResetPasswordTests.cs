@@ -9,6 +9,7 @@ using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Auditing;
