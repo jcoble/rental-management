@@ -433,6 +433,14 @@ Addenda are not included in the base-agreement exclusion constraint. Multiple ex
 
 It has unique `(LeaseAddendumId, SigningOrder)` and `(LeaseAddendumId, lower(EmailSnapshot))` indexes. A deferred constraint trigger requires at least one required signer at issue; the freeze trigger rejects child mutation after parent issuance.
 
+`Purpose` plus opaque `TermsPayload` cannot structurally prove that an Addendum authorizes adding,
+removing, or changing a household party. Until a typed `LeaseAddendumPartyEffect` child records the
+affected Tenant/party, prior role, resulting role or removal, and effective date, party-transition
+commands must reject Addendum legal-basis claims. They may accept only a qualifying fully executed
+replacement/restated Agreement effective on the transition date whose frozen required signer set
+covers every affected responsible Tenant. This is deliberately conservative; JSON text and a user
+confirmation are not legal authority.
+
 ### 4.5 `LeaseAddendumFinancialEffects`
 
 Financial effects are relational, queryable, and frozen with their parent. A non-financial addendum has zero effect rows.

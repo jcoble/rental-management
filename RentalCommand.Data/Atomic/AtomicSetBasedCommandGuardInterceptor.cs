@@ -16,7 +16,7 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
     // A DML keyword must own a table target. PostgreSQL row-lock clauses such as FOR UPDATE OF
     // are query operations and must not consume an UPDATE mutation permit.
     private static readonly Regex RawDml = new(
-        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)(?!\s+(?:OF|SKIP|NOWAIT)\b)|(?<delete>DELETE\s+FROM))\s+(?:""[^""]+""|[A-Za-z_][A-Za-z0-9_$]*)",
+        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)(?!\s+(?:OF|SKIP|NOWAIT)\b)|(?<delete>DELETE\s+FROM))\s+(?<table>""[^""]+""|[A-Za-z_][A-Za-z0-9_$]*)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly AtomicAuditScope _scope;
 
@@ -69,10 +69,9 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
 
         if (eventData.CommandSource is CommandSource.ExecuteSqlRaw or CommandSource.FromSqlQuery)
         {
-            var rawOperation = ClassifyRawDml(command.CommandText);
-            if (rawOperation is not null)
+            foreach (var target in ClassifyRawDmlTargets(command.CommandText))
             {
-                _scope.GuardRawDml(command.CommandText, rawOperation.Value);
+                _scope.GuardRawDml(target.TableName, target.Operation);
             }
 
             return;
@@ -99,18 +98,21 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
     }
 
     internal static AtomicRawDmlOperation? ClassifyRawDml(string commandText)
-    {
-        var match = RawDml.Match(commandText);
-        if (!match.Success)
-        {
-            return null;
-        }
+        => ClassifyRawDmlTargets(commandText).FirstOrDefault()?.Operation;
 
-        return match.Groups["insert"].Success
-            ? AtomicRawDmlOperation.Insert
-            : match.Groups["update"].Success
-                ? AtomicRawDmlOperation.Update
-                : AtomicRawDmlOperation.Delete;
+    internal static IReadOnlyList<AtomicRawDmlTarget> ClassifyRawDmlTargets(string commandText)
+    {
+        return RawDml.Matches(commandText)
+            .Cast<Match>()
+            .Select(match => new AtomicRawDmlTarget(
+                match.Groups["table"].Value.Trim('"'),
+                match.Groups["insert"].Success
+                    ? AtomicRawDmlOperation.Insert
+                    : match.Groups["update"].Success
+                        ? AtomicRawDmlOperation.Update
+                        : AtomicRawDmlOperation.Delete))
+            .Distinct()
+            .ToArray();
     }
 
     private static bool Targets(string sql, IReadOnlyEntityType entityType) =>

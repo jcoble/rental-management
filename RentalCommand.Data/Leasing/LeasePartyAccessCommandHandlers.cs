@@ -21,8 +21,9 @@ public sealed class AddEffectivePartyHandler
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var currentDate = DateOnly.FromDateTime(nowUtc);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var nowUtc = times.WallClockUtc;
+        var currentDate = times.BusinessDate;
 
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
             .Select(relationship => new AddPartyTarget(
@@ -37,22 +38,25 @@ public sealed class AddEffectivePartyHandler
                     && party.EffectiveFrom <= command.EffectiveFrom
                     && (party.EffectiveThrough == null || party.EffectiveThrough >= command.EffectiveFrom)),
                 LeasePartyAccessCommandSupport.IsResponsible(command.Role)
-                    && ((command.LegalBasisAgreementId != null
-                            && relationship.Agreements.Any(agreement =>
+                    && command.LegalBasisAddendumId == null
+                    && command.LegalBasisAgreementId != null
+                    && relationship.Agreements.Any(agreement =>
                                 agreement.Id == command.LegalBasisAgreementId
+                                && (agreement.ChangeType == LeaseAgreementChangeType.Correction
+                                    || agreement.ChangeType == LeaseAgreementChangeType.Restatement)
+                                && agreement.ReplacesAgreementId != null
+                                && agreement.GoverningFromOn == command.EffectiveFrom
+                                && (agreement.SupersededEffectiveOn == null
+                                    || agreement.SupersededEffectiveOn > command.EffectiveFrom)
                                 && agreement.FullyExecutedAtUtc != null
                                 && agreement.VoidedAtUtc == null
-                                && agreement.Signers.Any(signer => signer.TenantId == command.TenantId)))
-                        || (command.LegalBasisAddendumId != null
-                            && relationship.Addenda.Any(addendum =>
-                                addendum.Id == command.LegalBasisAddendumId
-                                && addendum.FullyExecutedAtUtc != null
-                                && addendum.VoidedAtUtc == null
-                                && addendum.Signers.Any(signer => signer.TenantId == command.TenantId))))))
+                                && agreement.Signers.Any(signer =>
+                                    signer.IsRequired && signer.TenantId == command.TenantId))))
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (!LeasePartyAccessCommandSupport.IsMutable(target.Relationship))
+        if (!LeasePartyAccessCommandSupport.IsMutable(target.Relationship)
+            || target.Relationship.PossessionReturnedAtUtc != null)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidParty, command, "The relationship is no longer mutable.");
@@ -61,7 +65,8 @@ public sealed class AddEffectivePartyHandler
             || (command.Role != LeaseManagementPartyRole.Guarantor
                 && command.GuarantorLegalNoticeEligible)
             || command.EffectiveFrom < currentDate
-            || string.IsNullOrWhiteSpace(command.ChangeReason))
+            || string.IsNullOrWhiteSpace(command.ChangeReason)
+            || command.ChangeReason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidParty, command, "The party details are invalid.");
@@ -83,14 +88,14 @@ public sealed class AddEffectivePartyHandler
         }
         if (LeasePartyAccessCommandSupport.IsResponsible(command.Role)
             && (!command.SameRelationshipConfirmed
-                || !LeasePartyAccessCommandSupport.HasExactlyOneLegalBasis(
-                    command.LegalBasisAgreementId, command.LegalBasisAddendumId)
+                || command.LegalBasisAgreementId is not > 0
+                || command.LegalBasisAddendumId != null
                 || !target.LegalBasisValid))
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.LegalBasisRequired,
                 command,
-                "A fully executed same-relationship legal artifact signed by this Tenant is required.");
+                "A qualifying executed replacement or restated Agreement effective on this date and signed by this Tenant is required.");
         }
 
         var party = LeasePartyAccessCommandSupport.NewParty(
@@ -147,8 +152,9 @@ public sealed class EndEffectivePartyHandler
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var currentDate = DateOnly.FromDateTime(nowUtc);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var nowUtc = times.WallClockUtc;
+        var currentDate = times.BusinessDate;
         var successorStart = command.EffectiveThrough.AddDays(1);
 
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
@@ -165,30 +171,26 @@ public sealed class EndEffectivePartyHandler
                     && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate)),
                 relationship.Parties.Where(party => party.Id == command.PartyId)
                     .Select(party => party.Role != LeaseManagementPartyRole.Occupant
-                        && ((command.LegalBasisAgreementId != null
-                                && relationship.Agreements.Any(agreement =>
+                        && command.LegalBasisAddendumId == null
+                        && command.LegalBasisAgreementId != null
+                        && relationship.Agreements.Any(agreement =>
                                     agreement.Id == command.LegalBasisAgreementId
+                                    && (agreement.ChangeType == LeaseAgreementChangeType.Correction
+                                        || agreement.ChangeType == LeaseAgreementChangeType.Restatement)
+                                    && agreement.ReplacesAgreementId != null
+                                    && agreement.GoverningFromOn == successorStart
+                                    && (agreement.SupersededEffectiveOn == null
+                                        || agreement.SupersededEffectiveOn > successorStart)
                                     && agreement.FullyExecutedAtUtc != null
                                     && agreement.VoidedAtUtc == null
-                                    && agreement.Signers.Any(signer => signer.TenantId == party.TenantId)
+                                    && agreement.Signers.Any(signer =>
+                                        signer.IsRequired && signer.TenantId == party.TenantId)
                                     && (command.PrimarySuccessorPartyId == null
                                         || agreement.Signers.Any(signer => signer.TenantId ==
                                             relationship.Parties
                                                 .Where(successor => successor.Id == command.PrimarySuccessorPartyId)
                                                 .Select(successor => successor.TenantId)
                                                 .FirstOrDefault()))))
-                            || (command.LegalBasisAddendumId != null
-                                && relationship.Addenda.Any(addendum =>
-                                    addendum.Id == command.LegalBasisAddendumId
-                                    && addendum.FullyExecutedAtUtc != null
-                                    && addendum.VoidedAtUtc == null
-                                    && addendum.Signers.Any(signer => signer.TenantId == party.TenantId)
-                                    && (command.PrimarySuccessorPartyId == null
-                                        || addendum.Signers.Any(signer => signer.TenantId ==
-                                            relationship.Parties
-                                                .Where(successor => successor.Id == command.PrimarySuccessorPartyId)
-                                                .Select(successor => successor.TenantId)
-                                                .FirstOrDefault()))))))
                     .FirstOrDefault()))
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
@@ -200,7 +202,8 @@ public sealed class EndEffectivePartyHandler
         }
         if (!Enum.IsDefined(command.AccessDisposition)
             || command.EffectiveThrough != currentDate.AddDays(-1)
-            || string.IsNullOrWhiteSpace(command.ChangeReason))
+            || string.IsNullOrWhiteSpace(command.ChangeReason)
+            || command.ChangeReason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidEffectiveDate, command, "The party end details are invalid.", command.PartyId);
@@ -257,33 +260,21 @@ public sealed class EndEffectivePartyHandler
 
         if (LeasePartyAccessCommandSupport.IsResponsible(target.Party.Role)
             && (!command.SameRelationshipConfirmed
-                || !LeasePartyAccessCommandSupport.HasExactlyOneLegalBasis(
-                    command.LegalBasisAgreementId, command.LegalBasisAddendumId)
+                || command.LegalBasisAgreementId is not > 0
+                || command.LegalBasisAddendumId != null
                 || !target.LegalBasisValid))
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.LegalBasisRequired,
                 command,
-                "A fully executed same-relationship legal artifact signed by every affected responsible Tenant is required.",
+                "A qualifying executed replacement or restated Agreement effective on this transition and signed by every affected responsible Tenant is required.",
                 command.PartyId);
         }
-
-        // Query 3: the complete active grant set for both memberships is read in one bounded SQL query.
-        var affectedPartyIds = target.Successor is null
-            ? new[] { target.Party.Id }
-            : new[] { target.Party.Id, target.Successor.Id };
-        var activeGrants = await attempt.Persistence.Query<TenantUserAccess>()
-            .Where(access => access.PortfolioId == command.PortfolioId
-                && affectedPartyIds.Contains(access.LeaseManagementPartyId)
-                && access.RevokedAtUtc == null)
-            .OrderBy(access => access.Id)
-            .ToListAsync(ct);
 
         target.Party.EffectiveThrough = command.EffectiveThrough;
         target.Party.ChangeReason = command.ChangeReason.Trim();
         LeasePartyAccessCommandSupport.BindUpdated(attempt, target.Party, command, "Ended relationship party membership.");
 
-        var replacementGrants = new List<TenantUserAccess>();
         if (target.Successor is not null)
         {
             target.Successor.EffectiveThrough = command.EffectiveThrough;
@@ -303,28 +294,27 @@ public sealed class EndEffectivePartyHandler
                 attempt, target.Successor, command, "Ended prior role for primary succession.");
             LeasePartyAccessCommandSupport.BindCreated(
                 attempt, successorReplacement, command, "Promoted successor to primary tenant.");
-            replacementGrants.AddRange(LeasePartyAccessCommandSupport.TransferGrants(
-                attempt,
-                activeGrants.Where(access => access.LeaseManagementPartyId == target.Successor.Id),
-                successorReplacement,
-                command,
-                nowUtc,
-                command.ChangeReason));
-        }
-
-        if (command.AccessDisposition == TenantAccessDisposition.RevokeImmediately)
-        {
-            LeasePartyAccessCommandSupport.RevokeGrants(
-                attempt,
-                activeGrants.Where(access => access.LeaseManagementPartyId == target.Party.Id),
-                command,
-                nowUtc,
-                command.ChangeReason);
         }
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
             attempt, target.Relationship, command, "Relationship party ended.");
         await attempt.FlushBusinessAsync(ct);
+        var accessTransitions = new List<AtomicTenantAccessTransition>
+        {
+            new(target.Party.Id, null,
+                command.AccessDisposition == TenantAccessDisposition.RevokeImmediately
+                    ? AtomicTenantAccessTransitionKind.Revoke
+                    : AtomicTenantAccessTransitionKind.Retain),
+        };
+        if (target.Successor is not null && successorReplacement is not null)
+        {
+            accessTransitions.Add(new(target.Successor.Id, successorReplacement.Id,
+                AtomicTenantAccessTransitionKind.ContinueOnReplacement));
+        }
+        var accessResult = await attempt.Leasing.TransitionTenantAccessAsync(
+            command.PortfolioId, command.LeaseManagementId, accessTransitions,
+            command.ActorUserId, nowUtc, command.ChangeReason, ct);
+        LeasePartyAccessCommandSupport.StageAccessTransitionAudits(attempt, command, accessResult, nowUtc);
         LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, target.Party.Id, "party-ended");
 
         return new LeasePartyMutationResult(
@@ -333,7 +323,7 @@ public sealed class EndEffectivePartyHandler
             target.Party.Id,
             null,
             successorReplacement?.Id,
-            activeGrants.Concat(replacementGrants).Select(access => access.Id).ToArray(),
+            accessResult.ActiveAccessIds.Concat(accessResult.CreatedAccessIds).ToArray(),
             null);
     }
 
@@ -363,8 +353,9 @@ public sealed class ChangeEffectivePartyRoleHandler
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var currentDate = DateOnly.FromDateTime(nowUtc);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var nowUtc = times.WallClockUtc;
+        var currentDate = times.BusinessDate;
 
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
             .Select(relationship => new ChangeRoleTarget(
@@ -379,35 +370,32 @@ public sealed class ChangeEffectivePartyRoleHandler
                     && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate)),
                 relationship.Parties.Where(party => party.Id == command.PartyId)
                     .Select(party =>
-                        ((command.LegalBasisAgreementId != null
-                                && relationship.Agreements.Any(agreement =>
+                        command.LegalBasisAddendumId == null
+                        && command.LegalBasisAgreementId != null
+                        && relationship.Agreements.Any(agreement =>
                                     agreement.Id == command.LegalBasisAgreementId
+                                    && (agreement.ChangeType == LeaseAgreementChangeType.Correction
+                                        || agreement.ChangeType == LeaseAgreementChangeType.Restatement)
+                                    && agreement.ReplacesAgreementId != null
+                                    && agreement.GoverningFromOn == command.EffectiveOn
+                                    && (agreement.SupersededEffectiveOn == null
+                                        || agreement.SupersededEffectiveOn > command.EffectiveOn)
                                     && agreement.FullyExecutedAtUtc != null
                                     && agreement.VoidedAtUtc == null
-                                    && agreement.Signers.Any(signer => signer.TenantId == party.TenantId)
+                                    && agreement.Signers.Any(signer =>
+                                        signer.IsRequired && signer.TenantId == party.TenantId)
                                     && (command.CompanionPrimaryPartyId == null
                                         || agreement.Signers.Any(signer => signer.TenantId ==
                                             relationship.Parties
                                                 .Where(companion => companion.Id == command.CompanionPrimaryPartyId)
                                                 .Select(companion => companion.TenantId)
                                                 .FirstOrDefault()))))
-                            || (command.LegalBasisAddendumId != null
-                                && relationship.Addenda.Any(addendum =>
-                                    addendum.Id == command.LegalBasisAddendumId
-                                    && addendum.FullyExecutedAtUtc != null
-                                    && addendum.VoidedAtUtc == null
-                                    && addendum.Signers.Any(signer => signer.TenantId == party.TenantId)
-                                    && (command.CompanionPrimaryPartyId == null
-                                        || addendum.Signers.Any(signer => signer.TenantId ==
-                                            relationship.Parties
-                                                .Where(companion => companion.Id == command.CompanionPrimaryPartyId)
-                                                .Select(companion => companion.TenantId)
-                                                .FirstOrDefault()))))))
                     .FirstOrDefault()))
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (!LeasePartyAccessCommandSupport.IsMutable(target.Relationship))
+        if (!LeasePartyAccessCommandSupport.IsMutable(target.Relationship)
+            || target.Relationship.PossessionReturnedAtUtc != null)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidParty, command, "The relationship is no longer mutable.", command.PartyId);
@@ -417,7 +405,8 @@ public sealed class ChangeEffectivePartyRoleHandler
             || (command.NewRole != LeaseManagementPartyRole.Guarantor
                 && command.GuarantorLegalNoticeEligible)
             || command.EffectiveOn != currentDate
-            || string.IsNullOrWhiteSpace(command.ChangeReason))
+            || string.IsNullOrWhiteSpace(command.ChangeReason)
+            || command.ChangeReason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidEffectiveDate, command, "The role transition details are invalid.", command.PartyId);
@@ -480,27 +469,16 @@ public sealed class ChangeEffectivePartyRoleHandler
             || target.Companion is not null;
         if (responsibleChange
             && (!command.SameRelationshipConfirmed
-                || !LeasePartyAccessCommandSupport.HasExactlyOneLegalBasis(
-                    command.LegalBasisAgreementId, command.LegalBasisAddendumId)
+                || command.LegalBasisAgreementId is not > 0
+                || command.LegalBasisAddendumId != null
                 || !target.LegalBasisValid))
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.LegalBasisRequired,
                 command,
-                "A fully executed same-relationship legal artifact signed by every affected responsible Tenant is required.",
+                "A qualifying executed replacement or restated Agreement effective on this transition and signed by every affected responsible Tenant is required.",
                 command.PartyId);
         }
-
-        var affectedPartyIds = target.Companion is null
-            ? new[] { target.Party.Id }
-            : new[] { target.Party.Id, target.Companion.Id };
-        // Query 3: every active grant to transition is loaded by one translated bounded query.
-        var activeGrants = await attempt.Persistence.Query<TenantUserAccess>()
-            .Where(access => access.PortfolioId == command.PortfolioId
-                && affectedPartyIds.Contains(access.LeaseManagementPartyId)
-                && access.RevokedAtUtc == null)
-            .OrderBy(access => access.Id)
-            .ToListAsync(ct);
 
         var priorDay = command.EffectiveOn.AddDays(-1);
         target.Party.EffectiveThrough = priorDay;
@@ -520,7 +498,6 @@ public sealed class ChangeEffectivePartyRoleHandler
         LeasePartyAccessCommandSupport.BindCreated(attempt, replacement, command, "Started replacement relationship role.");
 
         LeaseManagementParty? companionReplacement = null;
-        var replacementGrants = new List<TenantUserAccess>();
         if (target.Companion is not null)
         {
             target.Companion.EffectiveThrough = priorDay;
@@ -538,36 +515,36 @@ public sealed class ChangeEffectivePartyRoleHandler
             attempt.Persistence.Add(companionReplacement);
             LeasePartyAccessCommandSupport.BindUpdated(attempt, target.Companion, command, "Ended companion role for primary swap.");
             LeasePartyAccessCommandSupport.BindCreated(attempt, companionReplacement, command, "Started companion role for primary swap.");
-            replacementGrants.AddRange(LeasePartyAccessCommandSupport.TransferGrants(
-                attempt,
-                activeGrants.Where(access => access.LeaseManagementPartyId == target.Companion.Id),
-                companionReplacement,
-                command,
-                nowUtc,
-                command.ChangeReason));
-        }
-
-        var targetGrants = activeGrants.Where(access => access.LeaseManagementPartyId == target.Party.Id);
-        switch (command.AccessDisposition)
-        {
-            case TenantAccessDisposition.RevokeImmediately:
-                LeasePartyAccessCommandSupport.RevokeGrants(
-                    attempt, targetGrants, command, nowUtc, command.ChangeReason);
-                break;
-            case TenantAccessDisposition.RetainHistoricalReadOnly:
-                break;
-            case TenantAccessDisposition.ContinueOnReplacementMembership:
-                replacementGrants.AddRange(LeasePartyAccessCommandSupport.TransferGrants(
-                    attempt, targetGrants, replacement, command, nowUtc, command.ChangeReason));
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(command.AccessDisposition));
         }
 
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
             attempt, target.Relationship, command, "Relationship party role changed.");
         await attempt.FlushBusinessAsync(ct);
+        var accessTransitions = new List<AtomicTenantAccessTransition>
+        {
+            new(target.Party.Id,
+                command.AccessDisposition == TenantAccessDisposition.ContinueOnReplacementMembership
+                    ? replacement.Id
+                    : null,
+                command.AccessDisposition switch
+                {
+                    TenantAccessDisposition.RevokeImmediately => AtomicTenantAccessTransitionKind.Revoke,
+                    TenantAccessDisposition.RetainHistoricalReadOnly => AtomicTenantAccessTransitionKind.Retain,
+                    TenantAccessDisposition.ContinueOnReplacementMembership =>
+                        AtomicTenantAccessTransitionKind.ContinueOnReplacement,
+                    _ => throw new ArgumentOutOfRangeException(nameof(command.AccessDisposition)),
+                }),
+        };
+        if (target.Companion is not null && companionReplacement is not null)
+        {
+            accessTransitions.Add(new(target.Companion.Id, companionReplacement.Id,
+                AtomicTenantAccessTransitionKind.ContinueOnReplacement));
+        }
+        var accessResult = await attempt.Leasing.TransitionTenantAccessAsync(
+            command.PortfolioId, command.LeaseManagementId, accessTransitions,
+            command.ActorUserId, nowUtc, command.ChangeReason, ct);
+        LeasePartyAccessCommandSupport.StageAccessTransitionAudits(attempt, command, accessResult, nowUtc);
         LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, replacement.Id, "party-role-changed");
 
         return new LeasePartyMutationResult(
@@ -576,7 +553,7 @@ public sealed class ChangeEffectivePartyRoleHandler
             target.Party.Id,
             replacement.Id,
             companionReplacement?.Id,
-            activeGrants.Concat(replacementGrants).Select(access => access.Id).ToArray(),
+            accessResult.ActiveAccessIds.Concat(accessResult.CreatedAccessIds).ToArray(),
             null);
     }
 
@@ -606,8 +583,9 @@ public sealed class GrantTenantUserAccessHandler
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var currentDate = DateOnly.FromDateTime(nowUtc);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var nowUtc = times.WallClockUtc;
+        var currentDate = times.BusinessDate;
 
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
             .Select(relationship => new GrantAccessTarget(
@@ -635,12 +613,8 @@ public sealed class GrantTenantUserAccessHandler
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (!LeasePartyAccessCommandSupport.IsMutable(target.Relationship))
-        {
-            return LeasePartyAccessCommandSupport.Error(
-                LeasePartyMutationOutcome.InvalidParty, command, "The relationship is no longer mutable.", command.PartyId);
-        }
-        if (target.Party is null || !target.UserMatchesParty || string.IsNullOrWhiteSpace(command.Reason))
+        if (target.Party is null || !target.UserMatchesParty
+            || string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidParty, command, "The existing user and active party do not match.", command.PartyId);
@@ -714,7 +688,8 @@ public sealed class RevokeTenantUserAccessHandler
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (target.Access is null || string.IsNullOrWhiteSpace(command.Reason))
+        if (target.Access is null || string.IsNullOrWhiteSpace(command.Reason)
+            || command.Reason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.InvalidParty, command, "The access grant does not belong to this relationship party.", command.PartyId);
@@ -726,8 +701,11 @@ public sealed class RevokeTenantUserAccessHandler
                 new[] { target.Access.Id });
         }
 
-        LeasePartyAccessCommandSupport.RevokeGrants(
-            attempt, new[] { target.Access }, command, nowUtc, command.Reason);
+        target.Access.RevokedAtUtc = nowUtc;
+        target.Access.RevokedByUserId = command.ActorUserId;
+        target.Access.Reason = command.Reason.Trim();
+        LeasePartyAccessCommandSupport.BindUpdated(
+            attempt, target.Access, command, "Revoked tenant portal access.");
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
             attempt, target.Relationship, command, "Tenant portal access revoked.");
@@ -892,58 +870,6 @@ internal static class LeasePartyAccessCommandSupport
             Reason = reason.Trim(),
         };
 
-    internal static IReadOnlyList<TenantUserAccess> TransferGrants(
-        IAtomicWriteAttempt attempt,
-        IEnumerable<TenantUserAccess> grants,
-        LeaseManagementParty replacement,
-        ILeasePartyAccessCommand command,
-        DateTime nowUtc,
-        string reason)
-    {
-        var replacements = new List<TenantUserAccess>();
-        foreach (var grant in grants)
-        {
-            RevokeGrant(attempt, grant, command, nowUtc, reason);
-            var replacementGrant = NewAccess(
-                command.PortfolioId,
-                grant.ApplicationUserId,
-                replacement,
-                nowUtc,
-                command.ActorUserId,
-                reason);
-            attempt.Persistence.Add(replacementGrant);
-            BindCreated(attempt, replacementGrant, command, "Continued tenant access on replacement membership.");
-            replacements.Add(replacementGrant);
-        }
-        return replacements;
-    }
-
-    internal static void RevokeGrants(
-        IAtomicWriteAttempt attempt,
-        IEnumerable<TenantUserAccess> grants,
-        ILeasePartyAccessCommand command,
-        DateTime nowUtc,
-        string reason)
-    {
-        foreach (var grant in grants)
-        {
-            RevokeGrant(attempt, grant, command, nowUtc, reason);
-        }
-    }
-
-    private static void RevokeGrant(
-        IAtomicWriteAttempt attempt,
-        TenantUserAccess grant,
-        ILeasePartyAccessCommand command,
-        DateTime nowUtc,
-        string reason)
-    {
-        grant.RevokedAtUtc = nowUtc;
-        grant.RevokedByUserId = command.ActorUserId;
-        grant.Reason = reason.Trim();
-        BindUpdated(attempt, grant, command, "Revoked tenant portal access.");
-    }
-
     internal static void Touch(LeaseManagement relationship, DateTime nowUtc)
     {
         relationship.UpdatedAtUtc = nowUtc;
@@ -981,6 +907,34 @@ internal static class LeasePartyAccessCommandSupport
         LeaseManagement relationship,
         ILeasePartyAccessCommand command,
         string reason) => BindUpdated(attempt, relationship, command, reason);
+
+    internal static void StageAccessTransitionAudits(
+        IAtomicWriteAttempt attempt,
+        ILeasePartyAccessCommand command,
+        AtomicTenantAccessTransitionResult result,
+        DateTime occurredAtUtc)
+    {
+        foreach (var id in result.RevokedAccessIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(TenantUserAccess),
+                id,
+                AuditLogOperation.Updated,
+                UserId: command.ActorUserId,
+                ChangeReason: "Revoked tenant portal access during party transition."), occurredAtUtc);
+        }
+        foreach (var id in result.CreatedAccessIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(TenantUserAccess),
+                id,
+                AuditLogOperation.Created,
+                UserId: command.ActorUserId,
+                ChangeReason: "Continued tenant portal access on replacement membership."), occurredAtUtc);
+        }
+    }
 
     internal static void StageOutbox(
         IAtomicWriteAttempt attempt,

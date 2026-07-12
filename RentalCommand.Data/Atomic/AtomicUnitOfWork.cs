@@ -11,6 +11,7 @@ using RentalCommand.Core.Accounting;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Banking;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -348,6 +349,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicScheduledFinancePersistence _scheduledFinance;
         private readonly IAtomicProviderInboxPersistence _providerInbox;
         private readonly IAtomicPendingFileUploadPersistence _pendingFileUploads;
+        private readonly IAtomicLeaseMutationPersistence _leasing;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -369,6 +371,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _scheduledFinance = new AtomicScheduledFinancePersistence(db, auditScope);
             _providerInbox = new AtomicProviderInboxPersistence(db, auditScope);
             _pendingFileUploads = new AtomicPendingFileUploadPersistence(db, auditScope);
+            _leasing = new AtomicLeaseMutationPersistence(db, auditScope);
             _timeProvider = timeProvider;
         }
 
@@ -383,12 +386,34 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicScheduledFinancePersistence ScheduledFinance => _scheduledFinance;
         public IAtomicProviderInboxPersistence ProviderInbox => _providerInbox;
         public IAtomicPendingFileUploadPersistence PendingFileUploads => _pendingFileUploads;
+        public IAtomicLeaseMutationPersistence Leasing => _leasing;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
             _db.Database
                 .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
                 .SingleAsync(ct);
+
+        public Task<DateOnly> ReadBusinessDateAsync(int portfolioId, CancellationToken ct = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
+            return _db.Database
+                .SqlQuery<DateOnly>($$"SELECT rc_business_date({{portfolioId}}) AS \"Value\"")
+                .SingleAsync(ct);
+        }
+
+        public async Task<AtomicCommandTimes> ReadCommandTimesAsync(
+            int portfolioId,
+            CancellationToken ct = default)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
+            var row = await _db.Database.SqlQuery<AtomicCommandTimesRow>($$"""
+                    SELECT clock_timestamp() AS "WallClockUtc",
+                           rc_business_date({{portfolioId}}) AS "BusinessDate"
+                    """)
+                .SingleAsync(ct);
+            return new AtomicCommandTimes(row.WallClockUtc, row.BusinessDate);
+        }
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
 
@@ -429,6 +454,9 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public void StageSemanticEvent(AtomicSemanticAudit audit) =>
             _auditScope.StageSemanticEvent(audit, _timeProvider.GetUtcNow().UtcDateTime);
 
+        public void StageSemanticEvent(AtomicSemanticAudit audit, DateTime occurredAtUtc) =>
+            _auditScope.StageSemanticEvent(audit, occurredAtUtc);
+
         public void StageOutbox(OutboxMessage message)
         {
             ArgumentNullException.ThrowIfNull(message);
@@ -461,6 +489,12 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             {
                 _db.OutboxMessages.AddRange(_outbox);
             }
+        }
+
+        private sealed class AtomicCommandTimesRow
+        {
+            public DateTime WallClockUtc { get; set; }
+            public DateOnly BusinessDate { get; set; }
         }
     }
 }

@@ -16,6 +16,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Screening;
 using RentalCommand.Data;
 using RentalCommand.Data.Screening;
@@ -413,9 +414,14 @@ public class ScreeningServiceTests : IDisposable
             Mock.Of<IAtomicProviderInboxPersistence>();
         public IAtomicPendingFileUploadPersistence PendingFileUploads =>
             Mock.Of<IAtomicPendingFileUploadPersistence>();
+        public IAtomicLeaseMutationPersistence Leasing => Mock.Of<IAtomicLeaseMutationPersistence>();
 
         public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
             throw new NotSupportedException("The screening-only atomic test double has no database clock.");
+        public Task<DateOnly> ReadBusinessDateAsync(int portfolioId, CancellationToken ct = default) =>
+            throw new NotSupportedException("The screening-only atomic test double has no business clock.");
+        public Task<AtomicCommandTimes> ReadCommandTimesAsync(int portfolioId, CancellationToken ct = default) =>
+            throw new NotSupportedException("The screening-only atomic test double has no command clock.");
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
         public void Add<TEntity>(TEntity entity) where TEntity : class => _db.Add(entity);
@@ -431,6 +437,8 @@ public class ScreeningServiceTests : IDisposable
         public void BindSemanticAudit(object entityReference, AtomicSemanticAudit audit) { }
         public void EnrichMutation(AtomicAuditMutation mutation, AtomicSemanticAudit audit) { }
         public void StageSemanticEvent(AtomicSemanticAudit audit) => _semanticEvents.Add(audit);
+        public void StageSemanticEvent(AtomicSemanticAudit audit, DateTime occurredAtUtc) =>
+            _semanticEvents.Add(audit);
         public void StageOutbox(OutboxMessage message) => _db.OutboxMessages.Add(message);
     }
 

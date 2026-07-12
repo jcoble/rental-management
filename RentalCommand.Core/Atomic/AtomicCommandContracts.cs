@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Linq.Expressions;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Accounting;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -100,6 +101,7 @@ public interface IAtomicWriteAttempt
     IAtomicScheduledFinancePersistence ScheduledFinance { get; }
     IAtomicProviderInboxPersistence ProviderInbox { get; }
     IAtomicPendingFileUploadPersistence PendingFileUploads { get; }
+    IAtomicLeaseMutationPersistence Leasing { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -115,6 +117,9 @@ public interface IAtomicWriteAttempt
 
     /// <summary>Stages an explicit semantic event that is not a tracked-entity mutation.</summary>
     void StageSemanticEvent(AtomicSemanticAudit audit);
+
+    /// <summary>Stages an explicit event at a timestamp read from PostgreSQL's wall clock.</summary>
+    void StageSemanticEvent(AtomicSemanticAudit audit, DateTime occurredAtUtc);
 
     /// <summary>Stages an outbox companion for the owner's final flush.</summary>
     void StageOutbox(OutboxMessage message);
@@ -273,11 +278,19 @@ public interface IAtomicPersistenceSession
     /// </summary>
     Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default);
 
+    /// <summary>Reads the simulation-aware business date for one portfolio in PostgreSQL.</summary>
+    Task<DateOnly> ReadBusinessDateAsync(int portfolioId, CancellationToken ct = default);
+
+    /// <summary>Reads one paired real-clock/business-date sample in a single SQL statement.</summary>
+    Task<AtomicCommandTimes> ReadCommandTimesAsync(int portfolioId, CancellationToken ct = default);
+
     IQueryable<TEntity> Query<TEntity>() where TEntity : class;
     void Add<TEntity>(TEntity entity) where TEntity : class;
     void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class;
     void Remove<TEntity>(TEntity entity) where TEntity : class;
 }
+
+public sealed record AtomicCommandTimes(DateTime WallClockUtc, DateOnly BusinessDate);
 
 /// <summary>Exact, audited set-based mutations constructed by the persistence kernel.</summary>
 public interface IAtomicSetBasedPersistence
