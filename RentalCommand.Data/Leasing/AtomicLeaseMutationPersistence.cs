@@ -18,6 +18,73 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         _auditScope = auditScope;
     }
 
+    public async Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int leaseAgreementId,
+        int requiredDraftRevision,
+        IReadOnlyList<AtomicAgreementDraftSignerInput> signers,
+        CancellationToken ct = default)
+    {
+        var payload = JsonSerializer.Serialize(signers.Select(signer => new
+        {
+            lease_management_party_id = signer.LeaseManagementPartyId,
+            tenant_id = signer.TenantId,
+            signer_role = signer.SignerRole,
+            name_snapshot = signer.NameSnapshot,
+            email_snapshot = signer.EmailSnapshot,
+            signing_order = signer.SigningOrder,
+            is_required = signer.IsRequired,
+        }));
+        var parameters = new NpgsqlParameter[]
+        {
+            JsonParameter("signers", payload),
+            Integer("portfolioId", portfolioId),
+            Integer("leaseManagementId", leaseManagementId),
+            Integer("leaseAgreementId", leaseAgreementId),
+            Integer("requiredDraftRevision", requiredDraftRevision),
+        };
+        using var lease = _auditScope.BeginInternalRawDmlBatch(
+            new("LeaseAgreementSigners", AtomicRawDmlOperation.Delete),
+            new("LeaseAgreementSigners", AtomicRawDmlOperation.Insert));
+        var row = await _db.Database.SqlQueryRaw<AgreementSignerReplacementRow>(
+                ReplaceAgreementDraftSignersSql, parameters)
+            .SingleAsync(ct);
+        if (!row.Eligible)
+        {
+            throw new InvalidOperationException(
+                "Agreement draft changed or became immutable before signer replacement completed.");
+        }
+        return new(DeserializeIds(row.DeletedSignerIdsJson), DeserializeIds(row.CreatedSignerIdsJson));
+    }
+
+    public async Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAgreementId,
+        int successorAgreementId,
+        CancellationToken ct = default)
+    {
+        var parameters = new NpgsqlParameter[]
+        {
+            Integer("portfolioId", portfolioId),
+            Integer("leaseManagementId", leaseManagementId),
+            Integer("sourceAgreementId", sourceAgreementId),
+            Integer("successorAgreementId", successorAgreementId),
+        };
+        using var lease = _auditScope.BeginInternalRawDml(
+            "LeaseAgreementSigners", AtomicRawDmlOperation.Insert);
+        var row = await _db.Database.SqlQueryRaw<AgreementSignerCopyRow>(
+                CopyAgreementDraftSignersSql, parameters)
+            .SingleAsync(ct);
+        if (!row.Eligible)
+        {
+            throw new InvalidOperationException(
+                "Source or successor Agreement changed before signer copy completed.");
+        }
+        return DeserializeIds(row.CreatedSignerIdsJson);
+    }
+
     public async Task<AtomicTenantAccessTransitionResult> TransitionTenantAccessAsync(
         int portfolioId,
         int leaseManagementId,
@@ -215,6 +282,19 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         public string CreatedAccessIdsJson { get; set; } = "[]";
     }
 
+    private sealed class AgreementSignerReplacementRow
+    {
+        public bool Eligible { get; set; }
+        public string DeletedSignerIdsJson { get; set; } = "[]";
+        public string CreatedSignerIdsJson { get; set; } = "[]";
+    }
+
+    private sealed class AgreementSignerCopyRow
+    {
+        public bool Eligible { get; set; }
+        public string CreatedSignerIdsJson { get; set; } = "[]";
+    }
+
     private sealed class ReturnPossessionRow
     {
         public int Outcome { get; set; }
@@ -309,6 +389,102 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                 AS "RevokedAccessIdsJson",
             COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM continued), '[]'::jsonb)::text
                 AS "CreatedAccessIdsJson"
+        """;
+
+    private const string ReplaceAgreementDraftSignersSql = """
+        WITH input AS MATERIALIZED (
+            SELECT lease_management_party_id, tenant_id, signer_role, name_snapshot,
+                   email_snapshot, signing_order, is_required
+            FROM jsonb_to_recordset(@signers::jsonb) AS row(
+                lease_management_party_id integer,
+                tenant_id integer,
+                signer_role integer,
+                name_snapshot text,
+                email_snapshot text,
+                signing_order smallint,
+                is_required boolean)
+        ),
+        eligible AS MATERIALIZED (
+            SELECT agreement."Id"
+            FROM "LeaseAgreements" AS agreement
+            WHERE agreement."Id" = @leaseAgreementId
+              AND agreement."PortfolioId" = @portfolioId
+              AND agreement."LeaseManagementId" = @leaseManagementId
+              AND agreement."DraftRevision" = @requiredDraftRevision
+              AND agreement."IssuedAtUtc" IS NULL
+              AND agreement."IssuedArtifactId" IS NULL
+              AND agreement."FullyExecutedAtUtc" IS NULL
+              AND agreement."ExecutedArtifactId" IS NULL
+              AND agreement."VoidedAtUtc" IS NULL
+              AND agreement."DraftCanceledAtUtc" IS NULL
+            FOR UPDATE
+        ),
+        deleted AS (
+            DELETE FROM "LeaseAgreementSigners" AS signer
+            USING eligible
+            WHERE signer."LeaseAgreementId" = eligible."Id"
+              AND signer."PortfolioId" = @portfolioId
+            RETURNING signer."Id"
+        ),
+        inserted AS (
+            INSERT INTO "LeaseAgreementSigners"
+                ("PortfolioId", "LeaseAgreementId", "LeaseManagementPartyId", "TenantId",
+                 "SignerRole", "NameSnapshot", "EmailSnapshot", "SigningOrder", "IsRequired")
+            SELECT @portfolioId, eligible."Id", input.lease_management_party_id, input.tenant_id,
+                   CASE input.signer_role
+                       WHEN 0 THEN 'PrimaryTenant'
+                       WHEN 1 THEN 'CoTenant'
+                       WHEN 2 THEN 'Guarantor'
+                       WHEN 3 THEN 'Manager'
+                       WHEN 4 THEN 'Owner'
+                       WHEN 5 THEN 'Other'
+                   END,
+                   input.name_snapshot, input.email_snapshot, input.signing_order, input.is_required
+            FROM input
+            CROSS JOIN eligible
+            ORDER BY input.signing_order
+            RETURNING "Id"
+        )
+        SELECT EXISTS (SELECT 1 FROM eligible) AS "Eligible",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM deleted), '[]'::jsonb)::text
+                   AS "DeletedSignerIdsJson",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted), '[]'::jsonb)::text
+                   AS "CreatedSignerIdsJson"
+        """;
+
+    private const string CopyAgreementDraftSignersSql = """
+        WITH eligible AS MATERIALIZED (
+            SELECT successor."Id" AS successor_id
+            FROM "LeaseAgreements" AS source
+            INNER JOIN "LeaseAgreements" AS successor
+                ON successor."Id" = @successorAgreementId
+               AND successor."PortfolioId" = @portfolioId
+               AND successor."LeaseManagementId" = @leaseManagementId
+               AND successor."IssuedAtUtc" IS NULL
+               AND successor."DraftCanceledAtUtc" IS NULL
+            WHERE source."Id" = @sourceAgreementId
+              AND source."PortfolioId" = @portfolioId
+              AND source."LeaseManagementId" = @leaseManagementId
+              AND source."FullyExecutedAtUtc" IS NOT NULL
+              AND source."VoidedAtUtc" IS NULL
+        ),
+        inserted AS (
+            INSERT INTO "LeaseAgreementSigners"
+                ("PortfolioId", "LeaseAgreementId", "LeaseManagementPartyId", "TenantId",
+                 "SignerRole", "NameSnapshot", "EmailSnapshot", "SigningOrder", "IsRequired")
+            SELECT source."PortfolioId", eligible.successor_id, source."LeaseManagementPartyId",
+                   source."TenantId", source."SignerRole", source."NameSnapshot",
+                   source."EmailSnapshot", source."SigningOrder", source."IsRequired"
+            FROM "LeaseAgreementSigners" AS source
+            CROSS JOIN eligible
+            WHERE source."PortfolioId" = @portfolioId
+              AND source."LeaseAgreementId" = @sourceAgreementId
+            ORDER BY source."SigningOrder"
+            RETURNING "Id"
+        )
+        SELECT EXISTS (SELECT 1 FROM eligible) AS "Eligible",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted), '[]'::jsonb)::text
+                   AS "CreatedSignerIdsJson"
         """;
 
     private const string ReturnPossessionSql = """
