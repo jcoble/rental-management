@@ -342,6 +342,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CompleteTurnoverCommand,
     RentalCommand.Core.Leasing.CompleteTurnoverResult,
     RentalCommand.Data.Leasing.CompleteTurnoverHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Applications.RecordApplicationFeeCommand,
+    RentalCommand.Core.Applications.ApplicationFinanceMutationResult,
+    RentalCommand.Data.Applications.RecordApplicationFeeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Applications.RefundApplicationFeeCommand,
+    RentalCommand.Core.Applications.ApplicationFinanceMutationResult,
+    RentalCommand.Data.Applications.RefundApplicationFeeHandler>();
 
 // Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
 // app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so

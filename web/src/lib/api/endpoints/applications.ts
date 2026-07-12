@@ -1,5 +1,4 @@
-import type { Payment } from '$lib/types';
-import { api } from '../client';
+import { api, fetchApi } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
 /** Application lifecycle status (string enum, matches the API). */
@@ -109,11 +108,27 @@ export interface ScreeningResultResponse {
 	completedAtUtc: string | null;
 }
 
-/** Body for recording a real application/screening fee as income (lease-less payment). */
+/** Body for recording an immutable fee collection in the application's pre-tenancy account. */
 export interface RecordApplicationFeeRequest {
 	amount: number;
 	method?: string | null;
-	paidDate?: string | null;
+	currency: string;
+	effectiveOn?: string | null;
+}
+
+export interface ApplicationFinanceMutationResponse {
+	applicationId: number;
+	accountId: number;
+	entryId: number;
+	relatedEntryId: number | null;
+	entryType: 'FeeCollection' | 'Refund' | 'Adjustment';
+	direction: 'Increase' | 'Decrease';
+	amount: number;
+	currency: string;
+	effectiveOn: string;
+	occurredAtUtc: string;
+	accountCreated: boolean;
+	replayed: boolean;
 }
 
 /** Request body for generating an FCRA adverse-action notice. */
@@ -156,9 +171,13 @@ export const applications = {
 	screen: (id: number) => api.post<ScreeningResultResponse>(`/applications/${id}/screen`),
 	/** Prior screening results for an application, newest first. */
 	screening: (id: number) => api.get<ScreeningResultResponse[]>(`/applications/${id}/screening`),
-	/** Record a real application/screening fee as income (lease-less payment on the application's property). */
-	recordFee: (id: number, body: RecordApplicationFeeRequest) =>
-		api.post<Payment>(`/applications/${id}/fee`, body),
+	/** Record a fee collection idempotently in the application's pre-tenancy account. */
+	recordFee: (id: number, operationKey: string, body: RecordApplicationFeeRequest) =>
+		fetchApi<ApplicationFinanceMutationResponse>(`/applications/${id}/fee`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
+			body: JSON.stringify(body),
+		}),
 	/** Generate an FCRA adverse-action notice (and optionally email the applicant). */
 	adverseAction: (id: number, body: AdverseActionRequest) =>
 		api.post<AdverseActionNoticeResponse>(`/applications/${id}/adverse-action`, body),

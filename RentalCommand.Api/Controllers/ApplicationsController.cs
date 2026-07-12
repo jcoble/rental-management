@@ -1,6 +1,10 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Applications;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -16,22 +20,24 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public class ApplicationsController : ManagementControllerBase
 {
+    private static readonly AtomicJsonResultCodec<ApplicationFinanceMutationResult> FeeResultCodec =
+        new("application-finance.mutation.v1");
     private readonly IApplicationService _service;
     private readonly IScreeningService _screening;
-    private readonly IPaymentService _payments;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
 
     public ApplicationsController(
         IApplicationService service,
         IScreeningService screening,
-        IPaymentService payments,
+        IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
         IFileStorage files)
     {
         _service = service;
         _screening = screening;
-        _payments = payments;
+        _atomic = atomic;
         _db = db;
         _files = files;
     }
@@ -147,34 +153,146 @@ public class ApplicationsController : ManagementControllerBase
     }
 
     /// <summary>
-    /// Records a real application/screening fee as income against the application — no lease required.
-    /// Creates a Paid <see cref="PaymentType.ApplicationFee"/> payment attributed to the application's
-    /// property, so it surfaces on the accounting ledger and Schedule E. 404 when the application is not
-    /// in the caller's portfolio; 400 for an invalid amount.
+    /// Records an immutable application-fee collection in the application's pre-tenancy account.
     /// </summary>
     [HttpPost("{id:int}/fee")]
-    [ProducesResponseType(typeof(PaymentResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApplicationFinanceMutationResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> RecordFee(int id, [FromBody] RecordApplicationFeeRequest req, CancellationToken ct)
+    public Task<IActionResult> RecordFee(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RecordApplicationFeeRequest req,
+        CancellationToken ct)
     {
-        // Status = Paid so the fee is income immediately; DueDate carries the paid date (the service fills
-        // PaidDate from DueDate when omitted). A validation failure surfaces via the global handler (400).
-        var paidDate = req.PaidDate ?? DateTime.UtcNow;
-        var payment = await _payments.CreateAsync(GetPortfolioId(), new CreatePaymentRequest
-        {
-            ApplicationId = id,
-            PaymentType = PaymentType.ApplicationFee,
-            Status = PaymentStatus.Paid,
-            Amount = req.Amount,
-            DueDate = paidDate,
-            PaidDate = req.PaidDate,
-            Method = req.Method,
-        }, ct);
+        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+            return Task.FromResult<IActionResult>(Forbid());
 
-        return payment == null
-            ? NotFound(new { error = "Application not found" })
-            : CreatedAtAction("Get", "Payment", new { id = payment.Id }, payment);
+        return ExecuteFinanceMutation(
+            id,
+            idempotencyKey,
+            key => new RecordApplicationFeeCommand(
+                GetPortfolioId(),
+                id,
+                req.Amount,
+                req.Currency.Trim().ToUpperInvariant(),
+                req.EffectiveOn,
+                req.Method,
+                null,
+                null,
+                ApplicationFinancialEntrySource.Manual,
+                null,
+                key,
+                GetUserId(),
+                sessionId,
+                accessContextId,
+                accessRevision),
+            "application-finance.record-fee",
+            StatusCodes.Status201Created,
+            ct);
+    }
+
+    [HttpPost("{id:int}/fee-refunds")]
+    [ProducesResponseType(typeof(ApplicationFinanceMutationResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public Task<IActionResult> RefundFee(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RefundApplicationFeeRequest req,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+            return Task.FromResult<IActionResult>(Forbid());
+
+        return ExecuteFinanceMutation(
+            id,
+            idempotencyKey,
+            key => new RefundApplicationFeeCommand(
+                GetPortfolioId(),
+                id,
+                req.CollectionEntryId,
+                req.Amount,
+                req.EffectiveOn,
+                req.Method,
+                null,
+                null,
+                ApplicationFinancialEntrySource.Manual,
+                null,
+                req.Reason,
+                key,
+                GetUserId(),
+                sessionId,
+                accessContextId,
+                accessRevision),
+            "application-finance.refund-fee",
+            StatusCodes.Status201Created,
+            ct);
+    }
+
+    private async Task<IActionResult> ExecuteFinanceMutation<TCommand>(
+        int applicationId,
+        string? idempotencyKey,
+        Func<string, TCommand> createCommand,
+        string commandType,
+        int successStatus,
+        CancellationToken ct)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        var normalized = idempotencyKey?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+
+        var portfolioId = GetPortfolioId();
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
+            .ToLowerInvariant();
+        var commandKey = $"{portfolioId}:{applicationId}:{keyDigest}";
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(commandType, commandKey),
+                createCommand(commandKey),
+                FeeResultCodec,
+                ct);
+            var value = outcome.Value;
+            if (value.Outcome == ApplicationFinanceMutationOutcome.ApplicationNotFound)
+                return NotFound(new { error = value.Error });
+            if (value.Outcome == ApplicationFinanceMutationOutcome.CollectionNotFound)
+                return NotFound(new { error = value.Error });
+            if (value.Outcome is ApplicationFinanceMutationOutcome.CurrencyMismatch
+                or ApplicationFinanceMutationOutcome.RefundExceedsCollectedAmount)
+                return Conflict(new { error = value.Error });
+            if (value.Outcome != ApplicationFinanceMutationOutcome.Posted
+                || value.AccountId is null || value.EntryId is null || value.EntryType is null
+                || value.Direction is null || value.Amount is null || value.Currency is null
+                || value.EffectiveOn is null || value.OccurredAtUtc is null)
+                return StatusCode(StatusCodes.Status500InternalServerError);
+
+            return StatusCode(successStatus, new ApplicationFinanceMutationResponse
+            {
+                ApplicationId = value.ApplicationId,
+                AccountId = value.AccountId.Value,
+                EntryId = value.EntryId.Value,
+                RelatedEntryId = value.RelatedEntryId,
+                EntryType = value.EntryType.Value,
+                Direction = value.Direction.Value,
+                Amount = value.Amount.Value,
+                Currency = value.Currency,
+                EffectiveOn = value.EffectiveOn.Value,
+                OccurredAtUtc = value.OccurredAtUtc.Value,
+                AccountCreated = value.AccountCreated,
+                Replayed = outcome.Disposition == AtomicCommandDisposition.Replayed,
+            });
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
     }
 
     /// <summary>

@@ -287,13 +287,12 @@ export const paymentSchema = z
 	});
 
 /**
- * Record-application-fee form (a lease-less income entry against an application). Mirrors the server
- * RecordApplicationFeeRequest: amount is required and > 0; method + paid date are optional.
+ * Record-application-fee form for the application's pre-tenancy financial account.
  */
 export const applicationFeeSchema = z.object({
 	amount: positiveNumeric('Amount'),
 	method: optionalText,
-	paidDate: optionalText,
+	effectiveOn: optionalText,
 });
 
 export const expenseSchema = z.object({

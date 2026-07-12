@@ -16,6 +16,7 @@ public class AccountingService : IAccountingService
     private const string KindExpense = "Expense";
     private const string KindPayment = "Payment";
     private const string KindBank = "Bank";
+    private const string KindApplicationFee = "ApplicationFee";
 
     private readonly RentalCommandDbContext _db;
     private readonly IScheduleEService _scheduleE;
@@ -417,7 +418,36 @@ public class AccountingService : IAccountingService
         // are enforced inside the view; we still apply the app-layer portfolio scope here.
         IQueryable<AccountingTransactionView> rows = _db.AccountingTransactionViews
             .AsNoTracking()
-            .Where(r => r.PortfolioId == portfolioId);
+            .Where(r => r.PortfolioId == portfolioId && r.Category != KindApplicationFee)
+            .Concat(_db.ApplicationFinancialEntries
+                .AsNoTracking()
+                .Where(entry => entry.PortfolioId == portfolioId)
+                .Select(entry => new AccountingTransactionView
+                {
+                    Kind = KindApplicationFee,
+                    Id = entry.Id,
+                    PortfolioId = entry.PortfolioId,
+                    Date = entry.OccurredAtUtc,
+                    CreatedAt = entry.OccurredAtUtc,
+                    UpdatedAt = entry.OccurredAtUtc,
+                    Description = entry.Description,
+                    Category = entry.EntryType == ApplicationFinancialEntryType.FeeCollection
+                        ? "ApplicationFee"
+                        : entry.EntryType == ApplicationFinancialEntryType.Refund
+                            ? "ApplicationFeeRefund"
+                            : "ApplicationFeeAdjustment",
+                    Status = "Posted",
+                    Amount = entry.Direction == ApplicationFinancialDirection.Increase
+                        ? entry.Amount
+                        : -entry.Amount,
+                    PropertyId = entry.PropertyId,
+                    UnitId = entry.UnitId,
+                    PropertyName = entry.Property == null ? null : entry.Property.Name,
+                    Counterparty = entry.ApplicationFinancialAccount!.RentalApplication!.FirstName
+                        + " " + entry.ApplicationFinancialAccount.RentalApplication.LastName,
+                    Reference = entry.ProviderReference ?? entry.SourceReference ?? entry.Method,
+                    Notes = null,
+                }));
 
         if (!string.IsNullOrWhiteSpace(query.Kind))
         {
@@ -433,6 +463,10 @@ public class AccountingService : IAccountingService
             else if (kind.Equals(KindBank, StringComparison.OrdinalIgnoreCase))
             {
                 rows = rows.Where(r => r.Kind == KindBank);
+            }
+            else if (kind.Equals(KindApplicationFee, StringComparison.OrdinalIgnoreCase))
+            {
+                rows = rows.Where(r => r.Kind == KindApplicationFee);
             }
         }
 
@@ -587,6 +621,7 @@ public class AccountingService : IAccountingService
     {
         KindPayment => $"/accounting/payments/{id}",
         KindExpense => $"/accounting/expenses/{id}",
+        KindApplicationFee => "/applications",
         _ => "/banking",
     };
 

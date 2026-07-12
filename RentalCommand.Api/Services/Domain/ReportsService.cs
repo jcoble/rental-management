@@ -643,28 +643,53 @@ public class ReportsService : IReportsService
         // Cash is dated on PaidDate (falling back to DueDate). The range filter + monthly GROUP BY + SUM
         // all run SQL-side (this query was previously materialized + grouped in memory — a hard-rule
         // violation that §18 required rewriting; it is now one EF-translated aggregate).
-        var incomeQuery = _db.Payments
+        var tenantIncomeQuery = _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
+                p.LeaseId != null &&
                 (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee || p.PaymentType == PaymentType.ApplicationFee) &&
-                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
+                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+            .Select(p => new
+            {
+                PropertyId = (int?)p.Lease!.PropertyId,
+                Year = (p.PaidDate ?? p.DueDate).Year,
+                Month = (p.PaidDate ?? p.DueDate).Month,
+                Amount = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount,
+            });
+
+        var fromDate = DateOnly.FromDateTime(from);
+        var toDate = DateOnly.FromDateTime(to);
+        var applicationIncomeQuery = _db.ApplicationFinancialEntries
+            .AsNoTracking()
+            .Where(entry =>
+                entry.PortfolioId == portfolioId &&
+                entry.EffectiveOn >= fromDate &&
+                entry.EffectiveOn <= toDate)
+            .Select(entry => new
+            {
+                entry.PropertyId,
+                Year = entry.EffectiveOn.Year,
+                Month = entry.EffectiveOn.Month,
+                Amount = entry.Direction == ApplicationFinancialDirection.Increase
+                    ? entry.Amount
+                    : -entry.Amount,
+            });
+
+        var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
 
         if (propertyFilter is not null)
-            // Lease-tied income scopes by the lease's property; a lease-less app fee by its own PropertyId.
-            incomeQuery = incomeQuery.Where(p =>
-                p.LeaseId != null
-                    ? propertyFilter.Contains(p.Lease!.PropertyId)
-                    : (p.PropertyId != null && propertyFilter.Contains(p.PropertyId.Value)));
+            incomeQuery = incomeQuery.Where(row =>
+                row.PropertyId != null && propertyFilter.Contains(row.PropertyId.Value));
 
         var incomeByMonth = (await incomeQuery
-            .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
+            .GroupBy(row => new { row.Year, row.Month })
             .Select(g => new
             {
                 g.Key.Year,
                 g.Key.Month,
-                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
+                Total = g.Sum(row => row.Amount),
             })
             .ToListAsync(ct))
             .ToDictionary(r => (r.Year, r.Month), r => r.Total);
@@ -688,7 +713,7 @@ public class ReportsService : IReportsService
             .ToDictionary(r => (r.Year, r.Month), r => r.Total);
 
         var totalIncome = await incomeQuery
-            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
+            .SumAsync(row => (decimal?)row.Amount, ct) ?? 0m;
 
         var totalExpense = await expenseQuery
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
@@ -747,19 +772,47 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
 
+        var fromDate = DateOnly.FromDateTime(from);
+        var toDate = DateOnly.FromDateTime(to);
+        var tenantIncomeQuery = _db.Payments
+            .AsNoTracking()
+            .Where(pay =>
+                pay.PortfolioId == portfolioId &&
+                pay.LeaseId != null &&
+                (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
+                (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee) &&
+                (pay.PaidDate ?? pay.DueDate) >= from &&
+                (pay.PaidDate ?? pay.DueDate) <= to)
+            .Select(pay => new
+            {
+                PropertyId = (int?)pay.Lease!.PropertyId,
+                Amount = pay.Status == PaymentStatus.Partial ? (pay.AmountPaid ?? 0m) : pay.Amount,
+            });
+
+        var applicationIncomeQuery = _db.ApplicationFinancialEntries
+            .AsNoTracking()
+            .Where(entry =>
+                entry.PortfolioId == portfolioId &&
+                entry.EffectiveOn >= fromDate &&
+                entry.EffectiveOn <= toDate)
+            .Select(entry => new
+            {
+                entry.PropertyId,
+                Amount = entry.Direction == ApplicationFinancialDirection.Increase
+                    ? entry.Amount
+                    : -entry.Amount,
+            });
+
+        var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
+
         var rowQuery = propertyQuery
             .Select(p => new
             {
                 p.Id,
                 p.Name,
-                Income = _db.Payments
-                    .Where(pay =>
-                        pay.PortfolioId == portfolioId &&
-                        (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
-                        (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee || pay.PaymentType == PaymentType.ApplicationFee) &&
-                        (pay.LeaseId != null ? pay.Lease!.PropertyId : pay.PropertyId) == p.Id &&
-                        (pay.PaidDate ?? pay.DueDate) >= from && (pay.PaidDate ?? pay.DueDate) <= to)
-                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial ? (pay.AmountPaid ?? 0m) : pay.Amount)) ?? 0m,
+                Income = incomeQuery
+                    .Where(income => income.PropertyId == p.Id)
+                    .Sum(income => (decimal?)income.Amount) ?? 0m,
                 OperatingExpenses = _db.Expenses
                     .Where(e =>
                         e.PortfolioId == portfolioId &&

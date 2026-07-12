@@ -23,6 +23,8 @@ public class ScheduleEService : IScheduleEService
     {
         var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var yearEndExclusive = yearStart.AddYears(1);
+        var yearStartDate = new DateOnly(year, 1, 1);
+        var yearEndExclusiveDate = yearStartDate.AddYears(1);
 
         if (propertyId.HasValue)
         {
@@ -34,29 +36,43 @@ public class ScheduleEService : IScheduleEService
         }
 
         // ── Income ──────────────────────────────────────────────────────────────────────────────
-        // Taxable rental income = ACTUAL CASH RECEIVED (§7/§18): Rent + LateFee + tenant Utility
-        // reimbursements + application/screening fees (lease-less income, gap5), Paid (full Amount) or
-        // Partial (collected AmountPaid), PaidDate in the year. Security deposits are a liability and are
-        // excluded. The portfolio total and per-property row facts are summed SQL-side; no SUM in memory.
-        var incomeQuery = _db.Payments
+        // Taxable income is projected from tenant cash receipts plus the separate pre-tenancy
+        // application subledger. The UNION, filters, correlated sums, and total all remain SQL-side.
+        var tenantIncomeQuery = _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
+                p.LeaseId != null &&
                 (p.PaymentType == PaymentType.Rent ||
                  p.PaymentType == PaymentType.LateFee ||
-                 p.PaymentType == PaymentType.Utility ||
-                 p.PaymentType == PaymentType.ApplicationFee) &&
+                 p.PaymentType == PaymentType.Utility) &&
                 (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                 p.PaidDate != null &&
                 p.PaidDate.Value >= yearStart &&
-                p.PaidDate.Value < yearEndExclusive);
+                p.PaidDate.Value < yearEndExclusive)
+            .Select(p => new
+            {
+                PropertyId = (int?)p.Lease!.PropertyId,
+                Amount = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount,
+            });
+        var applicationIncomeQuery = _db.ApplicationFinancialEntries
+            .AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.EffectiveOn >= yearStartDate
+                && entry.EffectiveOn < yearEndExclusiveDate)
+            .Select(entry => new
+            {
+                entry.PropertyId,
+                Amount = entry.Direction == ApplicationFinancialDirection.Increase
+                    ? entry.Amount
+                    : -entry.Amount,
+            });
+        var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
         if (propertyId.HasValue)
-            // Property scope is lease-based for lease-tied income, else the payment's own PropertyId (app fee).
-            incomeQuery = incomeQuery.Where(p =>
-                (p.LeaseId != null ? p.Lease!.PropertyId : p.PropertyId) == propertyId.Value);
+            incomeQuery = incomeQuery.Where(row => row.PropertyId == propertyId.Value);
 
         var totalRentalIncome = await incomeQuery
-            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
+            .SumAsync(row => (decimal?)row.Amount, ct) ?? 0m;
 
         // ── Expenses ─────────────────────────────────────────────────────────────────────────────
         // Soft-deleted records are excluded by the global query filter. Grouped on (property, category)
@@ -200,7 +216,7 @@ public class ScheduleEService : IScheduleEService
 
         var propertyRows = await reportPropertyQuery
             .Where(p =>
-                incomeQuery.Any(pay => (pay.LeaseId != null ? pay.Lease!.PropertyId : pay.PropertyId) == p.Id) ||
+                incomeQuery.Any(income => income.PropertyId == p.Id) ||
                 expenseQuery.Any(e => e.PropertyId == p.Id) ||
                 loanPaymentQuery.Any(lp => lp.Loan != null && lp.Loan.PropertyId == p.Id) ||
                 depreciationPropertyIds.Contains(p.Id))
@@ -210,8 +226,8 @@ public class ScheduleEService : IScheduleEService
                 p.Id,
                 p.Name,
                 Income = incomeQuery
-                    .Where(pay => (pay.LeaseId != null ? pay.Lease!.PropertyId : pay.PropertyId) == p.Id)
-                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial ? (pay.AmountPaid ?? 0m) : pay.Amount)) ?? 0m,
+                    .Where(income => income.PropertyId == p.Id)
+                    .Sum(income => (decimal?)income.Amount) ?? 0m,
                 ModeledInterest = loanPaymentQuery
                     .Where(lp => lp.Loan != null && lp.Loan.PropertyId == p.Id)
                     .Sum(lp => (decimal?)lp.InterestAmount) ?? 0m,
@@ -225,11 +241,9 @@ public class ScheduleEService : IScheduleEService
         // ── Assemble per-property reports ─────────────────────────────────────────────────────────
         var unassignedIncome = propertyId.HasValue
             ? 0m
-            // Truly unassigned = neither a lease nor a property (an app fee carrying a PropertyId belongs to
-            // that property's row above, not here).
             : await incomeQuery
-                .Where(p => p.LeaseId == null && p.PropertyId == null)
-                .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
+                .Where(income => income.PropertyId == null)
+                .SumAsync(income => (decimal?)income.Amount, ct) ?? 0m;
         var unassignedDeductibleExpenses = propertyId.HasValue
             ? 0m
             : await deductibleExpenseQuery

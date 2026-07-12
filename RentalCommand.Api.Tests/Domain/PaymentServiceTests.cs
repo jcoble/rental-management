@@ -137,52 +137,6 @@ public class PaymentServiceTests : IDisposable
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
-    public async Task ListPageAsync_FiltersApplicationFeesInSql()
-    {
-        var now = DateTime.UtcNow;
-        SeedApplication(40);
-        SeedPayment(LeaseId, "Lease rent", now.AddDays(-1), 1200m);
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            ApplicationId = 40,
-            PropertyId = 10,
-            PaymentType = PaymentType.ApplicationFee,
-            Status = PaymentStatus.Paid,
-            Amount = 48m,
-            DueDate = now.Date,
-            PaidDate = now.Date,
-            Method = "PhoneUI",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        await _db.SaveChangesAsync();
-
-        _commands.Clear();
-        var page = await _sut.ListPageAsync(PortfolioId, leaseId: null, new PaymentListQuery
-        {
-            ApplicationId = 40,
-            Sort = "-createdAt",
-            Take = 10,
-        });
-
-        page.TotalCount.Should().Be(1);
-        var item = page.Items.Should().ContainSingle().Subject;
-        item.ApplicationId.Should().Be(40);
-        item.LeaseId.Should().BeNull();
-        item.PaymentType.Should().Be(PaymentType.ApplicationFee);
-        item.Method.Should().Be("PhoneUI");
-
-        _commands.Should().Contain(sql =>
-            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ApplicationId", StringComparison.OrdinalIgnoreCase));
-        _commands.Should().Contain(sql =>
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ApplicationId", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
-    }
-
 #endif
 
     [Fact]

@@ -14,9 +14,6 @@ public class PaymentResponse
     /// <summary>The lease this payment is on; null for a lease-less payment (e.g. an application fee).</summary>
     public int? LeaseId { get; set; }
 
-    /// <summary>The application this payment is on, when it is a lease-less application/screening fee; null otherwise.</summary>
-    public int? ApplicationId { get; set; }
-
     /// <summary>
     /// Unit the payment's lease is on; resolved DB-side via the lease join so the web client can route the
     /// payment to its unit's Command Center tab. Null only if the lease navigation wasn't loaded.
@@ -99,10 +96,8 @@ public class PaymentResponse
         // Lease label for the detail/list view. Only set when the Lease navigation was loaded
         // (Include'd); left null otherwise so callers that don't join don't pay for it.
         LeaseNumber = e.Lease?.LeaseNumber,
-        ApplicationId = e.ApplicationId,
         UnitId = e.Lease?.UnitId,
-        // Lease-tied payments scope by the lease's property; a lease-less fee carries its own PropertyId.
-        PropertyId = e.Lease?.PropertyId ?? e.PropertyId,
+        PropertyId = e.Lease?.PropertyId,
         PropertyName = e.Lease?.Property?.Name,
         UnitNumber = e.Lease?.Unit?.UnitNumber,
         TenantName = e.Lease?.Tenant == null
@@ -162,10 +157,6 @@ public class PaymentListQuery : ListQuery
     [Range(1, int.MaxValue)]
     public int? LeaseManagementId { get; set; }
 
-    [FromQuery(Name = "applicationId")]
-    [Range(1, int.MaxValue)]
-    public int? ApplicationId { get; set; }
-
     [FromQuery(Name = "dueFrom")]
     public DateTime? DueFrom { get; set; }
 
@@ -181,28 +172,9 @@ public class PaymentListQuery : ListQuery
 
 public class CreatePaymentRequest
 {
-    /// <summary>
-    /// The lease to charge. Optional: a lease-less payment (application/screening fee) sets
-    /// <see cref="ApplicationId"/> instead. gap5 (G5.2) completes the "exactly one of LeaseId /
-    /// ApplicationId" validation in <c>PaymentService.CreateAsync</c>.
-    /// </summary>
+    /// <summary>The legacy lease to charge. Application fees use ApplicationFinancialAccount.</summary>
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
-
-    /// <summary>
-    /// The rental application to charge, for a lease-less application/screening fee. Exactly one of
-    /// <see cref="LeaseId"/> / <see cref="ApplicationId"/> must be set (validated in the service). When set,
-    /// <see cref="PaymentType"/> defaults to <see cref="PaymentType.ApplicationFee"/>.
-    /// </summary>
-    [Range(1, int.MaxValue)]
-    public int? ApplicationId { get; set; }
-
-    /// <summary>
-    /// The property to attribute the payment to when there is no lease (application fee). Optional; defaults
-    /// to the application's property so lease-less income still lands on the right property's reports.
-    /// </summary>
-    [Range(1, int.MaxValue)]
-    public int? PropertyId { get; set; }
 
     [EnumDataType(typeof(PaymentType))]
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;

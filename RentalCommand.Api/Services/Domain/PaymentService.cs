@@ -275,13 +275,10 @@ public class PaymentService : IPaymentService
 
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)
     {
-        // Exactly one of LeaseId / ApplicationId identifies what the payment is charged against: a lease
-        // (rent/late-fee/utility) or a rental application (a lease-less application/screening fee). Both or
-        // neither is a validation failure (400).
-        if ((request.LeaseId is not null) == (request.ApplicationId is not null))
+        if (request.LeaseId is null)
         {
             throw new DomainValidationException(
-                "A payment must reference exactly one of a lease or an application.");
+                "A legacy payment row must reference a lease; application fees use the application's financial account.");
         }
 
         // Every referenced FK must belong to the caller's portfolio (cross-tenant IDOR guard) → 404 on miss.
@@ -289,36 +286,12 @@ public class PaymentService : IPaymentService
         {
             return null;
         }
-        if (request.ApplicationId is { } applicationId && !await _db.EnsureApplicationInPortfolioAsync(portfolioId, applicationId, ct))
-        {
-            return null;
-        }
-        if (request.PropertyId is { } requestedPropertyId && !await _db.EnsurePropertyInPortfolioAsync(portfolioId, requestedPropertyId, ct))
-        {
-            return null;
-        }
-
-        // An application fee defaults its type to ApplicationFee and attributes to the application's property
-        // when the caller didn't pass one, so lease-less income lands on the right property's reports.
-        var paymentType = request.PaymentType;
-        var resolvedPropertyId = request.PropertyId;
-        if (request.ApplicationId is { } appId)
-        {
-            paymentType = PaymentType.ApplicationFee;
-            resolvedPropertyId ??= await _db.RentalApplications
-                .Where(a => a.Id == appId && a.PortfolioId == portfolioId)
-                .Select(a => a.PropertyId)
-                .FirstOrDefaultAsync(ct);
-        }
-
         var now = _timeProvider.UtcNow();
         var entity = new Payment
         {
             PortfolioId = portfolioId,
             LeaseId = request.LeaseId,
-            ApplicationId = request.ApplicationId,
-            PropertyId = resolvedPropertyId,
-            PaymentType = paymentType,
+            PaymentType = request.PaymentType,
             Status = request.Status,
             Amount = request.Amount,
             // Partial-aware split: validated + normalized for the final status/amount (Partial keeps the
