@@ -226,6 +226,7 @@ This is the immutable database identity for an issued or executed PDF. It wraps 
 | Column | Type | Null | Rule |
 |---|---|---:|---|
 | `Id` | `int identity` | no | PK |
+| `PublicId` | `uuid` | no | unique, default `gen_random_uuid()` |
 | `PortfolioId` | `int` | no | RLS |
 | `StoredFileId` | `int` | no | unique scoped FK, `RESTRICT` |
 | `ArtifactKind` | `varchar(30)` | no | `IssuedAgreement`, `ExecutedAgreement`, `IssuedAddendum`, `ExecutedAddendum`, `CompletionCertificate` |
