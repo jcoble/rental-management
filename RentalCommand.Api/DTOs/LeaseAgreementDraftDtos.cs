@@ -39,7 +39,6 @@ public sealed class LeaseRenewalAddendumDecisionRequest
 {
     public Guid SourceAddendumSeriesPublicId { get; set; }
     public LeaseRenewalAddendumDecisionType? Decision { get; set; }
-    public int? ReplacementAddendumId { get; set; }
 }
 
 public sealed class CreateLeaseAgreementSuccessorDraftRequest
@@ -59,6 +58,7 @@ public sealed record LeaseAgreementDraftMutationResponse(
     int? SourceAgreementId,
     IReadOnlyList<int> LeaseAgreementSignerIds,
     IReadOnlyList<int> AddendumDecisionIds,
+    IReadOnlyList<int> ReplacementAddendumIds,
     bool Replayed)
 {
     public static LeaseAgreementDraftMutationResponse FromResult(
@@ -71,5 +71,6 @@ public sealed record LeaseAgreementDraftMutationResponse(
         result.SourceAgreementId,
         result.LeaseAgreementSignerIds,
         result.AddendumDecisionIds,
+        result.ReplacementAddendumIds,
         replayed);
 }

@@ -18,6 +18,72 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         _auditScope = auditScope;
     }
 
+    public async Task<bool> ValidateAgreementDraftSignerScopeAsync(
+        int portfolioId,
+        int leaseManagementId,
+        IReadOnlyList<AtomicAgreementDraftSignerInput> signers,
+        CancellationToken ct = default)
+    {
+        var payload = JsonSerializer.Serialize(signers.Select(signer => new
+        {
+            lease_management_party_id = signer.LeaseManagementPartyId,
+            tenant_id = signer.TenantId,
+        }));
+        var row = await _db.Database.SqlQueryRaw<SignerScopeValidationRow>(
+                ValidateAgreementDraftSignerScopeSql,
+                JsonParameter("signers", payload),
+                Integer("portfolioId", portfolioId),
+                Integer("leaseManagementId", leaseManagementId))
+            .SingleAsync(ct);
+        return row.InputValid;
+    }
+
+    public async Task<AtomicRenewalAddendumDraftResult> CreateRenewalAddendumDraftsAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAgreementId,
+        int renewalAgreementId,
+        DateOnly governingFromOn,
+        IReadOnlyList<AtomicRenewalAddendumDecisionInput> decisions,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default)
+    {
+        var payload = JsonSerializer.Serialize(decisions.Select(decision => new
+        {
+            source_addendum_series_public_id = decision.SourceAddendumSeriesPublicId,
+            decision = decision.Decision,
+        }));
+        var parameters = new NpgsqlParameter[]
+        {
+            JsonParameter("decisions", payload),
+            Integer("portfolioId", portfolioId),
+            Integer("leaseManagementId", leaseManagementId),
+            Integer("sourceAgreementId", sourceAgreementId),
+            Integer("renewalAgreementId", renewalAgreementId),
+            Date("governingFromOn", governingFromOn),
+            Integer("actorUserId", actorUserId),
+            Timestamp("createdAt", createdAtUtc),
+            Integer("end", 0),
+            Integer("incorporate", 1),
+            Integer("reissue", 2),
+        };
+        using var lease = _auditScope.BeginInternalRawDmlBatch(
+            new("LeaseAddenda", AtomicRawDmlOperation.Insert),
+            new("LeaseAddendumSigners", AtomicRawDmlOperation.Insert),
+            new("LeaseAddendumFinancialEffects", AtomicRawDmlOperation.Insert),
+            new("LeaseRenewalAddendumDecisions", AtomicRawDmlOperation.Insert));
+        var row = await _db.Database.SqlQueryRaw<RenewalAddendumDraftRow>(
+                CreateRenewalAddendumDraftsSql, parameters)
+            .SingleAsync(ct);
+        return new(
+            row.InputValid,
+            DeserializeIds(row.DecisionIdsJson),
+            DeserializeIds(row.ReplacementAddendumIdsJson),
+            DeserializeIds(row.ReplacementSignerIdsJson),
+            DeserializeIds(row.ReplacementFinancialEffectIdsJson));
+    }
+
     public async Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
         int portfolioId,
         int leaseManagementId,
@@ -264,6 +330,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
     private static NpgsqlParameter Timestamp(string name, DateTime value) =>
         new(name, NpgsqlDbType.TimestampTz) { Value = value };
 
+    private static NpgsqlParameter Date(string name, DateOnly value) =>
+        new(name, NpgsqlDbType.Date) { Value = value };
+
     private static NpgsqlParameter Text(string name, string value) =>
         new(name, NpgsqlDbType.Text) { Value = value };
 
@@ -287,6 +356,20 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         public bool Eligible { get; set; }
         public string DeletedSignerIdsJson { get; set; } = "[]";
         public string CreatedSignerIdsJson { get; set; } = "[]";
+    }
+
+    private sealed class SignerScopeValidationRow
+    {
+        public bool InputValid { get; set; }
+    }
+
+    private sealed class RenewalAddendumDraftRow
+    {
+        public bool InputValid { get; set; }
+        public string DecisionIdsJson { get; set; } = "[]";
+        public string ReplacementAddendumIdsJson { get; set; } = "[]";
+        public string ReplacementSignerIdsJson { get; set; } = "[]";
+        public string ReplacementFinancialEffectIdsJson { get; set; } = "[]";
     }
 
     private sealed class AgreementSignerCopyRow
@@ -404,6 +487,19 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                 signing_order smallint,
                 is_required boolean)
         ),
+        input_validation AS MATERIALIZED (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM input
+                LEFT JOIN "LeaseManagementParties" AS party
+                  ON party."Id" = input.lease_management_party_id
+                 AND party."PortfolioId" = @portfolioId
+                 AND party."LeaseManagementId" = @leaseManagementId
+                WHERE (input.lease_management_party_id IS NULL) <> (input.tenant_id IS NULL)
+                   OR (input.lease_management_party_id IS NOT NULL
+                       AND (party."Id" IS NULL OR party."TenantId" <> input.tenant_id))
+            ) AS input_valid
+        ),
         eligible AS MATERIALIZED (
             SELECT agreement."Id"
             FROM "LeaseAgreements" AS agreement
@@ -417,6 +513,7 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
               AND agreement."ExecutedArtifactId" IS NULL
               AND agreement."VoidedAtUtc" IS NULL
               AND agreement."DraftCanceledAtUtc" IS NULL
+              AND (SELECT input_valid FROM input_validation)
             FOR UPDATE
         ),
         deleted AS (
@@ -450,6 +547,165 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                    AS "DeletedSignerIdsJson",
                COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted), '[]'::jsonb)::text
                    AS "CreatedSignerIdsJson"
+        """;
+
+    private const string ValidateAgreementDraftSignerScopeSql = """
+        WITH input AS MATERIALIZED (
+            SELECT lease_management_party_id, tenant_id
+            FROM jsonb_to_recordset(@signers::jsonb) AS row(
+                lease_management_party_id integer,
+                tenant_id integer)
+        )
+        SELECT NOT EXISTS (
+            SELECT 1
+            FROM input
+            LEFT JOIN "LeaseManagementParties" AS party
+              ON party."Id" = input.lease_management_party_id
+             AND party."PortfolioId" = @portfolioId
+             AND party."LeaseManagementId" = @leaseManagementId
+            WHERE (input.lease_management_party_id IS NULL) <> (input.tenant_id IS NULL)
+               OR (input.lease_management_party_id IS NOT NULL
+                   AND (party."Id" IS NULL OR party."TenantId" <> input.tenant_id))
+        ) AS "InputValid"
+        """;
+
+    private const string CreateRenewalAddendumDraftsSql = """
+        WITH input AS MATERIALIZED (
+            SELECT source_addendum_series_public_id, decision
+            FROM jsonb_to_recordset(@decisions::jsonb) AS row(
+                source_addendum_series_public_id uuid,
+                decision integer)
+        ),
+        effective_source AS MATERIALIZED (
+            SELECT source.*
+            FROM "LeaseAddenda" AS source
+            WHERE source."PortfolioId" = @portfolioId
+              AND source."LeaseManagementId" = @leaseManagementId
+              AND source."FullyExecutedAtUtc" IS NOT NULL
+              AND source."VoidedAtUtc" IS NULL
+              AND source."EffectiveFromOn" <= rc_business_date(@portfolioId)
+              AND (source."EffectiveThroughOn" IS NULL
+                   OR source."EffectiveThroughOn" >= rc_business_date(@portfolioId))
+              AND (source."SupersededEffectiveOn" IS NULL
+                   OR source."SupersededEffectiveOn" > rc_business_date(@portfolioId))
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "LeaseAddenda" AS newer
+                  WHERE newer."PortfolioId" = source."PortfolioId"
+                    AND newer."LeaseManagementId" = source."LeaseManagementId"
+                    AND newer."SeriesPublicId" = source."SeriesPublicId"
+                    AND newer."VersionNumber" > source."VersionNumber")
+        ),
+        validation AS MATERIALIZED (
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM "LeaseAgreements" AS renewal
+                    WHERE renewal."Id" = @renewalAgreementId
+                      AND renewal."PortfolioId" = @portfolioId
+                      AND renewal."LeaseManagementId" = @leaseManagementId
+                      AND renewal."RenewsAgreementId" = @sourceAgreementId
+                      AND renewal."IssuedAtUtc" IS NULL
+                      AND renewal."DraftCanceledAtUtc" IS NULL) AS renewal_valid,
+                (SELECT count(*) FROM input) =
+                    (SELECT count(DISTINCT source_addendum_series_public_id) FROM input)
+                AND NOT EXISTS (SELECT 1 FROM input WHERE decision NOT IN (@end, @incorporate, @reissue))
+                AND NOT EXISTS (
+                    SELECT source_addendum_series_public_id FROM input
+                    EXCEPT SELECT "SeriesPublicId" FROM effective_source)
+                AND NOT EXISTS (
+                    SELECT "SeriesPublicId" FROM effective_source
+                    EXCEPT SELECT source_addendum_series_public_id FROM input) AS decisions_valid
+        ),
+        replacements AS (
+            INSERT INTO "LeaseAddenda"
+                ("PublicId", "SeriesPublicId", "PortfolioId", "LeaseManagementId",
+                 "BaseAgreementId", "VersionNumber", "AddendumNumber", "Purpose",
+                 "ReplacesAddendumId", "EffectiveFromOn", "EffectiveThroughOn",
+                 "TermsSchemaVersion", "TermsPayload", "DocumentTemplateId",
+                 "DocumentTemplateVersion", "CreatedAtUtc", "CreatedByUserId",
+                 "UpdatedAtUtc", "DraftRevision")
+            SELECT gen_random_uuid(), source."SeriesPublicId", @portfolioId, @leaseManagementId,
+                   @renewalAgreementId, source."VersionNumber" + 1, source."AddendumNumber",
+                   source."Purpose", source."Id", @governingFromOn,
+                   CASE WHEN source."EffectiveThroughOn" IS NULL
+                             OR source."EffectiveThroughOn" >= @governingFromOn
+                        THEN source."EffectiveThroughOn" ELSE NULL END,
+                   source."TermsSchemaVersion", source."TermsPayload", source."DocumentTemplateId",
+                   source."DocumentTemplateVersion", @createdAt, @actorUserId, @createdAt, 1
+            FROM input
+            INNER JOIN effective_source AS source
+                ON source."SeriesPublicId" = input.source_addendum_series_public_id
+            CROSS JOIN validation
+            WHERE validation.renewal_valid AND validation.decisions_valid
+              AND input.decision = @reissue
+            ORDER BY source."SeriesPublicId"
+            RETURNING "Id", "SeriesPublicId", "ReplacesAddendumId"
+        ),
+        replacement_signers AS (
+            INSERT INTO "LeaseAddendumSigners"
+                ("PortfolioId", "LeaseAddendumId", "LeaseManagementPartyId", "TenantId",
+                 "SignerRole", "NameSnapshot", "EmailSnapshot", "SigningOrder", "IsRequired")
+            SELECT @portfolioId, replacement."Id", signer."LeaseManagementPartyId", signer."TenantId",
+                   signer."SignerRole", signer."NameSnapshot", signer."EmailSnapshot",
+                   signer."SigningOrder", signer."IsRequired"
+            FROM replacements AS replacement
+            INNER JOIN "LeaseAddendumSigners" AS signer
+                ON signer."LeaseAddendumId" = replacement."ReplacesAddendumId"
+               AND signer."PortfolioId" = @portfolioId
+            ORDER BY replacement."Id", signer."SigningOrder"
+            RETURNING "Id"
+        ),
+        replacement_effects AS (
+            INSERT INTO "LeaseAddendumFinancialEffects"
+                ("PortfolioId", "LeaseAddendumId", "EffectType", "Amount", "Currency",
+                 "ChargeCode", "EffectiveFromOn", "EffectiveThroughOn", "DueOn", "Description")
+            SELECT @portfolioId, replacement."Id", effect."EffectType", effect."Amount",
+                   effect."Currency", effect."ChargeCode",
+                   CASE WHEN effect."EffectiveFromOn" IS NULL THEN NULL ELSE @governingFromOn END,
+                   CASE WHEN effect."EffectiveThroughOn" IS NULL
+                             OR effect."EffectiveThroughOn" >= @governingFromOn
+                        THEN effect."EffectiveThroughOn" ELSE NULL END,
+                   CASE WHEN effect."DueOn" IS NULL THEN NULL
+                        WHEN effect."DueOn" < @governingFromOn THEN @governingFromOn
+                        ELSE effect."DueOn" END,
+                   effect."Description"
+            FROM replacements AS replacement
+            INNER JOIN "LeaseAddendumFinancialEffects" AS effect
+                ON effect."LeaseAddendumId" = replacement."ReplacesAddendumId"
+               AND effect."PortfolioId" = @portfolioId
+            ORDER BY replacement."Id", effect."Id"
+            RETURNING "Id"
+        ),
+        decisions AS (
+            INSERT INTO "LeaseRenewalAddendumDecisions"
+                ("PortfolioId", "LeaseManagementId", "RenewalAgreementId",
+                 "SourceAddendumSeriesPublicId", "Decision", "ReplacementAddendumId",
+                 "CreatedAtUtc", "CreatedByUserId")
+            SELECT @portfolioId, @leaseManagementId, @renewalAgreementId,
+                   input.source_addendum_series_public_id,
+                   CASE input.decision WHEN @end THEN 'End'
+                       WHEN @incorporate THEN 'IncorporateIntoBase'
+                       WHEN @reissue THEN 'ReissueAsAddendum' END,
+                   replacement."Id", @createdAt, @actorUserId
+            FROM input
+            CROSS JOIN validation
+            LEFT JOIN replacements AS replacement
+                ON replacement."SeriesPublicId" = input.source_addendum_series_public_id
+            WHERE validation.renewal_valid AND validation.decisions_valid
+            ORDER BY input.source_addendum_series_public_id
+            RETURNING "Id"
+        )
+        SELECT validation.renewal_valid AND validation.decisions_valid AS "InputValid",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM decisions), '[]'::jsonb)::text
+                   AS "DecisionIdsJson",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM replacements), '[]'::jsonb)::text
+                   AS "ReplacementAddendumIdsJson",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM replacement_signers), '[]'::jsonb)::text
+                   AS "ReplacementSignerIdsJson",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM replacement_effects), '[]'::jsonb)::text
+                   AS "ReplacementFinancialEffectIdsJson"
+        FROM validation
         """;
 
     private const string CopyAgreementDraftSignersSql = """
