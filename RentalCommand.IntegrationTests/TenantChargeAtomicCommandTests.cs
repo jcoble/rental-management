@@ -81,6 +81,14 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         });
 
         await using var db = NewContext();
+        await CreatePhysicalTestSchemaAsync(db);
+    }
+
+    private static async Task CreatePhysicalTestSchemaAsync(RentalCommandDbContext db)
+    {
+        // The foundation migration chain is intentionally temporary and will disappear at the
+        // final baseline squash. Build the EF-owned tables directly, then install only the
+        // canonical SQL objects used by charge/receipt allocation and reversal proofs.
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);

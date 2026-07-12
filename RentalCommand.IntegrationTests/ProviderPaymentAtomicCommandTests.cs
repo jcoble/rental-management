@@ -65,6 +65,14 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         });
 
         await using var db = NewContext();
+        await CreatePhysicalTestSchemaAsync(db);
+    }
+
+    private static async Task CreatePhysicalTestSchemaAsync(RentalCommandDbContext db)
+    {
+        // The foundation migration chain is intentionally temporary and will disappear at the
+        // final baseline squash. Build the EF-owned tables directly, then install only the
+        // canonical SQL objects exercised by provider receipt allocation and autopay selection.
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
@@ -255,7 +263,12 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             PortfolioId = portfolio.Id, FirstName = "Tenant", LastName = suffix,
             CreatedAt = now, UpdatedAt = now,
         };
-        db.AddRange(property, unit, tenant);
+        var template = new DocumentTemplate
+        {
+            PortfolioId = portfolio.Id, Name = $"Template {suffix}", Version = 1,
+            CreatedAtUtc = now, UpdatedAtUtc = now,
+        };
+        db.AddRange(property, unit, tenant, template);
         await db.SaveChangesAsync();
         var relationship = new LeaseManagement
         {
@@ -277,7 +290,22 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             Role = LeaseManagementPartyRole.PrimaryTenant, EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
             ChangeReason = "integration", CreatedAtUtc = now, CreatedByUserId = user.Id,
         };
-        db.AddRange(account, party);
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
+            LeaseManagementId = relationship.Id, VersionNumber = 1,
+            AgreementNumber = $"AGR-{suffix}", ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddMonths(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 100m, RentDueDay = 1, SecurityDepositObligation = 0m,
+            LateFeeAmount = 0m, GracePeriodDays = 0, Currency = "USD",
+            TermsSchemaVersion = 1, TermsPayload = "{}",
+            DocumentTemplateId = template.Id, DocumentTemplateVersion = template.Version,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = user.Id,
+        };
+        db.AddRange(account, party, agreement);
         await db.SaveChangesAsync();
         var enrollment = new TenantAutopayEnrollment
         {
@@ -297,7 +325,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             EntryType = TenantLedgerEntryType.RentCharge, Direction = TenantLedgerDirection.Debit,
             Amount = 100m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(now),
             DueOn = DateOnly.FromDateTime(now), PostedAtUtc = now, Description = "Rent",
-            BusinessKey = $"rent:{suffix}", CreatedByUserId = user.Id,
+            BusinessKey = $"rent:{suffix}", LeaseAgreementId = agreement.Id,
+            CreatedByUserId = user.Id,
         };
         db.AddRange(access, enrollment, charge);
         await db.SaveChangesAsync();
