@@ -4,35 +4,36 @@ using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Enums;
 
 /// <summary>
-/// Tenant-facing balance summary derived from the signed-in tenant's payment records. Outstanding is
-/// everything still owed (scheduled/partial/late/failed, not yet paid or waived — a failed charge
-/// collected nothing, so its full amount is still owed); overdue is the subset whose due date has passed.
+/// Tenant-facing balance summary derived from the signed-in tenant's canonical account and ledger.
+/// Outstanding is the open receivable; overdue is the subset whose due date has passed.
 /// </summary>
 public class PortalBalanceResponse
 {
     public int TenantId { get; set; }
 
-    /// <summary>Sum of payments already collected (status Paid).</summary>
+    /// <summary>Net immutable payment receipts already collected.</summary>
     public decimal Collected { get; set; }
 
-    /// <summary>Sum of payments still owed across the tenant's leases.</summary>
+    /// <summary>Sum of open receivables across the tenant's account relationships.</summary>
     public decimal Outstanding { get; set; }
 
-    /// <summary>Sum of owed payments that are past their due date.</summary>
+    /// <summary>Sum of open charges that are past their due date.</summary>
     public decimal Overdue { get; set; }
 
-    /// <summary>Count of payments contributing to <see cref="Overdue"/>.</summary>
+    /// <summary>Count of open charges contributing to <see cref="Overdue"/>.</summary>
     public int OverdueCount { get; set; }
 
     /// <summary>Stable selector for frontend tests.</summary>
     public string TestId => $"portal-balance-{TenantId}";
 }
 
-/// <summary>Tenant-facing projection of one of their payments.</summary>
+/// <summary>Tenant-facing projection of one immutable charge and its derived open balance.</summary>
 public class PortalPaymentResponse
 {
-    public int Id { get; set; }
-    public int LeaseId { get; set; }
+    /// <summary>The canonical debit <c>TenantLedgerEntry.Id</c>; never a legacy Payment id.</summary>
+    public long Id { get; set; }
+    public int TenantAccountId { get; set; }
+    public int LeaseManagementId { get; set; }
     public string PaymentType { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public decimal Amount { get; set; }
