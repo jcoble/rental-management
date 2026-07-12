@@ -80,7 +80,11 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         });
 
         await using var db = NewContext();
-        await db.Database.MigrateAsync();
+        await db.Database.EnsureCreatedAsync();
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+        await db.Database.ExecuteSqlRawAsync(CreateAccountingParkedTransactionViewSql);
         await SeedAsync(db);
     }
 
@@ -392,6 +396,28 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
     private OutboxFailureInterceptor Failure => _services!.GetRequiredService<OutboxFailureInterceptor>();
+
+    private const string CreateAccountingParkedTransactionViewSql = """
+        CREATE VIEW vw_accounting_parked_transactions WITH (security_invoker = true) AS
+        SELECT
+            m."Id",
+            m."PortfolioId",
+            m."AccountingConnectionId",
+            m."ExternalType",
+            m."ExternalId",
+            m."MetadataJson" ->> 'CustomerExternalId' AS "CustomerExternalId",
+            m."MetadataJson" ->> 'VendorExternalId' AS "VendorExternalId",
+            m."MetadataJson" ->> 'AccountExternalId' AS "AccountExternalId",
+            m."MetadataJson" ->> 'ClassExternalId' AS "ClassExternalId",
+            m."MetadataJson" ->> 'DepositAccountExternalId' AS "DepositAccountExternalId",
+            COALESCE(NULLIF(m."MetadataJson" ->> 'Amount', '')::numeric, 0) AS "Amount",
+            COALESCE(NULLIF(m."MetadataJson" ->> 'TxnDateUtc', '')::timestamptz, '-infinity'::timestamptz) AS "TxnDateUtc",
+            m."MetadataJson" ->> 'PaymentMethod' AS "PaymentMethod",
+            m."MetadataJson" ->> 'ReferenceNumber' AS "ReferenceNumber",
+            m."MetadataJson" ->> 'SourceKind' AS "SourceKind"
+        FROM "AccountingSyncMaps" AS m
+        WHERE m."MetadataJson" IS NOT NULL;
+        """;
 
     private AtomicCommandIdentity Identity(string externalId, int tenantId, string suffix = "canonical") =>
         new("accounting.mapping.confirm", $"{_portfolioId}:{_connectionId}:{externalId}:{tenantId}:{suffix}");

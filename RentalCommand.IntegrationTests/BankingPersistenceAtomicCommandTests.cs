@@ -83,7 +83,9 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         });
 
         await using var db = NewContext();
-        await db.Database.MigrateAsync();
+        await db.Database.EnsureCreatedAsync();
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
         var portfolio = new Portfolio
         {
             Name = "Banking atomic portfolio",
