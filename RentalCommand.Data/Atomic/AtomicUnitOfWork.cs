@@ -8,6 +8,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Accounting;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Banking;
