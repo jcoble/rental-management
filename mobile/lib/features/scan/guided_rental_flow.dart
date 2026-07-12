@@ -220,37 +220,55 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     final o = <String, dynamic>{};
     // This flow always creates from the document (mobile v1: no existing-link picker — parity follow-up).
     o['propertyId'] = null;
-    if (_propName.text.trim().isNotEmpty)
+    if (_propName.text.trim().isNotEmpty) {
       o['propertyName'] = _propName.text.trim();
-    if (_propAddress.text.trim().isNotEmpty)
+    }
+    if (_propAddress.text.trim().isNotEmpty) {
       o['propertyAddress'] = _propAddress.text.trim();
-    if (_propCity.text.trim().isNotEmpty)
+    }
+    if (_propCity.text.trim().isNotEmpty) {
       o['propertyCity'] = _propCity.text.trim();
-    if (_propState.text.trim().isNotEmpty)
+    }
+    if (_propState.text.trim().isNotEmpty) {
       o['propertyState'] = _propState.text.trim();
-    if (_propZip.text.trim().isNotEmpty)
+    }
+    if (_propZip.text.trim().isNotEmpty) {
       o['propertyPostalCode'] = _propZip.text.trim();
+    }
     o['unitId'] = null;
-    if (_unitNumber.text.trim().isNotEmpty)
+    if (_unitNumber.text.trim().isNotEmpty) {
       o['unitNumber'] = _unitNumber.text.trim();
-    if (_unitBeds.text.trim().isNotEmpty)
+    }
+    if (_unitBeds.text.trim().isNotEmpty) {
       o['unitBedrooms'] = num.tryParse(_unitBeds.text.trim());
-    if (_unitBaths.text.trim().isNotEmpty)
+    }
+    if (_unitBaths.text.trim().isNotEmpty) {
       o['unitBathrooms'] = num.tryParse(_unitBaths.text.trim());
+    }
     final name = '${_tenantFirst.text.trim()} ${_tenantLast.text.trim()}'
         .trim();
-    if (name.isNotEmpty) o['tenantName'] = name;
+    if (name.isNotEmpty) {
+      o['tenantName'] = name;
+    }
     o['leaseNumber'] = _leaseNumber.text.trim();
-    if (_start != null) o['startDate'] = _iso(_start!);
-    if (_end != null) o['endDate'] = _iso(_end!);
-    if (_rent.text.trim().isNotEmpty)
+    if (_start != null) {
+      o['startDate'] = _iso(_start!);
+    }
+    if (_end != null) {
+      o['endDate'] = _iso(_end!);
+    }
+    if (_rent.text.trim().isNotEmpty) {
       o['monthlyRent'] = num.tryParse(_rent.text.trim());
-    if (_deposit.text.trim().isNotEmpty)
+    }
+    if (_deposit.text.trim().isNotEmpty) {
       o['securityDeposit'] = num.tryParse(_deposit.text.trim());
-    if (_lateFee.text.trim().isNotEmpty)
+    }
+    if (_lateFee.text.trim().isNotEmpty) {
       o['lateFee'] = num.tryParse(_lateFee.text.trim());
-    if (_dueDay.text.trim().isNotEmpty)
+    }
+    if (_dueDay.text.trim().isNotEmpty) {
       o['rentDueDay'] = int.tryParse(_dueDay.text.trim());
+    }
     return jsonEncode(o);
   }
 
@@ -264,10 +282,13 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
         err = 'Enter a property name or address.';
       }
     } else if (_step == 1) {
-      if (_unitNumber.text.trim().isEmpty) err = 'Enter a unit number.';
+      if (_unitNumber.text.trim().isEmpty) {
+        err = 'Enter a unit number.';
+      }
     } else if (_step == 2) {
-      if (_tenantFirst.text.trim().isEmpty)
+      if (_tenantFirst.text.trim().isEmpty) {
         err = "Enter the tenant's first name.";
+      }
     } else if (_step == 3) {
       if (_start == null || _end == null) {
         err = 'Pick the lease start and end dates.';
