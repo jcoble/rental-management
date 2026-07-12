@@ -105,7 +105,7 @@ class ScanRepository {
   /// [bytes]            — raw file bytes
   /// [filename]         — e.g. 'receipt.jpg'
   /// [contentType]      — MIME type, e.g. 'image/jpeg'
-  /// [targetEntityType] — 'Expense' (default), 'Payment', 'WorkOrder', or 'Loan'
+  /// [targetEntityType] — 'Expense' (default), 'Payment', 'WorkOrder', 'Lease', or 'Loan'
   /// [onSendProgress]   — optional progress callback (0.0–1.0)
   Future<ScanCreatedResponse> uploadImage(
     Uint8List bytes,
@@ -113,6 +113,9 @@ class ScanRepository {
     String contentType, {
     String targetEntityType = 'Expense',
     String? clientOperationId,
+    int? propertyId,
+    int? unitId,
+    String? sourceLabel,
     void Function(double progress)? onSendProgress,
   }) async {
     try {
@@ -124,6 +127,10 @@ class ScanRepository {
         ),
         'targetEntityType': targetEntityType,
         'clientOperationId': clientOperationId ?? const Uuid().v4(),
+        if (propertyId != null) 'propertyId': propertyId,
+        if (unitId != null) 'unitId': unitId,
+        if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
+          'sourceLabel': sourceLabel.trim(),
       });
 
       final response = await _dio.post<Map<String, dynamic>>(

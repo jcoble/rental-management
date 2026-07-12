@@ -17,8 +17,22 @@ void openMobileRecord(BuildContext context) {
   ).push<void>(MaterialPageRoute<void>(builder: (_) => const TellMeScreen()));
 }
 
-Future<void> openMobileScan(BuildContext context) async {
-  final draftId = await showScanCaptureSheet(context);
+Future<void> openMobileScan(
+  BuildContext context, {
+  String initialTargetEntityType = 'Expense',
+  bool lockTargetEntityType = false,
+  int? propertyId,
+  int? unitId,
+  String? sourceLabel,
+}) async {
+  final draftId = await showScanCaptureSheet(
+    context,
+    initialTargetEntityType: initialTargetEntityType,
+    lockTargetEntityType: lockTargetEntityType,
+    propertyId: propertyId,
+    unitId: unitId,
+    sourceLabel: sourceLabel,
+  );
   if (draftId == null || !context.mounted) return;
 
   await Navigator.of(context).push<void>(
