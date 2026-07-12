@@ -21,7 +21,7 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(pageSource, /<LifecycleRail[^>]+nextBestAction=\{dashboard\.nextBestAction\}/s);
 	});
 
-	test('move-in next action opens a concrete deposit and appointment workflow', () => {
+	test('move-in next action funds the prepared canonical deposit account and completes the appointment', () => {
 		const pageSource = readFileSync(
 			new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 			'utf8'
@@ -31,7 +31,11 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(pageSource, /import \{ appointments \} from '\$lib\/api\/endpoints\/appointments';/);
 		assert.match(pageSource, /page\.url\.searchParams\.get\('action'\) === 'confirm-move-in'/);
 		assert.match(pageSource, /data-testid="unit-move-in-dialog"/);
-		assert.match(pageSource, /securityDeposits\.create\(\{\s*leaseId: lease\.id/s);
+		assert.match(pageSource, /securityDeposits\.list\(lease\.leaseManagementId\)/);
+		assert.match(pageSource, /securityDeposits\.fund\(account\.tenantAccountId, operationKey/);
+		assert.match(pageSource, /securityDepositAccountId: account\.id/);
+		assert.match(pageSource, /paymentMethodSummary: moveInDepositPaymentMethod\.trim\(\)/);
+		assert.doesNotMatch(pageSource, /securityDeposits\.create/);
 		assert.match(pageSource, /appointments\.update\(moveInAppointment\.id,\s*\{\s*status: 'Completed'\s*\}\)/s);
 		assert.match(pageSource, /queryClient\.invalidateQueries\(\{ queryKey: \['unit-dashboard', id\] \}\)/);
 	});

@@ -245,6 +245,8 @@ export interface UnitDashboardHeader {
 
 export interface UnitLeaseSummary {
 	id: number;
+	leaseManagementId: number;
+	tenantAccountId?: number | null;
 	leaseNumber: string;
 	status: string;
 	startDate: string;
@@ -1339,28 +1341,34 @@ export interface AuthUser {
 	lastLoginAt?: string;
 }
 
-export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
+export type SecurityDepositStatus =
+	| 'NotFunded'
+	| 'Held'
+	| 'PartiallyReturned'
+	| 'Returned'
+	| 'Withheld';
 
-export interface DepositDeduction {
-	reason: string;
-	amount: number;
-	notes?: string;
-}
-
-export interface SecurityDepositHolding {
+/** Canonical security-deposit subledger account for one continuous tenant account. */
+export interface SecurityDepositAccount {
 	id: number;
-	leaseId: number;
-	leaseNumber?: string;
+	portfolioId: number;
+	tenantAccountId: number;
+	leaseManagementId: number;
+	originatingAgreementId: number;
+	propertyId: number;
+	unitId: number;
+	accountNumber: string;
+	relationshipNumber: string;
 	tenantName?: string;
-	amount: number;
-	status: SecurityDepositStatus;
-	heldAt: string;
-	returnedAt?: string;
-	returnedAmount?: number;
-	deductions: DepositDeduction[];
+	propertyName?: string;
+	unitNumber?: string;
+	currency: string;
+	totalReceived: number;
 	totalDeductions: number;
-	netRefund: number;
-	notes?: string;
+	totalRefunded: number;
+	heldBalance: number;
+	status: SecurityDepositStatus;
+	createdAtUtc: string;
 }
 
 export interface PortalMessage {
