@@ -516,7 +516,9 @@ public sealed class NativeEsignTests : IDisposable
                 _db.SaveChanges();
             }),
             TimeProvider.System,
-            new PendingFileUploadStore(_db),
+            new PendingFileUploadStore(
+                _db,
+                _services.GetRequiredService<IAtomicInfrastructureWriteGate>()),
             NullLogger<NativeEsignExecutionService>.Instance);
 
         (await execution.FinalizePendingAsync(requestId)).Should().BeFalse();
@@ -801,7 +803,9 @@ public sealed class NativeEsignTests : IDisposable
             _storage,
             _config,
             TimeProvider.System,
-            new PendingFileUploadStore(_db),
+            new PendingFileUploadStore(
+                _db,
+                _services.GetRequiredService<IAtomicInfrastructureWriteGate>()),
             NullLogger<NativeEsignProvider>.Instance);
 
     private NativeSigningService CreateSigningService()
@@ -823,7 +827,9 @@ public sealed class NativeEsignTests : IDisposable
             _storage,
             new ExecutedLeasePdfGenerator(),
             TimeProvider.System,
-            new PendingFileUploadStore(_db),
+            new PendingFileUploadStore(
+                _db,
+                _services.GetRequiredService<IAtomicInfrastructureWriteGate>()),
             NullLogger<NativeEsignExecutionService>.Instance);
 
     private sealed class TestNativeEsignExecutionClaimStore(RentalCommandDbContext db)

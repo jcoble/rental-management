@@ -62,6 +62,15 @@ public interface IAtomicCommandHandler<in TCommand, TResult>
 /// </summary>
 public interface IAtomicRemoteDependency;
 
+/// <summary>
+/// Narrow kernel lease for durable infrastructure metadata written before a business command.
+/// It deliberately exposes named operations rather than arbitrary table/DML permissions.
+/// </summary>
+public interface IAtomicInfrastructureWriteGate
+{
+    IDisposable BeginPendingFileUploadAdmission();
+}
+
 /// <summary>Capabilities owned by the current physical attempt; it deliberately exposes no ORM.</summary>
 public interface IAtomicWriteAttempt
 {
