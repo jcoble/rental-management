@@ -294,7 +294,7 @@ public sealed class AccountingConnectionClaimStore : IAccountingConnectionClaimS
         ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
         if (claimOwner.Length > 200) throw new ArgumentOutOfRangeException(nameof(claimOwner));
         if (leaseDuration <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(leaseDuration));
-        if (refreshHorizon is TimeSpan horizon && horizon < TimeSpan.Zero)
+        if (refreshHorizon is TimeSpan validatedHorizon && validatedHorizon < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(refreshHorizon));
         if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
 
