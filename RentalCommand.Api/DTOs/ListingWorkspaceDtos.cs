@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Listings;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -43,6 +45,9 @@ public sealed record ListingPublicationResponse(
     string? LastDeliveryStatus,
     string? LastDeliveryError,
     DateTime? LastDeliveryAttemptAtUtc,
+    bool ChannelAvailable,
+    string ChannelState,
+    string? ChannelUnavailableReason,
     IReadOnlyList<ExternalListingSignalResponse> UnconfirmedSignals);
 
 public sealed record ListingWorkspaceResponse(
@@ -71,7 +76,9 @@ public sealed record ListingWorkspaceResponse(
     DateTime CreatedAt,
     DateTime UpdatedAt)
 {
-    public static ListingWorkspaceResponse FromEntity(RentalListing listing)
+    public static ListingWorkspaceResponse FromEntity(
+        RentalListing listing,
+        Func<string, ListingChannelAvailability>? availability = null)
         => new(
             listing.Id,
             listing.PortfolioId,
@@ -120,6 +127,15 @@ public sealed record ListingWorkspaceResponse(
                     publication.LastDeliveryStatus,
                     publication.LastDeliveryError,
                     publication.LastDeliveryAttemptAtUtc,
+                    publication.Mode == ListingPublicationMode.Guided
+                        || availability?.Invoke(publication.ProviderKey).Available == true,
+                    publication.Mode == ListingPublicationMode.Guided
+                        ? "Guided"
+                        : availability?.Invoke(publication.ProviderKey).State ?? "Unavailable",
+                    publication.Mode == ListingPublicationMode.Guided
+                        ? null
+                        : availability?.Invoke(publication.ProviderKey).Reason
+                            ?? $"No Connected adapter is registered for {publication.ProviderKey}.",
                     publication.ExternalSignals.Select(signal => new ExternalListingSignalResponse(signal.Id, signal.SignalType,
                             signal.SuggestedExternalListingId, signal.SuggestedListingUrl,
                             signal.SuggestedExternalStatus, signal.Disposition.ToString(), signal.ReceivedAtUtc))
@@ -131,6 +147,11 @@ public sealed record ListingWorkspaceResponse(
             $"&returnTo={Uri.EscapeDataString($"/units/{listing.UnitId}?tab=lease")}",
             listing.CreatedAt,
             listing.UpdatedAt);
+}
+
+public sealed class ConnectedListingCommandRequest
+{
+    [Required, MaxLength(160)] public string ClientOperationId { get; set; } = string.Empty;
 }
 
 public sealed class SaveListingWorkspaceRequest

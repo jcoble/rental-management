@@ -59,6 +59,14 @@
 		onSuccess: (value) => { acceptWorkspace(value); showSuccess('Photo package updated.'); },
 		onError: (error) => showError(apiErrorMessage(error)),
 	}));
+	const connectedMutation = createMutation(() => ({
+		mutationFn: ({ action, publicationId }: { action: 'prepare' | 'publish' | 'update' | 'unpublish'; publicationId: number }) =>
+			action === 'prepare'
+				? units.prepareConnectedListing(unitId, publicationId)
+				: units.runConnectedListingCommand(unitId, publicationId, action, operationId()),
+		onSuccess: (value) => { acceptWorkspace(value); showSuccess('Connected listing state updated.'); },
+		onError: (error) => showError(apiErrorMessage(error)),
+	}));
 
 	function acceptWorkspace(value: ListingWorkspace) {
 		loadedVersion = value.contentVersion;
@@ -96,6 +104,7 @@
 
 	function numberOrNull(value: string): number | null { return value.trim() ? Number(value) : null; }
 	function validNumber(value: string): boolean { return !!value.trim() && Number.isFinite(Number(value)); }
+	function operationId(): string { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${unitId}`; }
 	async function copy(label: string, value: string) {
 		if (!value.trim()) return showError(`${label} is empty.`);
 		await navigator.clipboard.writeText(value); showSuccess(`${label} copied.`);
@@ -221,9 +230,29 @@
 					</div>
 				</DetailCard>
 
-				<DetailCard title="Zillow Connected" icon={WifiOff} accent="muted">
-					<p class="text-sm text-muted-foreground">Ready for provider approval. The same listing will publish, reconcile status, and receive leads through a Zillow adapter—without changing this screen or duplicating your data.</p>
-					<div class="mt-3 rounded-md bg-muted p-3 text-xs"><strong>Current state:</strong> {connected?.lastDeliveryStatus ?? 'Not connected'}<br />No Zillow API calls are made yet.</div>
+				<DetailCard title="Zillow Connected" icon={WifiOff} accent={connected?.channelAvailable ? 'primary' : 'muted'}>
+					<div class="space-y-3">
+						<p class="text-sm text-muted-foreground">The same canonical listing is prepared, published, updated, or removed through an approved provider adapter. Guided mode remains available independently.</p>
+						<div class="rounded-md bg-muted p-3 text-xs">
+							<strong>Connection:</strong> {connected?.channelState ?? 'Unavailable'}<br />
+							<strong>Publication:</strong> {connected?.status ?? 'Draft'}<br />
+							<strong>Last delivery:</strong> {connected?.lastDeliveryStatus ?? 'None'}
+							{#if connected?.lastDeliveryError}<br /><span class="text-destructive">{connected.lastDeliveryError}</span>{/if}
+						</div>
+						{#if connected?.channelAvailable}
+							<div class="grid gap-2 sm:grid-cols-2">
+								<Button variant="outline" disabled={connectedMutation.isPending} onclick={() => connectedMutation.mutate({ action: 'prepare', publicationId: connected.id })}><Clipboard class="mr-2 h-4 w-4" /> Prepare</Button>
+								{#if connected.status === 'Ready' || connected.status === 'Draft' || connected.status === 'Failed'}
+									<Button disabled={connectedMutation.isPending || connected.status !== 'Ready'} onclick={() => connectedMutation.mutate({ action: 'publish', publicationId: connected.id })}><Check class="mr-2 h-4 w-4" /> Publish</Button>
+								{:else if connected.status === 'Published'}
+									<Button disabled={connectedMutation.isPending || !connected.needsRepublish} onclick={() => connectedMutation.mutate({ action: 'update', publicationId: connected.id })}><RefreshCw class="mr-2 h-4 w-4" /> Send updates</Button>
+									<Button variant="outline" disabled={connectedMutation.isPending} onclick={() => connectedMutation.mutate({ action: 'unpublish', publicationId: connected.id })}><Trash2 class="mr-2 h-4 w-4" /> Remove listing</Button>
+								{/if}
+							</div>
+						{:else}
+							<p class="rounded-md border p-3 text-sm text-muted-foreground">{connected?.channelUnavailableReason ?? 'Connected publishing is not configured.'} No provider calls are made.</p>
+						{/if}
+					</div>
 				</DetailCard>
 
 				{#if guided?.unconfirmedSignals.length}

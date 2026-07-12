@@ -740,7 +740,11 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
               ],
             ),
             const SizedBox(height: 14),
-            _ListingConnectedCard(publication: _connectedPublication(listing)),
+            _ListingConnectedCard(
+              publication: _connectedPublication(listing),
+              busy: _isSaving,
+              onAction: _runConnectedAction,
+            ),
             if (_guidedPublication(listing)?.unconfirmedSignals.isNotEmpty ==
                 true) ...[
               const SizedBox(height: 14),
@@ -1046,6 +1050,37 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
       );
     } catch (e) {
       _showSnack(e is ApiException ? e.message : e.toString());
+    }
+  }
+
+  Future<void> _runConnectedAction(String action) async {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    final publication = listing == null ? null : _connectedPublication(listing);
+    if (publication == null || !publication.channelAvailable) return;
+    setState(() => _isSaving = true);
+    try {
+      final repository = ref.read(unitsRepositoryProvider);
+      final saved = action == 'prepare'
+          ? await repository.prepareConnectedListing(
+              widget.dashboard.unit.id,
+              publication.id,
+            )
+          : await repository.runConnectedListingCommand(
+              widget.dashboard.unit.id,
+              publication.id,
+              action,
+              '${DateTime.now().toUtc().microsecondsSinceEpoch}-${publication.id}',
+            );
+      _loadedContentVersion = null;
+      _syncFromListing(saved);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _showSnack('Connected listing state updated.');
+    } catch (e) {
+      _showSnack(e is ApiException ? e.message : e.toString());
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -1433,29 +1468,73 @@ class _ListingChecklist extends StatelessWidget {
 }
 
 class _ListingConnectedCard extends StatelessWidget {
-  const _ListingConnectedCard({required this.publication});
+  const _ListingConnectedCard({
+    required this.publication,
+    required this.busy,
+    required this.onAction,
+  });
 
   final ListingPublication? publication;
+  final bool busy;
+  final Future<void> Function(String action) onAction;
 
   @override
   Widget build(BuildContext context) {
     return _Section(
-      title: 'Zillow Connected — later',
+      title: 'Zillow Connected',
       empty: 'No connection status',
       children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
           child: Text(
-            'This workspace is ready for a future approved Zillow connection. The same listing will publish and reconcile here without duplicating your data. No Zillow API calls are made today.',
+            'An approved provider adapter publishes the same canonical listing used by Guided mode. It never creates a second listing.',
           ),
         ),
         _CompactRow(
-          icon: Symbols.cloud_off_rounded,
-          title: publication?.lastDeliveryStatus ?? 'Not connected',
+          icon: publication?.channelAvailable == true
+              ? Symbols.check_circle_rounded
+              : Symbols.cloud_off_rounded,
+          title: publication?.channelState ?? 'Unavailable',
           subtitle:
               publication?.lastDeliveryError ??
-              'Guided publishing remains available while approval is pending.',
+              publication?.channelUnavailableReason ??
+              'Guided publishing remains available.',
         ),
+        if (publication?.channelAvailable == true)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: busy ? null : () => onAction('prepare'),
+                  icon: const Icon(Symbols.description_rounded),
+                  label: const Text('Prepare'),
+                ),
+                if (publication?.status == 'Ready')
+                  FilledButton.icon(
+                    onPressed: busy ? null : () => onAction('publish'),
+                    icon: const Icon(Symbols.publish_rounded),
+                    label: const Text('Publish'),
+                  ),
+                if (publication?.status == 'Published') ...[
+                  OutlinedButton.icon(
+                    onPressed: busy || publication?.needsRepublish != true
+                        ? null
+                        : () => onAction('update'),
+                    icon: const Icon(Symbols.sync_rounded),
+                    label: const Text('Send updates'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : () => onAction('unpublish'),
+                    icon: const Icon(Symbols.delete_outline_rounded),
+                    label: const Text('Remove'),
+                  ),
+                ],
+              ],
+            ),
+          ),
       ],
     );
   }

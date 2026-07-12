@@ -501,6 +501,8 @@ class ListingPublication {
     required this.photosConfirmed,
     required this.providerWorkspaceOpened,
     required this.needsRepublish,
+    required this.channelAvailable,
+    required this.channelState,
     required this.unconfirmedSignals,
     this.externalListingId,
     this.listingUrl,
@@ -513,6 +515,7 @@ class ListingPublication {
     this.lastDeliveryStatus,
     this.lastDeliveryError,
     this.lastDeliveryAttemptAtUtc,
+    this.channelUnavailableReason,
   });
 
   final int id;
@@ -530,6 +533,9 @@ class ListingPublication {
   final bool photosConfirmed;
   final bool providerWorkspaceOpened;
   final bool needsRepublish;
+  final bool channelAvailable;
+  final String channelState;
+  final String? channelUnavailableReason;
   final int? publishedContentVersion;
   final String? lastDeliveryKey;
   final String? lastDeliveryStatus;
@@ -555,6 +561,9 @@ class ListingPublication {
     photosConfirmed: json['photosConfirmed'] as bool? ?? false,
     providerWorkspaceOpened: json['providerWorkspaceOpened'] as bool? ?? false,
     needsRepublish: json['needsRepublish'] as bool? ?? false,
+    channelAvailable: json['channelAvailable'] as bool? ?? false,
+    channelState: json['channelState'] as String? ?? 'Unavailable',
+    channelUnavailableReason: json['channelUnavailableReason'] as String?,
     publishedContentVersion: (json['publishedContentVersion'] as num?)?.toInt(),
     lastDeliveryKey: json['lastDeliveryKey'] as String?,
     lastDeliveryStatus: json['lastDeliveryStatus'] as String?,
@@ -962,6 +971,37 @@ class UnitsRepository {
         );
       }
       return ListingWorkspace.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ListingWorkspace> prepareConnectedListing(
+    int unitId,
+    int publicationId,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/units/$unitId/listing-workspace/publications/$publicationId/connected/prepare',
+      );
+      return ListingWorkspace.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ListingWorkspace> runConnectedListingCommand(
+    int unitId,
+    int publicationId,
+    String action,
+    String clientOperationId,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/units/$unitId/listing-workspace/publications/$publicationId/connected/$action',
+        data: {'clientOperationId': clientOperationId},
+      );
+      return ListingWorkspace.fromJson(response.data!);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

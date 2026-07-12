@@ -202,6 +202,51 @@ public class UnitController : ManagementControllerBase
         return File(file.Content, file.ContentType, enableRangeProcessing: true);
     }
 
+    [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/prepare")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListingWorkspaceResponse>> PrepareConnectedListing(
+        int id, int publicationId, CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
+        var workspace = await _listings.PrepareConnectedAsync(
+            GetPortfolioId(), id, publicationId, GetUserId(), ct);
+        return workspace is null ? NotFound(new { error = "Connected listing publication not found" }) : Ok(workspace);
+    }
+
+    [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/publish")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public Task<ActionResult<ListingWorkspaceResponse>> PublishConnectedListing(
+        int id, int publicationId, [FromBody] ConnectedListingCommandRequest request, CancellationToken ct)
+        => RunConnectedCommandAsync(id, publicationId, request,
+            _listings.PublishConnectedAsync, ct);
+
+    [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/update")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public Task<ActionResult<ListingWorkspaceResponse>> UpdateConnectedListing(
+        int id, int publicationId, [FromBody] ConnectedListingCommandRequest request, CancellationToken ct)
+        => RunConnectedCommandAsync(id, publicationId, request,
+            _listings.UpdateConnectedAsync, ct);
+
+    [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/unpublish")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public Task<ActionResult<ListingWorkspaceResponse>> UnpublishConnectedListing(
+        int id, int publicationId, [FromBody] ConnectedListingCommandRequest request, CancellationToken ct)
+        => RunConnectedCommandAsync(id, publicationId, request,
+            _listings.UnpublishConnectedAsync, ct);
+
+    private async Task<ActionResult<ListingWorkspaceResponse>> RunConnectedCommandAsync(
+        int unitId,
+        int publicationId,
+        ConnectedListingCommandRequest request,
+        Func<int, int, int, string, int, CancellationToken, Task<ListingWorkspaceResponse?>> command,
+        CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(unitId, ct)) return Forbid();
+        var workspace = await command(GetPortfolioId(), unitId, publicationId,
+            request.ClientOperationId, GetUserId(), ct);
+        return workspace is null ? NotFound(new { error = "Connected listing publication not found" }) : Ok(workspace);
+    }
+
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/signals")]
     [ProducesResponseType(typeof(ExternalListingSignalResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ExternalListingSignalResponse>> IngestListingSignal(

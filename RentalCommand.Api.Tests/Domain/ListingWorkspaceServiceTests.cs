@@ -8,6 +8,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Listings;
 using RentalCommand.TestCommon;
 using RentalCommand.Data.Documents;
 
@@ -22,7 +23,9 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     public ListingWorkspaceServiceTests()
         => _service = new ListingWorkspaceService(_context.Db, Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(), new PermissiveInfrastructureWriteGate(), Mock.Of<IFileStorage>(),
-            Mock.Of<IPendingFileUploadStore>(), NullLogger<ListingWorkspaceService>.Instance, TimeProvider.System);
+            Mock.Of<IPendingFileUploadStore>(),
+            new ListingChannelAdapterResolver([new DisabledZillowListingChannelAdapter()]),
+            NullLogger<ListingWorkspaceService>.Instance, TimeProvider.System);
 
     public void Dispose() => _context.Dispose();
 

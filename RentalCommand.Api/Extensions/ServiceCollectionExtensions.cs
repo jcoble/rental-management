@@ -4,6 +4,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Listings;
 
 namespace RentalCommand.Api.Extensions;
 
@@ -124,6 +125,8 @@ public static class ServiceCollectionExtensions
 
         // Unit Command Center aggregate (per-unit dashboard + timeline union).
         services.AddScoped<IUnitDashboardService, UnitDashboardService>();
+        services.AddSingleton<IListingChannelAdapter, DisabledZillowListingChannelAdapter>();
+        services.AddSingleton<IListingChannelAdapterResolver, ListingChannelAdapterResolver>();
         services.AddScoped<IListingWorkspaceService, ListingWorkspaceService>();
 
         // Portfolio analytics overview (occupancy, rent collection, trend, work orders, lease expiry).
