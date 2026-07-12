@@ -41,6 +41,32 @@ public sealed record ReturnPossessionResponse(
     DateTime PossessionReturnedAtUtc,
     bool Replayed);
 
+public sealed class CancelPlannedRelationshipAccessRequest
+{
+    public int TenantUserAccessId { get; set; }
+    public CancelPlannedAccessDisposition? Disposition { get; set; }
+}
+
+public sealed class CancelPlannedRelationshipRequest
+{
+    public int UnitId { get; set; }
+    public string CancellationReasonCode { get; set; } = string.Empty;
+    public string? CancellationNote { get; set; }
+    public string DraftCancellationReason { get; set; } = string.Empty;
+    public List<CancelPlannedRelationshipAccessRequest> Accesses { get; set; } = [];
+}
+
+public sealed record CancelPlannedRelationshipResponse(
+    int LeaseManagementId,
+    int UnitId,
+    DateTime CanceledAtUtc,
+    DateTime AccountClosedAtUtc,
+    IReadOnlyList<int> CanceledAgreementDraftIds,
+    IReadOnlyList<int> CanceledAddendumDraftIds,
+    IReadOnlyList<int> RevokedAccessIds,
+    IReadOnlyList<int> RetainedAccessIds,
+    bool Replayed);
+
 public sealed record CompleteTurnoverResponse(
     int UnitId,
     int TurnoverPeriodId,

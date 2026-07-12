@@ -130,6 +130,64 @@ internal sealed class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersi
             DeserializeIds(row.RevokedAccessIdsJson));
     }
 
+    public async Task<AtomicCancelPlannedRelationshipMutationResult> CancelPlannedRelationshipAsync(
+        int portfolioId,
+        int leaseManagementId,
+        IReadOnlyList<AtomicCancelPlannedAccessInput> accesses,
+        int actorUserId,
+        DateTime changedAtUtc,
+        string cancellationReasonCode,
+        string? cancellationNote,
+        string draftCancellationReason,
+        CancellationToken ct = default)
+    {
+        var accessPayload = JsonSerializer.Serialize(accesses.Select(item => new
+        {
+            access_id = item.AccessId,
+            disposition = (int)item.Disposition,
+        }));
+        var parameters = new NpgsqlParameter[]
+        {
+            JsonParameter("accesses", accessPayload),
+            Integer("portfolioId", portfolioId),
+            Integer("leaseManagementId", leaseManagementId),
+            Integer("actorUserId", actorUserId),
+            Timestamp("changedAt", changedAtUtc),
+            Text("reasonCode", cancellationReasonCode.Trim()),
+            NullableText("cancellationNote", cancellationNote?.Trim()),
+            Text("draftReason", draftCancellationReason.Trim()),
+            Text("accountCloseReason", "PlannedRelationshipCanceled"),
+            Text("accountCloseNote", "Planned lease relationship canceled before possession."),
+            Text("accessReason", "Tenant access revoked because the planned lease relationship was canceled."),
+            Integer("revokeNow", (int)CancelPlannedAccessDisposition.RevokeNow),
+            Integer("retain", (int)CancelPlannedAccessDisposition.Retain),
+            Integer("canceled", (int)CancelPlannedRelationshipOutcome.Canceled),
+            Integer("alreadyCanceled", (int)CancelPlannedRelationshipOutcome.AlreadyCanceled),
+            Integer("possessionGiven", (int)CancelPlannedRelationshipOutcome.PossessionAlreadyGiven),
+            Integer("issuedArtifacts", (int)CancelPlannedRelationshipOutcome.IssuedArtifactsRequireResolution),
+            Integer("moneyResolution", (int)CancelPlannedRelationshipOutcome.FinancialResolutionRequired),
+            Integer("invalidAccess", (int)CancelPlannedRelationshipOutcome.InvalidAccessPolicy),
+        };
+
+        using var lease = _auditScope.BeginInternalRawDmlBatch(
+            new("LeaseAgreements", AtomicRawDmlOperation.Update),
+            new("LeaseAddenda", AtomicRawDmlOperation.Update),
+            new("TenantUserAccesses", AtomicRawDmlOperation.Update),
+            new("TenantAccounts", AtomicRawDmlOperation.Update),
+            new("LeaseManagements", AtomicRawDmlOperation.Update));
+        var row = await _db.Database.SqlQueryRaw<CancelPlannedRelationshipRow>(
+                CancelPlannedRelationshipSql, parameters)
+            .SingleAsync(ct);
+        return new(
+            (CancelPlannedRelationshipOutcome)row.Outcome,
+            row.CanceledAtUtc,
+            row.TenantAccountId,
+            DeserializeIds(row.CanceledAgreementDraftIdsJson),
+            DeserializeIds(row.CanceledAddendumDraftIdsJson),
+            DeserializeIds(row.RevokedAccessIdsJson),
+            DeserializeIds(row.RetainedAccessIdsJson));
+    }
+
     private static NpgsqlParameter JsonParameter(string name, string json) =>
         new(name, NpgsqlDbType.Jsonb) { Value = json };
 
@@ -141,6 +199,9 @@ internal sealed class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersi
 
     private static NpgsqlParameter Text(string name, string value) =>
         new(name, NpgsqlDbType.Text) { Value = value };
+
+    private static NpgsqlParameter NullableText(string name, string? value) =>
+        new(name, NpgsqlDbType.Text) { Value = value is null ? DBNull.Value : value };
 
     private static int[] DeserializeIds(string json) =>
         JsonSerializer.Deserialize<int[]>(json)
@@ -161,6 +222,17 @@ internal sealed class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersi
         public DateTime? PossessionReturnedAtUtc { get; set; }
         public string EndedPartyIdsJson { get; set; } = "[]";
         public string RevokedAccessIdsJson { get; set; } = "[]";
+    }
+
+    private sealed class CancelPlannedRelationshipRow
+    {
+        public int Outcome { get; set; }
+        public DateTime? CanceledAtUtc { get; set; }
+        public int? TenantAccountId { get; set; }
+        public string CanceledAgreementDraftIdsJson { get; set; } = "[]";
+        public string CanceledAddendumDraftIdsJson { get; set; } = "[]";
+        public string RevokedAccessIdsJson { get; set; } = "[]";
+        public string RetainedAccessIdsJson { get; set; } = "[]";
     }
 
     private const string AccessTransitionSql = """
@@ -374,5 +446,205 @@ internal sealed class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersi
                 AS "EndedPartyIdsJson",
             COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM revoked_access), '[]'::jsonb)::text
                 AS "RevokedAccessIdsJson"
+        """;
+
+    private const string CancelPlannedRelationshipSql = """
+        WITH access_input AS MATERIALIZED (
+            SELECT access_id, disposition
+            FROM jsonb_to_recordset(@accesses::jsonb) AS row(access_id integer, disposition integer)
+        ),
+        relationship AS MATERIALIZED (
+            SELECT relationship.*
+            FROM "LeaseManagements" AS relationship
+            WHERE relationship."Id" = @leaseManagementId
+              AND relationship."PortfolioId" = @portfolioId
+            FOR UPDATE
+        ),
+        account AS MATERIALIZED (
+            SELECT account.*
+            FROM "TenantAccounts" AS account
+            INNER JOIN relationship
+                ON relationship."Id" = account."LeaseManagementId"
+               AND relationship."PortfolioId" = account."PortfolioId"
+            FOR UPDATE OF account
+        ),
+        active_access AS MATERIALIZED (
+            SELECT access."Id"
+            FROM "TenantUserAccesses" AS access
+            INNER JOIN "LeaseManagementParties" AS party
+                ON party."Id" = access."LeaseManagementPartyId"
+               AND party."PortfolioId" = access."PortfolioId"
+            WHERE party."LeaseManagementId" = @leaseManagementId
+              AND party."PortfolioId" = @portfolioId
+              AND access."RevokedAtUtc" IS NULL
+        ),
+        validation AS MATERIALIZED (
+            SELECT
+                relationship."CanceledAtUtc" IS NOT NULL AS already_canceled,
+                relationship."CanceledAtUtc" AS canceled_at,
+                relationship."PossessionGivenAtUtc" IS NOT NULL AS possession_given,
+                account."Id" AS tenant_account_id,
+                EXISTS (
+                    SELECT 1
+                    FROM "LeaseAgreements" AS agreement
+                    WHERE agreement."PortfolioId" = @portfolioId
+                      AND agreement."LeaseManagementId" = @leaseManagementId
+                      AND agreement."IssuedAtUtc" IS NOT NULL
+                      AND agreement."VoidedAtUtc" IS NULL)
+                OR EXISTS (
+                    SELECT 1
+                    FROM "LeaseAddenda" AS addendum
+                    WHERE addendum."PortfolioId" = @portfolioId
+                      AND addendum."LeaseManagementId" = @leaseManagementId
+                      AND addendum."IssuedAtUtc" IS NOT NULL
+                      AND addendum."VoidedAtUtc" IS NULL)
+                    AS unresolved_issued_artifacts,
+                EXISTS (
+                    SELECT 1
+                    FROM "TenantLedgerEntries" AS entry
+                    WHERE entry."PortfolioId" = @portfolioId
+                      AND entry."TenantAccountId" = account."Id")
+                OR EXISTS (
+                    SELECT 1
+                    FROM "SecurityDepositEntries" AS entry
+                    INNER JOIN "SecurityDepositAccounts" AS deposit
+                        ON deposit."Id" = entry."SecurityDepositAccountId"
+                       AND deposit."PortfolioId" = entry."PortfolioId"
+                    WHERE deposit."PortfolioId" = @portfolioId
+                      AND deposit."TenantAccountId" = account."Id")
+                OR COALESCE((
+                    SELECT sum(CASE WHEN entry."Direction" = 'Debit' THEN entry."Amount" ELSE -entry."Amount" END)
+                    FROM "TenantLedgerEntries" AS entry
+                    WHERE entry."PortfolioId" = @portfolioId
+                      AND entry."TenantAccountId" = account."Id"), 0) <> 0
+                OR COALESCE((
+                    SELECT sum(CASE WHEN entry."Direction" = 'Increase' THEN entry."Amount" ELSE -entry."Amount" END)
+                    FROM "SecurityDepositEntries" AS entry
+                    INNER JOIN "SecurityDepositAccounts" AS deposit
+                        ON deposit."Id" = entry."SecurityDepositAccountId"
+                       AND deposit."PortfolioId" = entry."PortfolioId"
+                    WHERE deposit."PortfolioId" = @portfolioId
+                      AND deposit."TenantAccountId" = account."Id"), 0) <> 0
+                OR EXISTS (
+                    SELECT 1
+                    FROM "TenantPaymentAttempts" AS attempt
+                    WHERE attempt."PortfolioId" = @portfolioId
+                      AND attempt."TenantAccountId" = account."Id"
+                      AND attempt."State" NOT IN ('Failed', 'Canceled'))
+                OR EXISTS (
+                    SELECT 1
+                    FROM "TenantAutopayEnrollments" AS enrollment
+                    WHERE enrollment."PortfolioId" = @portfolioId
+                      AND enrollment."TenantAccountId" = account."Id"
+                      AND enrollment."CanceledAtUtc" IS NULL)
+                    AS money_resolution_required,
+                (SELECT count(*) FROM access_input) =
+                    (SELECT count(DISTINCT access_id) FROM access_input)
+                AND NOT EXISTS (
+                    SELECT access_id FROM access_input EXCEPT SELECT "Id" FROM active_access)
+                AND NOT EXISTS (
+                    SELECT "Id" FROM active_access EXCEPT SELECT access_id FROM access_input)
+                AND NOT EXISTS (
+                    SELECT 1 FROM access_input
+                    WHERE disposition NOT IN (@revokeNow, @retain))
+                    AS access_policy_valid
+            FROM relationship
+            INNER JOIN account ON true
+        ),
+        decision AS MATERIALIZED (
+            SELECT *,
+                CASE
+                    WHEN already_canceled THEN @alreadyCanceled
+                    WHEN possession_given THEN @possessionGiven
+                    WHEN unresolved_issued_artifacts THEN @issuedArtifacts
+                    WHEN money_resolution_required THEN @moneyResolution
+                    WHEN NOT access_policy_valid THEN @invalidAccess
+                    ELSE @canceled
+                END AS outcome
+            FROM validation
+        ),
+        canceled_agreement_drafts AS (
+            UPDATE "LeaseAgreements" AS agreement
+            SET "DraftCanceledAtUtc" = @changedAt,
+                "DraftCancellationReason" = @draftReason,
+                "UpdatedAtUtc" = @changedAt
+            FROM decision
+            WHERE decision.outcome = @canceled
+              AND agreement."PortfolioId" = @portfolioId
+              AND agreement."LeaseManagementId" = @leaseManagementId
+              AND agreement."IssuedAtUtc" IS NULL
+              AND agreement."DraftCanceledAtUtc" IS NULL
+            RETURNING agreement."Id"
+        ),
+        canceled_addendum_drafts AS (
+            UPDATE "LeaseAddenda" AS addendum
+            SET "DraftCanceledAtUtc" = @changedAt,
+                "DraftCancellationReason" = @draftReason,
+                "UpdatedAtUtc" = @changedAt
+            FROM decision
+            WHERE decision.outcome = @canceled
+              AND addendum."PortfolioId" = @portfolioId
+              AND addendum."LeaseManagementId" = @leaseManagementId
+              AND addendum."IssuedAtUtc" IS NULL
+              AND addendum."DraftCanceledAtUtc" IS NULL
+            RETURNING addendum."Id"
+        ),
+        revoked_access AS (
+            UPDATE "TenantUserAccesses" AS access
+            SET "RevokedAtUtc" = @changedAt,
+                "RevokedByUserId" = @actorUserId,
+                "Reason" = @accessReason
+            FROM access_input AS input, decision
+            WHERE decision.outcome = @canceled
+              AND input.disposition = @revokeNow
+              AND access."Id" = input.access_id
+              AND access."PortfolioId" = @portfolioId
+              AND access."RevokedAtUtc" IS NULL
+            RETURNING access."Id"
+        ),
+        closed_account AS (
+            UPDATE "TenantAccounts" AS account
+            SET "ClosedAtUtc" = @changedAt,
+                "CloseReasonCode" = @accountCloseReason,
+                "CloseNote" = @accountCloseNote
+            FROM decision
+            WHERE decision.outcome = @canceled
+              AND account."Id" = decision.tenant_account_id
+              AND account."PortfolioId" = @portfolioId
+              AND account."ClosedAtUtc" IS NULL
+            RETURNING account."Id", account."ClosedAtUtc"
+        ),
+        canceled_relationship AS (
+            UPDATE "LeaseManagements" AS relationship
+            SET "CanceledAtUtc" = @changedAt,
+                "CancellationReasonCode" = @reasonCode,
+                "CancellationNote" = @cancellationNote,
+                "AccountClosedAtUtc" = @changedAt,
+                "UpdatedAtUtc" = @changedAt,
+                "RowVersion" = gen_random_uuid()
+            FROM decision, closed_account
+            WHERE decision.outcome = @canceled
+              AND relationship."Id" = @leaseManagementId
+              AND relationship."PortfolioId" = @portfolioId
+              AND relationship."CanceledAtUtc" IS NULL
+            RETURNING relationship."CanceledAtUtc"
+        )
+        SELECT
+            COALESCE((SELECT outcome FROM decision), @invalidAccess) AS "Outcome",
+            COALESCE(
+                (SELECT "CanceledAtUtc" FROM canceled_relationship),
+                (SELECT canceled_at FROM decision)) AS "CanceledAtUtc",
+            (SELECT tenant_account_id FROM decision) AS "TenantAccountId",
+            COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM canceled_agreement_drafts), '[]'::jsonb)::text
+                AS "CanceledAgreementDraftIdsJson",
+            COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM canceled_addendum_drafts), '[]'::jsonb)::text
+                AS "CanceledAddendumDraftIdsJson",
+            COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM revoked_access), '[]'::jsonb)::text
+                AS "RevokedAccessIdsJson",
+            COALESCE((
+                SELECT jsonb_agg(input.access_id ORDER BY input.access_id)
+                FROM access_input AS input, decision
+                WHERE decision.outcome = @canceled AND input.disposition = @retain), '[]'::jsonb)::text
+                AS "RetainedAccessIdsJson"
         """;
 }

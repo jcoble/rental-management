@@ -67,11 +67,14 @@ internal static class LeaseRelationshipModelConfiguration
                     "(\"PossessionAgreementExceptionAuthorizedByUserId\" IS NULL)) AND " +
                     "(\"PossessionAgreementExceptionReason\" IS NULL OR \"PossessionGivenAtUtc\" IS NOT NULL)");
                 table.HasCheckConstraint(
-                    "CK_LeaseManagement_AccountCloseRequiresReturn",
-                    "\"AccountClosedAtUtc\" IS NULL OR \"PossessionReturnedAtUtc\" IS NOT NULL");
+                    "CK_LeaseManagement_AccountCloseRequiresTerminalFact",
+                    "\"AccountClosedAtUtc\" IS NULL OR \"PossessionReturnedAtUtc\" IS NOT NULL " +
+                    "OR \"CanceledAtUtc\" IS NOT NULL");
                 table.HasCheckConstraint(
-                    "CK_LeaseManagement_AccountCloseAfterReturn",
-                    "\"AccountClosedAtUtc\" IS NULL OR \"AccountClosedAtUtc\" >= \"PossessionReturnedAtUtc\"");
+                    "CK_LeaseManagement_AccountCloseAfterTerminalFact",
+                    "\"AccountClosedAtUtc\" IS NULL OR " +
+                    "(\"PossessionReturnedAtUtc\" IS NOT NULL AND \"AccountClosedAtUtc\" >= \"PossessionReturnedAtUtc\") OR " +
+                    "(\"CanceledAtUtc\" IS NOT NULL AND \"AccountClosedAtUtc\" >= \"CanceledAtUtc\")");
                 table.HasCheckConstraint(
                     "CK_LeaseManagement_CancellationPair",
                     "(\"CanceledAtUtc\" IS NULL) = (\"CancellationReasonCode\" IS NULL)");

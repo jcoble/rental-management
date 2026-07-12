@@ -116,8 +116,8 @@ Checks:
 - `PossessionReturnedAtUtc IS NULL OR PossessionGivenAtUtc IS NOT NULL`.
 - `PossessionReturnedAtUtc IS NULL OR PossessionReturnedAtUtc >= PossessionGivenAtUtc`.
 - possession-exception reason and actor are both null or both present, and cannot be present without `PossessionGivenAtUtc`.
-- `AccountClosedAtUtc IS NULL OR PossessionReturnedAtUtc IS NOT NULL`.
-- `AccountClosedAtUtc IS NULL OR AccountClosedAtUtc >= PossessionReturnedAtUtc`.
+- `AccountClosedAtUtc IS NULL OR PossessionReturnedAtUtc IS NOT NULL OR CanceledAtUtc IS NOT NULL`.
+- When closed after possession return, `AccountClosedAtUtc >= PossessionReturnedAtUtc`; when a planned relationship is canceled, `AccountClosedAtUtc >= CanceledAtUtc`.
 - cancellation code/timestamp are both null or both non-null.
 - ending decision fields are null for `Undecided` and present for all other values.
 
@@ -1053,7 +1053,7 @@ Lock TenantAccount and operation receipt; validate source Agreement/Addendum/acc
 
 ### 7.10 Cancel planned relationship and close account
 
-- Cancel requires no possession; sets LeaseManagement cancellation, cancels drafts, voids issued artifacts through explicit rules, revokes/retains access by policy, and resolves posted money with append-only refund/reversal commands in the same orchestration boundary.
+- Cancel requires no possession; sets LeaseManagement cancellation, cancels drafts, voids issued artifacts through explicit rules, revokes/retains access by policy, and resolves posted money with append-only refund/reversal commands in the same orchestration boundary. When the account has no posted money or unfinished money workflow, cancellation closes `TenantAccount` and sets `LeaseManagement.AccountClosedAtUtc` at the same database wall-clock instant. Until the typed refund/reversal and issued-artifact void commands exist, their presence is a precise domain conflict rather than permission to rewrite history or invent void facts.
 - Close requires returned possession, no unfinished required workflows, and zero derived receivable/deposit balance after same-transaction final adjustments/refunds. It sets TenantAccount and LeaseManagement close facts together.
 
 ## 8. Exact destructive cutover
