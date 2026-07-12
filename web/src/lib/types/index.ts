@@ -394,32 +394,33 @@ export interface LeaseTenantSummary {
 	isPrimary: boolean;
 }
 
-export interface Payment {
+/** One immutable receipt credit posted to a continuous tenant account. */
+export interface PaymentReceipt {
 	id: number;
+	publicId: string;
 	portfolioId: number;
-	leaseId?: number | null;
-	applicationId?: number | null;
-	/** Unit/Property the payment's lease is on; resolved DB-side via the lease join so the UI can route to the unit's tab. */
-	unitId?: number;
-	propertyId?: number;
-	paymentType: PaymentType;
-	status: PaymentStatus;
+	tenantAccountId: number;
+	leaseManagementId: number;
+	propertyId: number;
+	unitId: number;
+	accountNumber: string;
+	relationshipNumber: string;
+	tenantName?: string | null;
+	propertyName?: string | null;
+	unitNumber?: string | null;
 	amount: number;
-	/** Cash collected so far on a Partial payment (strictly between 0 and amount); null/absent otherwise. */
-	amountPaid?: number | null;
-	dueDate: string;
-	paidDate?: string;
-	method?: string;
-	externalReference?: string;
-	notes?: string;
-	tenantName?: string;
-	leaseNumber?: string;
-	propertyName?: string;
-	unitNumber?: string;
-	hasScan?: boolean;
-	scanIsImage?: boolean;
-	createdAt: string;
-	updatedAt: string;
+	currency: string;
+	receivedOn: string;
+	postedAtUtc: string;
+	description: string;
+	provider?: string | null;
+	providerReference?: string | null;
+	providerState?: string | null;
+	paymentMethodSummary?: string | null;
+	payerName?: string | null;
+	checkNumber?: string | null;
+	bankName?: string | null;
+	sourceStoredFileId?: number | null;
 }
 
 export interface ExpenseLineItem {
@@ -745,22 +746,24 @@ export interface PastDueResponse {
 
 /** One behind lease/tenant row (PastDueLeaseResponse). */
 export interface PastDueLease {
-	leaseId: number;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	currentAgreementId?: number | null;
 	/** Unit id on the behind lease, so the "open oldest payment" link deep-links into the unit's
 	 * Command Center Rent tab rather than the generic payment detail page. */
 	unitId: number;
 	tenantName?: string | null;
 	/** Tenant phone, for a one-tap reminder text; null when not on file. */
 	tenantPhone?: string | null;
-	leaseNumber?: string | null;
+	relationshipNumber?: string | null;
 	propertyName?: string | null;
 	unitNumber?: string | null;
 	pastDueAmount: number;
 	overduePaymentCount: number;
 	/** Due date of the oldest past-due payment (drives the "N days late" label). */
-	oldestDueDate: string;
+	oldestDueOn: string;
 	/** Id of the oldest past-due payment, so the row can deep-link into its detail. */
-	oldestPaymentId: number;
+	oldestLedgerEntryId: number;
 }
 
 export interface PropertyFinancialSummary {

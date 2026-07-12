@@ -1,5 +1,5 @@
 import { api } from '../client';
-import type { Appointment, Lease, LeaseQuestionResponse, Payment, WorkOrder, WorkOrderDetail } from '$lib/types';
+import type { Appointment, Lease, LeaseQuestionResponse, PaymentStatus, PaymentType, WorkOrder, WorkOrderDetail } from '$lib/types';
 import type {
 	Conversation,
 	ConversationMessage,
@@ -45,6 +45,17 @@ export interface AutopayStatus {
 	enrolledAt?: string | null;
 }
 
+/** Tenant-facing payable charge shape. This is not the management receipt projection. */
+export interface PortalPayment {
+	id: number;
+	leaseId?: number | null;
+	paymentType: PaymentType;
+	status: PaymentStatus;
+	amount: number;
+	amountPaid?: number | null;
+	dueDate: string;
+}
+
 export const portal = {
 	overview: () => api.get('/portal/overview'),
 	leases: () => api.get<Lease[]>('/portal/leases'),
@@ -59,7 +70,7 @@ export const portal = {
 			{ question }
 		),
 	balance: () => api.get('/portal/balance'),
-	payments: () => api.get<Payment[]>('/portal/payments'),
+	payments: () => api.get<PortalPayment[]>('/portal/payments'),
 	appointments: () => api.get<Appointment[]>('/portal/appointments'),
 	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
