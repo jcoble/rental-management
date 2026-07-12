@@ -57,6 +57,21 @@ public interface IAtomicCommandHandler<in TCommand, TResult>
 }
 
 /// <summary>
+/// Optional authorization hook for receipt replays. The atomic kernel invokes this inside the
+/// receipt transaction before deserializing or returning a stored result. Implementations receive
+/// only the original command shape and the restricted persistence session; they must perform no
+/// business writes.
+/// </summary>
+public interface IAtomicReplayAuthorizer<in TCommand>
+    where TCommand : notnull, IAtomicCommandData
+{
+    Task AuthorizeReplayAsync(
+        TCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct);
+}
+
+/// <summary>
 /// Marker for network/remote dependencies. Atomic command handlers must stage durable intent in
 /// the database and cannot directly depend on types carrying this marker.
 /// </summary>
@@ -251,6 +266,13 @@ public interface IAtomicLockingPersistence
 public interface IAtomicPersistenceSession
 {
     Guid SessionId { get; }
+
+    /// <summary>
+    /// Reads PostgreSQL's real wall clock for security eligibility checks. Business and simulation
+    /// clocks must not be used to decide whether a session, membership, or assignment is live.
+    /// </summary>
+    Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default);
+
     IQueryable<TEntity> Query<TEntity>() where TEntity : class;
     void Add<TEntity>(TEntity entity) where TEntity : class;
     void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class;

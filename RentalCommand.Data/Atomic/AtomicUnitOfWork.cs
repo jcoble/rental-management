@@ -108,6 +108,12 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                 ct);
             if (claimed == 0)
             {
+                var replayAuthorizer = ResolveReplayAuthorizer<TCommand, TResult>(services);
+                if (replayAuthorizer is not null)
+                {
+                    await replayAuthorizer.AuthorizeReplayAsync(command, attempt.Persistence, ct);
+                }
+
                 var replay = DeserializeReplay(receipt, resultCodec);
                 using (auditScope.BeginExecutorTransactionLifecycle())
                 {
@@ -265,6 +271,27 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         return handler;
     }
 
+    private static IAtomicReplayAuthorizer<TCommand>? ResolveReplayAuthorizer<TCommand, TResult>(
+        IServiceProvider services)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var registration = services.GetService<AtomicHandlerRegistration<TCommand, TResult>>()
+            ?? throw new AtomicArchitectureException(
+                $"Atomic handler {typeof(TCommand).Name}/{typeof(TResult).Name} must be registered " +
+                "through AddAtomicCommandHandler.");
+        if (!typeof(IAtomicReplayAuthorizer<TCommand>).IsAssignableFrom(registration.HandlerType))
+        {
+            return null;
+        }
+
+        var handler = ResolveHandler<TCommand, TResult>(services);
+        return handler as IAtomicReplayAuthorizer<TCommand>
+            ?? throw new AtomicArchitectureException(
+                $"Atomic handler {registration.HandlerType.FullName} declares replay authorization " +
+                $"but does not implement {typeof(IAtomicReplayAuthorizer<TCommand>).FullName}.");
+    }
+
     private static TResult DeserializeReplay<TResult>(
         AtomicCommandReceipt receipt,
         IAtomicResultCodec<TResult> resultCodec)
@@ -346,6 +373,11 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicProviderInboxPersistence ProviderInbox => _providerInbox;
         public IAtomicPendingFileUploadPersistence PendingFileUploads => _pendingFileUploads;
         public Guid SessionId => _db.ContextId.InstanceId;
+
+        public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
+            _db.Database
+                .SqlQuery<DateTime>($"""SELECT clock_timestamp() AS "Value"""")
+                .SingleAsync(ct);
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
 
