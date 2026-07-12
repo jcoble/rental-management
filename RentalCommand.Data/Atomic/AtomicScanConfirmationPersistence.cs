@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -26,10 +27,12 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         int portfolioId,
         int draftId,
         string expectedTargetEntityType,
+        string expectedDraftFingerprint,
         int confirmedByUserId,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedTargetEntityType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedDraftFingerprint);
         await _locking.AcquireAsync(AtomicLockResource.ScanDraft, draftId, ct);
 
         var draft = await _db.ScanDrafts.SingleOrDefaultAsync(
@@ -64,17 +67,26 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
             return Snapshot(AtomicScanDraftClaimOutcome.Rejected, draft);
         }
 
+        if (draft.Status != "Reviewing")
+        {
+            return Snapshot(AtomicScanDraftClaimOutcome.NotReady, draft);
+        }
+
+        var currentFingerprint = ScanConfirmationDraftFingerprint.Create(
+            draft.TargetEntityType,
+            draft.SourceStoredFileId,
+            draft.ExtractedFields);
+        if (!string.Equals(currentFingerprint, expectedDraftFingerprint, StringComparison.Ordinal))
+        {
+            return Snapshot(AtomicScanDraftClaimOutcome.StalePreparation, draft);
+        }
+
         if (!string.Equals(
                 draft.TargetEntityType,
                 expectedTargetEntityType,
                 StringComparison.OrdinalIgnoreCase))
         {
             return Snapshot(AtomicScanDraftClaimOutcome.TargetMismatch, draft);
-        }
-
-        if (draft.Status != "Reviewing")
-        {
-            return Snapshot(AtomicScanDraftClaimOutcome.NotReady, draft);
         }
 
         draft.Status = "Confirming";

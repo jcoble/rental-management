@@ -32,6 +32,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private int _tenantId;
     private int _leaseId;
     private int _vendorId;
+    private readonly Dictionary<int, string> _preparedFingerprints = [];
 
     public async Task InitializeAsync()
     {
@@ -270,7 +271,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         draftId,
         ConfirmedByUserId: 42,
         ConfirmedAtUtc: CommandTime,
-        kind switch
+        ExpectedDraftFingerprint: _preparedFingerprints[draftId],
+        Target: kind switch
         {
             ScanConfirmationTargetKind.Expense => new ScanConfirmationTargetData(
                 kind,
@@ -346,6 +348,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         };
         scope.Db.AddRange(source, draft);
         await scope.Db.SaveChangesAsync();
+        _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
+            draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
         return draft.Id;
     }
 

@@ -91,6 +91,8 @@ public class ScanServiceTests : IDisposable
         command.PortfolioId.Should().Be(PortfolioId);
         command.DraftId.Should().Be(draft.Id);
         command.ConfirmedByUserId.Should().Be(7);
+        command.ExpectedDraftFingerprint.Should().Be(
+            ScanConfirmationDraftFingerprint.Create("Expense", null, draft.ExtractedFields));
         command.Target.Kind.Should().Be(ScanConfirmationTargetKind.Expense);
         command.Target.Expense.Should().NotBeNull();
         command.Target.Expense!.Receipt.VendorName.Should().Be("Reviewed Vendor");

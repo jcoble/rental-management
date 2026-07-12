@@ -253,7 +253,15 @@ public sealed class ScanService : IScanService
         return new(
             ScanConfirmationPreparationOutcome.Ready,
             new ConfirmScanDraftCommand(
-                portfolioId, draftId, userId, _timeProvider.UtcNow(), target));
+                portfolioId,
+                draftId,
+                userId,
+                _timeProvider.UtcNow(),
+                ScanConfirmationDraftFingerprint.Create(
+                    draft.TargetEntityType,
+                    draft.SourceStoredFileId,
+                    draft.ExtractedFields),
+                target));
     }
 
     private static int? PositiveOverride(JsonElement root, params string[] names) =>

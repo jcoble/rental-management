@@ -22,6 +22,7 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
         CancellationToken ct)
     {
         command.Target.Validate();
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ExpectedDraftFingerprint);
         if (!_targetWriter.Supports(command.Target.Kind))
         {
             throw new ScanConfirmationValidationException(
@@ -32,6 +33,7 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             command.PortfolioId,
             command.DraftId,
             command.Target.EntityType,
+            command.ExpectedDraftFingerprint,
             command.ConfirmedByUserId,
             ct);
         switch (claim.Outcome)
@@ -45,6 +47,9 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             case AtomicScanDraftClaimOutcome.TargetMismatch:
                 throw new ScanConfirmationValidationException(
                     "Draft target does not match the reviewed confirmation target.");
+            case AtomicScanDraftClaimOutcome.StalePreparation:
+                throw new ScanConfirmationValidationException(
+                    "Draft changed after it was reviewed. Review the latest extraction and confirm again.");
             case AtomicScanDraftClaimOutcome.AlreadyConfirmed:
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.AlreadyConfirmed,
