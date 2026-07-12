@@ -44,6 +44,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     private int _unscopedPropertyId;
     private int _otherWorkspacePropertyId;
     private int _managerWorkOrderId;
+    private int _leasingUnitId;
+    private int _managerUnitId;
+    private int _leasingApplicationId;
+    private int _managerApplicationId;
 
     public async Task InitializeAsync()
     {
@@ -231,6 +235,63 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             active,
             CapabilityKeys.MoneyPaymentsManage,
             PropertyTarget(_leasingPropertyId),
+            _now)).Should().BeFalse();
+    }
+
+    [SkippableFact]
+    public async Task MarketplaceTargets_RequireExactCapabilityAndOwningPropertyScope()
+    {
+        SkipIfNoDocker();
+        await using var db = NewContext();
+        var active = await ResolveAsync(db, presentedRevision: 7);
+        var evaluator = new WorkspaceAuthorizationEvaluator(db);
+
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingListingsManage,
+            new UnitCapabilityAuthorizationTarget(_portfolioId, _leasingUnitId),
+            _now)).Should().BeTrue();
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingListingsManage,
+            new UnitCapabilityAuthorizationTarget(_portfolioId, _managerUnitId),
+            _now)).Should().BeFalse(
+            "a different assignment's property scope cannot supply the leasing capability");
+
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingApplicationsManage,
+            new RentalApplicationCapabilityAuthorizationTarget(_portfolioId, _leasingApplicationId),
+            _now)).Should().BeTrue();
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingApplicationsManage,
+            new RentalApplicationCapabilityAuthorizationTarget(_portfolioId, _managerApplicationId),
+            _now)).Should().BeFalse(
+            "portfolio membership and an unrelated scoped assignment are not application authority");
+    }
+
+    [SkippableFact]
+    public async Task RelationshipOnlyContext_CannotUseMarketplaceTeamCapabilities()
+    {
+        SkipIfNoDocker();
+        await using var db = NewContext();
+        var active = (await ResolveAsync(db, presentedRevision: 7)) with
+        {
+            WorkspaceMembershipId = null,
+            DefaultExperience = null,
+        };
+        var evaluator = new WorkspaceAuthorizationEvaluator(db);
+
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingListingsManage,
+            new UnitCapabilityAuthorizationTarget(_portfolioId, _leasingUnitId),
+            _now)).Should().BeFalse();
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.LeasingApplicationsManage,
+            new RentalApplicationCapabilityAuthorizationTarget(_portfolioId, _leasingApplicationId),
             _now)).Should().BeFalse();
     }
 
@@ -1091,6 +1152,49 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             UpdatedAt = _now,
         };
 
+        var leasingUnit = new Unit
+        {
+            PortfolioId = workspace.Id,
+            Property = leasingProperty,
+            UnitNumber = "Lease-1",
+            Status = UnitStatus.Vacant,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        var managerUnit = new Unit
+        {
+            PortfolioId = workspace.Id,
+            Property = managerProperty,
+            UnitNumber = "Manage-1",
+            Status = UnitStatus.Vacant,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        var leasingApplication = new RentalApplication
+        {
+            PortfolioId = workspace.Id,
+            Property = leasingProperty,
+            Unit = leasingUnit,
+            FirstName = "Leasing",
+            LastName = "Applicant",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = _now,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        var managerApplication = new RentalApplication
+        {
+            PortfolioId = workspace.Id,
+            Property = managerProperty,
+            Unit = managerUnit,
+            FirstName = "Manager",
+            LastName = "Applicant",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = _now,
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+
         var session = new AuthSession
         {
             Id = Guid.NewGuid(),
@@ -1101,7 +1205,16 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             LastSeenAtUtc = _now,
             ExpiresAtUtc = _now.AddDays(30),
         };
-        db.AddRange(leasingAssignment, managerAssignment, technicianAssignment, workOrder, session);
+        db.AddRange(
+            leasingAssignment,
+            managerAssignment,
+            technicianAssignment,
+            workOrder,
+            leasingUnit,
+            managerUnit,
+            leasingApplication,
+            managerApplication,
+            session);
         await db.SaveChangesAsync();
 
         _userId = user.Id;
@@ -1114,6 +1227,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _unscopedPropertyId = unscopedProperty.Id;
         _otherWorkspacePropertyId = outsideProperty.Id;
         _managerWorkOrderId = workOrder.Id;
+        _leasingUnitId = leasingUnit.Id;
+        _managerUnitId = managerUnit.Id;
+        _leasingApplicationId = leasingApplication.Id;
+        _managerApplicationId = managerApplication.Id;
     }
 
     private async Task<TeamAuthorityPair> SeedTeamAuthorityPairAsync(string suffix)

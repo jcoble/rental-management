@@ -35,6 +35,10 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
                 HasWorkspaceCapabilityAsync(accessContext, capabilityKey, workspace, utcNow, cancellationToken),
             PropertyCapabilityAuthorizationTarget property =>
                 HasPropertyCapabilityAsync(accessContext, capabilityKey, property, utcNow, cancellationToken),
+            UnitCapabilityAuthorizationTarget unit =>
+                HasUnitCapabilityAsync(accessContext, capabilityKey, unit, utcNow, cancellationToken),
+            RentalApplicationCapabilityAuthorizationTarget application =>
+                HasApplicationCapabilityAsync(accessContext, capabilityKey, application, utcNow, cancellationToken),
             WorkOrderCapabilityAuthorizationTarget => DenyAssignedWorkUntilResponsibilityExists(),
             _ => Task.FromResult(false),
         };
@@ -80,6 +84,67 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
                       assignment.SelectedProperties.Any(scope =>
                           scope.PropertyId == property.Id &&
                           scope.PortfolioId == property.PortfolioId)))),
+            cancellationToken);
+    }
+
+    private Task<bool> HasUnitCapabilityAsync(
+        ActiveAccessContext accessContext,
+        string capabilityKey,
+        UnitCapabilityAuthorizationTarget target,
+        DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var assignments = EffectiveAssignments(
+            accessContext,
+            capabilityKey,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+
+        return _db.Units.AsNoTracking().AnyAsync(unit =>
+                unit.Id == target.UnitId &&
+                unit.PortfolioId == target.PortfolioId &&
+                unit.PortfolioId == accessContext.PortfolioId &&
+                _db.Properties.AsNoTracking().Any(property =>
+                    property.Id == unit.PropertyId &&
+                    property.PortfolioId == unit.PortfolioId &&
+                    assignments.Any(assignment =>
+                        assignment.PortfolioId == property.PortfolioId &&
+                        (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                         (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                          assignment.SelectedProperties.Any(scope =>
+                              scope.PropertyId == property.Id &&
+                              scope.PortfolioId == property.PortfolioId))))),
+            cancellationToken);
+    }
+
+    private Task<bool> HasApplicationCapabilityAsync(
+        ActiveAccessContext accessContext,
+        string capabilityKey,
+        RentalApplicationCapabilityAuthorizationTarget target,
+        DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var assignments = EffectiveAssignments(
+            accessContext,
+            capabilityKey,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+
+        return _db.RentalApplications.AsNoTracking().AnyAsync(application =>
+                application.Id == target.ApplicationId &&
+                application.PortfolioId == target.PortfolioId &&
+                application.PortfolioId == accessContext.PortfolioId &&
+                application.PropertyId != null &&
+                _db.Properties.AsNoTracking().Any(property =>
+                    property.Id == application.PropertyId.Value &&
+                    property.PortfolioId == application.PortfolioId &&
+                    assignments.Any(assignment =>
+                        assignment.PortfolioId == property.PortfolioId &&
+                        (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                         (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                          assignment.SelectedProperties.Any(scope =>
+                              scope.PropertyId == property.Id &&
+                              scope.PortfolioId == property.PortfolioId))))),
             cancellationToken);
     }
 
