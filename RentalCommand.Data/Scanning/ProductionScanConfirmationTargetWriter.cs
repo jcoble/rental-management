@@ -3,7 +3,10 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -123,42 +126,46 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             throw new ScanConfirmationValidationException("Confirmed payment amount must be greater than zero.");
         }
 
-        var unitId = await attempt.Persistence.Query<Lease>()
-            .Where(lease => lease.Id == target.LeaseId && lease.PortfolioId == command.PortfolioId)
-            .Select(lease => (int?)lease.UnitId)
+        var unitId = await attempt.Persistence.Query<TenantAccount>()
+            .Where(account => account.Id == target.TenantAccountId
+                && account.PortfolioId == command.PortfolioId)
+            .Select(account => (int?)account.LeaseManagement!.UnitId)
             .SingleOrDefaultAsync(ct);
         if (unitId is null)
         {
-            throw new ScanConfirmationValidationException("Selected lease is not in this portfolio.");
+            throw new ScanConfirmationValidationException("Selected tenant account is not in this portfolio.");
         }
 
         var paymentDate = ToUtc(receipt.TransactionDate) ?? ToUtc(command.ConfirmedAtUtc);
         var noteParts = new[] { receipt.PayerName, receipt.Notes }
             .Where(value => !string.IsNullOrWhiteSpace(value));
         var notes = string.Join(" — ", noteParts);
-        var payment = new Payment
-        {
-            PortfolioId = command.PortfolioId,
-            LeaseId = target.LeaseId,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = amount,
-            DueDate = paymentDate,
-            PaidDate = paymentDate,
-            Method = "Check",
-            ExternalReference = receipt.CheckNumber,
-            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes,
-            PayerName = receipt.PayerName,
-            CheckNumber = receipt.CheckNumber,
-            BankName = receipt.BankName,
-            ExtractedData = NormalizeJson(extractedFieldsJson),
-            CreatedAt = ToUtc(command.ConfirmedAtUtc),
-            UpdatedAt = ToUtc(command.ConfirmedAtUtc),
-        };
-
-        attempt.Persistence.Add(payment);
-        await attempt.FlushBusinessAsync(ct);
-        return new ScanConfirmationTargetWriteResult(payment.Id, unitId);
+        var receiptCommand = new RecordTenantReceiptCommand(
+            command.PortfolioId,
+            target.TenantAccountId,
+            amount,
+            DateOnly.FromDateTime(paymentDate),
+            string.IsNullOrWhiteSpace(notes) ? "Scanned tenant payment" : notes,
+            receipt.PaymentMethod ?? "Scanned check",
+            receipt.CheckNumber,
+            receipt.PayerName,
+            receipt.CheckNumber,
+            receipt.BankName,
+            command.SourceStoredFileId,
+            true,
+            command.ConfirmedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            CapabilityKeys.MoneyPaymentsManage,
+            $"scan-receipt:{command.DraftId}",
+            command.DeliveryIdempotencyKey);
+        var result = await new RecordTenantReceiptHandler().HandleAsync(receiptCommand, attempt, ct);
+        return new ScanConfirmationTargetWriteResult(
+            target.TenantAccountId,
+            unitId,
+            nameof(TenantAccount),
+            result.LedgerEntryId);
     }
 
     private static async Task<ScanConfirmationTargetWriteResult> WriteWorkOrderAsync(

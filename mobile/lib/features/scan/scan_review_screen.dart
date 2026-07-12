@@ -8,7 +8,6 @@ import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../leases/leases_repository.dart';
-import '../payments/payment_lease_labels.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
@@ -43,12 +42,16 @@ final _imageProvider = FutureProvider.autoDispose.family<Uint8List, int>((
   return ref.read(scanRepositoryProvider).downloadFile(id);
 });
 
-/// Holds the leases list (only fetched for Payment drafts).
-final _leasesProvider = FutureProvider.autoDispose<List<Lease>>((ref) async {
-  // Keep alive so the 1.5 s poll-driven rebuilds don't trigger repeated fetches.
-  ref.keepAlive();
-  return ref.read(scanRepositoryProvider).listLeases();
-});
+typedef _TenantAccountQuery = ({String search, int skip});
+
+/// Holds one server-filtered page of canonical tenant-account options.
+final _tenantAccountOptionsProvider = FutureProvider.autoDispose
+    .family<TenantAccountOptionPage, _TenantAccountQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(scanRepositoryProvider)
+          .listTenantAccountOptions(search: query.search, skip: query.skip);
+    });
 
 /// Properties for the in-portfolio property picker (Lease drafts only).
 final _propertiesProvider = FutureProvider.autoDispose<List<Property>>((
@@ -337,7 +340,7 @@ Map<String, dynamic> buildOverridesMap({
   required bool isApplication,
   required bool isLoan,
   required bool isPaid,
-  required int? selectedLeaseId,
+  required int? selectedTenantAccountId,
   // Extracted, in-portfolio-validated property/unit link for an Application
   // draft, carried through so the applicant can be filed under the unit they
   // applied for (the server re-validates both in-portfolio).
@@ -394,7 +397,7 @@ Map<String, dynamic> buildOverridesMap({
     }
     if (applicationUnitId != null) overrides['unitId'] = applicationUnitId;
   } else if (isPayment) {
-    overrides['leaseId'] = selectedLeaseId;
+    overrides['tenantAccountId'] = selectedTenantAccountId;
   } else if (isLoan) {
     if (loanPropertyId != null) overrides['propertyId'] = loanPropertyId;
   } else if (!isWorkOrder) {
@@ -430,8 +433,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   bool _isPaid = true;
   bool _isPaidInitialized = false;
 
-  // Selected lease id (Payment only).
-  int? _selectedLeaseId;
+  // Selected canonical tenant account (Payment only).
+  int? _selectedTenantAccountId;
 
   // Lease-draft selections. In LINK mode property + unit are required; tenant is
   // optional (null = create/match from the extracted tenant_name). Seeded once
@@ -597,7 +600,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isApplication: draft.isApplication,
         isLoan: draft.isLoan,
         isPaid: _isPaid,
-        selectedLeaseId: _selectedLeaseId,
+        selectedTenantAccountId: _selectedTenantAccountId,
         applicationPropertyId: _extractedInt(draft, 'property_id'),
         applicationUnitId: _extractedInt(draft, 'unit_id'),
         createNewProperty: _createNewProperty,
@@ -784,8 +787,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
               setState(() => _editedFields[name] = value),
           isPaid: _isPaid,
           onIsPaidChanged: (v) => setState(() => _isPaid = v),
-          selectedLeaseId: _selectedLeaseId,
-          onLeaseSelected: (id) => setState(() => _selectedLeaseId = id),
+          selectedTenantAccountId: _selectedTenantAccountId,
+          onTenantAccountSelected: (id) =>
+              setState(() => _selectedTenantAccountId = id),
           createNewProperty: _createNewProperty,
           onCreateNewPropertyChanged: (v) => setState(() {
             _createNewProperty = v;
@@ -829,8 +833,8 @@ class _ReviewBody extends ConsumerWidget {
     required this.onFieldChanged,
     required this.isPaid,
     required this.onIsPaidChanged,
-    required this.selectedLeaseId,
-    required this.onLeaseSelected,
+    required this.selectedTenantAccountId,
+    required this.onTenantAccountSelected,
     required this.createNewProperty,
     required this.onCreateNewPropertyChanged,
     required this.selectedPropertyId,
@@ -852,8 +856,8 @@ class _ReviewBody extends ConsumerWidget {
   final void Function(String name, String value) onFieldChanged;
   final bool isPaid;
   final ValueChanged<bool> onIsPaidChanged;
-  final int? selectedLeaseId;
-  final ValueChanged<int?> onLeaseSelected;
+  final int? selectedTenantAccountId;
+  final ValueChanged<int?> onTenantAccountSelected;
   final bool createNewProperty;
   final ValueChanged<bool> onCreateNewPropertyChanged;
   final int? selectedPropertyId;
@@ -911,7 +915,7 @@ class _ReviewBody extends ConsumerWidget {
         !actionsLocked &&
         !busy &&
         !isTerminal &&
-        (!draft.isPayment || selectedLeaseId != null) &&
+        (!draft.isPayment || selectedTenantAccountId != null) &&
         leaseReady &&
         applicationReady &&
         loanReady;
@@ -975,9 +979,9 @@ class _ReviewBody extends ConsumerWidget {
 
                 // ---- Lease selector (Payment only) ----
                 if (draft.isPayment)
-                  _LeaseSelector(
-                    selectedLeaseId: selectedLeaseId,
-                    onLeaseSelected: onLeaseSelected,
+                  _TenantAccountSelector(
+                    selectedTenantAccountId: selectedTenantAccountId,
+                    onTenantAccountSelected: onTenantAccountSelected,
                   ),
 
                 if (draft.isLease) ...[
@@ -1078,11 +1082,13 @@ class _ReviewBody extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (draft.isPayment && selectedLeaseId == null && !isTerminal)
+            if (draft.isPayment &&
+                selectedTenantAccountId == null &&
+                !isTerminal)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  'Select a lease above to enable payment creation.',
+                  'Select a rental account above to enable payment creation.',
                   style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
@@ -1320,25 +1326,55 @@ class _DocumentPreview extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _LeaseSelector
+// _TenantAccountSelector
 // ---------------------------------------------------------------------------
 
-String _leaseLabel(Lease lease) {
-  return formatLeasePickerLabel(lease);
-}
-
-class _LeaseSelector extends ConsumerWidget {
-  const _LeaseSelector({
-    required this.selectedLeaseId,
-    required this.onLeaseSelected,
+class _TenantAccountSelector extends ConsumerStatefulWidget {
+  const _TenantAccountSelector({
+    required this.selectedTenantAccountId,
+    required this.onTenantAccountSelected,
   });
 
-  final int? selectedLeaseId;
-  final ValueChanged<int?> onLeaseSelected;
+  final int? selectedTenantAccountId;
+  final ValueChanged<int?> onTenantAccountSelected;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final leasesAsync = ref.watch(_leasesProvider);
+  ConsumerState<_TenantAccountSelector> createState() =>
+      _TenantAccountSelectorState();
+}
+
+class _TenantAccountSelectorState
+    extends ConsumerState<_TenantAccountSelector> {
+  static const _pageSize = 25;
+  final _searchController = TextEditingController();
+  Timer? _debounce;
+  String _search = '';
+  int _skip = 0;
+  TenantAccountOption? _selectedOption;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _searchChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() {
+        _search = value.trim();
+        _skip = 0;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accountsAsync = ref.watch(
+      _tenantAccountOptionsProvider((search: _search, skip: _skip)),
+    );
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -1348,7 +1384,7 @@ class _LeaseSelector extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Which lease is this payment for?',
+            'Which rental account is this payment for?',
             style: theme.textTheme.labelLarge?.copyWith(
               fontWeight: FontWeight.w600,
             ),
@@ -1361,33 +1397,98 @@ class _LeaseSelector extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 8),
-          leasesAsync.when(
+          TextField(
+            controller: _searchController,
+            onChanged: _searchChanged,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Search tenant, property, unit, or relationship',
+            ),
+          ),
+          const SizedBox(height: 8),
+          accountsAsync.when(
             loading: () => const LinearProgressIndicator(),
             error: (e, _) => Text(
-              'Could not load leases.',
+              'Could not load rental accounts.',
               style: TextStyle(color: colorScheme.error),
             ),
-            data: (leases) => DropdownButtonFormField<int>(
-              initialValue: selectedLeaseId,
-              hint: const Text('Select a lease'),
-              isExpanded: true,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-              ),
-              items: leases.map((l) {
-                final id = l.id;
-                final label = _leaseLabel(l);
-                return DropdownMenuItem(
-                  value: id,
-                  child: Text(label, overflow: TextOverflow.ellipsis),
-                );
-              }).toList(),
-              onChanged: onLeaseSelected,
-            ),
+            data: (page) {
+              final accounts = [...page.items];
+              if (_selectedOption != null &&
+                  !accounts.any(
+                    (item) =>
+                        item.tenantAccountId ==
+                        _selectedOption!.tenantAccountId,
+                  )) {
+                accounts.insert(0, _selectedOption!);
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DropdownButtonFormField<int>(
+                    initialValue: widget.selectedTenantAccountId,
+                    hint: const Text('Select a rental account'),
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                    items: accounts.map((account) {
+                      final tenant = account.primaryTenantName?.trim();
+                      final label =
+                          '${account.propertyName} · Unit ${account.unitNumber}'
+                          '${tenant == null || tenant.isEmpty ? '' : ' — $tenant'}'
+                          ' · ${account.relationshipNumber}';
+                      return DropdownMenuItem(
+                        value: account.tenantAccountId,
+                        child: Text(label, overflow: TextOverflow.ellipsis),
+                      );
+                    }).toList(),
+                    onChanged: (id) {
+                      _selectedOption = accounts
+                          .where((item) => item.tenantAccountId == id)
+                          .firstOrNull;
+                      widget.onTenantAccountSelected(id);
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          page.totalCount == 0
+                              ? 'No matching rental accounts'
+                              : '${page.skip + 1}–${page.skip + page.items.length} of ${page.totalCount}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _skip == 0
+                            ? null
+                            : () => setState(
+                                () => _skip = (_skip - _pageSize)
+                                    .clamp(0, page.totalCount)
+                                    .toInt(),
+                              ),
+                        child: const Text('Previous'),
+                      ),
+                      TextButton(
+                        onPressed: _skip + page.items.length >= page.totalCount
+                            ? null
+                            : () => setState(() => _skip += _pageSize),
+                        child: const Text('Next'),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
           ),
           const SizedBox(height: 4),
         ],

@@ -88,7 +88,7 @@ export interface ScanCreatedResponse {
 
 export interface ScanConfirmResponse {
 	expenseId?: number | null;
-	paymentId?: number | null;
+	receiptId?: number | null;
 	workOrderId?: number | null;
 	leaseId?: number | null;
 	applicationId?: number | null;

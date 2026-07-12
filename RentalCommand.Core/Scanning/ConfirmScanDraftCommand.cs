@@ -61,7 +61,7 @@ public sealed record ScanExpenseTargetData(
 
 public sealed record ScanPaymentTargetData(
     ScanReceiptData Receipt,
-    int LeaseId) : IAtomicCommandData;
+    int TenantAccountId) : IAtomicCommandData;
 
 public sealed record ScanWorkOrderTargetData(
     int PropertyId,
@@ -184,7 +184,12 @@ public sealed record ConfirmScanDraftCommand(
     int ConfirmedByUserId,
     DateTime ConfirmedAtUtc,
     string ExpectedDraftFingerprint,
-    ScanConfirmationTargetData Target) : IAtomicCommandData;
+    ScanConfirmationTargetData Target,
+    int? SourceStoredFileId = null,
+    Guid AuthSessionId = default,
+    int AccessContextId = 0,
+    long ExpectedAccessRevision = 0,
+    string DeliveryIdempotencyKey = "") : IAtomicCommandData;
 
 /// <summary>
 /// Stable version token for the exact draft facts used to prepare a confirmation command. The
@@ -301,10 +306,15 @@ public sealed record ConfirmScanDraftResult(
     string TargetEntityType,
     int? TargetEntityId,
     int? UnitId = null,
-    string? Error = null) : IAtomicResultData;
+    string? Error = null,
+    long? LedgerEntryId = null) : IAtomicResultData;
 
 /// <summary>Internal writer result; the handler turns it into the stable receipt result contract.</summary>
-public sealed record ScanConfirmationTargetWriteResult(int EntityId, int? UnitId = null);
+public sealed record ScanConfirmationTargetWriteResult(
+    int EntityId,
+    int? UnitId = null,
+    string? CanonicalEntityType = null,
+    long? LedgerEntryId = null);
 
 /// <summary>
 /// Transaction-only target seam. Implementations must be sealed, data/persistence-only atomic

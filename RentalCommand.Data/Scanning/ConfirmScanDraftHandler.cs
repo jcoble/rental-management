@@ -1,6 +1,8 @@
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Scanning;
+using Microsoft.EntityFrameworkCore;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -51,11 +53,29 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                 throw new ScanConfirmationValidationException(
                     "Draft changed after it was reviewed. Review the latest extraction and confirm again.");
             case AtomicScanDraftClaimOutcome.AlreadyConfirmed:
+                var existingReceipt = command.Target.Kind == ScanConfirmationTargetKind.Payment
+                    ? await (
+                        from entry in attempt.Persistence.Query<TenantLedgerEntry>()
+                        join account in attempt.Persistence.Query<TenantAccount>()
+                            on new { entry.TenantAccountId, entry.PortfolioId }
+                            equals new { TenantAccountId = account.Id, account.PortfolioId }
+                        where entry.PortfolioId == command.PortfolioId
+                            && entry.TenantAccountId == claim.CanonicalEntityId
+                            && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                            && entry.BusinessKey == $"scan-receipt:{command.DraftId}"
+                        select new
+                        {
+                            LedgerEntryId = (long?)entry.Id,
+                            UnitId = (int?)account.LeaseManagement!.UnitId,
+                        }).SingleOrDefaultAsync(ct)
+                    : null;
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.AlreadyConfirmed,
                     command.DraftId,
-                    claim.CanonicalEntityType ?? claim.TargetEntityType,
-                    claim.CanonicalEntityId);
+                    command.Target.EntityType,
+                    claim.CanonicalEntityId,
+                    existingReceipt?.UnitId,
+                    LedgerEntryId: existingReceipt?.LedgerEntryId);
             case AtomicScanDraftClaimOutcome.Claimed:
                 break;
             default:
@@ -69,9 +89,10 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             throw new InvalidOperationException("A scan target writer must return a generated positive entity id.");
         }
 
+        var canonicalEntityType = target.CanonicalEntityType ?? command.Target.EntityType;
         await attempt.ScanConfirmation.FinalizeAsync(
             claim,
-            command.Target.EntityType,
+            canonicalEntityType,
             target.EntityId,
             command.ConfirmedByUserId,
             command.ConfirmedAtUtc,
@@ -79,7 +100,7 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
         await attempt.FlushBusinessAsync(ct);
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
-            command.Target.EntityType,
+            canonicalEntityType,
             target.EntityId,
             AuditLogOperation.Created,
             UserId: command.ConfirmedByUserId,
@@ -91,7 +112,8 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             command.DraftId,
             command.Target.EntityType,
             target.EntityId,
-            target.UnitId);
+            target.UnitId,
+            LedgerEntryId: target.LedgerEntryId);
     }
 
     private static ConfirmScanDraftResult Result(

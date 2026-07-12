@@ -8,6 +8,29 @@ import 'package:rental_command/features/scan/scan_review_screen.dart';
 /// the chosen ids. This is the invariant that makes "the computer creates the
 /// property for you" actually reachable, so it's worth pinning.
 void main() {
+  test('payment confirmation sends tenantAccountId and no legacy leaseId', () {
+    final overrides = buildOverridesMap(
+      editedFields: const {'total': '1200'},
+      isPayment: true,
+      isWorkOrder: false,
+      isLease: false,
+      isApplication: false,
+      isLoan: false,
+      isPaid: true,
+      selectedTenantAccountId: 77,
+      applicationPropertyId: null,
+      applicationUnitId: null,
+      createNewProperty: false,
+      selectedPropertyId: null,
+      selectedUnitId: null,
+      selectedTenantId: null,
+      loanPropertyId: null,
+    );
+
+    expect(overrides['tenantAccountId'], 77);
+    expect(overrides.containsKey('leaseId'), isFalse);
+  });
+
   group('buildOverridesMap — lease create-new-property (C3)', () {
     test('create mode sends propertyId:0 + address, never a real id', () {
       final overrides = buildOverridesMap(
@@ -20,7 +43,7 @@ void main() {
         applicationPropertyId: null,
         applicationUnitId: null,
         isPaid: false,
-        selectedLeaseId: null,
+        selectedTenantAccountId: null,
         createNewProperty: true,
         // Even if a stale id lingers in state, create mode must ignore it.
         selectedPropertyId: 99,
@@ -52,7 +75,7 @@ void main() {
         applicationPropertyId: null,
         applicationUnitId: null,
         isPaid: false,
-        selectedLeaseId: null,
+        selectedTenantAccountId: null,
         createNewProperty: false,
         selectedPropertyId: 7,
         selectedUnitId: 3,

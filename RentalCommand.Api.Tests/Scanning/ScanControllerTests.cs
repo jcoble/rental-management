@@ -337,7 +337,8 @@ public class ScanControllerTests : IDisposable
         {
             Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
                 new ConfirmScanDraftResult(
-                    ConfirmScanDraftOutcome.AlreadyConfirmed, 17, "Payment", 88, 4),
+                    ConfirmScanDraftOutcome.AlreadyConfirmed, 17, "Payment", 88, 4,
+                    LedgerEntryId: 8_800_000_000),
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid()),
         };
@@ -350,7 +351,8 @@ public class ScanControllerTests : IDisposable
 
         var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         Property(body, "status").Should().Be("alreadyConfirmed");
-        Property(body, "paymentId").Should().Be(88);
+        Property(body, "receiptId").Should().Be(8_800_000_000L);
+        Property(body, "entityId").Should().Be(88);
         Property(body, "entityType").Should().Be("Payment");
         scan.VerifyAll();
     }

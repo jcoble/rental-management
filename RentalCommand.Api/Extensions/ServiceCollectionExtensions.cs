@@ -47,7 +47,7 @@ public static class ServiceCollectionExtensions
             RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
         services.AddScoped<RentalCommand.Api.Services.Esign.INativeSigningService,
             RentalCommand.Api.Services.Esign.NativeSigningService>();
-        services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IPaymentReceiptQueryService, PaymentReceiptQueryService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<ICapitalAssetService, CapitalAssetService>();
         services.AddScoped<IPropertyDispositionService, PropertyDispositionService>();

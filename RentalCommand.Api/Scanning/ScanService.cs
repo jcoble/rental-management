@@ -100,10 +100,17 @@ public sealed class ScanService : IScanService
             var receiptData = ToAtomicReceipt(receipt);
             if (kind == ScanConfirmationTargetKind.Payment)
             {
-                var leaseId = TryGetOverrideInt(overrideRoot, out var selectedLeaseId, "leaseId", "lease_id")
-                    ? selectedLeaseId
+                var tenantAccountId = TryGetOverrideInt(
+                        overrideRoot, out var selectedTenantAccountId,
+                        "tenantAccountId", "tenant_account_id")
+                    ? selectedTenantAccountId
                     : 0;
-                target = new(kind, Payment: new ScanPaymentTargetData(receiptData, leaseId));
+                if (tenantAccountId <= 0)
+                {
+                    throw new ScanConfirmationValidationException(
+                        "Select the rental account this payment belongs to.");
+                }
+                target = new(kind, Payment: new ScanPaymentTargetData(receiptData, tenantAccountId));
             }
             else
             {
@@ -181,7 +188,8 @@ public sealed class ScanService : IScanService
                     draft.TargetEntityType,
                     draft.SourceStoredFileId,
                     draft.ExtractedFields),
-                target));
+                target,
+                draft.SourceStoredFileId));
     }
 
     private static int? PositiveOverride(JsonElement root, params string[] names) =>

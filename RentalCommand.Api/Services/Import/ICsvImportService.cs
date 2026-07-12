@@ -2,6 +2,13 @@ using RentalCommand.Api.DTOs;
 
 namespace RentalCommand.Api.Services.Import;
 
+public readonly record struct CsvImportCommandContext(
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long AccessRevision,
+    string OperationKeyDigest);
+
 /// <summary>
 /// Bulk CSV import for a migrating landlord: upload a spreadsheet of core records and transactions
 /// and create them in bulk, with a dry-run preview (per-row validation + errors) before committing.
@@ -23,7 +30,13 @@ public interface ICsvImportService
     /// <param name="entityType">Supported entity type (case-insensitive).</param>
     /// <exception cref="CsvFormatException">The CSV is structurally unusable (no header row).</exception>
     /// <exception cref="ArgumentException">The entity type is not supported.</exception>
-    Task<CsvImportResult> ImportAsync(int portfolioId, string entityType, Stream csv, bool dryRun, CancellationToken ct = default);
+    Task<CsvImportResult> ImportAsync(
+        int portfolioId,
+        string entityType,
+        Stream csv,
+        bool dryRun,
+        CsvImportCommandContext? commandContext = null,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Returns the CSV header row (column names, comma-joined) for an entity type, so the web can

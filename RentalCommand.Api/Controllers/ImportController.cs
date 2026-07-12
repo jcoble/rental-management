@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Import;
@@ -40,6 +43,7 @@ public class ImportController : ManagementControllerBase
     public async Task<ActionResult<CsvImportResult>> Import(
         string entityType,
         [FromQuery] bool dryRun,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         IFormFile? file,
         CancellationToken ct)
     {
@@ -61,7 +65,25 @@ public class ImportController : ManagementControllerBase
 
         try
         {
-            var result = await _import.ImportAsync(GetPortfolioId(), entityType, csv, dryRun, ct);
+            CsvImportCommandContext? commandContext = null;
+            if (!dryRun && IsPaymentType(entityType))
+            {
+                var normalizedKey = idempotencyKey?.Trim();
+                if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
+                    return BadRequest(new { error = "A valid Idempotency-Key is required for payment imports (maximum 200 characters)." });
+                if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId)
+                    || !int.TryParse(User.FindFirstValue("ctx"), out var accessContextId)
+                    || !long.TryParse(User.FindFirstValue("ar"), out var accessRevision))
+                    return Forbid();
+
+                commandContext = new CsvImportCommandContext(
+                    GetUserId(), sessionId, accessContextId, accessRevision,
+                    Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
+                        .ToLowerInvariant());
+            }
+
+            var result = await _import.ImportAsync(
+                GetPortfolioId(), entityType, csv, dryRun, commandContext, ct);
             return Ok(result);
         }
         catch (ArgumentException ex)
@@ -73,6 +95,10 @@ public class ImportController : ManagementControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    private static bool IsPaymentType(string entityType) =>
+        entityType.Trim().Equals("payment", StringComparison.OrdinalIgnoreCase)
+        || entityType.Trim().Equals("payments", StringComparison.OrdinalIgnoreCase);
 
     // -------------------------------------------------------------------------
     // GET /api/v1/import/{entityType}/template

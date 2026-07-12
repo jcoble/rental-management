@@ -1,4 +1,7 @@
 using System.Linq.Expressions;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -438,17 +441,39 @@ public class ScanController : ManagementControllerBase
         if (draft is null)
             return NotFound(new { error = "Scan draft not found" });
 
-        var linkedFile = await _db.StoredFiles
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath, ct);
-
-        var createdUnitId = await ResolveCreatedUnitIdAsync(
-            portfolioId, linkedFile?.EntityType, linkedFile?.EntityId, ct);
-        var response = ScanDraftResponse.FromEntity(
-            draft,
-            linkedFile?.EntityType,
-            linkedFile?.EntityId,
-            createdUnitId);
+        ScanDraftResponse response;
+        if (draft.Status == "Confirmed"
+            && draft.TargetEntityType == "Payment"
+            && draft.ConfirmedEntityId is int tenantAccountId)
+        {
+            var receipt = await (
+                from entry in _db.TenantLedgerEntries.AsNoTracking()
+                join account in _db.TenantAccounts.AsNoTracking()
+                    on new { entry.PortfolioId, entry.TenantAccountId }
+                    equals new { account.PortfolioId, TenantAccountId = account.Id }
+                where entry.PortfolioId == portfolioId
+                    && entry.TenantAccountId == tenantAccountId
+                    && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    && entry.BusinessKey == "scan-receipt:" + draft.Id
+                select new
+                {
+                    EntryId = (long?)entry.Id,
+                    UnitId = (int?)account.LeaseManagement!.UnitId,
+                }).SingleOrDefaultAsync(ct);
+            response = ScanDraftResponse.FromEntity(
+                draft, "Payment", receipt?.EntryId, receipt?.UnitId);
+        }
+        else
+        {
+            var linkedFile = draft.SourceStoredFileId is int sourceStoredFileId
+                ? await _db.StoredFiles.AsNoTracking().SingleOrDefaultAsync(
+                    file => file.Id == sourceStoredFileId && file.PortfolioId == portfolioId, ct)
+                : null;
+            var createdUnitId = await ResolveCreatedUnitIdAsync(
+                portfolioId, linkedFile?.EntityType, linkedFile?.EntityId, ct);
+            response = ScanDraftResponse.FromEntity(
+                draft, linkedFile?.EntityType, linkedFile?.EntityId, createdUnitId);
+        }
 
         // For a lease draft, attach the property/unit import proposal (link-existing vs create-new) so the
         // review UI can show what confirming will do — the empty-portfolio bootstrap is visible up front.
@@ -536,13 +561,26 @@ public class ScanController : ManagementControllerBase
                 CreatedEntityType = d.Status == "Confirmed" && d.ConfirmedEntityId != null
                     ? d.TargetEntityType
                     : null,
-                CreatedEntityId = d.Status == "Confirmed" ? d.ConfirmedEntityId : null,
+                CreatedEntityId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
+                    ? null
+                    : d.TargetEntityType == "Payment"
+                        ? _db.TenantLedgerEntries
+                            .Where(entry => entry.PortfolioId == portfolioId
+                                && entry.TenantAccountId == d.ConfirmedEntityId
+                                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                                && entry.BusinessKey == "scan-receipt:" + d.Id)
+                            .Select(entry => (long?)entry.Id)
+                            .FirstOrDefault()
+                        : (long?)d.ConfirmedEntityId,
                 CreatedUnitId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
                     ? null
                     : d.TargetEntityType == "Payment"
-                        ? _db.Payments
-                            .Where(p => p.PortfolioId == portfolioId && p.Id == d.ConfirmedEntityId)
-                            .Select(p => p.Lease != null ? (int?)p.Lease.UnitId : null)
+                        ? _db.TenantAccounts
+                            .Where(account => account.PortfolioId == portfolioId
+                                && account.Id == d.ConfirmedEntityId)
+                            .Select(account => account.LeaseManagement != null
+                                ? (int?)account.LeaseManagement.UnitId
+                                : null)
                             .FirstOrDefault()
                         : d.TargetEntityType == "Expense"
                             ? _db.Expenses
@@ -596,11 +634,6 @@ public class ScanController : ManagementControllerBase
 
         return entityType switch
         {
-            "Payment" => await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && p.Id == entityId.Value)
-                .Select(p => p.Lease != null ? (int?)p.Lease.UnitId : null)
-                .FirstOrDefaultAsync(ct),
             "Expense" => await _db.Expenses
                 .AsNoTracking()
                 .Where(e => e.PortfolioId == portfolioId && e.Id == entityId.Value)
@@ -640,7 +673,7 @@ public class ScanController : ManagementControllerBase
         public DateTime? ReviewedAt { get; init; }
         public DateTime? ConfirmedAt { get; init; }
         public string? CreatedEntityType { get; init; }
-        public int? CreatedEntityId { get; init; }
+        public long? CreatedEntityId { get; init; }
         public int? CreatedUnitId { get; init; }
     }
 
@@ -793,13 +826,28 @@ public class ScanController : ManagementControllerBase
             || preparation.Command is null)
             return BadRequest(new { error = preparation.Error ?? "Scan confirmation request is invalid." });
 
+        if (!Guid.TryParse(User.FindFirstValue("sid"), out var authSessionId)
+            || !int.TryParse(User.FindFirstValue("ctx"), out var accessContextId)
+            || !long.TryParse(User.FindFirstValue("ar"), out var accessRevision))
+            return Forbid();
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(body.ClientOperationId.Trim())))
+            .ToLowerInvariant();
+        var command = preparation.Command with
+        {
+            AuthSessionId = authSessionId,
+            AccessContextId = accessContextId,
+            ExpectedAccessRevision = accessRevision,
+            DeliveryIdempotencyKey = $"scan-confirm:{portfolioId}:{id}:{operationDigest}",
+        };
+
         AtomicCommandOutcome<ConfirmScanDraftResult> atomicResult;
         try
         {
             atomicResult = await _atomic.ExecuteAsync(
                 ScanConfirmationCommandIdentity.Create(
                     portfolioId, id, body.ClientOperationId),
-                preparation.Command,
+                command,
                 ConfirmResultCodec,
                 ct);
         }
@@ -834,7 +882,7 @@ public class ScanController : ManagementControllerBase
             : "confirmed";
         return entityType switch
         {
-            "Payment" => Ok(new { paymentId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Payment" => Ok(new { receiptId = result.LedgerEntryId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
