@@ -129,17 +129,17 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     // -----------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Starts a hosted Stripe Checkout session (card or ACH) for ONE of the signed-in tenant's own
-    /// rent payments and returns <c>{ checkoutUrl }</c> to redirect to. A payment that isn't on this
-    /// tenant's lease returns 404 (never reveals another tenant's payment). 503 when Stripe is off.
+    /// Starts hosted Stripe Checkout for one open charge on the signed-in tenant's canonical account.
+    /// A charge outside that account relationship returns 404. 503 when Stripe is off.
     /// </summary>
-    [HttpPost("payments/{paymentId:int}/checkout")]
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/charges/{chargeLedgerEntryId:long}/checkout")]
     [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> CreatePaymentCheckout(
-        int paymentId, [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
+        int tenantAccountId, long chargeLedgerEntryId,
+        [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -148,14 +148,15 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         }
 
         var result = await _stripe.CreatePaymentCheckoutSessionAsync(
-            GetPortfolioId(), tenantId.Value, paymentId, request?.SuccessUrl, request?.CancelUrl, ct);
+            GetPortfolioId(), tenantId.Value, tenantAccountId, chargeLedgerEntryId, GetUserId(),
+            request?.SuccessUrl, request?.CancelUrl, ct);
 
         return result.Result switch
         {
             CheckoutResult.Outcome.NotEnabled =>
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
-                NotFound(new { error = "Payment not found" }),
+                NotFound(new { error = "Tenant account charge not found" }),
             _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
         };
     }
@@ -188,7 +189,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     }
 
     /// <summary>
-    /// Enrolls one of the tenant's own leases in autopay: starts a setup-mode Checkout session that
+    /// Enrolls one of the tenant's own canonical accounts in autopay: starts setup Checkout that
     /// saves a reusable payment method, and returns <c>{ checkoutUrl }</c>. The enrollment is only
     /// recorded once the setup session completes (webhook). 404 if the lease isn't the tenant's;
     /// 503 when Stripe is off.
@@ -207,14 +208,15 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         }
 
         var result = await _stripe.CreateAutopaySetupSessionAsync(
-            GetPortfolioId(), tenantId.Value, request.LeaseId, request.SuccessUrl, request.CancelUrl, ct);
+            GetPortfolioId(), tenantId.Value, request.TenantAccountId, GetUserId(), request.OperationKey,
+            request.SuccessUrl, request.CancelUrl, ct);
 
         return result.Result switch
         {
             CheckoutResult.Outcome.NotEnabled =>
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
-                NotFound(new { error = "Lease not found" }),
+                NotFound(new { error = "Tenant account not found" }),
             _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
         };
     }

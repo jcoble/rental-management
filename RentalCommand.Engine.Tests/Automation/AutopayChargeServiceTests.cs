@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Engine.Services;
@@ -192,6 +193,7 @@ public class AutopayChargeServiceTests : IDisposable
             _ctx.Db,
             Options.Create(config),
             TimeProvider.System,
+            new UnexpectedAtomicUnitOfWork(),
             NullLogger<AutopayChargeService>.Instance);
     }
 
@@ -282,5 +284,14 @@ public class AutopayChargeServiceTests : IDisposable
         _ctx.Db.AutopayEnrollments.Add(enrollment);
         _ctx.Db.SaveChanges();
         return enrollment;
+    }
+
+    private sealed class UnexpectedAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity, TCommand command,
+            IAtomicResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData where TResult : notnull =>
+            throw new InvalidOperationException("No canonical autopay candidate should reach the atomic executor.");
     }
 }

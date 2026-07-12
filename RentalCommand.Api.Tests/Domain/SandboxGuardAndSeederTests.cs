@@ -137,7 +137,9 @@ public class SandboxGuardAndSeederTests : IDisposable
         var sut = BuildStripeService(enabled: true);
 
         var result = await sut.CreatePaymentCheckoutSessionAsync(
-            portfolioId: 1, tenantId: 10, payment.Id, successUrl: null, cancelUrl: null, CancellationToken.None);
+            portfolioId: 1, tenantId: 10, tenantAccountId: 1,
+            chargeLedgerEntryId: payment.Id, actorUserId: 1,
+            successUrl: null, cancelUrl: null, CancellationToken.None);
 
         // Suppressed: returns NotEnabled WITHOUT contacting Stripe or creating a transaction.
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
@@ -155,7 +157,9 @@ public class SandboxGuardAndSeederTests : IDisposable
         var sut = BuildStripeService(enabled: true);
 
         var result = await sut.CreateAutopaySetupSessionAsync(
-            portfolioId: 1, tenantId: 10, lease.Id, successUrl: null, cancelUrl: null, CancellationToken.None);
+            portfolioId: 1, tenantId: 10, tenantAccountId: lease.Id, actorUserId: 1,
+            operationKey: "sandbox-setup",
+            successUrl: null, cancelUrl: null, CancellationToken.None);
 
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
     }
@@ -173,7 +177,6 @@ public class SandboxGuardAndSeederTests : IDisposable
         };
 
         return new StripePaymentService(
-            _ctx.Db,
             Options.Create(config),
             new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance,

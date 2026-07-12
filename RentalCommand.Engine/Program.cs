@@ -71,6 +71,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventResult,
     RentalCommand.Data.Payments.ReconcileClaimedProviderPaymentEventHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FailProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FailProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FailProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Automation.ApplyClaimedDebtServiceBatchCommand,
     RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
     RentalCommand.Data.Automation.ApplyClaimedDebtServiceBatchHandler>();

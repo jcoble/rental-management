@@ -158,7 +158,10 @@ internal static class TenantAccountModelConfiguration
                 table.HasCheckConstraint(
                     "CK_TenantPaymentAttempt_State",
                     "\"State\" IN ('Prepared', 'Submitted', 'Succeeded', 'Failed', 'Canceled', 'Unknown')");
-                table.HasCheckConstraint("CK_TenantPaymentAttempt_Amount", "\"Amount\" > 0");
+                table.HasCheckConstraint(
+                    "CK_TenantPaymentAttempt_Amount",
+                    "(\"AttemptType\" = 'Verification' AND \"Amount\" = 0) OR " +
+                    "(\"AttemptType\" IN ('Charge','Refund') AND \"Amount\" > 0)");
                 table.HasCheckConstraint("CK_TenantPaymentAttempt_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
                 table.HasCheckConstraint("CK_TenantPaymentAttempt_AttemptCount", "\"AttemptCount\" >= 0");
                 table.HasCheckConstraint(
