@@ -56,41 +56,51 @@ public class PortalService : IPortalService
 
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var overdueCutoffUtc = _timeProvider.UtcNow().Date;
-
-        // All four figures are conditional SUM/COUNT aggregates computed SQL-side in a single grouped
-        // round-trip — no payment rows are pulled into memory. Partial-aware: a Paid payment contributes
-        // its full Amount to Collected; a Partial contributes its collected AmountPaid to Collected and
-        // only its unpaid remainder (Amount − AmountPaid) to Outstanding/Overdue; Scheduled/Late/Failed
-        // owe in full — a Failed charge collected nothing, so the whole Amount is still owed (matching the
-        // payments UI, which marks Failed as "still owed" and keeps it payable). Due-today payments are
-        // outstanding, not overdue; overdue starts at the next UTC calendar day boundary. Waived/Refunded
-        // are not money currently owed.
-        var rollup = await _db.Payments
+        var financialRelationships = _db.LeaseManagementParties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                _db.Leases.Any(l => l.Id == p.LeaseId && l.TenantId == tenantId))
-            .GroupBy(_ => 1)
-            .Select(g => new
+            .Where(party => party.PortfolioId == portfolioId
+                && party.TenantId == tenantId
+                && (party.Role == LeaseManagementPartyRole.PrimaryTenant
+                    || party.Role == LeaseManagementPartyRole.CoTenant
+                    || party.Role == LeaseManagementPartyRole.Guarantor));
+
+        // One SQL statement authorizes every account through a party row belonging to this tenant.
+        // Receivable and past-due facts come from the database projections; collected cash is the net
+        // value of immutable receipt credits after any immutable reversals.
+        var rollup = await _db.Tenants
+            .AsNoTracking()
+            .Where(tenant => tenant.PortfolioId == portfolioId && tenant.Id == tenantId)
+            .Select(_ => new
             {
-                Collected = g.Sum(p =>
-                    p.Status == PaymentStatus.Paid ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
-                    : 0m),
-                Outstanding = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Failed) ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
-                    : 0m),
-                Overdue = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Failed)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < overdueCutoffUtc)
-                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
-                        : 0m),
-                OverdueCount = g.Count(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Failed)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < overdueCutoffUtc)),
+                Collected = _db.TenantLedgerEntries
+                    .Where(entry => entry.PortfolioId == portfolioId
+                        && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                        && financialRelationships.Any(party =>
+                            party.LeaseManagementId == entry.TenantAccount!.LeaseManagementId))
+                    .Sum(entry => (decimal?)(entry.Amount -
+                        (_db.TenantLedgerEntries
+                            .Where(reversal => reversal.PortfolioId == portfolioId
+                                && reversal.TenantAccountId == entry.TenantAccountId
+                                && reversal.EntryType == TenantLedgerEntryType.Reversal
+                                && reversal.ReversesEntryId == entry.Id)
+                            .Sum(reversal => (decimal?)reversal.Amount) ?? 0m))) ?? 0m,
+                Outstanding = _db.TenantAccountBalanceProjections
+                    .Where(balance => balance.PortfolioId == portfolioId
+                        && financialRelationships.Any(party =>
+                            party.LeaseManagementId == balance.LeaseManagementId))
+                    .Sum(balance => (decimal?)balance.ReceivableBalance) ?? 0m,
+                Overdue = _db.TenantAccountBalanceProjections
+                    .Where(balance => balance.PortfolioId == portfolioId
+                        && financialRelationships.Any(party =>
+                            party.LeaseManagementId == balance.LeaseManagementId))
+                    .Sum(balance => (decimal?)balance.PastDueAmount) ?? 0m,
+                OverdueCount = _db.TenantAccountBalanceProjections
+                    .Where(balance => balance.PortfolioId == portfolioId
+                        && financialRelationships.Any(party =>
+                            party.LeaseManagementId == balance.LeaseManagementId))
+                    .Sum(balance => (int?)balance.PastDueCount) ?? 0,
             })
-            .FirstOrDefaultAsync(ct);
+            .SingleOrDefaultAsync(ct);
 
         return new PortalBalanceResponse
         {
@@ -104,22 +114,59 @@ public class PortalService : IPortalService
 
     public async Task<IReadOnlyList<PortalPaymentResponse>> GetPaymentsAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var payments = await _db.Payments
+        var financialRelationships = _db.LeaseManagementParties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                _db.Leases.Any(l => l.Id == p.LeaseId && l.TenantId == tenantId))
-            .OrderByDescending(p => p.DueDate)
-            .Select(p => new PortalPaymentResponse
+            .Where(party => party.PortfolioId == portfolioId
+                && party.TenantId == tenantId
+                && (party.Role == LeaseManagementPartyRole.PrimaryTenant
+                    || party.Role == LeaseManagementPartyRole.CoTenant
+                    || party.Role == LeaseManagementPartyRole.Guarantor));
+
+        var payments = await (
+            from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { charge.PortfolioId, charge.TenantAccountId }
+                equals new { account.PortfolioId, TenantAccountId = account.Id }
+            where charge.PortfolioId == portfolioId
+                && financialRelationships.Any(party =>
+                    party.LeaseManagementId == account.LeaseManagementId)
+            orderby (charge.DueOn ?? charge.EffectiveOn) descending, charge.TenantLedgerEntryId descending
+            select new PortalPaymentResponse
             {
-                Id = p.Id,
-                // Portal payments are scoped to the tenant's lease (filtered above), so never lease-less.
-                LeaseId = p.LeaseId!.Value,
-                PaymentType = p.PaymentType.ToString(),
-                Status = p.Status.ToString(),
-                Amount = p.Amount,
-                DueDate = p.DueDate,
-                PaidDate = p.PaidDate,
-                Method = p.Method,
+                Id = charge.TenantLedgerEntryId,
+                TenantAccountId = account.Id,
+                LeaseManagementId = account.LeaseManagementId,
+                PaymentType = charge.EntryType == "RentCharge" ? "Rent"
+                    : charge.EntryType == "DepositCharge" ? "SecurityDeposit"
+                    : charge.EntryType == "LateFeeCharge" ? "LateFee"
+                    : "Other",
+                Status = charge.OriginalAmount - charge.ReversedAmount <= 0m ? "Waived"
+                    : charge.OpenAmount <= 0m ? "Paid"
+                    : charge.NetAllocations > 0m ? "Partial"
+                    : charge.IsPastDue ? "Late"
+                    : "Scheduled",
+                Amount = charge.OriginalAmount - charge.ReversedAmount,
+                DueDate = (charge.DueOn ?? charge.EffectiveOn)
+                    .ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                PaidDate = charge.OpenAmount <= 0m
+                    ? _db.TenantLedgerAllocations
+                        .Where(allocation => allocation.PortfolioId == portfolioId
+                            && allocation.TenantAccountId == account.Id
+                            && allocation.DebitEntryId == charge.TenantLedgerEntryId
+                            && allocation.CreditEntry!.EntryType == TenantLedgerEntryType.PaymentReceipt)
+                        .Max(allocation => (DateTime?)allocation.CreditEntry!.PostedAtUtc)
+                    : null,
+                Method = _db.TenantLedgerAllocations
+                    .Where(allocation => allocation.PortfolioId == portfolioId
+                        && allocation.TenantAccountId == account.Id
+                        && allocation.DebitEntryId == charge.TenantLedgerEntryId
+                        && allocation.CreditEntry!.EntryType == TenantLedgerEntryType.PaymentReceipt)
+                    .OrderByDescending(allocation => allocation.AllocatedAtUtc)
+                    .ThenByDescending(allocation => allocation.Id)
+                    .Select(allocation => allocation.CreditEntry!.ProviderPaymentAttempt == null
+                        ? null
+                        : allocation.CreditEntry.ProviderPaymentAttempt.PaymentMethodSummary)
+                    .FirstOrDefault(),
             })
             .ToListAsync(ct);
 
