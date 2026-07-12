@@ -16,6 +16,16 @@ public sealed class LeaseManagementController : ManagementControllerBase
 {
     private static readonly AtomicJsonResultCodec<PrepareMoveInResult> ResultCodec =
         new("lease-management.prepare-move-in.v1");
+    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> AddPartyResultCodec =
+        new("lease-management.party.add.v1");
+    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> EndPartyResultCodec =
+        new("lease-management.party.end.v1");
+    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> ChangePartyRoleResultCodec =
+        new("lease-management.party.change-role.v1");
+    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> GrantAccessResultCodec =
+        new("lease-management.party.access.grant.v1");
+    private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> RevokeAccessResultCodec =
+        new("lease-management.party.access.revoke.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
@@ -139,6 +149,315 @@ public sealed class LeaseManagementController : ManagementControllerBase
         }
     }
 
+    [HttpPost("{leaseManagementId:int}/parties")]
+    [ProducesResponseType(typeof(LeasePartyMutationResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> AddEffectiveParty(
+        int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] AddEffectivePartyRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareMutation(idempotencyKey, out var envelope, out var error))
+        {
+            return error!;
+        }
+        if (request.Role is null || request.LegalBasis is null)
+        {
+            return BadRequest(new { error = "Role and LegalBasis are required." });
+        }
+
+        var command = new AddEffectivePartyCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            request.TenantId,
+            request.Role.Value,
+            request.EffectiveFrom,
+            request.GuarantorLegalNoticeEligible,
+            request.ChangeReason,
+            request.LegalBasis.SameRelationshipConfirmed,
+            request.LegalBasis.AgreementId,
+            request.LegalBasis.AddendumId,
+            envelope.UserId,
+            envelope.AuthSessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"lease-party-add:{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}");
+        return await ExecuteMutation(
+            "lease-management.party.add",
+            $"{leaseManagementId}",
+            envelope.KeyDigest,
+            command,
+            AddPartyResultCodec,
+            StatusCodes.Status201Created,
+            ct);
+    }
+
+    [HttpPost("{leaseManagementId:int}/parties/{partyId:int}/end")]
+    [ProducesResponseType(typeof(LeasePartyMutationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> EndEffectiveParty(
+        int leaseManagementId,
+        int partyId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] EndEffectivePartyRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareMutation(idempotencyKey, out var envelope, out var error))
+        {
+            return error!;
+        }
+        if (request.AccessDisposition is null || request.LegalBasis is null)
+        {
+            return BadRequest(new { error = "AccessDisposition and LegalBasis are required." });
+        }
+
+        var command = new EndEffectivePartyCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            partyId,
+            request.EffectiveThrough,
+            request.AccessDisposition.Value,
+            request.PrimarySuccessorPartyId,
+            request.LegalBasis.SameRelationshipConfirmed,
+            request.LegalBasis.AgreementId,
+            request.LegalBasis.AddendumId,
+            request.ChangeReason,
+            envelope.UserId,
+            envelope.AuthSessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"lease-party-end:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{envelope.KeyDigest}");
+        return await ExecuteMutation(
+            "lease-management.party.end",
+            $"{leaseManagementId}:{partyId}",
+            envelope.KeyDigest,
+            command,
+            EndPartyResultCodec,
+            StatusCodes.Status200OK,
+            ct);
+    }
+
+    [HttpPost("{leaseManagementId:int}/parties/{partyId:int}/change-role")]
+    [ProducesResponseType(typeof(LeasePartyMutationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ChangeEffectivePartyRole(
+        int leaseManagementId,
+        int partyId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ChangeEffectivePartyRoleRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareMutation(idempotencyKey, out var envelope, out var error))
+        {
+            return error!;
+        }
+        if (request.NewRole is null || request.AccessDisposition is null || request.LegalBasis is null)
+        {
+            return BadRequest(new { error = "NewRole, AccessDisposition, and LegalBasis are required." });
+        }
+
+        var command = new ChangeEffectivePartyRoleCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            partyId,
+            request.NewRole.Value,
+            request.EffectiveOn,
+            request.GuarantorLegalNoticeEligible,
+            request.AccessDisposition.Value,
+            request.CompanionPrimaryPartyId,
+            request.CompanionNewRole,
+            request.CompanionGuarantorLegalNoticeEligible,
+            request.LegalBasis.SameRelationshipConfirmed,
+            request.LegalBasis.AgreementId,
+            request.LegalBasis.AddendumId,
+            request.ChangeReason,
+            envelope.UserId,
+            envelope.AuthSessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"lease-party-role:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{envelope.KeyDigest}");
+        return await ExecuteMutation(
+            "lease-management.party.change-role",
+            $"{leaseManagementId}:{partyId}",
+            envelope.KeyDigest,
+            command,
+            ChangePartyRoleResultCodec,
+            StatusCodes.Status200OK,
+            ct);
+    }
+
+    [HttpPost("{leaseManagementId:int}/parties/{partyId:int}/access")]
+    [ProducesResponseType(typeof(LeasePartyMutationResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> GrantTenantUserAccess(
+        int leaseManagementId,
+        int partyId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] GrantTenantUserAccessRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareMutation(idempotencyKey, out var envelope, out var error))
+        {
+            return error!;
+        }
+
+        var command = new GrantTenantUserAccessCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            partyId,
+            request.ApplicationUserId,
+            request.Reason,
+            envelope.UserId,
+            envelope.AuthSessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"tenant-access-grant:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{envelope.KeyDigest}");
+        return await ExecuteMutation(
+            "lease-management.party.access.grant",
+            $"{leaseManagementId}:{partyId}",
+            envelope.KeyDigest,
+            command,
+            GrantAccessResultCodec,
+            StatusCodes.Status201Created,
+            ct);
+    }
+
+    [HttpPost("{leaseManagementId:int}/parties/{partyId:int}/access/{tenantUserAccessId:int}/revoke")]
+    [ProducesResponseType(typeof(LeasePartyMutationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> RevokeTenantUserAccess(
+        int leaseManagementId,
+        int partyId,
+        int tenantUserAccessId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RevokeTenantUserAccessRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareMutation(idempotencyKey, out var envelope, out var error))
+        {
+            return error!;
+        }
+
+        var command = new RevokeTenantUserAccessCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            partyId,
+            tenantUserAccessId,
+            request.Reason,
+            envelope.UserId,
+            envelope.AuthSessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"tenant-access-revoke:{envelope.PortfolioId}:{leaseManagementId}:{partyId}:{tenantUserAccessId}:{envelope.KeyDigest}");
+        return await ExecuteMutation(
+            "lease-management.party.access.revoke",
+            $"{leaseManagementId}:{partyId}:{tenantUserAccessId}",
+            envelope.KeyDigest,
+            command,
+            RevokeAccessResultCodec,
+            StatusCodes.Status200OK,
+            ct);
+    }
+
+    private async Task<IActionResult> ExecuteMutation<TCommand>(
+        string commandType,
+        string identityTarget,
+        string keyDigest,
+        TCommand command,
+        AtomicJsonResultCodec<LeasePartyMutationResult> codec,
+        int successStatus,
+        CancellationToken ct)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    commandType,
+                    $"{GetPortfolioId()}:{identityTarget}:{keyDigest}"),
+                command,
+                codec,
+                ct);
+            if (outcome.Value.Outcome == LeasePartyMutationOutcome.Applied)
+            {
+                return StatusCode(
+                    successStatus,
+                    LeasePartyMutationResponse.FromResult(
+                        outcome.Value,
+                        outcome.Disposition == AtomicCommandDisposition.Replayed));
+            }
+
+            return outcome.Value.Outcome switch
+            {
+                LeasePartyMutationOutcome.AlreadyActive or LeasePartyMutationOutcome.AlreadyRevoked
+                    => Conflict(new { error = outcome.Value.Error }),
+                LeasePartyMutationOutcome.InvalidPrimaryTransition
+                    or LeasePartyMutationOutcome.AccessTransitionInvalid
+                    => Conflict(new { error = outcome.Value.Error }),
+                LeasePartyMutationOutcome.InvalidEffectiveDate
+                    or LeasePartyMutationOutcome.InvalidParty
+                    or LeasePartyMutationOutcome.LegalBasisRequired
+                    => UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
+    }
+
+    private bool TryPrepareMutation(
+        string? idempotencyKey,
+        out MutationEnvelope envelope,
+        out IActionResult? error)
+    {
+        envelope = default;
+        error = null;
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            error = BadRequest(new { error = "Idempotency-Key is required." });
+            return false;
+        }
+        var normalizedKey = idempotencyKey.Trim();
+        if (normalizedKey.Length > 200)
+        {
+            error = BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+            return false;
+        }
+        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+        {
+            error = Forbid();
+            return false;
+        }
+
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
+            .ToLowerInvariant();
+        envelope = new MutationEnvelope(
+            GetPortfolioId(), GetUserId(), sessionId, accessContextId, accessRevision, digest);
+        return true;
+    }
+
     private bool TryReadAccessClaims(
         out Guid sessionId,
         out int accessContextId,
@@ -151,4 +470,12 @@ public sealed class LeaseManagementController : ManagementControllerBase
             && int.TryParse(User.FindFirstValue("ctx"), out accessContextId)
             && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
     }
+
+    private readonly record struct MutationEnvelope(
+        int PortfolioId,
+        int UserId,
+        Guid AuthSessionId,
+        int AccessContextId,
+        long AccessRevision,
+        string KeyDigest);
 }
