@@ -119,11 +119,11 @@ class DeductSecurityDepositInput extends SecurityDepositMutationInput {
 
 class RefundSecurityDepositInput extends SecurityDepositMutationInput {
   const RefundSecurityDepositInput({
-    double? amount,
+    super.amount,
     required super.effectiveOn,
     required this.description,
     this.externalReference,
-  }) : super(amount: amount);
+  });
 
   final String description;
   final String? externalReference;
