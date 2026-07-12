@@ -192,10 +192,44 @@ public sealed class SandboxService : ISandboxService
         await _db.Inspections.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 5. Appointments, deposits, opening balances, payments, notices (all → Lease/Property/etc.).
+        // 5. Appointments, canonical tenant/deposit ledgers, opening balances, payments, and notices.
         await _db.Appointments.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.SecurityDepositHoldings.IgnoreQueryFilters()
+        await _db.SecurityDepositEntries.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantLedgerAllocations.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantLedgerEntries.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantPaymentAttempts.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantAutopayEnrollments.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantAccountConditionPeriods.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.SecurityDepositAccounts.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantAccounts.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseAgreementSigners.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseRenewalAddendumDecisions.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseAddendumSigners.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseAddendumFinancialEffects.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseAddenda.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseAgreements.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.TenantUserAccesses.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseManagementParties.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.UnitOperationalPeriods.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LeaseManagements.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.OpeningBalances.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);

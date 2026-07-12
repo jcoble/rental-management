@@ -1368,33 +1368,71 @@ public class ReportsService : IReportsService
     {
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        var q = _db.SecurityDepositHoldings
-            .AsNoTracking()
-            .Where(h => h.PortfolioId == portfolioId);
+        var q =
+            from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+            join account in _db.SecurityDepositAccounts.AsNoTracking()
+                on new { balance.PortfolioId, Id = balance.SecurityDepositAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join tenantAccount in _db.TenantAccounts.AsNoTracking()
+                on new { balance.PortfolioId, Id = balance.TenantAccountId }
+                equals new { tenantAccount.PortfolioId, tenantAccount.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { balance.PortfolioId, Id = balance.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { balance.PortfolioId, balance.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.OriginatingAgreementId }
+                equals new { agreement.PortfolioId, agreement.Id }
+            where balance.PortfolioId == portfolioId
+            select new
+            {
+                Account = account,
+                Balance = balance,
+                Management = management,
+                Lifecycle = lifecycle,
+                Agreement = agreement,
+            };
 
         if (propertyFilter is not null)
-            q = q.Where(h => propertyFilter.Contains(h.Lease!.PropertyId));
+            q = q.Where(h => propertyFilter.Contains(h.Management.PropertyId));
 
         var rowsQuery = q
             .Select(h => new
             {
-                h.Id,
-                h.LeaseId,
-                LeaseNumber = h.Lease!.LeaseNumber,
-                h.Lease!.PropertyId,
-                PropertyName = h.Lease!.Property!.Name,
-                UnitNumber = h.Lease!.Unit!.UnitNumber,
-                TenantFirst = h.Lease!.Tenant!.FirstName,
-                TenantLast = h.Lease!.Tenant!.LastName,
-                h.Amount,
-                h.DeductionsTotal,
-                h.ReturnedAmount,
-                h.Status,
-                h.HeldAt,
-                h.ReturnedAt,
-                CurrentBalance = h.Amount - h.DeductionsTotal - (h.ReturnedAmount ?? 0m) < 0m
-                    ? 0m
-                    : h.Amount - h.DeductionsTotal - (h.ReturnedAmount ?? 0m),
+                Id = h.Account.Id,
+                LeaseId = h.Management.Id,
+                LeaseNumber = h.Management.RelationshipNumber,
+                h.Management.PropertyId,
+                PropertyName = h.Management.Property!.Name,
+                UnitNumber = h.Management.Unit!.UnitNumber,
+                TenantName = h.Lifecycle.CurrentPrimaryTenantName,
+                Amount = h.Balance.TotalReceived
+                    + h.Balance.TotalTransferredIn
+                    + (h.Balance.NetAdjustments > 0m ? h.Balance.NetAdjustments : 0m),
+                DeductionsTotal = h.Balance.TotalDeductions,
+                ReturnedAmount = h.Balance.TotalRefunded + h.Balance.TotalTransferredOut,
+                Status = h.Balance.DepositStatus == "Returned"
+                    ? SecurityDepositStatus.Returned
+                    : h.Balance.DepositStatus == "PartiallyReturned"
+                        ? SecurityDepositStatus.PartiallyReturned
+                        : h.Balance.DepositStatus == "Withheld"
+                            ? SecurityDepositStatus.Withheld
+                            : SecurityDepositStatus.Held,
+                HeldAt = _db.SecurityDepositEntries
+                    .Where(entry => entry.PortfolioId == h.Account.PortfolioId
+                        && entry.SecurityDepositAccountId == h.Account.Id
+                        && entry.EntryType == SecurityDepositEntryType.Receipt)
+                    .Select(entry => (DateTime?)entry.PostedAtUtc)
+                    .Min() ?? h.Account.CreatedAtUtc,
+                ReturnedAt = _db.SecurityDepositEntries
+                    .Where(entry => entry.PortfolioId == h.Account.PortfolioId
+                        && entry.SecurityDepositAccountId == h.Account.Id
+                        && entry.EntryType == SecurityDepositEntryType.Refund)
+                    .Select(entry => (DateTime?)entry.PostedAtUtc)
+                    .Max(),
+                CurrentBalance = h.Balance.HeldBalance,
             });
 
         var rows = await rowsQuery
@@ -1408,10 +1446,10 @@ public class ReportsService : IReportsService
                 PropertyId = h.PropertyId,
                 PropertyName = h.PropertyName,
                 UnitNumber = h.UnitNumber,
-                TenantName = (h.TenantFirst + " " + h.TenantLast).Trim(),
+                TenantName = h.TenantName ?? string.Empty,
                 Held = h.Amount,
                 Deductions = h.DeductionsTotal,
-                Returned = h.ReturnedAmount ?? 0m,
+                Returned = h.ReturnedAmount,
                 CurrentBalance = h.CurrentBalance,
                 Status = h.Status,
                 StatusName = FormatSecurityDepositStatus(h.Status),
@@ -1426,7 +1464,7 @@ public class ReportsService : IReportsService
             {
                 TotalHeld = g.Sum(x => x.Amount),
                 TotalDeductions = g.Sum(x => x.DeductionsTotal),
-                TotalReturned = g.Sum(x => x.ReturnedAmount ?? 0m),
+                TotalReturned = g.Sum(x => x.ReturnedAmount),
                 TotalCurrentBalance = g.Sum(x => x.CurrentBalance),
             })
             .FirstOrDefaultAsync(ct);
