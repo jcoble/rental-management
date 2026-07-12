@@ -11,6 +11,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Atomic;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -194,7 +195,8 @@ public class AccountingConnectionServiceTests : IDisposable
             _dp, providerResolver, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
-            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService, claims,
+            _dp, providerResolver, settingsResolver, tokenService, claims,
+            Moq.Mock.Of<IAtomicUnitOfWork>(),
             TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(

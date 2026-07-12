@@ -7,6 +7,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
+using RentalCommand.Core.Accounting;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Banking;
 
@@ -302,6 +304,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly AtomicAuditScope _auditScope;
         private readonly IAtomicSetBasedPersistence _setBased;
         private readonly IAtomicBankingPersistence _banking;
+        private readonly IAtomicAccountingPersistence _accounting;
         private readonly IAtomicLockingPersistence _locking;
         private readonly IAtomicScanConfirmationPersistence _scanConfirmation;
         private readonly TimeProvider _timeProvider;
@@ -319,6 +322,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _auditScope = auditScope;
             _setBased = new AtomicSetBasedMutationExecutor(db, auditScope, timeProvider);
             _banking = new AtomicBankingPersistence(db, auditScope);
+            _accounting = new AtomicAccountingPullPersistence(db, auditScope);
             _locking = new AtomicLockingPersistence(db);
             _scanConfirmation = new AtomicScanConfirmationPersistence(db, auditScope, _locking);
             _timeProvider = timeProvider;
@@ -329,6 +333,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => _setBased;
         public IAtomicBankingPersistence Banking => _banking;
+        public IAtomicAccountingPersistence Accounting => _accounting;
         public IAtomicLockingPersistence Locking => _locking;
         public IAtomicScanConfirmationPersistence ScanConfirmation => _scanConfirmation;
         public Guid SessionId => _db.ContextId.InstanceId;

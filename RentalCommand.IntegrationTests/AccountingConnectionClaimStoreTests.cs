@@ -1,8 +1,11 @@
 using FluentAssertions;
+using System.Data.Common;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
@@ -10,6 +13,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using Testcontainers.PostgreSql;
@@ -200,6 +205,152 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         (await verify.AccountingEntityMappings.CountAsync()).Should().Be(0);
         (await verify.AccountingConnections.SingleAsync(row => row.Id == stale.Connection.Id))
             .PullClaimToken.Should().NotBe(stale.Fence.ClaimToken);
+    }
+
+    [SkippableFact]
+    public async Task Atomic_pull_deduplicates_replays_advances_cursor_and_releases_claim()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now, "Atomic apply");
+        await using (var seed = NewContext())
+        {
+            var property = new Property
+            {
+                PortfolioId = portfolioId, Name = "Maple", AddressLine1 = "1 Main",
+                City = "Columbus", State = "OH", PostalCode = "43215", CreatedAt = now, UpdatedAt = now,
+            };
+            seed.Properties.Add(property);
+            await seed.SaveChangesAsync();
+            var unit = new Unit
+            {
+                PropertyId = property.Id, UnitNumber = "1", Bedrooms = 1, Bathrooms = 1,
+                MarketRent = 1200, CreatedAt = now, UpdatedAt = now,
+            };
+            var tenant = new Tenant
+            {
+                PortfolioId = portfolioId, FirstName = "Jordan", LastName = "Rivera",
+                CreatedAt = now, UpdatedAt = now,
+            };
+            seed.AddRange(unit, tenant);
+            await seed.SaveChangesAsync();
+            var connection = Connection(portfolioId, now, pullEnabled: true);
+            seed.AccountingConnections.Add(connection);
+            seed.Leases.Add(new Lease
+            {
+                PortfolioId = portfolioId, PropertyId = property.Id, UnitId = unit.Id, TenantId = tenant.Id,
+                LeaseNumber = "L-atomic", Status = LeaseStatus.Active, StartDate = now.AddMonths(-1),
+                EndDate = now.AddMonths(11), MonthlyRent = 1200, CreatedAt = now, UpdatedAt = now,
+            });
+            await seed.SaveChangesAsync();
+            seed.AccountingEntityMappings.Add(new AccountingEntityMapping
+            {
+                PortfolioId = portfolioId, AccountingConnectionId = connection.Id,
+                ExternalType = ExternalKind.Customer, ExternalId = "customer-atomic",
+                ExternalDisplayName = "Jordan Rivera", LocalEntityType = LocalEntityKind.Tenant,
+                LocalEntityId = tenant.Id, ConfirmedAt = now, Confidence = 1,
+                CreatedAt = now, UpdatedAt = now,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        AccountingConnectionClaim claim;
+        await using (var claimDb = NewContext())
+            claim = (await new AccountingConnectionClaimStore(claimDb)
+                .ClaimPullAsync("atomic", now, TimeSpan.FromMinutes(5), 1)).Single();
+
+        var provider = new Mock<IAccountingProvider>();
+        provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
+        provider.SetupGet(x => x.Capabilities).Returns(new AccountingCapabilities(
+            false, false, false, true, false, false, false));
+        var paidAt = now.AddDays(-1);
+        provider.Setup(x => x.PullPaymentsAsync(
+                It.IsAny<AcctCallCtx>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AccountingPullResult<ExtPaymentDto>(
+                [
+                    new("payment-atomic", "customer-atomic", 1200, paidAt, "ACH", "first", paidAt, null, null, "{}"),
+                    new("payment-atomic", "customer-atomic", 1200, paidAt, "ACH", "last", paidAt, null, null, "{}"),
+                ], paidAt, false));
+
+        await using var importDb = NewContext();
+        var applyCommands = new List<string>();
+        var service = CreateImportService(importDb, provider.Object, applyCommands);
+        var first = await service.ImportAsync(claim.Connection, null, CancellationToken.None, claim.Fence);
+        var replay = await service.ImportAsync(claim.Connection, null, CancellationToken.None, claim.Fence);
+        first.Should().Be(replay);
+        first.PaymentsImported.Should().Be(1);
+
+        await using var verify = NewContext();
+        (await verify.Payments.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(1);
+        (await verify.AccountingSyncMaps.CountAsync(row => row.AccountingConnectionId == claim.Connection.Id))
+            .Should().Be(1);
+        (await verify.AtomicCommandReceipts.CountAsync(row => row.CommandType == "accounting.pull.apply"))
+            .Should().Be(1);
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == claim.Connection.Id);
+        saved.PullClaimToken.Should().BeNull();
+        saved.LastPulledAtJson.Should().Contain("payments");
+        saved.LastSyncedAt.Should().NotBeNull();
+        applyCommands.Count(sql => sql.Contains("payment_decisions AS MATERIALIZED", StringComparison.Ordinal))
+            .Should().Be(1, "the bounded payload must be mapped, ranked, deduplicated, and written by one SQL statement");
+        applyCommands.Single(sql => sql.Contains("payment_decisions AS MATERIALIZED", StringComparison.Ordinal))
+            .Should().Contain("jsonb_array_elements").And.Contain("row_number() OVER").And.Contain("ON CONFLICT");
+    }
+
+    [SkippableFact]
+    public async Task Atomic_pull_injected_failure_rolls_back_receipt_mapping_cursor_and_claim_release()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        var portfolioId = await SeedPortfolioAsync(now, "Atomic rollback");
+        await using (var seed = NewContext())
+        {
+            seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
+            await seed.SaveChangesAsync();
+        }
+        AccountingConnectionClaim claim;
+        await using (var claimDb = NewContext())
+            claim = (await new AccountingConnectionClaimStore(claimDb)
+                .ClaimPullAsync("rollback", now, TimeSpan.FromMinutes(5), 1)).Single();
+
+        await using (var control = NewContext())
+            await control.Database.ExecuteSqlRawAsync("""
+                CREATE OR REPLACE FUNCTION fail_accounting_apply() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN RAISE EXCEPTION 'injected accounting rollback'; END $$;
+                CREATE TRIGGER fail_accounting_apply_trigger BEFORE INSERT ON "AccountingEntityMappings"
+                FOR EACH ROW EXECUTE FUNCTION fail_accounting_apply();
+                """);
+        try
+        {
+            var provider = new Mock<IAccountingProvider>();
+            provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
+            provider.SetupGet(x => x.Capabilities).Returns(new AccountingCapabilities(
+                true, false, false, false, false, false, false));
+            provider.Setup(x => x.PullCustomersAsync(
+                    It.IsAny<AcctCallCtx>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AccountingPullResult<ExtCustomerDto>(
+                    [new("rollback-customer", "Rollback", true, now, null, null, "{}")], now, false));
+            await using var importDb = NewContext();
+            var act = () => CreateImportService(importDb, provider.Object)
+                .ImportAsync(claim.Connection, null, CancellationToken.None, claim.Fence);
+            await act.Should().ThrowAsync<Exception>();
+        }
+        finally
+        {
+            await using var cleanup = NewContext();
+            await cleanup.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_accounting_apply_trigger ON "AccountingEntityMappings";
+                DROP FUNCTION IF EXISTS fail_accounting_apply();
+                """);
+        }
+
+        await using var verify = NewContext();
+        (await verify.AccountingEntityMappings.CountAsync(row => row.AccountingConnectionId == claim.Connection.Id))
+            .Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row => row.CommandType == "accounting.pull.apply"))
+            .Should().Be(0);
+        var saved = await verify.AccountingConnections.SingleAsync(row => row.Id == claim.Connection.Id);
+        saved.PullClaimToken.Should().Be(claim.Fence.ClaimToken);
+        saved.LastPulledAtJson.Should().BeNull();
     }
 
     [SkippableFact]
@@ -445,15 +596,19 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         return connection;
     }
 
-    private AccountingImportService CreateImportService(RentalCommandDbContext db, IAccountingProvider provider)
+    private AccountingImportService CreateImportService(
+        RentalCommandDbContext db,
+        IAccountingProvider provider,
+        List<string>? applyCommands = null)
     {
         var (providerResolver, settingsResolver) = CreateResolvers(provider);
         var claims = new AccountingConnectionClaimStore(db);
         return new AccountingImportService(
-            db, _dataProtection, providerResolver, settingsResolver,
+            _dataProtection, providerResolver, settingsResolver,
             new AccountingTokenService(_dataProtection, providerResolver, settingsResolver,
                 claims, TimeProvider.System, NullLogger<AccountingTokenService>.Instance),
             claims,
+            CreateAtomicUnitOfWork(applyCommands),
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
     }
 
@@ -475,7 +630,8 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             _dataProtection, providerResolver, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var import = new AccountingImportService(
-            db, _dataProtection, providerResolver, settingsResolver, tokenService, claims,
+            _dataProtection, providerResolver, settingsResolver, tokenService, claims,
+            CreateAtomicUnitOfWork(),
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             db, _dataProtection, providerResolver, settingsResolver, import,
@@ -524,6 +680,36 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options;
         return new RentalCommandDbContext(options);
+    }
+
+    private IAtomicUnitOfWork CreateAtomicUnitOfWork(List<string>? applyCommands = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
+            RentalCommand.Core.Accounting.ApplyAccountingPullResult,
+            ApplyAccountingPullResultHandler>();
+        services.AddDbContext<RentalCommandDbContext>((sp, options) =>
+        {
+            options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(sp);
+            if (applyCommands is not null) options.AddInterceptors(new AccountingApplyCommandInterceptor(applyCommands));
+        });
+        return services.BuildServiceProvider().GetRequiredService<IAtomicUnitOfWork>();
+    }
+
+    private sealed class AccountingApplyCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
     }
 
     private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>

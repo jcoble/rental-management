@@ -242,30 +242,21 @@ public class AccountingConnectionService
     }
 
     /// <summary>
-    /// Best-effort initial import right after a successful connect (port of EdiPlatform's
-    /// <c>RunInitialPullAsync</c>). Only runs when pull is enabled; swallows + logs failures so the
-    /// connect flow is never broken by a transient provider error.
+    /// Leaves the already-due connection for the fenced pull worker. Provider I/O cannot be started
+    /// inline because only the worker owns a durable pull claim.
     /// </summary>
-    private async Task RunInitialPullAsync(AccountingConnection conn, CancellationToken ct)
+    private Task RunInitialPullAsync(AccountingConnection conn, CancellationToken ct)
     {
         if (!conn.PullEnabled)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        try
-        {
-            var summary = await _importService.ImportAsync(conn, since: null, ct);
-            _logger.LogInformation(
-                "Initial accounting import for connection {ConnectionId}: {Payments} payments, {Expenses} expenses, {Review} for review",
-                conn.Id, summary.PaymentsImported, summary.ExpensesImported, summary.NeedsReview);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex,
-                "Initial accounting import failed for connection {ConnectionId} — the scheduled pull worker will retry",
-                conn.Id);
-        }
+        ct.ThrowIfCancellationRequested();
+        _logger.LogInformation(
+            "Initial accounting import for connection {ConnectionId} was queued for the fenced pull worker",
+            conn.Id);
+        return Task.CompletedTask;
     }
 
     /// <summary>Best-effort revoke at the provider, then flip Disconnected and blank the tokens.</summary>
@@ -435,9 +426,8 @@ public class AccountingConnectionService
     // --- Phase 2: import / mappings / confirm / review-queue ------------------------------
 
     /// <summary>
-    /// Run a one-time / backfill import for a connected provider over an optional date range. Delegates
-    /// to <see cref="AccountingImportService"/>; the date range is advisory (the provider pulls deltas,
-    /// the import is idempotent). Returns the per-resource counts for the caller to surface.
+    /// Manual backfills are disabled until the command endpoint can enqueue an exact durable pull
+    /// claim. This prevents a second unfenced writer from bypassing the atomic cutover.
     /// </summary>
     public async Task<AccountingImportService.ImportSummary> RunImportAsync(
         int portfolioId, AccountingProvider provider, DateTime? fromDate, DateTime? toDate, CancellationToken ct)
@@ -453,9 +443,8 @@ public class AccountingConnectionService
                 $"{provider} is not connected (status: {conn.Status}). Reconnect before importing.");
         }
 
-        // A backfill explicitly asks to re-scan from a start date, so honour fromDate as the delta floor
-        // when supplied (null = use each resource's stored cursor).
-        return await _importService.ImportAsync(conn, since: fromDate, ct);
+        throw new InvalidOperationException(
+            "Manual accounting pulls must be queued through the fenced accounting worker.");
     }
 
     /// <summary>
