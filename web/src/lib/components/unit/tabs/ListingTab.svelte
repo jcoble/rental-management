@@ -45,7 +45,7 @@
 		onError: (error) => showError(apiErrorMessage(error)),
 	}));
 	const saveMutation = createMutation(() => ({
-		mutationFn: (markPublished = false) => units.saveListingWorkspace(unitId, payload(markPublished)),
+		mutationFn: (markPublished: boolean) => units.saveListingWorkspace(unitId, payload(markPublished)),
 		onSuccess: (value) => { acceptWorkspace(value); showSuccess('Listing workspace saved.'); },
 		onError: (error) => showError(apiErrorMessage(error)),
 	}));

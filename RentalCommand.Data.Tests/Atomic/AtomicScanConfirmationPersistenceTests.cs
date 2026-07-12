@@ -94,6 +94,15 @@ public sealed class AtomicScanConfirmationPersistenceTests
 
     private static ScanDraft SeedDraft(RentalCommandDbContext db)
     {
+        db.Portfolios.Add(new Portfolio
+        {
+            Id = 42,
+            Name = "Scan confirmation test",
+            ManagementCompanyName = "Test management",
+            TimeZone = "UTC",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
         var draft = new ScanDraft
         {
             Id = 17,
