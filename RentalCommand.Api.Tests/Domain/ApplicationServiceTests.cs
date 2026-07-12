@@ -870,26 +870,9 @@ public class ApplicationServiceTests : IDisposable
 }
 
 /// <summary>
-/// Derived DbContext that remaps Postgres-specific column types to SQLite-friendly ones for tests.
+/// SQLite application context using the shared test-only compatibility model.
 /// </summary>
-internal sealed class ApplicationTestDbContext : RentalCommandDbContext
+internal sealed class ApplicationTestDbContext : SqliteCompatibleRentalCommandDbContext
 {
     public ApplicationTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        // jsonb is not understood by SQLite — remap those columns to plain text.
-        modelBuilder.Entity<RentalApplication>().Property(e => e.IdExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<ScreeningResult>().Property(e => e.RawResultJson).HasColumnType("TEXT");
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-
-        // Drop the Postgres check constraints SQLite can't execute.
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-    }
 }

@@ -161,7 +161,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
     }
 }
 
-internal sealed class WorkOrderWindowTestDbContext : RentalCommandDbContext
+internal sealed class WorkOrderWindowTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public WorkOrderWindowTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }

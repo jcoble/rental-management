@@ -361,21 +361,7 @@ public sealed class AuditTrailTests : IDisposable
 /// Derived DbContext that maps Postgres jsonb columns to TEXT and drops Postgres-only DDL so the
 /// schema is valid under SQLite (mirrors the existing accounting test context).
 /// </summary>
-internal sealed class AuditTestDbContext : RentalCommandDbContext
+internal sealed class AuditTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public AuditTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<SecurityDepositHolding>().Property(e => e.DeductionsJson).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
-    }
 }

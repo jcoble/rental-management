@@ -404,7 +404,7 @@ public sealed class MoveOutStatementTests : IDisposable
     }
 
     private sealed class MoveOutStatementTestDbContext(DbContextOptions<RentalCommandDbContext> options)
-        : RentalCommandDbContext(options)
+        : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
     {
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

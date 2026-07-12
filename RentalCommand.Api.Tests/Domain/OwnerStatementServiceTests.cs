@@ -415,24 +415,9 @@ public class OwnerStatementServiceTests : IDisposable
     }
 }
 
-internal sealed class OwnerStatementTestDbContext : RentalCommandDbContext
+internal sealed class OwnerStatementTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public OwnerStatementTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-        // Map Postgres jsonb columns to TEXT so EnsureCreated works on SQLite.
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
-    }
 }
 
 internal sealed class OwnerStatementRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

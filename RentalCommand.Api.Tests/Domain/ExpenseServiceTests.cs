@@ -573,22 +573,7 @@ public class ExpenseServiceTests : IDisposable
     }
 }
 
-internal sealed class ExpenseServiceTestDbContext : RentalCommandDbContext
+internal sealed class ExpenseServiceTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public ExpenseServiceTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-    }
 }

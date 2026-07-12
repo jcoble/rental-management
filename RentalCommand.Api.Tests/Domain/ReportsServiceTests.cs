@@ -1408,37 +1408,9 @@ public class ReportsServiceTests : IDisposable
 }
 
 /// <summary>
-/// SQLite-compatible DbContext for the reports tests: strips jsonb column types and Postgres check
-/// constraints / partial-index filters that SQLite cannot execute (same approach as the other domain
-/// test contexts).
+/// SQLite reports context using the shared test-only compatibility model.
 /// </summary>
-internal sealed class ReportsServiceTestDbContext : RentalCommandDbContext
+internal sealed class ReportsServiceTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public ReportsServiceTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<SecurityDepositHolding>().Property(e => e.DeductionsJson).HasColumnType("TEXT");
-
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
-
-        modelBuilder.Entity<Payment>()
-            .HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
-            .IsUnique()
-            .HasFilter(null);
-
-        modelBuilder.Entity<AutopayEnrollment>()
-            .HasIndex(e => e.LeaseId)
-            .IsUnique()
-            .HasFilter(null);
-    }
 }

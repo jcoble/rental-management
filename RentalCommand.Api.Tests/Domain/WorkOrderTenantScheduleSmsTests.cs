@@ -217,13 +217,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
     }
 }
 
-internal sealed class WorkOrderSmsTestDbContext : RentalCommandDbContext
+internal sealed class WorkOrderSmsTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public WorkOrderSmsTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-    }
 }

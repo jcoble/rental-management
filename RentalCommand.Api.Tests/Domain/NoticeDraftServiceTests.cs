@@ -575,7 +575,7 @@ public class NoticeDraftServiceTests : IDisposable
     }
 
     private sealed class FixtureDbContext(DbContextOptions<RentalCommandDbContext> options)
-        : RentalCommandDbContext(options)
+        : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
     {
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
