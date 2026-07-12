@@ -18,4 +18,8 @@ public sealed class DisabledScreeningProvider : IScreeningProvider
     public Task<ScreeningInvitationResult> CreateInvitationAsync(
         ScreeningInvitationRequest request, CancellationToken ct = default) =>
         throw new InvalidOperationException("No integrated screening provider adapter is configured.");
+
+    public Task<ScreeningProviderDeliveryVerification> VerifyDeliveryAsync(
+        ScreeningProviderCallback callback, CancellationToken ct = default) =>
+        Task.FromResult(ScreeningProviderDeliveryVerification.Rejected("provider_not_configured"));
 }

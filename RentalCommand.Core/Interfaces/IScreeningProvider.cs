@@ -11,6 +11,15 @@ public interface IScreeningProvider : RentalCommand.Core.Atomic.IAtomicRemoteDep
     Task<ScreeningInvitationResult> CreateInvitationAsync(
         ScreeningInvitationRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Authenticates a provider callback and translates it to the restricted, provider-neutral
+    /// delivery shape. Concrete adapters verify the vendor's signature and timestamp here. Raw
+    /// callback bodies are transient and must never be persisted or logged.
+    /// </summary>
+    Task<ScreeningProviderDeliveryVerification> VerifyDeliveryAsync(
+        ScreeningProviderCallback callback,
+        CancellationToken ct = default);
 }
 
 public sealed record ScreeningProviderDescriptor(
@@ -62,3 +71,29 @@ public sealed record ScreeningProviderStatusDelivery(
     string? CreditReportingAgencyName = null,
     string? CreditReportingAgencyAddress = null,
     string? CreditReportingAgencyPhone = null);
+
+/// <summary>Transient callback material supplied to the installed provider adapter.</summary>
+public sealed record ScreeningProviderCallback(
+    string ProviderKey,
+    byte[] Body,
+    string? ContentType,
+    IReadOnlyDictionary<string, string> Headers);
+
+/// <summary>
+/// Result of signature/authentication verification. A verified callback may still be malformed;
+/// ErrorCode is safe operational metadata and must not contain the raw provider payload.
+/// </summary>
+public sealed record ScreeningProviderDeliveryVerification(
+    bool IsAuthentic,
+    ScreeningProviderStatusDelivery? Delivery,
+    string? ErrorCode)
+{
+    public static ScreeningProviderDeliveryVerification Rejected(string errorCode) =>
+        new(false, null, errorCode);
+
+    public static ScreeningProviderDeliveryVerification Invalid(string errorCode) =>
+        new(true, null, errorCode);
+
+    public static ScreeningProviderDeliveryVerification Verified(ScreeningProviderStatusDelivery delivery) =>
+        new(true, delivery, null);
+}

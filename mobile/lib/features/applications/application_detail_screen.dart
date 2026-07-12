@@ -1566,6 +1566,33 @@ class _ScreeningResultView extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
+        if (r.statusSummary.isNotEmpty || r.nextAction.isNotEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (r.statusSummary.isNotEmpty)
+                  Text(r.statusSummary, style: theme.textTheme.bodyMedium),
+                if (r.nextAction.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Next: ${r.nextAction}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         _DetailRow(
           label: 'Path',
           value: r.mode == 'Integrated' ? 'Rental Command' : 'Outside service',

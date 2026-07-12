@@ -81,6 +81,40 @@ public sealed class ScreeningService : IScreeningService
                     && r.CreditReportingAgencyName != null
                     && r.CreditReportingAgencyAddress != null
                     && r.CreditReportingAgencyPhone != null,
+                StatusSummary = r.Status == ApplicantScreeningStatus.Created
+                    ? "The screening record is ready to start."
+                    : r.Status == ApplicantScreeningStatus.AwaitingProvider
+                        ? "Rental Command is creating the secure provider invitation."
+                        : r.Status == ApplicantScreeningStatus.AwaitingApplicant
+                            ? "The invitation was created and is waiting for the applicant."
+                            : r.Status == ApplicantScreeningStatus.InProgress
+                                ? "The applicant submitted their information and the provider is processing it."
+                                : r.Status == ApplicantScreeningStatus.Completed
+                                    ? "The provider has completed the screening."
+                                    : r.Status == ApplicantScreeningStatus.Failed
+                                        ? "The screening could not be completed."
+                                        : "The screening was cancelled.",
+                NextAction = r.Status == ApplicantScreeningStatus.Created
+                    ? "Start the screening when the applicant is ready."
+                    : r.Status == ApplicantScreeningStatus.AwaitingProvider
+                        ? "No action is needed yet. Retry with the same request if this does not update."
+                        : r.Status == ApplicantScreeningStatus.AwaitingApplicant
+                            ? "Ask the applicant to complete the secure provider invitation."
+                            : r.Status == ApplicantScreeningStatus.InProgress
+                                ? "Wait for the provider to finish, or open the provider site for details."
+                                : r.Status == ApplicantScreeningStatus.Completed && r.Decision == null
+                                    ? "Review the result at the provider and record your screening decision."
+                                    : r.Status == ApplicantScreeningStatus.Completed
+                                        ? "The screening decision is recorded."
+                                        : r.Status == ApplicantScreeningStatus.Failed && r.Mode == ScreeningMode.Integrated
+                                            ? "Retry the integrated screening or track an outside screening."
+                                            : r.Status == ApplicantScreeningStatus.Failed
+                                                ? "Update this outside screening or start another one."
+                                                : "Start another screening if it is still needed.",
+                IsTerminal = r.Status == ApplicantScreeningStatus.Completed
+                    || r.Status == ApplicantScreeningStatus.Failed
+                    || r.Status == ApplicantScreeningStatus.Cancelled,
+                CanOpenProvider = r.ProviderHostedUrl != null,
             })
             .ToListAsync(ct);
 
@@ -378,6 +412,8 @@ public sealed class ScreeningService : IScreeningService
         ArgumentException.ThrowIfNullOrWhiteSpace(delivery.ProviderKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(delivery.DeliveryId);
         ArgumentException.ThrowIfNullOrWhiteSpace(delivery.ProviderReference);
+        if (delivery.Status is ApplicantScreeningStatus.Created or ApplicantScreeningStatus.AwaitingProvider)
+            throw new ArgumentException("Provider callbacks cannot move a screening to an internal preparation status.");
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         await LockIdempotencyKeyAsync(
@@ -400,7 +436,8 @@ public sealed class ScreeningService : IScreeningService
                 && s.ProviderReference == delivery.ProviderReference, ct);
         if (screening == null) return null;
 
-        if (delivery.OccurredAtUtc >= screening.LastStatusAtUtc)
+        if (delivery.OccurredAtUtc >= screening.LastStatusAtUtc
+            && CanApplyProviderStatus(screening.Status, delivery.Status))
         {
             screening.Status = delivery.Status;
             screening.ProviderHostedUrl = NullIfBlank(delivery.ProviderHostedUrl) ?? screening.ProviderHostedUrl;
@@ -408,8 +445,12 @@ public sealed class ScreeningService : IScreeningService
             screening.CreditReportingAgencyAddress = NullIfBlank(delivery.CreditReportingAgencyAddress) ?? screening.CreditReportingAgencyAddress;
             screening.CreditReportingAgencyPhone = NullIfBlank(delivery.CreditReportingAgencyPhone) ?? screening.CreditReportingAgencyPhone;
             screening.ApplicantSubmittedAtUtc ??= delivery.Status == ApplicantScreeningStatus.InProgress ? delivery.OccurredAtUtc : null;
-            screening.CompletedAtUtc = delivery.Status == ApplicantScreeningStatus.Completed ? delivery.OccurredAtUtc : screening.CompletedAtUtc;
-            screening.FailedAtUtc = delivery.Status == ApplicantScreeningStatus.Failed ? delivery.OccurredAtUtc : null;
+            screening.CompletedAtUtc = delivery.Status == ApplicantScreeningStatus.Completed
+                ? delivery.OccurredAtUtc
+                : null;
+            screening.FailedAtUtc = delivery.Status == ApplicantScreeningStatus.Failed
+                ? delivery.OccurredAtUtc
+                : null;
             screening.LastStatusAtUtc = delivery.OccurredAtUtc;
             screening.UpdatedAt = _timeProvider.UtcNow();
         }
@@ -438,6 +479,30 @@ public sealed class ScreeningService : IScreeningService
         !string.IsNullOrWhiteSpace(screening.CreditReportingAgencyName)
         && !string.IsNullOrWhiteSpace(screening.CreditReportingAgencyAddress)
         && !string.IsNullOrWhiteSpace(screening.CreditReportingAgencyPhone);
+
+    private static bool CanApplyProviderStatus(
+        ApplicantScreeningStatus current, ApplicantScreeningStatus next) =>
+        current == next || current switch
+        {
+            ApplicantScreeningStatus.Created => next is ApplicantScreeningStatus.AwaitingApplicant
+                or ApplicantScreeningStatus.InProgress
+                or ApplicantScreeningStatus.Completed
+                or ApplicantScreeningStatus.Failed
+                or ApplicantScreeningStatus.Cancelled,
+            ApplicantScreeningStatus.AwaitingProvider => next is ApplicantScreeningStatus.AwaitingApplicant
+                or ApplicantScreeningStatus.InProgress
+                or ApplicantScreeningStatus.Completed
+                or ApplicantScreeningStatus.Failed
+                or ApplicantScreeningStatus.Cancelled,
+            ApplicantScreeningStatus.AwaitingApplicant => next is ApplicantScreeningStatus.InProgress
+                or ApplicantScreeningStatus.Completed
+                or ApplicantScreeningStatus.Failed
+                or ApplicantScreeningStatus.Cancelled,
+            ApplicantScreeningStatus.InProgress => next is ApplicantScreeningStatus.Completed
+                or ApplicantScreeningStatus.Failed
+                or ApplicantScreeningStatus.Cancelled,
+            _ => false,
+        };
 
     private static string ReceiptKey(string purpose, string operationKey)
     {

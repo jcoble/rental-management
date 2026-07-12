@@ -455,6 +455,10 @@ public sealed class ApplicantScreeningResponse
     public string? CreditReportingAgencyPhone { get; init; }
     public bool HasCompleteCreditReportingAgencyContact { get; init; }
     public bool CanGenerateAdverseAction { get; init; }
+    public string StatusSummary { get; init; } = string.Empty;
+    public string NextAction { get; init; } = string.Empty;
+    public bool IsTerminal { get; init; }
+    public bool CanOpenProvider { get; init; }
 
     public static ApplicantScreeningResponse FromEntity(ApplicantScreening e) => new()
     {
@@ -482,12 +486,45 @@ public sealed class ApplicantScreeningResponse
             && e.Decision == ScreeningDecision.Decline
             && e.ConsumerReportUsedForDecision
             && HasCompleteCraContact(e),
+        StatusSummary = StatusSummaryFor(e.Status),
+        NextAction = NextActionFor(e.Status, e.Decision, e.Mode),
+        IsTerminal = e.Status is ApplicantScreeningStatus.Completed
+            or ApplicantScreeningStatus.Failed
+            or ApplicantScreeningStatus.Cancelled,
+        CanOpenProvider = !string.IsNullOrWhiteSpace(e.ProviderHostedUrl),
     };
 
     private static bool HasCompleteCraContact(ApplicantScreening e) =>
         !string.IsNullOrWhiteSpace(e.CreditReportingAgencyName)
         && !string.IsNullOrWhiteSpace(e.CreditReportingAgencyAddress)
         && !string.IsNullOrWhiteSpace(e.CreditReportingAgencyPhone);
+
+    public static string StatusSummaryFor(ApplicantScreeningStatus status) => status switch
+    {
+        ApplicantScreeningStatus.Created => "The screening record is ready to start.",
+        ApplicantScreeningStatus.AwaitingProvider => "Rental Command is creating the secure provider invitation.",
+        ApplicantScreeningStatus.AwaitingApplicant => "The invitation was created and is waiting for the applicant.",
+        ApplicantScreeningStatus.InProgress => "The applicant submitted their information and the provider is processing it.",
+        ApplicantScreeningStatus.Completed => "The provider has completed the screening.",
+        ApplicantScreeningStatus.Failed => "The screening could not be completed.",
+        ApplicantScreeningStatus.Cancelled => "The screening was cancelled.",
+        _ => "Screening status is unavailable.",
+    };
+
+    public static string NextActionFor(
+        ApplicantScreeningStatus status, ScreeningDecision? decision, ScreeningMode mode) => status switch
+    {
+        ApplicantScreeningStatus.Created => "Start the screening when the applicant is ready.",
+        ApplicantScreeningStatus.AwaitingProvider => "No action is needed yet. Retry with the same request if this does not update.",
+        ApplicantScreeningStatus.AwaitingApplicant => "Ask the applicant to complete the secure provider invitation.",
+        ApplicantScreeningStatus.InProgress => "Wait for the provider to finish, or open the provider site for details.",
+        ApplicantScreeningStatus.Completed when decision == null => "Review the result at the provider and record your screening decision.",
+        ApplicantScreeningStatus.Completed => "The screening decision is recorded.",
+        ApplicantScreeningStatus.Failed when mode == ScreeningMode.Integrated => "Retry the integrated screening or track an outside screening.",
+        ApplicantScreeningStatus.Failed => "Update this outside screening or start another one.",
+        ApplicantScreeningStatus.Cancelled => "Start another screening if it is still needed.",
+        _ => "Review the screening record.",
+    };
 }
 
 public sealed class ScreeningWorkspaceResponse
