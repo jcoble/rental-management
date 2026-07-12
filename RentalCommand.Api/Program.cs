@@ -233,6 +233,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Accounting.ContinueAccountingMappingPromotionResult,
     RentalCommand.Data.Accounting.ContinueAccountingMappingPromotionHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
+    RentalCommand.Core.Accounting.ApplyAccountingPullResult,
+    RentalCommand.Data.Accounting.ApplyAccountingPullResultHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Banking.PreparePlaidTokenExchangeCommand,
     RentalCommand.Core.Banking.PreparePlaidTokenExchangeResult,
     RentalCommand.Data.Banking.PreparePlaidTokenExchangeHandler>();
