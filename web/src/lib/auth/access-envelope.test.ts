@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
 	capabilityKeysForExperience,
 	userFromAccessEnvelope,
@@ -25,19 +26,18 @@ const access: AccessEnvelope = {
 
 describe('canonical access envelope', () => {
 	it('derives shell identity without recreating legacy roles', () => {
-		expect(userFromAccessEnvelope(access)).toMatchObject({
-			id: 17,
-			portfolioId: 8,
-			roles: []
-		});
+		const user = userFromAccessEnvelope(access);
+		assert.equal(user.id, 17);
+		assert.equal(user.portfolioId, 8);
+		assert.deepEqual(user.roles, []);
 	});
 
 	it('keeps navigation capabilities isolated by active experience', () => {
-		expect([...capabilityKeysForExperience(access, 'Management')]).toEqual([
+		assert.deepEqual([...capabilityKeysForExperience(access, 'Management')], [
 			'rentals.read',
 			'money.balances.read'
 		]);
-		expect([...capabilityKeysForExperience(access, 'Maintenance')]).toEqual([
+		assert.deepEqual([...capabilityKeysForExperience(access, 'Maintenance')], [
 			'maintenance.assigned-work.read'
 		]);
 	});

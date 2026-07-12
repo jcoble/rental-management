@@ -3,10 +3,12 @@
 	import { banking } from '$lib/api/endpoints/banking';
 	import type {
 		BankReviewQueueResponse,
+		BankMatchSuggestion,
 		BankTransactionListResponse,
 		BankingSummary,
 		ExchangePlaidPublicTokenRequest,
 		ImportBankTransactionsRequest,
+		MatchBankTransactionRequest,
 		PlaidSettings
 	} from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -181,9 +183,18 @@
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
+	function matchRequest(suggestion: BankMatchSuggestion): MatchBankTransactionRequest {
+		return suggestion.entityType === 'Expense'
+			? { expenseId: suggestion.entityId }
+			: {
+					tenantAccountId: suggestion.tenantAccountId,
+					tenantLedgerEntryId: suggestion.entityId
+				};
+	}
+
 	const matchMutation = createMutation(() => ({
-		mutationFn: ({ id, entityType, entityId }: { id: number; entityType: string; entityId: number }) =>
-			banking.match(id, { entityType, entityId }),
+		mutationFn: ({ id, request }: { id: number; request: MatchBankTransactionRequest }) =>
+			banking.match(id, request),
 		onSuccess: () => {
 			showSuccess('Bank transaction matched.');
 			refreshBanking();
@@ -586,8 +597,7 @@
 															size="sm"
 															onclick={() => matchMutation.mutate({
 																id: transaction.id,
-																entityType: transaction.suggestedMatch!.entityType,
-																entityId: transaction.suggestedMatch!.entityId
+																request: matchRequest(transaction.suggestedMatch!)
 															})}
 															disabled={matchMutation.isPending}
 														>

@@ -302,7 +302,7 @@ class _UnitWorkOrderQuickActionFabState
       leaseManagementId: lease.leaseManagementId,
       tenantName: widget.dashboard.header.currentTenantName,
       rentalLabel:
-          '${_propertyLabel} · ${_unitLabel(widget.dashboard.unit.unitNumber)}',
+          '$_propertyLabel · ${_unitLabel(widget.dashboard.unit.unitNumber)}',
     );
     if (result != null) {
       ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));

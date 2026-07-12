@@ -22,6 +22,7 @@ import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
 import '../accounting/accounting_repository.dart';
 import '../onboarding/onboarding_repository.dart';
+import '../notifications/notifications_inbox_screen.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
 import '../appointments/appointments_screen.dart';

@@ -183,6 +183,9 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
             null!,
             NullLogger<UserManager<ApplicationUser>>.Instance);
         manager.RegisterTokenProvider(
+            TokenOptions.DefaultProvider,
+            new EmailTokenProvider<ApplicationUser>());
+        manager.RegisterTokenProvider(
             TokenOptions.DefaultEmailProvider,
             new EmailTokenProvider<ApplicationUser>());
         return manager;

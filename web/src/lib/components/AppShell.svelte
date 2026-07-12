@@ -231,7 +231,8 @@
 	let currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
 	let activeExperience = $derived(authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null);
 	let activeCapabilities = $derived(new Set(
-		currentAccess?.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
+		currentAccess?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience)?.capabilityKeys ?? []
 	));
 	let portalUser = $derived(activeExperience === 'Tenant');
 	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
