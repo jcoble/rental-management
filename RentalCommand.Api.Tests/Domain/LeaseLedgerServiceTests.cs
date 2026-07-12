@@ -26,7 +26,8 @@ public sealed class LeaseLedgerServiceTests
         typeof(LeaseController).GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .SelectMany(method => method.GetCustomAttributes<HttpGetAttribute>())
             .Select(attribute => attribute.Template)
-            .Should().NotContain(template => template?.Contains("ledger", StringComparison.OrdinalIgnoreCase) == true);
+            .Should().NotContain(template =>
+                template != null && template.Contains("ledger", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
