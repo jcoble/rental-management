@@ -23,6 +23,8 @@ public class Tenant : IAuditable, IPortfolioScoped
     public List<Lease> Leases { get; set; } = [];
     public List<LeaseTenant> LeaseTenants { get; set; } = [];
     public List<LeaseManagementParty> LeaseManagementParties { get; set; } = [];
+    public List<LeaseAgreementSigner> AgreementSignerSnapshots { get; set; } = [];
+    public List<LeaseAddendumSigner> AddendumSignerSnapshots { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<UserAccount> UserAccounts { get; set; } = [];
