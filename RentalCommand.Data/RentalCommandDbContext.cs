@@ -183,9 +183,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // Npgsql's inet type is represented by IPAddress. Keep the HTTP/domain boundary as a
         // normalized string while making the provider mapping explicit; EF handles nulls before
         // invoking the converter.
-        var ipAddressConverter = new ValueConverter<string, IPAddress>(
-            value => IPAddress.Parse(value),
-            value => value.ToString());
+        var ipAddressConverter = new ValueConverter<string?, IPAddress?>(
+            value => value == null ? null : IPAddress.Parse(value),
+            value => value == null ? null : value.ToString());
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
