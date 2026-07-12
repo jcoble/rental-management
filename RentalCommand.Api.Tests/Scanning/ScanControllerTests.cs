@@ -7,9 +7,11 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Scanning;
@@ -278,9 +280,161 @@ public class ScanControllerTests : IDisposable
             i.CreatedUnitId == 11);
     }
 
-    private ScanController CreateController(IScanService scan, IFileStorage? files = null)
+    [Fact]
+    public async Task Confirm_WithoutStableOperationId_IsRejectedBeforePreparationOrAtomicAdmission()
     {
-        var controller = new ScanController(scan, _db, files ?? Mock.Of<IFileStorage>(), TimeProvider.System)
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        var atomic = new RecordingAtomicUnitOfWork();
+        var controller = CreateController(scan.Object, atomic: atomic);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "   " },
+            CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        atomic.Calls.Should().Be(0);
+        scan.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData(AtomicCommandDisposition.Executed, false)]
+    [InlineData(AtomicCommandDisposition.Replayed, true)]
+    public async Task Confirm_UsesTypedAtomicCommandAndReportsExecutionDisposition(
+        AtomicCommandDisposition disposition,
+        bool replayed)
+    {
+        var command = ExpenseCommand(17);
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        scan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.Ready, command));
+        var atomic = new RecordingAtomicUnitOfWork
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed, 17, "Expense", 91, 12),
+                disposition,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, atomic: atomic);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "mobile-confirm-17" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "entityType").Should().Be("Expense");
+        Property(body, "entityId").Should().Be(91);
+        Property(body, "unitId").Should().Be(12);
+        Property(body, "replayed").Should().Be(replayed);
+        Property(body, "atomicDisposition").Should().Be(disposition.ToString());
+        atomic.Calls.Should().Be(1);
+        atomic.Command.Should().BeSameAs(command);
+        atomic.Identity!.CommandType.Should().Be("scan.confirm");
+        atomic.Identity.IdempotencyKey.Should().StartWith("42:17:");
+        scan.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Confirm_AlreadyConfirmed_ReturnsCanonicalEntityWithoutLegacyWrite()
+    {
+        var scan = ReadyScan(ExpenseCommand(17));
+        var atomic = new RecordingAtomicUnitOfWork
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.AlreadyConfirmed, 17, "Payment", 88, 4),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, atomic: atomic);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "second-operation" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "status").Should().Be("alreadyConfirmed");
+        Property(body, "paymentId").Should().Be(88);
+        Property(body, "entityType").Should().Be("Payment");
+        scan.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Confirm_MapsNotFoundRejectedAndValidationResponses()
+    {
+        var notFoundScan = new Mock<IScanService>(MockBehavior.Strict);
+        notFoundScan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.DraftNotFound,
+                Error: "Scan draft not found."));
+        var unusedAtomic = new RecordingAtomicUnitOfWork();
+        var notFound = await CreateController(notFoundScan.Object, atomic: unusedAtomic).Confirm(
+            17, new ConfirmScanRequest { ClientOperationId = "missing" }, CancellationToken.None);
+        notFound.Should().BeOfType<NotFoundObjectResult>();
+        unusedAtomic.Calls.Should().Be(0);
+
+        var rejectedScan = ReadyScan(ExpenseCommand(17));
+        var rejectedAtomic = new RecordingAtomicUnitOfWork
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.DraftRejected, 17, "Expense", null, Error: "Draft is rejected."),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var rejected = await CreateController(rejectedScan.Object, atomic: rejectedAtomic).Confirm(
+            17, new ConfirmScanRequest { ClientOperationId = "rejected" }, CancellationToken.None);
+        rejected.Should().BeOfType<ConflictObjectResult>();
+
+        var validationScan = ReadyScan(ExpenseCommand(17));
+        var validationAtomic = new RecordingAtomicUnitOfWork
+        {
+            Exception = new ScanConfirmationValidationException("Draft is not ready to confirm."),
+        };
+        var validation = await CreateController(validationScan.Object, atomic: validationAtomic).Confirm(
+            17, new ConfirmScanRequest { ClientOperationId = "not-ready" }, CancellationToken.None);
+        validation.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task Confirm_LeasePreparation_ReturnsTemporaryUnavailableWithoutAtomicOrLegacyWriter()
+    {
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        scan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.TemporarilyUnavailable,
+                Error: "Lease scan confirmation is temporarily unavailable."));
+        var atomic = new RecordingAtomicUnitOfWork();
+
+        var result = await CreateController(scan.Object, atomic: atomic).Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "lease-confirm" },
+            CancellationToken.None);
+
+        var unavailable = result.Should().BeOfType<ObjectResult>().Subject;
+        unavailable.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        atomic.Calls.Should().Be(0);
+        scan.VerifyAll();
+    }
+
+    private ScanController CreateController(
+        IScanService scan,
+        IFileStorage? files = null,
+        IAtomicUnitOfWork? atomic = null)
+    {
+        var controller = new ScanController(
+            scan,
+            atomic ?? Mock.Of<IAtomicUnitOfWork>(),
+            _db,
+            files ?? Mock.Of<IFileStorage>(),
+            TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {
@@ -295,6 +449,61 @@ public class ScanControllerTests : IDisposable
         };
 
         return controller;
+    }
+
+    private static Mock<IScanService> ReadyScan(ConfirmScanDraftCommand command)
+    {
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        scan.Setup(service => service.PrepareConfirmationAsync(
+                42, 17, 7, "{}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ScanConfirmationPreparation(
+                ScanConfirmationPreparationOutcome.Ready, command));
+        return scan;
+    }
+
+    private static ConfirmScanDraftCommand ExpenseCommand(int draftId) => new(
+        42,
+        draftId,
+        7,
+        DateTime.UtcNow,
+        new ScanConfirmationTargetData(
+            ScanConfirmationTargetKind.Expense,
+            Expense: new ScanExpenseTargetData(
+                new ScanReceiptData(
+                    null, null, null, null, null, null, null, null, null, null,
+                    null, null, null, 25m, null, null, null, null, null, null, [],
+                    null, null, null, []),
+                true,
+                null,
+                null,
+                null)));
+
+    private static object? Property(object value, string name) =>
+        value.GetType().GetProperty(name)!.GetValue(value);
+
+    private sealed class RecordingAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public object? Outcome { get; init; }
+        public Exception? Exception { get; init; }
+        public int Calls { get; private set; }
+        public AtomicCommandIdentity? Identity { get; private set; }
+        public object? Command { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            Calls++;
+            Identity = identity;
+            Command = command;
+            if (Exception is not null)
+                return Task.FromException<AtomicCommandOutcome<TResult>>(Exception);
+            return Task.FromResult((AtomicCommandOutcome<TResult>)Outcome!);
+        }
     }
 }
 

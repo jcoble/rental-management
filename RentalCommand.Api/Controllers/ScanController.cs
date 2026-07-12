@@ -2,9 +2,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -19,7 +21,11 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public class ScanController : ManagementControllerBase
 {
+    private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ConfirmResultCodec =
+        new("scan-confirm.result.v1");
+
     private readonly IScanService _scan;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
@@ -41,9 +47,15 @@ public class ScanController : ManagementControllerBase
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
     private const int MaxBatchFiles = 100;
 
-    public ScanController(IScanService scan, RentalCommandDbContext db, IFileStorage files, TimeProvider timeProvider)
+    public ScanController(
+        IScanService scan,
+        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IFileStorage files,
+        TimeProvider timeProvider)
     {
         _scan = scan;
+        _atomic = atomic;
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
@@ -71,6 +83,9 @@ public class ScanController : ManagementControllerBase
         {
             return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan (or omit to auto-classify)." });
         }
+        if (!string.IsNullOrEmpty(targetEntityType))
+            targetEntityType = ValidTargets.First(target =>
+                string.Equals(target, targetEntityType, StringComparison.OrdinalIgnoreCase));
 
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms, ct);
@@ -765,35 +780,92 @@ public class ScanController : ManagementControllerBase
     }
 
     // -------------------------------------------------------------------------
-    // POST /api/v1/scans/{id}/confirm  — confirm a draft → create Expense
+    // POST /api/v1/scans/{id}/confirm  — atomically confirm a reviewed draft
     // -------------------------------------------------------------------------
 
     [HttpPost("{id:int}/confirm")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Confirm(
         int id,
         [FromBody] ConfirmScanRequest? body,
         CancellationToken ct)
     {
-        var result = await _scan.ConfirmAndCreateAsync(
-            GetPortfolioId(), id, GetUserId(), body?.OverridesJson ?? "{}", ct);
-
-        if (!result.Success)
-            return BadRequest(new { error = result.Error });
-
-        // Return a named id field that matches the created entity type so clients can
-        // navigate directly to the record. Both keys are included for backward compatibility
-        // (older clients that always read expenseId still get a value; newer clients use
-        // entityType + entityId for a generic approach).
-        return result.EntityType switch
+        if (body is null || string.IsNullOrWhiteSpace(body.ClientOperationId)
+            || body.ClientOperationId.Trim().Length > 160)
         {
-            "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "Application" => Ok(new { applicationId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "Loan" => Ok(new { loanId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+        }
+
+        var portfolioId = GetPortfolioId();
+        ScanConfirmationPreparation preparation;
+        try
+        {
+            preparation = await _scan.PrepareConfirmationAsync(
+                portfolioId, id, GetUserId(), body.OverridesJson ?? "{}", ct);
+        }
+        catch (ScanConfirmationValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        if (preparation.Outcome == ScanConfirmationPreparationOutcome.DraftNotFound)
+            return NotFound(new { error = preparation.Error });
+        if (preparation.Outcome == ScanConfirmationPreparationOutcome.TemporarilyUnavailable)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = preparation.Error });
+        if (preparation.Outcome != ScanConfirmationPreparationOutcome.Ready
+            || preparation.Command is null)
+            return BadRequest(new { error = preparation.Error ?? "Scan confirmation request is invalid." });
+
+        AtomicCommandOutcome<ConfirmScanDraftResult> atomicResult;
+        try
+        {
+            atomicResult = await _atomic.ExecuteAsync(
+                ScanConfirmationCommandIdentity.Create(
+                    portfolioId, id, body.ClientOperationId),
+                preparation.Command,
+                ConfirmResultCodec,
+                ct);
+        }
+        catch (ScanConfirmationValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        var result = atomicResult.Value;
+        return result.Outcome switch
+        {
+            ConfirmScanDraftOutcome.Confirmed or ConfirmScanDraftOutcome.AlreadyConfirmed =>
+                ConfirmationOk(result, atomicResult.Disposition),
+            ConfirmScanDraftOutcome.DraftNotFound => NotFound(new { error = result.Error ?? "Scan draft not found." }),
+            ConfirmScanDraftOutcome.DraftRejected => Conflict(new { error = result.Error ?? "Scan draft is rejected." }),
+            _ => BadRequest(new { error = result.Error ?? "Scan draft could not be confirmed." }),
+        };
+    }
+
+    private IActionResult ConfirmationOk(
+        ConfirmScanDraftResult result,
+        AtomicCommandDisposition disposition)
+    {
+        var replayed = disposition is AtomicCommandDisposition.Replayed or AtomicCommandDisposition.Joined;
+        var atomicDisposition = disposition.ToString();
+        var entityType = Enum.TryParse<ScanConfirmationTargetKind>(
+            result.TargetEntityType, ignoreCase: true, out var targetKind)
+            ? targetKind.ToString()
+            : result.TargetEntityType;
+        var status = result.Outcome == ConfirmScanDraftOutcome.AlreadyConfirmed
+            ? "alreadyConfirmed"
+            : "confirmed";
+        return entityType switch
+        {
+            "Payment" => Ok(new { paymentId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };
     }
 

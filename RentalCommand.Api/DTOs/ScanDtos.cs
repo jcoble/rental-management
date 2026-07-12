@@ -159,9 +159,14 @@ public sealed record ScanBatchDetailResponse(
     int Id, string? Name, string TargetEntityType, string Status, int FileCount,
     DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts);
 
-/// <summary>Optional field override JSON applied when confirming a scan draft.</summary>
+/// <summary>Stable operation identity plus optional reviewed field overrides for scan confirmation.</summary>
 public sealed class ConfirmScanRequest
 {
+    [Required]
+    [MaxLength(160)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
+
     public string? OverridesJson { get; set; }
 }
 

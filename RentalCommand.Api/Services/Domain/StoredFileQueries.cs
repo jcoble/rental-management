@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
 /// Lookups for the polymorphic <see cref="StoredFile"/> attachment that the scan→draft→confirm flow
-/// re-keys onto the record it created (see <c>ScanService.FinalizeDraft</c>, which stamps
+/// re-keys onto the record it created (the atomic scan-confirm finalizer stamps
 /// <see cref="StoredFile.EntityType"/> + <see cref="StoredFile.EntityId"/> on confirm). Centralized so
 /// the detail DTOs (scan-present flags) and the file-serving endpoints read the same row the same way.
 /// </summary>

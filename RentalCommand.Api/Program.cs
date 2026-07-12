@@ -264,9 +264,8 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Banking.ReconcileBankTransactionCommand,
     RentalCommand.Core.Banking.ReconcileBankTransactionResult,
     RentalCommand.Data.Banking.ReconcileBankTransactionHandler>();
-// The writer intentionally supports only the five completed non-lease targets. There is no API
-// call site yet; ScanService continues to own confirmation until the lease aggregate writer and the
-// post-commit notification adapter are ready, preventing a partial old/new production path.
+// The live scan-confirm endpoint admits only the five completed non-lease targets through this
+// persistence-only writer. Lease confirmation returns 503 until its aggregate writer is complete.
 builder.Services.AddScoped<RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>();
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.ConfirmScanDraftCommand,
