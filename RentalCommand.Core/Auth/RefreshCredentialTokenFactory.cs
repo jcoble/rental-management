@@ -104,7 +104,7 @@ public sealed class RefreshCredentialTokenFactory
     private static byte[] FromBase64Url(string value)
     {
         var normalized = value.Replace('-', '+').Replace('_', '/');
-        normalized += normalized.Length % 4 switch
+        normalized += (normalized.Length % 4) switch
         {
             0 => string.Empty,
             2 => "==",
