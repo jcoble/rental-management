@@ -46,4 +46,5 @@ public class LeaseManagement : IAuditable, IPortfolioScoped
     public List<LeaseAddendum> Addenda { get; set; } = [];
     public List<LeaseRenewalAddendumDecision> RenewalAddendumDecisions { get; set; } = [];
     public List<UnitOperationalPeriod> SourceOperationalPeriods { get; set; } = [];
+    public TenantAccount? TenantAccount { get; set; }
 }
