@@ -8,7 +8,6 @@ using RentalCommand.Core.Entities;
 namespace RentalCommand.Data.Automation;
 
 public sealed record ScheduledAutomationClaim(int Id, int PortfolioId, Guid ClaimToken);
-public sealed record LoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);
 
 public interface IScheduledAutomationClaimStore
 {
@@ -21,12 +20,6 @@ public interface IScheduledAutomationClaimStore
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
         string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
-    Task<IReadOnlyList<Loan>> LockOwnedLoansAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
-    Task<IReadOnlyDictionary<int, LoanPaymentTail>> LoadLoanTailsAsync(
-        IReadOnlyList<int> loanIds, CancellationToken ct = default);
-    Task<IReadOnlyList<RecurringExpense>> LockOwnedRecurringExpensesAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
     Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
         IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
 }
@@ -42,22 +35,26 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         WITH candidates AS (
             SELECT loan."Id"
             FROM "Loans" AS loan
+            LEFT JOIN LATERAL (
+                SELECT MAX(payment."PeriodKey") AS last_period
+                FROM "LoanPayments" AS payment
+                WHERE payment."LoanId" = loan."Id"
+            ) AS tail ON TRUE
             WHERE loan."DeletedAt" IS NULL
               AND loan."Status" = @activeStatus
               AND loan."TermMonths" > 0
               AND date_trunc('month', loan."StartDate") <= date_trunc('month', @today)
               AND (loan."WorkerClaimToken" IS NULL OR loan."WorkerClaimExpiresAtUtc" <= @now)
-              AND COALESCE((
-                    SELECT MAX(payment."PeriodKey")
-                    FROM "LoanPayments" AS payment
-                    WHERE payment."LoanId" = loan."Id"
-                  ), '') < to_char(
+              AND COALESCE(tail.last_period, '') < to_char(
                     LEAST(
                       date_trunc('month', @today),
                       date_trunc('month', loan."StartDate")
                         + make_interval(months => loan."TermMonths" - 1)),
                     'YYYY-MM')
-            ORDER BY loan."StartDate", loan."Id"
+            ORDER BY COALESCE(
+                to_date(tail.last_period, 'YYYY-MM') + interval '1 month',
+                date_trunc('month', loan."StartDate")),
+              loan."Id"
             FOR UPDATE OF loan SKIP LOCKED
             LIMIT @batchSize
         )
@@ -135,59 +132,6 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default) =>
         ClaimAsync(MaintenanceSql, owner, todayUtc, nowUtc, leaseDuration, batchSize, false, ct);
-
-    public async Task<IReadOnlyList<Loan>> LockOwnedLoansAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
-    {
-        var (ids, token) = BatchIdentity(claims);
-        if (ids.Length == 0) return [];
-        return await _db.Loans.FromSqlInterpolated($"""
-            SELECT loan.*
-            FROM "Loans" AS loan
-            WHERE loan."Id" = ANY({ids})
-              AND loan."DeletedAt" IS NULL
-              AND loan."WorkerClaimToken" = {token}
-              AND loan."Status" = {(int)LoanStatus.Active}
-              AND loan."TermMonths" > 0
-              AND date_trunc('month', loan."StartDate") <= date_trunc('month', {AsUtc(todayUtc)})
-            ORDER BY loan."Id"
-            FOR UPDATE OF loan
-            """).IgnoreQueryFilters().ToListAsync(ct);
-    }
-
-    public async Task<IReadOnlyDictionary<int, LoanPaymentTail>> LoadLoanTailsAsync(
-        IReadOnlyList<int> loanIds, CancellationToken ct = default)
-    {
-        if (loanIds.Count == 0) return new Dictionary<int, LoanPaymentTail>();
-        var ids = loanIds.ToArray();
-        var tails = await _db.LoanPayments.AsNoTracking()
-            .Where(payment => ids.Contains(payment.LoanId))
-            .GroupBy(payment => payment.LoanId)
-            .Select(group => group.OrderByDescending(payment => payment.PeriodKey)
-                .Select(payment => new LoanPaymentTail(
-                    payment.LoanId, payment.PeriodKey, payment.BalanceAfter))
-                .First())
-            .ToListAsync(ct);
-        return tails.ToDictionary(tail => tail.LoanId);
-    }
-
-    public async Task<IReadOnlyList<RecurringExpense>> LockOwnedRecurringExpensesAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
-    {
-        var (ids, token) = BatchIdentity(claims);
-        if (ids.Length == 0) return [];
-        return await _db.RecurringExpenses.FromSqlInterpolated($"""
-            SELECT template.*
-            FROM "RecurringExpenses" AS template
-            WHERE template."Id" = ANY({ids})
-              AND template."DeletedAt" IS NULL
-              AND template."WorkerClaimToken" = {token}
-              AND template."Active"
-              AND template."NextRunDate" <= {AsUtc(todayUtc)}
-            ORDER BY template."Id"
-            FOR UPDATE OF template
-            """).IgnoreQueryFilters().ToListAsync(ct);
-    }
 
     public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
         IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)

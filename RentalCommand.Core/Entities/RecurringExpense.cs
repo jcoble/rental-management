@@ -6,9 +6,8 @@ namespace RentalCommand.Core.Entities;
 /// <summary>
 /// A standing cost entered once (insurance, property tax, HOA, management fee, …) that the Engine
 /// materializes into <see cref="Expense"/> rows on a schedule, so it flows into every report without
-/// re-entry (spec §8). Idempotency is by schedule advancement: when <see cref="NextRunDate"/> arrives
-/// the worker creates the period's expense and rolls <see cref="NextRunDate"/> forward, so a re-run
-/// never double-creates the same period.
+/// re-entry (spec §8). The worker advances <see cref="NextRunDate"/> atomically with generated
+/// expenses, whose template/occurrence identity is protected by a database unique constraint.
 /// </summary>
 public class RecurringExpense : IAuditable, IPortfolioScoped
 {

@@ -22,35 +22,6 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         }))), ct);
     }
 
-    public async Task<IReadOnlyList<Loan>> LockOwnedLoansAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
-    {
-        var (ids, token) = BatchIdentity(claims);
-        return await db.Loans.Where(row => ids.Contains(row.Id) && row.WorkerClaimToken == token &&
-            row.Status == LoanStatus.Active && row.TermMonths > 0 && row.StartDate <= todayUtc).ToListAsync(ct);
-    }
-
-    public async Task<IReadOnlyDictionary<int, LoanPaymentTail>> LoadLoanTailsAsync(
-        IReadOnlyList<int> loanIds, CancellationToken ct = default)
-    {
-        var tails = await db.LoanPayments.AsNoTracking()
-            .Where(payment => loanIds.Contains(payment.LoanId))
-            .GroupBy(payment => payment.LoanId)
-            .Select(group => group.OrderByDescending(payment => payment.PeriodKey)
-                .Select(payment => new LoanPaymentTail(payment.LoanId, payment.PeriodKey, payment.BalanceAfter))
-                .First())
-            .ToListAsync(ct);
-        return tails.ToDictionary(tail => tail.LoanId);
-    }
-
-    public async Task<IReadOnlyList<RecurringExpense>> LockOwnedRecurringExpensesAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
-    {
-        var (ids, token) = BatchIdentity(claims);
-        return await db.RecurringExpenses.Where(row => ids.Contains(row.Id) && row.WorkerClaimToken == token &&
-            row.Active && row.NextRunDate <= todayUtc).ToListAsync(ct);
-    }
-
     public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
         IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
     {

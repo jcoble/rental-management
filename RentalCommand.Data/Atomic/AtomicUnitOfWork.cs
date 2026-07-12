@@ -307,6 +307,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicAccountingPersistence _accounting;
         private readonly IAtomicLockingPersistence _locking;
         private readonly IAtomicScanConfirmationPersistence _scanConfirmation;
+        private readonly IAtomicScheduledFinancePersistence _scheduledFinance;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -325,6 +326,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _accounting = new AtomicAccountingPullPersistence(db, auditScope);
             _locking = new AtomicLockingPersistence(db);
             _scanConfirmation = new AtomicScanConfirmationPersistence(db, auditScope, _locking);
+            _scheduledFinance = new AtomicScheduledFinancePersistence(db);
             _timeProvider = timeProvider;
         }
 
@@ -336,6 +338,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicAccountingPersistence Accounting => _accounting;
         public IAtomicLockingPersistence Locking => _locking;
         public IAtomicScanConfirmationPersistence ScanConfirmation => _scanConfirmation;
+        public IAtomicScheduledFinancePersistence ScheduledFinance => _scheduledFinance;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();
