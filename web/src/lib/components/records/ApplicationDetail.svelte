@@ -153,31 +153,35 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// ── Record application fee (lease-less income against the application's property) ──────────────
+	// ── Record application fee in the application's pre-tenancy financial account ─────────────────
 	let showRecordFee = $state(false);
 	let feeAmount = $state('');
 	let feeMethod = $state('');
-	let feePaidDate = $state('');
+	let feeEffectiveOn = $state('');
+	let feeOperationKey = $state<string | null>(null);
 	let feeErrors = $state<Record<string, string>>({});
 
 	function openRecordFee() {
 		feeAmount = '';
 		feeMethod = '';
-		feePaidDate = '';
+		feeEffectiveOn = '';
+		feeOperationKey = null;
 		feeErrors = {};
 		showRecordFee = true;
 	}
 
 	const recordFeeMutation = createMutation(() => ({
-		mutationFn: (body: RecordApplicationFeeRequest) => applications.recordFee(id, body),
+		mutationFn: (body: RecordApplicationFeeRequest) => {
+			feeOperationKey ??= crypto.randomUUID();
+			return applications.recordFee(id, feeOperationKey, body);
+		},
 		onSuccess: () => {
+			feeOperationKey = null;
 			showRecordFee = false;
 			showSuccess('Application fee recorded.');
 			queryClient.invalidateQueries({ queryKey: ['application', id] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-transactions'] });
-			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, { applicationId: id }] });
-			queryClient.invalidateQueries({ queryKey: ['payments'] });
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -186,7 +190,7 @@
 		const result = parseForm(applicationFeeSchema, {
 			amount: feeAmount,
 			method: feeMethod,
-			paidDate: feePaidDate,
+			effectiveOn: feeEffectiveOn,
 		});
 		if (result.errors) {
 			feeErrors = result.errors;
@@ -196,7 +200,8 @@
 		recordFeeMutation.mutate({
 			amount: result.data.amount,
 			method: result.data.method ?? null,
-			paidDate: result.data.paidDate ?? null,
+			currency: 'USD',
+			effectiveOn: result.data.effectiveOn ?? null,
 		});
 	}
 
@@ -1008,12 +1013,12 @@
 				/>
 			</div>
 			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Paid date (optional)</span>
+				<span class="mb-1 block text-xs text-muted-foreground">Effective date (optional)</span>
 				<DatePicker
 					id="application-fee-paid-date-input"
 					testid="application-fee-paid-date-input"
-					value={feePaidDate}
-					onchange={(v) => (feePaidDate = v)}
+					value={feeEffectiveOn}
+					onchange={(v) => (feeEffectiveOn = v)}
 					placeholder="Defaults to today"
 				/>
 			</div>

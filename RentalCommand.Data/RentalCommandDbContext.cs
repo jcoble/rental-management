@@ -93,6 +93,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
     public DbSet<NoticeTemplate> NoticeTemplates => Set<NoticeTemplate>();
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
+    public DbSet<ApplicationFinancialAccount> ApplicationFinancialAccounts => Set<ApplicationFinancialAccount>();
+    public DbSet<ApplicationFinancialEntry> ApplicationFinancialEntries => Set<ApplicationFinancialEntry>();
     public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
     public DbSet<AdverseActionNotice> AdverseActionNotices => Set<AdverseActionNotice>();
 
@@ -179,6 +181,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.ConfigureTenantAccountKernel();
         modelBuilder.ConfigureLeaseLifecycleProjections();
         modelBuilder.ConfigureAccountStatusProjections();
+        modelBuilder.ConfigureApplicationFinance();
 
         // Npgsql's inet type is represented by IPAddress. Keep the HTTP/domain boundary as a
         // normalized string while making the provider mapping explicit; EF handles nulls before
@@ -1372,23 +1375,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(p => p.Payments)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            // Optional lease (nullable FK): a lease-less payment (application fee) has LeaseId == null.
-            // SetNull (not Cascade) so deleting a lease never cascade-deletes historical payment/income rows.
             entity.HasOne(e => e.Lease)
                 .WithMany(l => l.Payments)
                 .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.SetNull);
-            // Optional application/property links for lease-less income (application/screening fees).
-            // SetNull so deleting an application or property never removes the income record. ApplicationId
-            // is not soft-delete-joined, so no query-filter guard is needed (mirrors ScreeningResult).
-            entity.HasIndex(e => e.ApplicationId);
-            entity.HasOne(e => e.Application)
-                .WithMany()
-                .HasForeignKey(e => e.ApplicationId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Property)
-                .WithMany()
-                .HasForeignKey(e => e.PropertyId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
@@ -2265,6 +2254,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // Dependents of RentalApplication (RentalApplication has `DeletedAt == null`); nav is `Application`.
         modelBuilder.Entity<AdverseActionNotice>().HasQueryFilter(e => e.Application!.DeletedAt == null);
         modelBuilder.Entity<ScreeningResult>().HasQueryFilter(e => e.Application!.DeletedAt == null);
+        modelBuilder.Entity<ApplicationFinancialAccount>()
+            .HasQueryFilter(e => e.RentalApplication!.DeletedAt == null);
+        modelBuilder.Entity<ApplicationFinancialEntry>()
+            .HasQueryFilter(e => e.ApplicationFinancialAccount!.RentalApplication!.DeletedAt == null);
 
         // Dependent of Expense (Expense has `DeletedAt == null`).
         modelBuilder.Entity<ExpenseLineItem>().HasQueryFilter(e => e.Expense!.DeletedAt == null);

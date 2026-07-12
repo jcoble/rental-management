@@ -91,4 +91,5 @@ public class RentalApplication : IAuditable, IPortfolioScoped
     public Unit? Unit { get; set; }
     public Tenant? ApprovedTenant { get; set; }
     public LeaseManagement? PreparedLeaseManagement { get; set; }
+    public ApplicationFinancialAccount? FinancialAccount { get; set; }
 }

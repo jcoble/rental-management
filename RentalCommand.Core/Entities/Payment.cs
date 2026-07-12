@@ -8,12 +8,7 @@ public class Payment : IAuditable, IPortfolioScoped
     public int Id { get; set; }
     public int PortfolioId { get; set; }
 
-    /// <summary>
-    /// The lease this payment is charged against. Nullable so income can exist without a lease
-    /// (e.g. an application/screening fee recorded before any lease exists — see <see cref="ApplicationId"/>).
-    /// Lease-tied payments (Rent/LateFee/Utility) always set it; the accounting view and the Payment
-    /// global query filter both tolerate a null lease.
-    /// </summary>
+    /// <summary>The legacy lease charge this transitional row is attached to.</summary>
     public int? LeaseId { get; set; }
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
     public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
@@ -54,21 +49,6 @@ public class Payment : IAuditable, IPortfolioScoped
     /// </summary>
     public string? ExtractedData { get; set; }
 
-    /// <summary>
-    /// The rental application this payment is tied to, for a lease-less application/screening fee
-    /// (<see cref="PaymentType.ApplicationFee"/>). Null for lease-tied payments. SetNull on delete.
-    /// </summary>
-    public int? ApplicationId { get; set; }
-
-    /// <summary>
-    /// The property this payment is attributed to when there is no lease (application fee). For
-    /// lease-tied payments the property comes from the lease; this is used for lease-less income so it
-    /// still lands on the right property's Schedule E / cash flow. Null when unknown. SetNull on delete.
-    /// </summary>
-    public int? PropertyId { get; set; }
-
     public Portfolio? Portfolio { get; set; }
     public Lease? Lease { get; set; }
-    public RentalApplication? Application { get; set; }
-    public Property? Property { get; set; }
 }

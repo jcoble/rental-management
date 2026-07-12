@@ -344,8 +344,7 @@ public class DeclineApplicationRequest
 }
 
 /// <summary>
-/// Records a real application/screening fee as income against an application, before any lease exists.
-/// The property is taken from the application; the payment is created Paid.
+/// Records a collected application/screening fee in the application's append-only financial account.
 /// </summary>
 public class RecordApplicationFeeRequest
 {
@@ -356,8 +355,45 @@ public class RecordApplicationFeeRequest
     [MaxLength(100)]
     public string? Method { get; set; }
 
-    /// <summary>When the fee was received; defaults to now when omitted.</summary>
-    public DateTime? PaidDate { get; set; }
+    [Required, RegularExpression("^[A-Za-z]{3}$")]
+    public string Currency { get; set; } = "USD";
+
+    /// <summary>Business-effective receipt date; defaults to the database business date.</summary>
+    public DateOnly? EffectiveOn { get; set; }
+}
+
+public class RefundApplicationFeeRequest
+{
+    [Range(1, int.MaxValue)]
+    public int CollectionEntryId { get; set; }
+
+    [Range(0.01, 99999999)]
+    public decimal Amount { get; set; }
+
+    public DateOnly? EffectiveOn { get; set; }
+
+    [MaxLength(100)]
+    public string? Method { get; set; }
+
+    [Required]
+    [MaxLength(500)]
+    public string Reason { get; set; } = string.Empty;
+}
+
+public sealed class ApplicationFinanceMutationResponse
+{
+    public int ApplicationId { get; init; }
+    public int AccountId { get; init; }
+    public int EntryId { get; init; }
+    public int? RelatedEntryId { get; init; }
+    public ApplicationFinancialEntryType EntryType { get; init; }
+    public ApplicationFinancialDirection Direction { get; init; }
+    public decimal Amount { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public DateOnly EffectiveOn { get; init; }
+    public DateTime OccurredAtUtc { get; init; }
+    public bool AccountCreated { get; init; }
+    public bool Replayed { get; init; }
 }
 
 /// <summary>Result of approving an application: the new status plus the tenant that was created.</summary>
