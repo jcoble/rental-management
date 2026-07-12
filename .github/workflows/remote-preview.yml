@@ -1,0 +1,102 @@
+name: Remote preview stack
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Preview lifecycle action"
+        required: true
+        default: status
+        type: choice
+        options: [start, health, status, logs, stop, cleanup, reset-data]
+      ref:
+        description: "Pushed branch, tag, or SHA (required for start; audited for every action)"
+        required: true
+        type: string
+      stack_id:
+        description: "Lowercase preview name"
+        required: true
+        default: rental
+        type: string
+      ttl_hours:
+        description: "Hours before automatic teardown (1-12)"
+        required: true
+        default: "4"
+        type: choice
+        options: ["1", "2", "4", "8", "12"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rental-command-azure-preview
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: [self-hosted, Linux, X64, azure-build, rental-command]
+    timeout-minutes: 120
+    env:
+      PREVIEW_ROOT: /srv/dev-stacks/rental-command
+      PREVIEW_DATA_ROOT: /srv/dev-stack-data/rental-command
+      PREVIEW_WEB_PORT: "15667"
+      ARTIFACT_DIR: ${{ github.workspace }}/.runner-artifacts/rental-command-preview-${{ github.run_id }}
+    steps:
+      - name: Validate inputs
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+          STACK_ID: ${{ inputs.stack_id }}
+        run: |
+          set -euo pipefail
+          [[ "$REQUESTED_REF" =~ ^[A-Za-z0-9._/@:+-]+$ ]] || exit 2
+          [[ "$STACK_ID" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || {
+            echo "::error::stack_id must be lowercase letters, digits, and hyphens (max 32)"
+            exit 2
+          }
+
+      - name: Checkout exact requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          clean: true
+          fetch-depth: 1
+
+      - name: Run serialized lifecycle action
+        shell: bash
+        env:
+          PREVIEW_ACTION: ${{ inputs.action }}
+          STACK_ID: ${{ inputs.stack_id }}
+          TTL_HOURS: ${{ inputs.ttl_hours }}
+          RESOLVED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          RESOLVED_SHA="$(git rev-parse HEAD)"
+          export RESOLVED_SHA
+          flock --wait 7200 /run/lock/azure-build-runner.lock \
+            ./scripts/remote/preview-stack.sh "$PREVIEW_ACTION" "$STACK_ID" "$TTL_HOURS" "$ARTIFACT_DIR"
+
+          tailscale_host="$(tailscale ip -4 2>/dev/null | head -n1 || hostname -f)"
+          {
+            echo "### Rental Command preview"
+            echo "- Action: \`$PREVIEW_ACTION\`"
+            echo "- Requested ref: \`${{ inputs.ref }}\`"
+            echo "- Exact commit: \`$RESOLVED_SHA\`"
+            echo "- Stack: \`$STACK_ID\`"
+            if [[ "$PREVIEW_ACTION" =~ ^(start|health|status)$ ]]; then
+              echo "- Private URL: http://$tailscale_host:$PREVIEW_WEB_PORT"
+            fi
+            if [[ "$PREVIEW_ACTION" == "reset-data" ]]; then
+              echo "- Persistent preview database: deleted by explicit request"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload preview logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rental-command-preview-${{ inputs.stack_id }}-${{ github.run_id }}
+          path: ${{ env.ARTIFACT_DIR }}
+          if-no-files-found: warn
+          retention-days: 7

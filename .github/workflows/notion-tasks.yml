@@ -46,10 +46,9 @@ concurrency:
 
 jobs:
   sync:
-    # Self-hosted only — the user runs zero GitHub-hosted minutes by design (the build
-    # box exists precisely so nothing runs on GH-hosted). This is a tiny github-script
-    # API job; its runner contention is negligible vs the no-GH-hosted constraint.
-    runs-on: self-hosted
+    # This is a tiny GitHub API synchronization job. Keep it on an ephemeral hosted
+    # runner so task tracking does not depend on dedicated build infrastructure.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
         env:
