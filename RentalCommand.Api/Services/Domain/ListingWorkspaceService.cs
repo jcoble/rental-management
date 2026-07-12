@@ -260,7 +260,15 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             await _db.ListingPhotos.Where(photo => photo.RentalListingId == listing.Id && photo.PortfolioId == portfolioId)
                 .ExecuteUpdateAsync(setters => setters.SetProperty(photo => photo.Position, photo => photo.Position + 1000), ct);
             for (var index = 0; index < request.PhotoIds.Count; index++)
-                listing.Photos.Single(photo => photo.Id == request.PhotoIds[index]).Position = index + 1;
+            {
+                var photo = listing.Photos.Single(item => item.Id == request.PhotoIds[index]);
+                photo.Position = index + 1;
+
+                // ExecuteUpdate bypasses EF's change tracker. Force every final position back to the
+                // database, including photos whose new position happens to equal their tracked value;
+                // otherwise those rows would remain at the temporary +1000 position.
+                _db.Entry(photo).Property(item => item.Position).IsModified = true;
+            }
             return true;
         }, ct);
 
