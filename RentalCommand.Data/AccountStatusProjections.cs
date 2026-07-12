@@ -169,10 +169,22 @@ internal static class LeaseAddendumStatusViewSql
                  effect."LeaseAddendumId",
                  count(*)::int AS "FinancialEffectCount",
                  bool_or(
-                   (effect."EffectiveFromOn" IS NULL
-                    OR effect."EffectiveFromOn" <= effective_time."BusinessDate")
-                   AND (effect."EffectiveThroughOn" IS NULL
-                        OR effective_time."BusinessDate" < effect."EffectiveThroughOn" + 1)
+                   CASE
+                     WHEN effect."EffectType" = 'OneTimeCharge' THEN
+                       effect."DueOn" <= effective_time."BusinessDate"
+                       AND NOT EXISTS (
+                         SELECT 1
+                         FROM "TenantLedgerEntries" AS posted_charge
+                         WHERE posted_charge."PortfolioId" = effect."PortfolioId"
+                           AND posted_charge."LeaseAddendumId" = effect."LeaseAddendumId"
+                           AND posted_charge."EntryType" = 'AddendumCharge'
+                           AND posted_charge."BusinessKey" = 'addendum-effect:' || effect."Id"::text
+                       )
+                     ELSE
+                       effect."EffectiveFromOn" <= effective_time."BusinessDate"
+                       AND (effect."EffectiveThroughOn" IS NULL
+                            OR effective_time."BusinessDate" < effect."EffectiveThroughOn" + 1)
+                   END
                  ) AS "HasEffectiveFinancialEffect"
           FROM "LeaseAddendumFinancialEffects" AS effect
           JOIN effective_portfolio_time AS effective_time
@@ -315,7 +327,8 @@ internal static class TenantChargeBalanceViewSql
                  0::numeric,
                  "OriginalAmount" - "ReversedAmount" - "NetAllocations"
                ) AS "OpenAmount",
-               ("DueOn" < "BusinessDate"
+               ("DueOn" IS NOT NULL
+                 AND "DueOn" < "BusinessDate"
                  AND "OriginalAmount" - "ReversedAmount" - "NetAllocations" > 0)
                  AS "IsPastDue"
         FROM charge_rows;

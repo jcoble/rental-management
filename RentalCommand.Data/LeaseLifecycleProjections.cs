@@ -116,9 +116,9 @@ internal static class LeaseEffectiveClockSql
         AS $function$
           SELECT CASE COALESCE(clock_state."Mode", 'Real')
             WHEN 'Frozen' THEN clock_state."SimAnchorUtc"
-            WHEN 'Offset' THEN clock_timestamp()
+            WHEN 'Offset' THEN statement_timestamp()
               + (clock_state."SimAnchorUtc" - clock_state."RealAnchorUtc")
-            ELSE clock_timestamp()
+            ELSE statement_timestamp()
           END
           FROM (SELECT 1) AS singleton
           LEFT JOIN "SimulationClocks" AS clock_state ON clock_state."Id" = 1;

@@ -56,8 +56,9 @@ This avoids cross-portfolio references even if an API guard is bypassed. It also
 ### 2.4 Database time
 
 - Defaults and claim/terminal facts use `clock_timestamp()`, not caller clocks.
-- Agreement status uses the portfolio's IANA `TimeZone`:
-  `((clock_timestamp() AT TIME ZONE p."TimeZone")::date)`.
+- Read-model status uses one PostgreSQL `statement_timestamp()` per statement and the
+  portfolio's IANA `TimeZone`. This keeps composed views on the same effective instant while
+  defaults, claims, and terminal mutation facts continue to use `clock_timestamp()`.
 - Simulation uses a database-visible effective-clock function shared by all status/worker projections. The final implementation must expose `rc_effective_now_utc(portfolio_id)` and `rc_business_date(portfolio_id)` so production and simulation do not implement different status logic.
 - Date ranges are half-open internally. A user-facing inclusive `TermEndOn` becomes `TermEndOn + 1` for PostgreSQL range operations.
 
@@ -458,6 +459,10 @@ Checks enforce column shape by type:
 - through date is not before from date.
 
 It has `UNIQUE (Id, PortfolioId)`, index `(PortfolioId, LeaseAddendumId, EffectType, EffectiveFromOn, EffectiveThroughOn)`, and index `(PortfolioId, DueOn, Id) WHERE EffectType = 'OneTimeCharge'`.
+
+Posting a one-time effect uses ledger `BusinessKey = 'addendum-effect:' || effect.Id`. The
+billable projection treats the effect as eligible on or after `DueOn` only while that key has
+never been posted, so retries and later status queries cannot recreate the charge.
 
 Trigger rejects every mutation after parent issuance. Billing candidates join executed/nonvoid effective addenda and effects in one SQL statement. Renewal never silently carries an effect: the renewal command records each series disposition as `End`, `IncorporateIntoBase`, or `ReissueAsAddendum` in `LeaseRenewalAddendumDecisions`.
 
