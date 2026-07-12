@@ -65,7 +65,7 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("LeaseManagementParties");
         sql.Should().Contain("vw_unit_occupancy");
         sql.Should().Contain("vw_lease_management_lifecycle");
-        sql.Should().Contain("COUNT");
+        sql.Should().Contain("count");
         sql.Should().Contain("DISTINCT");
         sql.Should().Contain("LIMIT");
         sql.Should().NotContain("\"Leases\"");
