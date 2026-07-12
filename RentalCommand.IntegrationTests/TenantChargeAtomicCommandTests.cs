@@ -279,8 +279,11 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         Failures.FailAtomicAudit = true;
         try
         {
-            await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, reversalCommand, ChargeCodec))
-                .Should().ThrowAsync<InvalidOperationException>();
+            var failure = await FluentActions
+                .Invoking(() => Atomic.ExecuteAsync(identity, reversalCommand, ChargeCodec))
+                .Should().ThrowAsync<DbUpdateException>();
+            failure.WithInnerException<InvalidOperationException>()
+                .WithMessage("injected tenant-charge audit failure");
         }
         finally
         {
