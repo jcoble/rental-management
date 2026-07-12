@@ -147,6 +147,26 @@ builder.Services.AddAtomicCommandHandler<
     WorkspaceAccessMutationResult,
     ChangeWorkspaceAssignmentEndHandler>();
 builder.Services.AddAtomicCommandHandler<
+    CreateWorkspaceMembershipCommand,
+    CreateWorkspaceMembershipResult,
+    CreateWorkspaceMembershipHandler>();
+builder.Services.AddAtomicCommandHandler<
+    AddWorkspaceRoleAssignmentCommand,
+    WorkspaceTeamMutationResult,
+    AddWorkspaceRoleAssignmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    EndWorkspaceRoleAssignmentCommand,
+    WorkspaceTeamMutationResult,
+    EndWorkspaceRoleAssignmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ReplaceWorkspaceAssignmentPropertyScopeCommand,
+    WorkspaceTeamMutationResult,
+    ReplaceWorkspaceAssignmentPropertyScopeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ChangeWorkspaceMembershipStatusCommand,
+    WorkspaceTeamMutationResult,
+    ChangeWorkspaceMembershipStatusHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();
