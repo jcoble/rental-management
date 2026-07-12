@@ -42,9 +42,9 @@ public class UnitResponse
 
 /// <summary>
 /// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Every field
-/// is computed DB-side in one projection query (grouped counts + the current-lease scalars) — the list
+/// is computed DB-side in one projection query (grouped counts + canonical occupancy/lifecycle scalars) — the list
 /// never calls the per-unit dashboard per row. <see cref="SimpleStage"/> is a simplified label
-/// (Unit.Status + current-lease status), NOT the full 9-stage detail-page derivation.
+/// derived from possession, operational periods, lifecycle, and governing-agreement dates.
 /// </summary>
 public class UnitHealthResponse
 {
@@ -53,17 +53,29 @@ public class UnitHealthResponse
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
 
-    /// <summary>Occupancy status as its string name (e.g. <c>Occupied</c>).</summary>
+    /// <summary>
+    /// Occupancy/availability status derived from possession and operational-period projections,
+    /// never the mutable legacy Unit.Status field.
+    /// </summary>
     public string Status { get; set; } = string.Empty;
     public decimal MarketRent { get; set; }
+
+    /// <summary>Canonical continuous household/possession relationship currently occupying the Unit.</summary>
+    public int? CurrentLeaseManagementId { get; set; }
+
+    /// <summary>Immutable agreement version governing the relationship on the portfolio business date.</summary>
+    public int? CurrentAgreementId { get; set; }
+
+    /// <summary>Continuous tenant-account identity for rent, charges, payments, and deposits.</summary>
+    public int? TenantAccountId { get; set; }
 
     /// <summary>Open (not Completed/Cancelled/Archived) work orders on the unit.</summary>
     public int OpenWorkOrderCount { get; set; }
 
-    /// <summary>Days until the unit's active lease ends; null when there is no active lease.</summary>
+    /// <summary>Days until the governing agreement ends; null for an open-ended/no-current agreement.</summary>
     public int? LeaseEndsInDays { get; set; }
 
-    /// <summary>Documents attached to the unit or its lease/payment/expense/work-order/inspection children.</summary>
+    /// <summary>Documents attached to the unit, canonical legal artifacts, expenses, work orders, or inspections.</summary>
     public int DocsNeedingReviewCount { get; set; }
 
     /// <summary>Simplified lifecycle label for the list badge (Active/Renewal/Move-Out/Lease/Vacant/Turnover).</summary>
