@@ -51,7 +51,10 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         _dockerAvailable = true;
         _connectionString = _postgres.GetConnectionString();
         await using var db = NewContext();
-        await db.Database.MigrateAsync();
+        await db.Database.EnsureCreatedAsync();
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
     }
 
     public async Task DisposeAsync()
