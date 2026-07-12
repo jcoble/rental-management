@@ -39,7 +39,6 @@ public sealed class RecurringExpenseGenerationService : IRecurringExpenseGenerat
         var claims = await _claims.ClaimRecurringExpensesAsync(
             $"{Environment.MachineName}:{Environment.ProcessId}:recurring-expense",
             today,
-            now,
             TimeSpan.FromMinutes(3),
             25,
             ct);

@@ -10,9 +10,10 @@ namespace RentalCommand.TestCommon;
 public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db) : IScheduledAutomationClaimStore
 {
     public async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimDebtServiceAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default)
     {
+        var nowUtc = DateTime.UtcNow;
         var rows = await db.Loans.Where(row => row.Status == LoanStatus.Active && row.TermMonths > 0 &&
                 row.StartDate <= todayUtc && (row.WorkerClaimToken == null || row.WorkerClaimExpiresAtUtc <= nowUtc))
             .OrderBy(row => row.StartDate).ThenBy(row => row.Id).Take(batchSize).ToListAsync(ct);
@@ -35,9 +36,10 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
     }
 
     public async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringExpensesAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default)
     {
+        var nowUtc = DateTime.UtcNow;
         var rows = await db.RecurringExpenses.Where(row => row.Active && row.NextRunDate <= todayUtc &&
                 (row.WorkerClaimToken == null || row.WorkerClaimExpiresAtUtc <= nowUtc))
             .OrderBy(row => row.NextRunDate).ThenBy(row => row.Id).Take(batchSize).ToListAsync(ct);
@@ -48,9 +50,10 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
     }
 
     public async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default)
     {
+        var nowUtc = DateTime.UtcNow;
         var rows = await db.RecurringMaintenanceTasks.Where(row => row.IsActive && row.NextDueDate <= todayUtc &&
                 (row.WorkerClaimToken == null || row.WorkerClaimExpiresAtUtc <= nowUtc) &&
                 (!db.NotificationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||

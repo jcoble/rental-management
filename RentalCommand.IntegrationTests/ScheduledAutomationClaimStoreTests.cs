@@ -76,11 +76,11 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
 
         await using var db = NewContext();
         var store = new ScheduledAutomationClaimStore(db);
-        (await store.ClaimDebtServiceAsync("debt", now, now, TimeSpan.FromMinutes(2), 1))
+        (await store.ClaimDebtServiceAsync("debt", now, TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
-        (await store.ClaimRecurringExpensesAsync("expense", now, now, TimeSpan.FromMinutes(2), 1))
+        (await store.ClaimRecurringExpensesAsync("expense", now, TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle(claim => claim.Id == earliestExpenseId);
-        (await store.ClaimRecurringMaintenanceAsync("maintenance", now, now, TimeSpan.FromMinutes(2), 1))
+        (await store.ClaimRecurringMaintenanceAsync("maintenance", now, TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
     }
 
@@ -101,9 +101,9 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         await using var dbB = NewContext();
         var batches = await Task.WhenAll(
             new ScheduledAutomationClaimStore(dbA).ClaimRecurringExpensesAsync(
-                "expense-a", now, now, TimeSpan.FromMinutes(2), 4),
+                "expense-a", now, TimeSpan.FromMinutes(2), 4),
             new ScheduledAutomationClaimStore(dbB).ClaimRecurringExpensesAsync(
-                "expense-b", now, now, TimeSpan.FromMinutes(2), 4));
+                "expense-b", now, TimeSpan.FromMinutes(2), 4));
 
         var all = batches.SelectMany(batch => batch).ToArray();
         all.Should().HaveCount(8);
@@ -118,7 +118,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
 
         await using var reclaim = NewContext();
         var replacement = (await new ScheduledAutomationClaimStore(reclaim).ClaimRecurringExpensesAsync(
-            "expense-replacement", now, now, TimeSpan.FromMinutes(2), 1)).Single();
+            "expense-replacement", now, TimeSpan.FromMinutes(2), 1)).Single();
         replacement.Id.Should().Be(first.Id);
         replacement.ClaimToken.Should().NotBe(first.ClaimToken);
 
@@ -152,7 +152,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         await using var db = NewContext();
         var store = new ScheduledAutomationClaimStore(db);
         (await store.ClaimRecurringMaintenanceAsync(
-            "maintenance-disabled", now, now, TimeSpan.FromMinutes(2), 25)).Should().BeEmpty();
+            "maintenance-disabled", now, TimeSpan.FromMinutes(2), 25)).Should().BeEmpty();
 
         await db.NotificationSettings
             .Where(row => row.PortfolioId == portfolioId)
@@ -161,7 +161,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
                 .SetProperty(row => row.UpdatedAt, now));
 
         var claims = await store.ClaimRecurringMaintenanceAsync(
-            "maintenance-enabled", now, now, TimeSpan.FromMinutes(2), 25);
+            "maintenance-enabled", now, TimeSpan.FromMinutes(2), 25);
         claims.Should().ContainSingle();
 
         await db.NotificationSettings
@@ -211,7 +211,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         await using var db = NewContext(counter);
         var store = new ScheduledAutomationClaimStore(db);
         var claims = await store.ClaimDebtServiceAsync(
-            "debt-batch", now, now, TimeSpan.FromMinutes(2), 1);
+            "debt-batch", now, TimeSpan.FromMinutes(2), 1);
         claims.Should().ContainSingle(claim => claim.Id == oldestDebtOccurrenceLoanId);
         counter.ReaderCommands.Should().Be(1);
     }

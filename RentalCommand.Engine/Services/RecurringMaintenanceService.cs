@@ -61,7 +61,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             DateTimeKind.Utc);
 
         var claims = await _claims.ClaimRecurringMaintenanceAsync(
-            $"{Environment.MachineName}:recurring-maintenance", today, _timeProvider.UtcNow(),
+            $"{Environment.MachineName}:recurring-maintenance", today,
             TimeSpan.FromMinutes(6), 25, ct);
         var created = await ProcessClaimsAsync(claims, today, businessTimeZone, ct);
 

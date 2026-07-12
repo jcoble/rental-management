@@ -12,13 +12,13 @@ public sealed record ScheduledAutomationClaim(int Id, int PortfolioId, Guid Clai
 public interface IScheduledAutomationClaimStore
 {
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimDebtServiceAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringExpensesAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
     Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
         IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
@@ -44,7 +44,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
               AND loan."Status" = @activeStatus
               AND loan."TermMonths" > 0
               AND date_trunc('month', loan."StartDate") <= date_trunc('month', @today)
-              AND (loan."WorkerClaimToken" IS NULL OR loan."WorkerClaimExpiresAtUtc" <= @now)
+              AND (loan."WorkerClaimToken" IS NULL OR loan."WorkerClaimExpiresAtUtc" <= clock_timestamp())
               AND COALESCE(tail.last_period, '') < to_char(
                     LEAST(
                       date_trunc('month', @today),
@@ -61,7 +61,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         UPDATE "Loans" AS loan
         SET "WorkerClaimOwner" = @owner,
             "WorkerClaimToken" = @token,
-            "WorkerClaimExpiresAtUtc" = @expires,
+            "WorkerClaimExpiresAtUtc" = clock_timestamp() + @leaseDuration,
             "WorkerClaimAttemptCount" = loan."WorkerClaimAttemptCount" + 1
         FROM candidates
         WHERE loan."Id" = candidates."Id"
@@ -75,7 +75,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             WHERE template."DeletedAt" IS NULL
               AND template."Active"
               AND template."NextRunDate" <= @today
-              AND (template."WorkerClaimToken" IS NULL OR template."WorkerClaimExpiresAtUtc" <= @now)
+              AND (template."WorkerClaimToken" IS NULL OR template."WorkerClaimExpiresAtUtc" <= clock_timestamp())
             ORDER BY template."NextRunDate", template."Id"
             FOR UPDATE OF template SKIP LOCKED
             LIMIT @batchSize
@@ -83,7 +83,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         UPDATE "RecurringExpenses" AS template
         SET "WorkerClaimOwner" = @owner,
             "WorkerClaimToken" = @token,
-            "WorkerClaimExpiresAtUtc" = @expires,
+            "WorkerClaimExpiresAtUtc" = clock_timestamp() + @leaseDuration,
             "WorkerClaimAttemptCount" = template."WorkerClaimAttemptCount" + 1
         FROM candidates
         WHERE template."Id" = candidates."Id"
@@ -99,7 +99,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
               AND task."IsActive"
               AND task."NextDueDate" <= @today
               AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
-              AND (task."WorkerClaimToken" IS NULL OR task."WorkerClaimExpiresAtUtc" <= @now)
+              AND (task."WorkerClaimToken" IS NULL OR task."WorkerClaimExpiresAtUtc" <= clock_timestamp())
             ORDER BY task."NextDueDate", task."Id"
             FOR UPDATE OF task SKIP LOCKED
             LIMIT @batchSize
@@ -107,7 +107,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         UPDATE "RecurringMaintenanceTasks" AS task
         SET "WorkerClaimOwner" = @owner,
             "WorkerClaimToken" = @token,
-            "WorkerClaimExpiresAtUtc" = @expires,
+            "WorkerClaimExpiresAtUtc" = clock_timestamp() + @leaseDuration,
             "WorkerClaimAttemptCount" = task."WorkerClaimAttemptCount" + 1
         FROM candidates
         WHERE task."Id" = candidates."Id"
@@ -119,19 +119,19 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
     public ScheduledAutomationClaimStore(RentalCommandDbContext db) => _db = db;
 
     public Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimDebtServiceAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default) =>
-        ClaimAsync(DebtSql, owner, todayUtc, nowUtc, leaseDuration, batchSize, true, ct);
+        ClaimAsync(DebtSql, owner, todayUtc, leaseDuration, batchSize, true, ct);
 
     public Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringExpensesAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default) =>
-        ClaimAsync(ExpenseSql, owner, todayUtc, nowUtc, leaseDuration, batchSize, false, ct);
+        ClaimAsync(ExpenseSql, owner, todayUtc, leaseDuration, batchSize, false, ct);
 
     public Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
-        string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default) =>
-        ClaimAsync(MaintenanceSql, owner, todayUtc, nowUtc, leaseDuration, batchSize, false, ct);
+        ClaimAsync(MaintenanceSql, owner, todayUtc, leaseDuration, batchSize, false, ct);
 
     public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
         IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
@@ -154,7 +154,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
     }
 
     private async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimAsync(
-        string sql, string owner, DateTime todayUtc, DateTime nowUtc, TimeSpan leaseDuration,
+        string sql, string owner, DateTime todayUtc, TimeSpan leaseDuration,
         int batchSize, bool addActiveStatus, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
@@ -162,7 +162,6 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         if (leaseDuration <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(leaseDuration));
         if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
 
-        var now = AsUtc(nowUtc);
         var connection = _db.Database.GetDbConnection();
         var closeWhenDone = connection.State != ConnectionState.Open;
         if (closeWhenDone) await _db.Database.OpenConnectionAsync(ct);
@@ -172,10 +171,9 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             await using var command = connection.CreateCommand();
             command.CommandText = sql;
             command.Parameters.Add(new NpgsqlParameter("today", NpgsqlDbType.TimestampTz) { Value = AsUtc(todayUtc) });
-            command.Parameters.Add(new NpgsqlParameter("now", NpgsqlDbType.TimestampTz) { Value = now });
             command.Parameters.Add(new NpgsqlParameter("owner", NpgsqlDbType.Text) { Value = owner });
             command.Parameters.Add(new NpgsqlParameter("token", NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
-            command.Parameters.Add(new NpgsqlParameter("expires", NpgsqlDbType.TimestampTz) { Value = now.Add(leaseDuration) });
+            command.Parameters.Add(new NpgsqlParameter("leaseDuration", NpgsqlDbType.Interval) { Value = leaseDuration });
             command.Parameters.Add(new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize });
             if (addActiveStatus)
             {

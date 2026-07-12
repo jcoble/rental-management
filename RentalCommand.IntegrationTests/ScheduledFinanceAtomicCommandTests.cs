@@ -161,6 +161,65 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task RecurringExpense_BoundedCatchUpLeavesEveryOlderOccurrenceRecoverable()
+    {
+        SkipIfNoDocker();
+        var templateId = await SeedRecurringExpenseAsync(_today.AddMonths(-40));
+        var firstClaim = await ClaimExpenseAsync();
+
+        var first = await Atomic.ExecuteAsync(
+            ExpenseIdentity(firstClaim.ClaimToken, "bounded-first"),
+            ExpenseCommand(firstClaim),
+            ExpenseCodec);
+
+        first.Value.GeneratedRowCount.Should().Be(36);
+        var secondClaim = await ClaimExpenseAsync();
+        var second = await Atomic.ExecuteAsync(
+            ExpenseIdentity(secondClaim.ClaimToken, "bounded-second"),
+            ExpenseCommand(secondClaim),
+            ExpenseCodec);
+
+        second.Value.GeneratedRowCount.Should().Be(5);
+        await using var verify = NewContext();
+        (await verify.Expenses.CountAsync(row => row.RecurringExpenseId == templateId)).Should().Be(41);
+        (await verify.RecurringExpenses.SingleAsync(row => row.Id == templateId)).NextRunDate
+            .Should().Be(_today.AddMonths(1));
+    }
+
+    [SkippableFact]
+    public async Task DebtService_BoundedCatchUpContinuesWithoutSkippingPeriods()
+    {
+        SkipIfNoDocker();
+        var loanId = await SeedLoanAsync(_today.AddMonths(-40));
+        var firstClaim = await ClaimDebtAsync();
+        var first = await Atomic.ExecuteAsync(
+            DebtIdentity(firstClaim.ClaimToken, "bounded-first"),
+            new ApplyClaimedDebtServiceBatchCommand(
+                [firstClaim.Id], firstClaim.ClaimToken, _today, _today.AddMinutes(1)),
+            DebtCodec);
+
+        first.Value.GeneratedRowCount.Should().Be(36);
+        var secondClaim = await ClaimDebtAsync();
+        var second = await Atomic.ExecuteAsync(
+            DebtIdentity(secondClaim.ClaimToken, "bounded-second"),
+            new ApplyClaimedDebtServiceBatchCommand(
+                [secondClaim.Id], secondClaim.ClaimToken, _today, _today.AddMinutes(2)),
+            DebtCodec);
+
+        second.Value.GeneratedRowCount.Should().Be(5);
+        await using var verify = NewContext();
+        var periods = await verify.LoanPayments
+            .Where(row => row.LoanId == loanId)
+            .OrderBy(row => row.PeriodKey)
+            .Select(row => row.PeriodKey)
+            .ToListAsync();
+        periods.Should().HaveCount(41).And.OnlyHaveUniqueItems();
+        periods.Should().ContainInOrder(
+            Enumerable.Range(0, 41)
+                .Select(offset => _today.AddMonths(-40 + offset).ToString("yyyy-MM")));
+    }
+
+    [SkippableFact]
     public async Task ExpiredTakenOverToken_WritesNothing_AndReplacementRecovers()
     {
         SkipIfNoDocker();
@@ -293,7 +352,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         return template.Id;
     }
 
-    private async Task<int> SeedLoanAsync()
+    private async Task<int> SeedLoanAsync(DateTime? startDate = null)
     {
         await using var db = NewContext();
         var loan = new Loan
@@ -305,7 +364,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             CurrentBalance = 100_000m,
             AnnualInterestRatePct = 6m,
             TermMonths = 360,
-            StartDate = _today,
+            StartDate = startDate ?? _today,
             DayOfMonthDue = 1,
             MonthlyPrincipalInterest = 600m,
             Status = LoanStatus.Active,
@@ -320,17 +379,15 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     private async Task<ScheduledAutomationClaim> ClaimExpenseAsync()
     {
         await using var db = NewContext();
-        var now = DateTime.UtcNow;
         return (await new ScheduledAutomationClaimStore(db).ClaimRecurringExpensesAsync(
-            "expense-test", _today, now, TimeSpan.FromMinutes(5), 1)).Single();
+            "expense-test", _today, TimeSpan.FromMinutes(5), 1)).Single();
     }
 
     private async Task<ScheduledAutomationClaim> ClaimDebtAsync()
     {
         await using var db = NewContext();
-        var now = DateTime.UtcNow;
         return (await new ScheduledAutomationClaimStore(db).ClaimDebtServiceAsync(
-            "debt-test", _today, now, TimeSpan.FromMinutes(5), 1)).Single();
+            "debt-test", _today, TimeSpan.FromMinutes(5), 1)).Single();
     }
 
     private ApplyClaimedRecurringExpenseBatchCommand ExpenseCommand(ScheduledAutomationClaim claim) =>
