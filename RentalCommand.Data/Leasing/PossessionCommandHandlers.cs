@@ -146,119 +146,79 @@ public sealed class ReturnPossessionHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
 
         var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await PossessionCommandAuthorization.AuthorizedRelationships(
+        var authorized = await PossessionCommandAuthorization.AuthorizedRelationships(
                 attempt.Persistence, command.PortfolioId, command.LeaseManagementId, command.UnitId,
                 command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
                 command.ExpectedAccessRevision, nowUtc)
-            .Select(relationship => new ReturnTarget(
-                relationship,
-                attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
-                    period.PortfolioId == command.PortfolioId
-                    && period.UnitId == command.UnitId
-                    && period.Type == UnitOperationalPeriodType.Turnover
-                    && period.EndedAtUtc == null)))
-            .SingleOrDefaultAsync(ct);
+            .AnyAsync(ct);
 
-        if (target is null)
+        if (!authorized)
         {
             throw new UnauthorizedAccessException("The lease relationship is not authorized in the current property scope.");
         }
-        if (target.Relationship.PossessionReturnedAtUtc is not null)
-        {
-            return new(ReturnPossessionOutcome.AlreadyReturned, command.LeaseManagementId, command.UnitId,
-                null, target.Relationship.PossessionReturnedAtUtc, "Possession has already been returned.");
-        }
-        if (target.Relationship.PossessionGivenAtUtc is null)
-        {
-            return Empty(ReturnPossessionOutcome.PossessionNotGiven, command,
-                "Possession cannot be returned before it has been given.");
-        }
-        if (target.HasOpenTurnover)
-        {
-            return Empty(ReturnPossessionOutcome.TurnoverAlreadyOpen, command,
-                "The unit already has an open turnover period.");
-        }
 
-        // Query 3 is a single bounded relationship-owned graph. Include is intentional: it produces
-        // one SQL statement and avoids a per-party or per-access query.
-        var currentParties = await attempt.Persistence.Query<LeaseManagementParty>()
-            .Where(party => party.PortfolioId == command.PortfolioId
-                && party.LeaseManagementId == command.LeaseManagementId
-                && party.EffectiveFrom <= command.EffectiveOn
-                && (party.EffectiveThrough == null || party.EffectiveThrough >= command.EffectiveOn))
-            .Include(party => party.UserAccesses.Where(access => access.RevokedAtUtc == null))
-            .ToListAsync(ct);
+        var mutation = await attempt.Leasing.ReturnPossessionAsync(
+            command.PortfolioId,
+            command.LeaseManagementId,
+            command.UnitId,
+            command.EffectiveOn,
+            command.Parties.Select(item => new AtomicReturnPossessionPartyInput(
+                item.LeaseManagementPartyId, item.Disposition)).ToArray(),
+            command.Accesses.Select(item => new AtomicReturnPossessionAccessInput(
+                item.TenantUserAccessId, item.Disposition)).ToArray(),
+            command.CreatedByUserId,
+            nowUtc,
+            command.TurnoverReason,
+            ct);
 
-        var partyDispositionById = command.Parties.ToDictionary(item => item.LeaseManagementPartyId);
-        if (currentParties.Count != partyDispositionById.Count
-            || currentParties.Any(party => !partyDispositionById.ContainsKey(party.Id))
-            || currentParties.Any(party => partyDispositionById[party.Id].Disposition == ReturnPartyDisposition.RetainGuarantor
-                && party.Role != LeaseManagementPartyRole.Guarantor))
+        if (mutation.Outcome != ReturnPossessionOutcome.Returned)
         {
-            return Empty(ReturnPossessionOutcome.InvalidPartyDisposition, command,
-                "Every current party must have one disposition, and only a guarantor may remain.");
-        }
-
-        var activeAccesses = currentParties.SelectMany(party => party.UserAccesses).ToArray();
-        var accessDispositionById = command.Accesses.ToDictionary(item => item.TenantUserAccessId);
-        if (activeAccesses.Length != accessDispositionById.Count
-            || activeAccesses.Any(access => !accessDispositionById.ContainsKey(access.Id)))
-        {
-            return Empty(ReturnPossessionOutcome.InvalidAccessDisposition, command,
-                "Every active tenant access must have one explicit disposition.");
-        }
-
-        foreach (var party in currentParties)
-        {
-            if (partyDispositionById[party.Id].Disposition == ReturnPartyDisposition.EndMembership)
+            return mutation.Outcome switch
             {
-                party.EffectiveThrough = command.EffectiveOn;
-                attempt.BindSemanticAudit(party, new AtomicSemanticAudit(command.PortfolioId,
-                    nameof(LeaseManagementParty), party.Id, AuditLogOperation.Updated,
-                    UserId: command.CreatedByUserId, ChangeReason: "Party membership ended when possession returned."));
-            }
-        }
-        foreach (var access in activeAccesses)
-        {
-            if (accessDispositionById[access.Id].Disposition == ReturnAccessDisposition.RevokeNow)
-            {
-                access.RevokedAtUtc = nowUtc;
-                access.RevokedByUserId = command.CreatedByUserId;
-                attempt.BindSemanticAudit(access, new AtomicSemanticAudit(command.PortfolioId,
-                    nameof(TenantUserAccess), access.Id, AuditLogOperation.Updated,
-                    UserId: command.CreatedByUserId, ChangeReason: "Tenant access revoked when possession returned."));
-            }
+                ReturnPossessionOutcome.AlreadyReturned => new(
+                    mutation.Outcome, command.LeaseManagementId, command.UnitId,
+                    null, mutation.PossessionReturnedAtUtc, "Possession has already been returned."),
+                ReturnPossessionOutcome.PossessionNotGiven => Empty(
+                    mutation.Outcome, command, "Possession cannot be returned before it has been given."),
+                ReturnPossessionOutcome.TurnoverAlreadyOpen => Empty(
+                    mutation.Outcome, command, "The unit already has an open turnover period."),
+                ReturnPossessionOutcome.InvalidPartyDisposition => Empty(
+                    mutation.Outcome, command,
+                    "The date must be today's portfolio business date and every current party must have one valid disposition."),
+                ReturnPossessionOutcome.InvalidAccessDisposition => Empty(
+                    mutation.Outcome, command, "Every active tenant access must have one explicit disposition."),
+                _ => throw new InvalidOperationException("Return possession produced an unknown outcome."),
+            };
         }
 
-        target.Relationship.PossessionReturnedAtUtc = nowUtc;
-        target.Relationship.UpdatedAtUtc = nowUtc;
-        target.Relationship.RowVersion = Guid.NewGuid();
-        var turnover = new UnitOperationalPeriod
+        foreach (var partyId in mutation.EndedPartyIds)
         {
-            PortfolioId = command.PortfolioId,
-            PropertyId = target.Relationship.PropertyId,
-            UnitId = command.UnitId,
-            Type = UnitOperationalPeriodType.Turnover,
-            StartedAtUtc = nowUtc,
-            SourceLeaseManagementId = command.LeaseManagementId,
-            Reason = command.TurnoverReason.Trim(),
-            CreatedAtUtc = nowUtc,
-            CreatedByUserId = command.CreatedByUserId,
-        };
-        attempt.Persistence.Add(turnover);
-        attempt.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(command.PortfolioId,
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+                nameof(LeaseManagementParty), partyId, AuditLogOperation.Updated,
+                UserId: command.CreatedByUserId,
+                ChangeReason: "Party membership ended when possession returned."), nowUtc);
+        }
+        foreach (var accessId in mutation.RevokedAccessIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+                nameof(TenantUserAccess), accessId, AuditLogOperation.Updated,
+                UserId: command.CreatedByUserId,
+                ChangeReason: "Tenant access revoked when possession returned."), nowUtc);
+        }
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(LeaseManagement), command.LeaseManagementId, AuditLogOperation.Updated,
-            UserId: command.CreatedByUserId, ChangeReason: "Possession returned; tenant account remains open."));
-        attempt.BindSemanticAudit(turnover, new AtomicSemanticAudit(command.PortfolioId,
-            nameof(UnitOperationalPeriod), 0, AuditLogOperation.Created,
-            UserId: command.CreatedByUserId, ChangeReason: "Turnover opened after possession return."));
+            UserId: command.CreatedByUserId,
+            ChangeReason: "Possession returned; tenant account remains open."), nowUtc);
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+            nameof(UnitOperationalPeriod), mutation.TurnoverPeriodId!.Value, AuditLogOperation.Created,
+            UserId: command.CreatedByUserId,
+            ChangeReason: "Turnover opened after possession return."), nowUtc);
         attempt.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
             nowUtc, "possession-returned", nameof(LeaseManagement), command.LeaseManagementId,
             command.LeaseManagementId, command.UnitId));
-        await attempt.FlushBusinessAsync(ct);
 
         return new(ReturnPossessionOutcome.Returned, command.LeaseManagementId, command.UnitId,
-            turnover.Id, nowUtc, null);
+            mutation.TurnoverPeriodId, mutation.PossessionReturnedAtUtc, null);
     }
 
     public async Task AuthorizeReplayAsync(ReturnPossessionCommand command,
@@ -294,8 +254,6 @@ public sealed class ReturnPossessionHandler
     private static ReturnPossessionResult Empty(ReturnPossessionOutcome outcome,
         ReturnPossessionCommand command, string error) =>
         new(outcome, command.LeaseManagementId, command.UnitId, null, null, error);
-
-    private sealed record ReturnTarget(LeaseManagement Relationship, bool HasOpenTurnover);
 }
 
 public sealed class CompleteTurnoverHandler

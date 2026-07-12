@@ -27,7 +27,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
     private long _ordinal;
     private int _transactionLifecycleDepth;
     private AtomicSetBasedTarget? _activeSetBasedTarget;
-    private AtomicRawDmlPermit? _activeRawDmlPermit;
+    private IReadOnlyList<AtomicRawDmlPermit>? _activeRawDmlPermits;
 
     public Guid ScopeId { get; } = Guid.NewGuid();
     public bool IsActive => _command is not null;
@@ -43,7 +43,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
             {
                 throw new InvalidOperationException("This atomic audit scope already owns an attempt.");
             }
-            if (_activeRawDmlPermit is not null)
+            if (_activeRawDmlPermits is not null)
             {
                 throw new AtomicArchitectureException(
                     "An atomic attempt cannot begin while an infrastructure raw-DML lease is active.");
@@ -61,7 +61,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
                 _attemptId = default;
                 _transactionLifecycleDepth = 0;
                 _activeSetBasedTarget = null;
-                _activeRawDmlPermit = null;
+                _activeRawDmlPermits = null;
                 _boundSemantic.Clear();
                 _mutations.Clear();
                 _rows.Clear();
@@ -96,27 +96,34 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
     }
 
     public IDisposable BeginInternalRawDml(string tableName, AtomicRawDmlOperation operation)
+        => BeginInternalRawDmlBatch(new AtomicRawDmlTarget(tableName, operation));
+
+    public IDisposable BeginInternalRawDmlBatch(params AtomicRawDmlTarget[] targets)
     {
         RequireActive();
-        ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
+        if (targets.Length == 0 || targets.Any(target => string.IsNullOrWhiteSpace(target.TableName)))
+        {
+            throw new ArgumentException("At least one exact raw-DML target is required.", nameof(targets));
+        }
         lock (_gate)
         {
-            if (_activeRawDmlPermit is not null)
+            if (_activeRawDmlPermits is not null)
             {
                 throw new InvalidOperationException("An internal raw DML command is already executing.");
             }
 
-            _activeRawDmlPermit = new AtomicRawDmlPermit(
-                tableName,
-                operation,
-                AllowWithoutAttempt: false);
+            _activeRawDmlPermits = targets
+                .Distinct()
+                .Select(target => new AtomicRawDmlPermit(
+                    target.TableName, target.Operation, AllowWithoutAttempt: false))
+                .ToArray();
         }
 
         return new Lease(() =>
         {
             lock (_gate)
             {
-                _activeRawDmlPermit = null;
+                _activeRawDmlPermits = null;
             }
         });
     }
@@ -136,22 +143,22 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
                 throw new AtomicArchitectureException(
                     "Infrastructure raw DML cannot execute inside an atomic business attempt.");
             }
-            if (_activeRawDmlPermit is not null)
+            if (_activeRawDmlPermits is not null)
             {
                 throw new InvalidOperationException("An internal raw DML command is already executing.");
             }
 
-            _activeRawDmlPermit = new AtomicRawDmlPermit(
-                tableName,
-                operation,
-                AllowWithoutAttempt: true);
+            _activeRawDmlPermits =
+            [
+                new AtomicRawDmlPermit(tableName, operation, AllowWithoutAttempt: true),
+            ];
         }
 
         return new Lease(() =>
         {
             lock (_gate)
             {
-                _activeRawDmlPermit = null;
+                _activeRawDmlPermits = null;
             }
         });
     }
@@ -160,18 +167,16 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
         BeginInfrastructureRawDml("PendingFileUploads", AtomicRawDmlOperation.Insert);
 
     public void GuardRawDml(
-        string commandText,
+        string tableName,
         AtomicRawDmlOperation operation)
     {
         lock (_gate)
         {
-            if (_activeRawDmlPermit is null
-                || (_command is null && !_activeRawDmlPermit.AllowWithoutAttempt)
-                || (_command is not null && _activeRawDmlPermit.AllowWithoutAttempt)
-                || _activeRawDmlPermit.Operation != operation
-                || !commandText.Contains(
-                    $"\"{_activeRawDmlPermit.TableName}\"",
-                    StringComparison.Ordinal))
+            var permit = _activeRawDmlPermits?.SingleOrDefault(candidate =>
+                candidate.TableName == tableName && candidate.Operation == operation);
+            if (permit is null
+                || (_command is null && !permit.AllowWithoutAttempt)
+                || (_command is not null && permit.AllowWithoutAttempt))
             {
                 throw new AtomicArchitectureException(
                     $"Raw {operation} DML is forbidden without an exact internal atomic mutation lease.");
@@ -527,6 +532,10 @@ internal sealed record AtomicRawDmlPermit(
     string TableName,
     AtomicRawDmlOperation Operation,
     bool AllowWithoutAttempt);
+
+internal sealed record AtomicRawDmlTarget(
+    string TableName,
+    AtomicRawDmlOperation Operation);
 
 internal enum AtomicRawDmlOperation
 {
