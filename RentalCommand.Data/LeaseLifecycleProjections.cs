@@ -156,7 +156,6 @@ internal static class LeaseAgreementStatusViewSql
           SELECT portfolio."Id" AS "PortfolioId",
                  rc_business_date(portfolio."Id") AS "BusinessDate"
           FROM "Portfolios" AS portfolio
-          WHERE portfolio."DeletedAt" IS NULL
         )
         SELECT agreement."PortfolioId",
                agreement."LeaseManagementId",
@@ -207,8 +206,15 @@ internal static class UnitOccupancyViewSql
     public const string Definition = """
         WITH effective_portfolio_time AS MATERIALIZED (
           SELECT portfolio."Id" AS "PortfolioId",
-                 rc_effective_now_utc(portfolio."Id") AS "NowUtc"
+                 effective_time."NowUtc",
+                 (effective_time."NowUtc" AT TIME ZONE
+                    COALESCE(NULLIF(clock_state."TimeZoneId", ''), portfolio."TimeZone"))::date
+                   AS "BusinessDate"
           FROM "Portfolios" AS portfolio
+          LEFT JOIN "SimulationClocks" AS clock_state ON clock_state."Id" = 1
+          CROSS JOIN LATERAL (
+            SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
+          ) AS effective_time
           WHERE portfolio."DeletedAt" IS NULL
         )
         SELECT unit."PortfolioId",
@@ -250,10 +256,17 @@ internal static class UnitOccupancyViewSql
           SELECT management."Id" AS "LeaseManagementId",
                  EXISTS (
                    SELECT 1
-                   FROM "vw_lease_agreement_status" AS agreement_status
-                   WHERE agreement_status."PortfolioId" = management."PortfolioId"
-                     AND agreement_status."LeaseManagementId" = management."Id"
-                     AND agreement_status."IsGoverning"
+                   FROM "LeaseAgreements" AS agreement
+                   WHERE agreement."PortfolioId" = management."PortfolioId"
+                     AND agreement."LeaseManagementId" = management."Id"
+                     AND agreement."FullyExecutedAtUtc" IS NOT NULL
+                     AND agreement."VoidedAtUtc" IS NULL
+                     AND agreement."DraftCanceledAtUtc" IS NULL
+                     AND effective_time."BusinessDate" >= agreement."GoverningFromOn"
+                     AND (agreement."TermEndOn" IS NULL
+                          OR effective_time."BusinessDate" < agreement."TermEndOn" + 1)
+                     AND (agreement."SupersededEffectiveOn" IS NULL
+                          OR effective_time."BusinessDate" < agreement."SupersededEffectiveOn")
                  ) AS "HasGoverningAgreement"
           FROM "LeaseManagements" AS management
           WHERE management."PortfolioId" = unit."PortfolioId"
@@ -312,16 +325,24 @@ internal static class UnitOccupancyViewSql
           SELECT EXISTS (
             SELECT 1
             FROM "LeaseManagements" AS management
-            JOIN "vw_lease_agreement_status" AS agreement_status
-              ON agreement_status."PortfolioId" = management."PortfolioId"
-             AND agreement_status."LeaseManagementId" = management."Id"
-             AND agreement_status."IsGoverning"
+            JOIN "LeaseAgreements" AS agreement
+              ON agreement."PortfolioId" = management."PortfolioId"
+             AND agreement."LeaseManagementId" = management."Id"
+             AND agreement."FullyExecutedAtUtc" IS NOT NULL
+             AND agreement."VoidedAtUtc" IS NULL
+             AND agreement."DraftCanceledAtUtc" IS NULL
+             AND effective_time."BusinessDate" >= agreement."GoverningFromOn"
+             AND (agreement."TermEndOn" IS NULL
+                  OR effective_time."BusinessDate" < agreement."TermEndOn" + 1)
+             AND (agreement."SupersededEffectiveOn" IS NULL
+                  OR effective_time."BusinessDate" < agreement."SupersededEffectiveOn")
             WHERE management."PortfolioId" = unit."PortfolioId"
               AND management."PropertyId" = unit."PropertyId"
               AND management."UnitId" = unit."Id"
               AND management."CanceledAtUtc" IS NULL
               AND NOT (
-                management."PossessionGivenAtUtc" <= effective_time."NowUtc"
+                management."PossessionGivenAtUtc" IS NOT NULL
+                AND management."PossessionGivenAtUtc" <= effective_time."NowUtc"
                 AND (management."PossessionReturnedAtUtc" IS NULL
                      OR management."PossessionReturnedAtUtc" > effective_time."NowUtc")
               )
@@ -349,7 +370,6 @@ internal static class LeaseManagementLifecycleViewSql
           CROSS JOIN LATERAL (
             SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
           ) AS effective_time
-          WHERE portfolio."DeletedAt" IS NULL
         )
         SELECT management."PortfolioId",
                management."PropertyId",
@@ -394,11 +414,13 @@ internal static class LeaseManagementLifecycleViewSql
                ((management."AccountClosedAtUtc" IS NULL) <>
                  (account."ClosedAtUtc" IS NULL)) AS "HasAccountCloseMismatch",
                (current_agreement."AgreementId" IS NOT NULL
-                 AND NOT (management."PossessionGivenAtUtc" <= effective_time."NowUtc"
+                 AND NOT (management."PossessionGivenAtUtc" IS NOT NULL
+                   AND management."PossessionGivenAtUtc" <= effective_time."NowUtc"
                    AND (management."PossessionReturnedAtUtc" IS NULL
                         OR management."PossessionReturnedAtUtc" > effective_time."NowUtc")))
                  AS "HasGoverningAgreementWithoutPossession",
                (current_agreement."AgreementId" IS NULL
+                 AND management."PossessionGivenAtUtc" IS NOT NULL
                  AND management."PossessionGivenAtUtc" <= effective_time."NowUtc"
                  AND (management."PossessionReturnedAtUtc" IS NULL
                       OR management."PossessionReturnedAtUtc" > effective_time."NowUtc"))
@@ -408,10 +430,12 @@ internal static class LeaseManagementLifecycleViewSql
                  OR household."CurrentPrimaryCount" > 1
                  OR ((management."AccountClosedAtUtc" IS NULL) <> (account."ClosedAtUtc" IS NULL))
                  OR (current_agreement."AgreementId" IS NOT NULL
-                   AND NOT (management."PossessionGivenAtUtc" <= effective_time."NowUtc"
+                   AND NOT (management."PossessionGivenAtUtc" IS NOT NULL
+                     AND management."PossessionGivenAtUtc" <= effective_time."NowUtc"
                      AND (management."PossessionReturnedAtUtc" IS NULL
                           OR management."PossessionReturnedAtUtc" > effective_time."NowUtc")))
                  OR (current_agreement."AgreementId" IS NULL
+                   AND management."PossessionGivenAtUtc" IS NOT NULL
                    AND management."PossessionGivenAtUtc" <= effective_time."NowUtc"
                    AND (management."PossessionReturnedAtUtc" IS NULL
                         OR management."PossessionReturnedAtUtc" > effective_time."NowUtc")))
@@ -424,30 +448,49 @@ internal static class LeaseManagementLifecycleViewSql
                  counts."AgreementCount"
           FROM (
             SELECT count(*)::int AS "AgreementCount"
-            FROM "vw_lease_agreement_status" AS agreement_status
-            WHERE agreement_status."PortfolioId" = management."PortfolioId"
-              AND agreement_status."LeaseManagementId" = management."Id"
-              AND agreement_status."IsGoverning"
+            FROM "LeaseAgreements" AS agreement
+            WHERE agreement."PortfolioId" = management."PortfolioId"
+              AND agreement."LeaseManagementId" = management."Id"
+              AND agreement."FullyExecutedAtUtc" IS NOT NULL
+              AND agreement."VoidedAtUtc" IS NULL
+              AND agreement."DraftCanceledAtUtc" IS NULL
+              AND effective_time."BusinessDate" >= agreement."GoverningFromOn"
+              AND (agreement."TermEndOn" IS NULL
+                   OR effective_time."BusinessDate" < agreement."TermEndOn" + 1)
+              AND (agreement."SupersededEffectiveOn" IS NULL
+                   OR effective_time."BusinessDate" < agreement."SupersededEffectiveOn")
           ) AS counts
           LEFT JOIN LATERAL (
-            SELECT agreement_status."AgreementId"
-            FROM "vw_lease_agreement_status" AS agreement_status
-            WHERE agreement_status."PortfolioId" = management."PortfolioId"
-              AND agreement_status."LeaseManagementId" = management."Id"
-              AND agreement_status."IsGoverning"
-            ORDER BY agreement_status."GoverningFromOn" DESC,
-                     agreement_status."AgreementId" DESC
+            SELECT agreement."Id" AS "AgreementId"
+            FROM "LeaseAgreements" AS agreement
+            WHERE agreement."PortfolioId" = management."PortfolioId"
+              AND agreement."LeaseManagementId" = management."Id"
+              AND agreement."FullyExecutedAtUtc" IS NOT NULL
+              AND agreement."VoidedAtUtc" IS NULL
+              AND agreement."DraftCanceledAtUtc" IS NULL
+              AND effective_time."BusinessDate" >= agreement."GoverningFromOn"
+              AND (agreement."TermEndOn" IS NULL
+                   OR effective_time."BusinessDate" < agreement."TermEndOn" + 1)
+              AND (agreement."SupersededEffectiveOn" IS NULL
+                   OR effective_time."BusinessDate" < agreement."SupersededEffectiveOn")
+            ORDER BY agreement."GoverningFromOn" DESC,
+                     agreement."Id" DESC
             LIMIT 1
           ) AS selected ON TRUE
         ) AS current_agreement
         LEFT JOIN LATERAL (
-          SELECT agreement_status."AgreementId"
-          FROM "vw_lease_agreement_status" AS agreement_status
-          WHERE agreement_status."PortfolioId" = management."PortfolioId"
-            AND agreement_status."LeaseManagementId" = management."Id"
-            AND agreement_status."AgreementStatus" = 'Upcoming'
-          ORDER BY agreement_status."GoverningFromOn",
-                   agreement_status."AgreementId"
+          SELECT agreement."Id" AS "AgreementId"
+          FROM "LeaseAgreements" AS agreement
+          WHERE agreement."PortfolioId" = management."PortfolioId"
+            AND agreement."LeaseManagementId" = management."Id"
+            AND agreement."FullyExecutedAtUtc" IS NOT NULL
+            AND agreement."VoidedAtUtc" IS NULL
+            AND agreement."DraftCanceledAtUtc" IS NULL
+            AND effective_time."BusinessDate" < agreement."GoverningFromOn"
+            AND (agreement."SupersededEffectiveOn" IS NULL
+                 OR effective_time."BusinessDate" < agreement."SupersededEffectiveOn")
+          ORDER BY agreement."GoverningFromOn",
+                   agreement."Id"
           LIMIT 1
         ) AS upcoming_agreement ON TRUE
         CROSS JOIN LATERAL (
