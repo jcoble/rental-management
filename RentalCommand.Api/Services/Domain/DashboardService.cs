@@ -242,8 +242,8 @@ public class DashboardService : IDashboardService
                 && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
                 && lifecycle.CurrentAgreementId != null
             join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId.Value }
-                equals new { agreement.PortfolioId, agreement.Id }
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
             join property in _db.Properties.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
                 equals new { property.PortfolioId, property.Id }
@@ -261,7 +261,7 @@ public class DashboardService : IDashboardService
                 Tenant = lifecycle.CurrentPrimaryTenantName,
                 Property = property.Name,
                 Unit = unit.UnitNumber,
-                EndOn = agreement.TermEndOn.Value,
+                EndOn = agreement.TermEndOn.GetValueOrDefault(),
                 BaseRentAmount = agreement.BaseRentAmount,
             }).ToListAsync(ct);
 
