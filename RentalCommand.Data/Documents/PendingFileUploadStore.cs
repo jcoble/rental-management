@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -52,8 +53,15 @@ public interface IPendingFileUploadStore
 public sealed class PendingFileUploadStore : IPendingFileUploadStore
 {
     private readonly RentalCommandDbContext _db;
+    private readonly IAtomicInfrastructureWriteGate _writeGate;
 
-    public PendingFileUploadStore(RentalCommandDbContext db) => _db = db;
+    public PendingFileUploadStore(
+        RentalCommandDbContext db,
+        IAtomicInfrastructureWriteGate writeGate)
+    {
+        _db = db;
+        _writeGate = writeGate;
+    }
 
     public async Task<PendingFileUploadAdmission> PrepareAsync(
         int portfolioId,
@@ -79,6 +87,7 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         var storagePath = $"pending-{id:N}-{safeName}";
         var now = AsUtc(nowUtc);
 
+        using var admissionLease = _writeGate.BeginPendingFileUploadAdmission();
         await _db.Database.ExecuteSqlInterpolatedAsync($$"""
             INSERT INTO "PendingFileUploads"
                 ("Id", "PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash",

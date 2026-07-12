@@ -5,7 +5,7 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Atomic;
 
-internal sealed class AtomicAuditScope : IAtomicExecutionState
+internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastructureWriteGate
 {
     private readonly AtomicPersistenceMode _mode;
 
@@ -42,6 +42,11 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState
             if (_command is not null)
             {
                 throw new InvalidOperationException("This atomic audit scope already owns an attempt.");
+            }
+            if (_activeRawDmlPermit is not null)
+            {
+                throw new AtomicArchitectureException(
+                    "An atomic attempt cannot begin while an infrastructure raw-DML lease is active.");
             }
 
             _command = command;
@@ -101,7 +106,10 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState
                 throw new InvalidOperationException("An internal raw DML command is already executing.");
             }
 
-            _activeRawDmlPermit = new AtomicRawDmlPermit(tableName, operation);
+            _activeRawDmlPermit = new AtomicRawDmlPermit(
+                tableName,
+                operation,
+                AllowWithoutAttempt: false);
         }
 
         return new Lease(() =>
@@ -113,14 +121,53 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState
         });
     }
 
+    /// <summary>
+    /// Leases one exact kernel-owned infrastructure statement that must run before an atomic
+    /// business attempt can begin. This is for durable admission/claim metadata only; it cannot
+    /// overlap an active command and never permits arbitrary caller-authored DML.
+    /// </summary>
+    private IDisposable BeginInfrastructureRawDml(string tableName, AtomicRawDmlOperation operation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
+        lock (_gate)
+        {
+            if (_command is not null)
+            {
+                throw new AtomicArchitectureException(
+                    "Infrastructure raw DML cannot execute inside an atomic business attempt.");
+            }
+            if (_activeRawDmlPermit is not null)
+            {
+                throw new InvalidOperationException("An internal raw DML command is already executing.");
+            }
+
+            _activeRawDmlPermit = new AtomicRawDmlPermit(
+                tableName,
+                operation,
+                AllowWithoutAttempt: true);
+        }
+
+        return new Lease(() =>
+        {
+            lock (_gate)
+            {
+                _activeRawDmlPermit = null;
+            }
+        });
+    }
+
+    IDisposable IAtomicInfrastructureWriteGate.BeginPendingFileUploadAdmission() =>
+        BeginInfrastructureRawDml("PendingFileUploads", AtomicRawDmlOperation.Insert);
+
     public void GuardRawDml(
         string commandText,
         AtomicRawDmlOperation operation)
     {
         lock (_gate)
         {
-            if (_command is null
-                || _activeRawDmlPermit is null
+            if (_activeRawDmlPermit is null
+                || (_command is null && !_activeRawDmlPermit.AllowWithoutAttempt)
+                || (_command is not null && _activeRawDmlPermit.AllowWithoutAttempt)
                 || _activeRawDmlPermit.Operation != operation
                 || !commandText.Contains(
                     $"\"{_activeRawDmlPermit.TableName}\"",
@@ -478,7 +525,8 @@ internal sealed record AtomicSetBasedTarget(
 
 internal sealed record AtomicRawDmlPermit(
     string TableName,
-    AtomicRawDmlOperation Operation);
+    AtomicRawDmlOperation Operation,
+    bool AllowWithoutAttempt);
 
 internal enum AtomicRawDmlOperation
 {
