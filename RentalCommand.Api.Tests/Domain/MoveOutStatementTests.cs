@@ -287,7 +287,7 @@ public sealed class MoveOutStatementTests : IDisposable
             Amount = amount,
             Currency = "USD",
             EffectiveOn = effectiveOn,
-            PostedAtUtc = postedAtUtc ?? effectiveOn.ToDateTime(TimeOnly.Noon, DateTimeKind.Utc),
+            PostedAtUtc = postedAtUtc ?? effectiveOn.ToDateTime(new TimeOnly(12, 0), DateTimeKind.Utc),
             BusinessKey = $"test:{entryType}:{Guid.NewGuid():N}",
             Description = description,
             LeaseAgreementId = graph.Agreement.Id,
