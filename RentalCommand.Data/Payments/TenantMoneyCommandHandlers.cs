@@ -471,7 +471,7 @@ internal static class TenantMoneyCommandSupport
         decimal? amount = command switch
         {
             RecordTenantReceiptCommand receiptCommand => receiptCommand.Amount,
-            PostTenantChargeCommand charge => charge.Amount,
+            PostTenantChargeCommand chargeCommand => chargeCommand.Amount,
             ReverseTenantChargeCommand => null,
             FundSecurityDepositCommand fund => fund.Amount,
             DeductSecurityDepositCommand deduction => deduction.Amount,
