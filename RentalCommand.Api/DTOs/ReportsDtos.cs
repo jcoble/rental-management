@@ -455,7 +455,8 @@ public class SecurityDepositRegisterRow
     /// <summary>What is still held in trust right now: Held − Deductions − Returned (floored at 0).</summary>
     public decimal CurrentBalance { get; set; }
 
-    public SecurityDepositStatus Status { get; set; }
+    /// <summary>Database-derived status: NotFunded, Held, Withheld, PartiallyReturned, or Returned.</summary>
+    public string Status { get; set; } = string.Empty;
     public string StatusName { get; set; } = string.Empty;
     public DateTime HeldAt { get; set; }
     public DateTime? ReturnedAt { get; set; }
