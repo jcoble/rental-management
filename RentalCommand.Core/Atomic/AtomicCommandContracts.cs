@@ -270,6 +270,7 @@ public enum AtomicLockResource
     LeaseManagement = 14,
     TenantAccount = 15,
     RentalApplication = 16,
+    WorkspaceAccessContext = 17,
 }
 
 public enum AtomicScanDraftClaimOutcome

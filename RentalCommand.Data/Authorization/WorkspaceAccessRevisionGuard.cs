@@ -55,8 +55,6 @@ public sealed class WorkspaceAccessRevisionGuard
             rootEntry.Property(context => context.SuspendedAtUtc).IsModified ||
             rootEntry.Property(context => context.RevokedAtUtc).IsModified;
 
-        RejectReactivation(rootEntry);
-
         var membershipIdsToResolve = new HashSet<int>();
         var assignmentIdsToResolve = new HashSet<int>();
         var assignmentsToValidate = new HashSet<MembershipRoleAssignment>();
@@ -71,7 +69,6 @@ public sealed class WorkspaceAccessRevisionGuard
                 throw WrongRoot();
             }
 
-            RejectReactivation(membershipEntry);
         }
 
         foreach (var assignmentEntry in AuthorityEntries<MembershipRoleAssignment>(db))
@@ -80,7 +77,6 @@ public sealed class WorkspaceAccessRevisionGuard
             var assignment = assignmentEntry.Entity;
             ValidateAssignmentOwnerOrDefer(
                 assignment, accessContextId, membershipIdsToResolve);
-            RejectReactivation(assignmentEntry);
 
             if (assignmentEntry.State != EntityState.Deleted)
             {
@@ -212,41 +208,9 @@ public sealed class WorkspaceAccessRevisionGuard
         }
     }
 
-    private static void RejectReactivation(EntityEntry<WorkspaceAccessContext> entry)
-    {
-        if (entry.State == EntityState.Modified &&
-            entry.Property(context => context.Status).OriginalValue != WorkspaceAccessContextStatus.Active &&
-            entry.Entity.Status == WorkspaceAccessContextStatus.Active)
-        {
-            throw ReactivationUnsupported();
-        }
-    }
-
-    private static void RejectReactivation(EntityEntry<WorkspaceMembership> entry)
-    {
-        if (entry.State == EntityState.Modified &&
-            entry.Property(membership => membership.Status).OriginalValue != WorkspaceMembershipStatus.Active &&
-            entry.Entity.Status == WorkspaceMembershipStatus.Active)
-        {
-            throw ReactivationUnsupported();
-        }
-    }
-
-    private static void RejectReactivation(EntityEntry<MembershipRoleAssignment> entry)
-    {
-        if (entry.State == EntityState.Modified &&
-            entry.Property(assignment => assignment.Status).OriginalValue != MembershipRoleAssignmentStatus.Active &&
-            entry.Entity.Status == MembershipRoleAssignmentStatus.Active)
-        {
-            throw ReactivationUnsupported();
-        }
-    }
-
     private static AccessAuthorityMutationException WrongRoot() =>
         new("Every authority change must belong to the access root whose revision is advancing.");
 
-    private static AccessAuthorityMutationException ReactivationUnsupported() =>
-        new("Reactivation is not supported until a durable resumption fact is modeled.");
 }
 
 public sealed record WorkspaceAccessGuardResult(

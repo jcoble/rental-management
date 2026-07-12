@@ -24,6 +24,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<WorkspaceAccessMutationResult> MutationCodec =
         new("workspace-access-mutation-result.v1");
+    private static readonly AtomicJsonResultCodec<CreateWorkspaceMembershipResult> TeamCreateCodec =
+        new("workspace-team.membership.create.v1");
+    private static readonly AtomicJsonResultCodec<WorkspaceTeamMutationResult> TeamMutationCodec =
+        new("workspace-team.mutation.v1");
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
@@ -77,6 +81,26 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             ChangeWorkspaceAssignmentEndCommand,
             WorkspaceAccessMutationResult,
             ChangeWorkspaceAssignmentEndHandler>();
+        services.AddAtomicCommandHandler<
+            CreateWorkspaceMembershipCommand,
+            CreateWorkspaceMembershipResult,
+            CreateWorkspaceMembershipHandler>();
+        services.AddAtomicCommandHandler<
+            AddWorkspaceRoleAssignmentCommand,
+            WorkspaceTeamMutationResult,
+            AddWorkspaceRoleAssignmentHandler>();
+        services.AddAtomicCommandHandler<
+            EndWorkspaceRoleAssignmentCommand,
+            WorkspaceTeamMutationResult,
+            EndWorkspaceRoleAssignmentHandler>();
+        services.AddAtomicCommandHandler<
+            ReplaceWorkspaceAssignmentPropertyScopeCommand,
+            WorkspaceTeamMutationResult,
+            ReplaceWorkspaceAssignmentPropertyScopeHandler>();
+        services.AddAtomicCommandHandler<
+            ChangeWorkspaceMembershipStatusCommand,
+            WorkspaceTeamMutationResult,
+            ChangeWorkspaceMembershipStatusHandler>();
         services.AddAtomicCommandHandler<
             UnsafeWorkspaceAssignmentMutationCommand,
             WorkspaceAccessMutationResult,
@@ -776,6 +800,172 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task TeamInvite_ReplayReturnsSameMembershipWithoutDuplicateAuthorityRows()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"invite-{Guid.NewGuid():N}");
+        var identity = new AtomicCommandIdentity("test.team.membership.create", Guid.NewGuid().ToString("N"));
+        var command = new CreateWorkspaceMembershipCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            $"invite-{Guid.NewGuid():N}@example.test", "Invited Member",
+            RoleProfileKeys.LeasingAgent, MembershipRoleAssignmentScopeKind.SelectedProperties,
+            [_leasingPropertyId], _now);
+
+        var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamCreateCodec);
+        var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command with
+        {
+            ActorAuthSessionId = pair.ActorSessionId,
+            ActorAccessRevision = 1,
+        }, TeamCreateCodec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var db = NewContext();
+        (await db.WorkspaceMemberships.CountAsync(item =>
+            item.AccessContextId == first.Value.AccessContextId)).Should().Be(1);
+        (await db.MembershipRoleAssignments.CountAsync(item =>
+            item.WorkspaceMembershipId == first.Value.WorkspaceMembershipId)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task TeamAssignment_ReplayPreservesExistingAssignmentsAndReturnsStableRevision()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"assignment-{Guid.NewGuid():N}");
+        var identity = new AtomicCommandIdentity("test.team.assignment.add", Guid.NewGuid().ToString("N"));
+        var command = TeamAddCommand(pair, expectedTargetRevision: 1, _managerPropertyId);
+
+        var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamMutationCodec);
+        var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamMutationCodec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        replay.Value.AccessRevision.Should().Be(2);
+        await using var db = NewContext();
+        (await db.MembershipRoleAssignments.CountAsync(item =>
+            item.WorkspaceMembershipId == pair.TargetMembershipId)).Should().Be(2,
+            "adding one job must not replace the member's existing independently scoped job");
+    }
+
+    [SkippableFact]
+    public async Task TeamMutation_StaleActorRevisionCannotChangeCurrentTarget()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"stale-actor-{Guid.NewGuid():N}");
+        await using (var db = NewContext())
+        {
+            var actor = await db.WorkspaceAccessContexts.SingleAsync(item => item.Id == pair.ActorContextId);
+            actor.AdvanceRevision(1);
+            actor.UpdatedAtUtc = _now.AddMinutes(1);
+            await db.SaveChangesAsync();
+        }
+
+        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.stale-actor"), TeamAddCommand(pair, 1, _managerPropertyId), TeamMutationCodec);
+        await act.Should().ThrowAsync<StaleAccessRevisionException>();
+
+        await using var verification = NewContext();
+        (await verification.WorkspaceAccessContexts.Where(item => item.Id == pair.TargetContextId)
+            .Select(item => item.AccessRevision).SingleAsync()).Should().Be(1);
+        (await verification.MembershipRoleAssignments.CountAsync(item =>
+            item.WorkspaceMembershipId == pair.TargetMembershipId)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task TeamMutation_StaleTargetRevisionCannotOverwriteWinningChange()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"stale-target-{Guid.NewGuid():N}");
+        await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.target-winner"), TeamAddCommand(pair, 1, _managerPropertyId), TeamMutationCodec);
+
+        var stale = async () => await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.target-stale"), TeamAddCommand(pair, 1, _unscopedPropertyId), TeamMutationCodec);
+        await stale.Should().ThrowAsync<StaleAccessRevisionException>();
+
+        await using var db = NewContext();
+        (await db.WorkspaceAccessContexts.Where(item => item.Id == pair.TargetContextId)
+            .Select(item => item.AccessRevision).SingleAsync()).Should().Be(2);
+        var managerPropertyIds = await db.MembershipRoleAssignmentProperties
+            .Where(scope => scope.MembershipRoleAssignment!.WorkspaceMembershipId == pair.TargetMembershipId &&
+                            scope.MembershipRoleAssignment.RoleProfileId == 2)
+            .Select(scope => scope.PropertyId)
+            .ToListAsync();
+        managerPropertyIds.Should().Equal(_managerPropertyId);
+    }
+
+    [SkippableFact]
+    public async Task PropertyScopeReplacement_CrossWorkspaceDecoyRollsBackScopeAndRevision()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"decoy-{Guid.NewGuid():N}");
+        var command = new ReplaceWorkspaceAssignmentPropertyScopeCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            pair.TargetContextId, 1, pair.TargetAssignmentId, [_otherWorkspacePropertyId]);
+
+        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.decoy-scope"), command, TeamMutationCodec);
+        await act.Should().ThrowAsync<DomainValidationException>();
+
+        await using var db = NewContext();
+        (await db.WorkspaceAccessContexts.Where(item => item.Id == pair.TargetContextId)
+            .Select(item => item.AccessRevision).SingleAsync()).Should().Be(1);
+        var propertyIds = await db.MembershipRoleAssignmentProperties
+            .Where(scope => scope.MembershipRoleAssignmentId == pair.TargetAssignmentId)
+            .Select(scope => scope.PropertyId)
+            .ToListAsync();
+        propertyIds.Should().Equal(_leasingPropertyId);
+    }
+
+    [SkippableFact]
+    public async Task RevokingMembership_InvalidatesTargetSessionImmediately()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"revoke-{Guid.NewGuid():N}");
+        var command = new ChangeWorkspaceMembershipStatusCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            pair.TargetContextId, 1, WorkspaceMembershipStatusAction.Revoke);
+
+        var result = await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.revoke"), command, TeamMutationCodec);
+        result.Value.AccessRevision.Should().Be(2);
+        result.Value.ContextStatus.Should().Be(WorkspaceAccessContextStatus.Revoked);
+
+        await using var db = NewContext();
+        var resolve = async () => await new ActiveAccessContextResolver(db).ResolveAsync(
+            pair.TargetSessionId, pair.TargetUserId, pair.TargetContextId, 2, _now.AddMinutes(1));
+        await resolve.Should().ThrowAsync<AccessContextUnavailableException>();
+    }
+
+    [SkippableFact]
+    public async Task SuspendedMembership_CanBeReactivatedWithAnotherFencedRevision()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"reactivate-{Guid.NewGuid():N}");
+        var suspend = new ChangeWorkspaceMembershipStatusCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            pair.TargetContextId, 1, WorkspaceMembershipStatusAction.Suspend);
+        await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.suspend"), suspend, TeamMutationCodec);
+
+        var reactivate = suspend with
+        {
+            ExpectedRevision = 2,
+            Action = WorkspaceMembershipStatusAction.Reactivate,
+        };
+        var result = await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.reactivate"), reactivate, TeamMutationCodec);
+
+        result.Value.AccessRevision.Should().Be(3);
+        result.Value.ContextStatus.Should().Be(WorkspaceAccessContextStatus.Active);
+        result.Value.MembershipStatus.Should().Be(WorkspaceMembershipStatus.Active);
+        await using var db = NewContext();
+        (await new ActiveAccessContextResolver(db).ResolveAsync(
+            pair.TargetSessionId, pair.TargetUserId, pair.TargetContextId, 3, _now.AddMinutes(2)))
+            .AccessContextId.Should().Be(pair.TargetContextId);
+    }
+
+    [SkippableFact]
     public async Task SessionRefreshCredential_RotatesOnceWithinItsOwnFamily()
     {
         SkipIfNoDocker();
@@ -909,7 +1099,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = _now.AddHours(-1),
             LastSeenAtUtc = _now,
-            ExpiresAtUtc = _now.AddDays(1),
+            ExpiresAtUtc = _now.AddDays(30),
         };
         db.AddRange(leasingAssignment, managerAssignment, technicianAssignment, workOrder, session);
         await db.SaveChangesAsync();
@@ -925,6 +1115,146 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _otherWorkspacePropertyId = outsideProperty.Id;
         _managerWorkOrderId = workOrder.Id;
     }
+
+    private async Task<TeamAuthorityPair> SeedTeamAuthorityPairAsync(string suffix)
+    {
+        await using var db = NewContext();
+        var actorUser = new ApplicationUser
+        {
+            UserName = $"team-admin-{suffix}@example.test",
+            NormalizedUserName = $"TEAM-ADMIN-{suffix}@EXAMPLE.TEST".ToUpperInvariant(),
+            Email = $"team-admin-{suffix}@example.test",
+            NormalizedEmail = $"TEAM-ADMIN-{suffix}@EXAMPLE.TEST".ToUpperInvariant(),
+            DisplayName = "Team Administrator",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = _now,
+        };
+        var targetUser = new ApplicationUser
+        {
+            UserName = $"team-target-{suffix}@example.test",
+            NormalizedUserName = $"TEAM-TARGET-{suffix}@EXAMPLE.TEST".ToUpperInvariant(),
+            Email = $"team-target-{suffix}@example.test",
+            NormalizedEmail = $"TEAM-TARGET-{suffix}@EXAMPLE.TEST".ToUpperInvariant(),
+            DisplayName = "Team Target",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = _now,
+        };
+        db.AddRange(actorUser, targetUser);
+        await db.SaveChangesAsync();
+
+        var actorContext = new WorkspaceAccessContext
+        {
+            UserId = actorUser.Id,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var actorMembership = new WorkspaceMembership
+        {
+            AccessContext = actorContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var actorAssignment = Assignment(0, _portfolioId, 1,
+            MembershipRoleAssignmentScopeKind.AllProperties);
+        actorAssignment.WorkspaceMembership = actorMembership;
+
+        var targetContext = new WorkspaceAccessContext
+        {
+            UserId = targetUser.Id,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var targetMembership = new WorkspaceMembership
+        {
+            AccessContext = targetContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Leasing,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var targetAssignment = Assignment(0, _portfolioId, 3,
+            MembershipRoleAssignmentScopeKind.SelectedProperties);
+        targetAssignment.WorkspaceMembership = targetMembership;
+        targetAssignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            PropertyId = _leasingPropertyId,
+            PortfolioId = _portfolioId,
+        });
+        db.AddRange(actorAssignment, targetAssignment);
+        await db.SaveChangesAsync();
+
+        var actorSession = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = actorUser.Id,
+            ActiveAccessContextId = actorContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = _now.AddMinutes(-5),
+            LastSeenAtUtc = _now,
+            ExpiresAtUtc = _now.AddDays(30),
+        };
+        var targetSession = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = targetUser.Id,
+            ActiveAccessContextId = targetContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = _now.AddMinutes(-5),
+            LastSeenAtUtc = _now,
+            ExpiresAtUtc = _now.AddDays(30),
+        };
+        db.AddRange(actorSession, targetSession);
+        await db.SaveChangesAsync();
+        return new TeamAuthorityPair(
+            _portfolioId,
+            actorUser.Id,
+            actorContext.Id,
+            actorSession.Id,
+            targetUser.Id,
+            targetContext.Id,
+            targetMembership.Id,
+            targetAssignment.Id,
+            targetSession.Id);
+    }
+
+    private AddWorkspaceRoleAssignmentCommand TeamAddCommand(
+        TeamAuthorityPair pair,
+        long expectedTargetRevision,
+        int propertyId) => new(
+        pair.PortfolioId,
+        pair.ActorUserId,
+        pair.ActorSessionId,
+        pair.ActorContextId,
+        1,
+        pair.TargetContextId,
+        expectedTargetRevision,
+        RoleProfileKeys.PropertyManager,
+        MembershipRoleAssignmentScopeKind.SelectedProperties,
+        [propertyId],
+        _now);
+
+    private sealed record TeamAuthorityPair(
+        int PortfolioId,
+        int ActorUserId,
+        int ActorContextId,
+        Guid ActorSessionId,
+        int TargetUserId,
+        int TargetContextId,
+        int TargetMembershipId,
+        int TargetAssignmentId,
+        Guid TargetSessionId);
 
     private MembershipRoleAssignment Assignment(
         int membershipId,
