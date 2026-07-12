@@ -130,7 +130,7 @@ public sealed class ScanService : IScanService
                 fields.UnitId = await TryResolveWorkOrderUnitFromTextAsync(
                     portfolioId, fields.PropertyId, fields, ct);
             target = new(kind, WorkOrder: new ScanWorkOrderTargetData(
-                fields.PropertyId, fields.UnitId, fields.TenantId, fields.LeaseId, fields.VendorId,
+                fields.PropertyId, fields.UnitId, fields.TenantId, fields.LeaseManagementId, fields.VendorId,
                 fields.Title, fields.Description, fields.Category, fields.Priority, fields.EstimatedCost));
         }
         else if (kind == ScanConfirmationTargetKind.Lease)
@@ -1018,7 +1018,7 @@ public sealed class ScanService : IScanService
             fields.PropertyId = ParseIntField(root, "property_id") ?? ParseIntField(root, "propertyId") ?? 0;
             fields.UnitId = ParseIntField(root, "unit_id") ?? ParseIntField(root, "unitId");
             fields.TenantId = ParseIntField(root, "tenant_id") ?? ParseIntField(root, "tenantId");
-            fields.LeaseId = ParseIntField(root, "lease_id") ?? ParseIntField(root, "leaseId");
+            fields.LeaseManagementId = ParseIntField(root, "lease_management_id") ?? ParseIntField(root, "leaseManagementId");
             fields.VendorId = ParseIntField(root, "vendor_id") ?? ParseIntField(root, "vendorId");
             fields.Title = ReadFieldValue(root, "title");
             fields.Description = ReadFieldValue(root, "description") ?? ReadFieldValue(root, "transcript");
@@ -1071,10 +1071,10 @@ public sealed class ScanService : IScanService
             fields.TenantId = null;
         }
 
-        if (fields.LeaseId is > 0 &&
-            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, fields.LeaseId.Value, ct))
+        if (fields.LeaseManagementId is > 0 &&
+            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, fields.LeaseManagementId.Value, ct))
         {
-            fields.LeaseId = null;
+            fields.LeaseManagementId = null;
         }
 
         if (fields.VendorId is > 0 &&
@@ -1100,8 +1100,8 @@ public sealed class ScanService : IScanService
                 fields.UnitId = unitId is > 0 ? unitId : null;
             if (TryGetOverrideNullableInt(root, out var tenantId, "tenantId", "tenant_id"))
                 fields.TenantId = tenantId is > 0 ? tenantId : null;
-            if (TryGetOverrideNullableInt(root, out var leaseId, "leaseId", "lease_id"))
-                fields.LeaseId = leaseId is > 0 ? leaseId : null;
+            if (TryGetOverrideNullableInt(root, out var leaseManagementId, "leaseManagementId", "lease_management_id"))
+                fields.LeaseManagementId = leaseManagementId is > 0 ? leaseManagementId : null;
             if (TryGetOverrideNullableInt(root, out var vendorId, "vendorId", "vendor_id"))
                 fields.VendorId = vendorId is > 0 ? vendorId : null;
             if (TryGetOverrideString(root, out var title, "title"))
@@ -1677,7 +1677,7 @@ public sealed class ScanService : IScanService
         public int PropertyId { get; set; }
         public int? UnitId { get; set; }
         public int? TenantId { get; set; }
-        public int? LeaseId { get; set; }
+        public int? LeaseManagementId { get; set; }
         public int? VendorId { get; set; }
         public string? Title { get; set; }
         public string? Description { get; set; }

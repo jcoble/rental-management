@@ -148,6 +148,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<LoanPayment> LoanPayments => Set<LoanPayment>();
     public DbSet<RecurringExpense> RecurringExpenses => Set<RecurringExpense>();
     public DbSet<EvictionCase> EvictionCases => Set<EvictionCase>();
+    public DbSet<EvictionCaseRespondent> EvictionCaseRespondents => Set<EvictionCaseRespondent>();
     public DbSet<EvictionCaseEvent> EvictionCaseEvents => Set<EvictionCaseEvent>();
 
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
@@ -1626,20 +1627,22 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Resolution).HasMaxLength(500);
             entity.Property(e => e.Notes).HasMaxLength(1000);
             entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.Status })
-                .HasDatabaseName("IX_EvictionCases_Portfolio_Lease_Status");
+            entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.Status })
+                .HasDatabaseName("IX_EvictionCases_Portfolio_LeaseManagement_Status");
             entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.Status })
                 .HasDatabaseName("IX_EvictionCases_Portfolio_Property_Status");
-            entity.HasIndex(e => new { e.PortfolioId, e.TenantId, e.Status })
-                .HasDatabaseName("IX_EvictionCases_Portfolio_Tenant_Status");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
+            entity.HasOne(e => e.LeaseManagement)
                 .WithMany(l => l.EvictionCases)
-                .HasForeignKey(e => e.LeaseId)
+                .HasForeignKey(e => e.LeaseManagementId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.LeaseAgreement)
+                .WithMany(a => a.EvictionCases)
+                .HasForeignKey(e => e.LeaseAgreementId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.EvictionCases)
@@ -1649,10 +1652,16 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.UnitId)
                 .OnDelete(DeleteBehavior.Restrict);
-            entity.HasOne(e => e.Tenant)
-                .WithMany()
-                .HasForeignKey(e => e.TenantId)
-                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EvictionCaseRespondent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.EvictionCaseId, e.LeaseManagementPartyId }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementPartyId });
+            entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.EvictionCase).WithMany(e => e.Respondents).HasForeignKey(e => e.EvictionCaseId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.LeaseManagementParty).WithMany(p => p.EvictionCaseRespondents).HasForeignKey(e => e.LeaseManagementPartyId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<EvictionCaseEvent>(entity =>
@@ -1762,7 +1771,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.TenantId);
-            entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.LeaseManagementId);
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.RecurringMaintenanceTaskId);
             entity.HasIndex(e => e.Priority);
@@ -1784,9 +1793,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(t => t.WorkOrders)
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Lease)
+            entity.HasOne(e => e.LeaseManagement)
                 .WithMany(l => l.WorkOrders)
-                .HasForeignKey(e => e.LeaseId)
+                .HasForeignKey(e => e.LeaseManagementId)
                 .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.Vendor)
                 .WithMany(v => v.WorkOrders)
@@ -1870,7 +1879,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
-            entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.LeaseManagementId);
+            entity.HasIndex(e => e.RentalApplicationId);
             entity.HasIndex(e => e.TenantId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.ScheduledStart);
@@ -1886,9 +1896,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(u => u.Appointments)
                 .HasForeignKey(e => e.UnitId)
                 .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Lease)
+            entity.HasOne(e => e.LeaseManagement)
                 .WithMany(l => l.Appointments)
-                .HasForeignKey(e => e.LeaseId)
+                .HasForeignKey(e => e.LeaseManagementId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.RentalApplication)
+                .WithMany(a => a.Appointments)
+                .HasForeignKey(e => e.RentalApplicationId)
                 .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.Tenant)
                 .WithMany(t => t.Appointments)
@@ -1907,7 +1921,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
-            entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.LeaseManagementId);
+            entity.HasIndex(e => e.LeaseAgreementId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.ScheduledFor);
             entity.HasOne(e => e.Portfolio)
@@ -1922,9 +1937,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(u => u.Inspections)
                 .HasForeignKey(e => e.UnitId)
                 .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Lease)
+            entity.HasOne(e => e.LeaseManagement)
                 .WithMany(l => l.Inspections)
-                .HasForeignKey(e => e.LeaseId)
+                .HasForeignKey(e => e.LeaseManagementId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.LeaseAgreement)
+                .WithMany(a => a.Inspections)
+                .HasForeignKey(e => e.LeaseAgreementId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

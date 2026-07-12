@@ -11,7 +11,8 @@ public class InspectionResponse
     public int PortfolioId { get; set; }
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+    public int? LeaseAgreementId { get; set; }
     public InspectionType Type { get; set; }
     public InspectionStatus Status { get; set; }
     public DateTime ScheduledFor { get; set; }
@@ -40,7 +41,8 @@ public class InspectionResponse
         PortfolioId = e.PortfolioId,
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
-        LeaseId = e.LeaseId,
+        LeaseManagementId = e.LeaseManagementId,
+        LeaseAgreementId = e.LeaseAgreementId,
         Type = e.Type,
         Status = e.Status,
         ScheduledFor = e.ScheduledFor,
@@ -106,7 +108,8 @@ public class InspectionDetailResponse : InspectionResponse
             PortfolioId = e.PortfolioId,
             PropertyId = e.PropertyId,
             UnitId = e.UnitId,
-            LeaseId = e.LeaseId,
+            LeaseManagementId = e.LeaseManagementId,
+            LeaseAgreementId = e.LeaseAgreementId,
             Type = e.Type,
             Status = e.Status,
             ScheduledFor = e.ScheduledFor,
@@ -270,7 +273,10 @@ public class CreateInspectionRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? LeaseAgreementId { get; set; }
 
     [EnumDataType(typeof(InspectionType))]
     public InspectionType Type { get; set; } = InspectionType.Routine;
@@ -306,7 +312,10 @@ public class UpdateInspectionRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? LeaseAgreementId { get; set; }
 
     [EnumDataType(typeof(InspectionType))]
     public InspectionType? Type { get; set; }

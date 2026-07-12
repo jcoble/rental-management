@@ -204,7 +204,7 @@ public class PortalService : IPortalService
                 PortfolioId = a.PortfolioId,
                 PropertyId = a.PropertyId,
                 UnitId = a.UnitId,
-                LeaseId = a.LeaseId,
+                LeaseManagementId = a.LeaseManagementId,
                 TenantId = a.TenantId,
                 Title = a.Title,
                 ProspectName = a.ProspectName,
@@ -273,15 +273,17 @@ public class PortalService : IPortalService
         CreateTenantWorkOrderRequest request,
         CancellationToken ct = default)
     {
-        var lease = await _db.Leases
+        var relationship = await _db.LeaseManagementParties
             .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
-            .OrderByDescending(l => l.Status == LeaseStatus.Active)
-            .ThenByDescending(l => l.EndDate)
-            .Select(l => new { l.Id, l.PropertyId, l.UnitId })
+            .Where(p => p.PortfolioId == portfolioId && p.TenantId == tenantId
+                && p.LeaseManagement != null
+                && p.LeaseManagement.CanceledAtUtc == null
+                && p.LeaseManagement.PossessionReturnedAtUtc == null)
+            .OrderByDescending(p => p.EffectiveFrom)
+            .Select(p => new { p.LeaseManagementId, p.LeaseManagement!.PropertyId, p.LeaseManagement.UnitId })
             .FirstOrDefaultAsync(ct);
 
-        if (lease is null)
+        if (relationship is null)
         {
             return null;
         }
@@ -290,10 +292,10 @@ public class PortalService : IPortalService
         var workOrder = new WorkOrder
         {
             PortfolioId = portfolioId,
-            PropertyId = lease.PropertyId,
-            UnitId = lease.UnitId,
+            PropertyId = relationship.PropertyId,
+            UnitId = relationship.UnitId,
             TenantId = tenantId,
-            LeaseId = lease.Id,
+            LeaseManagementId = relationship.LeaseManagementId,
             Title = request.Title.Trim(),
             Description = request.Description.Trim(),
             Category = string.IsNullOrWhiteSpace(request.Category) ? "Resident Request" : request.Category.Trim(),

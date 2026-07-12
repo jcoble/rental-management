@@ -25,4 +25,5 @@ public class LeaseManagementParty : IAuditable, IPortfolioScoped
     public List<TenantUserAccess> UserAccesses { get; set; } = [];
     public List<LeaseAgreementSigner> AgreementSignerSnapshots { get; set; } = [];
     public List<LeaseAddendumSigner> AddendumSignerSnapshots { get; set; } = [];
+    public List<EvictionCaseRespondent> EvictionCaseRespondents { get; set; } = [];
 }

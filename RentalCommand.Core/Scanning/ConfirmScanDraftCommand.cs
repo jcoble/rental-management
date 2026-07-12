@@ -73,7 +73,7 @@ public sealed record ScanWorkOrderTargetData(
     int PropertyId,
     int? UnitId,
     int? TenantId,
-    int? LeaseId,
+    int? LeaseManagementId,
     int? VendorId,
     string? Title,
     string? Description,

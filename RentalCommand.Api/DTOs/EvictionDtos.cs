@@ -9,14 +9,15 @@ public class EvictionCaseResponse
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int LeaseId { get; set; }
-    public string? LeaseNumber { get; set; }
+    public int LeaseManagementId { get; set; }
+    public string? RelationshipNumber { get; set; }
+    public int? LeaseAgreementId { get; set; }
+    public string? AgreementNumber { get; set; }
     public int PropertyId { get; set; }
     public string? PropertyName { get; set; }
     public int UnitId { get; set; }
     public string? UnitNumber { get; set; }
-    public int TenantId { get; set; }
-    public string? TenantName { get; set; }
+    public IReadOnlyList<EvictionCaseRespondentResponse> Respondents { get; set; } = [];
     public EvictionCaseStatus Status { get; set; }
     public DateTime? FiledOnDate { get; set; }
     public DateTime? HearingDate { get; set; }
@@ -33,37 +34,14 @@ public class EvictionCaseResponse
 
     public string TestId => $"eviction-case-{Id}";
 
-    public static EvictionCaseResponse FromEntity(EvictionCase e, bool includeEvents = false)
-    {
-        return new EvictionCaseResponse
-        {
-            Id = e.Id,
-            PortfolioId = e.PortfolioId,
-            LeaseId = e.LeaseId,
-            LeaseNumber = e.Lease?.LeaseNumber,
-            PropertyId = e.PropertyId,
-            PropertyName = e.Property?.Name,
-            UnitId = e.UnitId,
-            UnitNumber = e.Unit?.UnitNumber,
-            TenantId = e.TenantId,
-            TenantName = e.Tenant == null ? null : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
-            Status = e.Status,
-            FiledOnDate = e.FiledOnDate,
-            HearingDate = e.HearingDate,
-            ResolvedOnDate = e.ResolvedOnDate,
-            CourtName = e.CourtName,
-            CaseNumber = e.CaseNumber,
-            Resolution = e.Resolution,
-            Notes = e.Notes,
-            EventCount = e.Events.Count,
-            LatestEventDate = e.Events.Count == 0 ? null : e.Events.Max(evt => evt.EventDate),
-            Events = includeEvents
-                ? e.Events.OrderBy(evt => evt.EventDate).ThenBy(evt => evt.Id).Select(EvictionCaseEventResponse.FromEntity).ToList()
-                : [],
-            CreatedAt = e.CreatedAt,
-            UpdatedAt = e.UpdatedAt,
-        };
-    }
+}
+
+public class EvictionCaseRespondentResponse
+{
+    public int LeaseManagementPartyId { get; set; }
+    public int TenantId { get; set; }
+    public string TenantName { get; set; } = string.Empty;
+
 }
 
 public class EvictionCaseEventResponse
@@ -102,14 +80,14 @@ public class EvictionCaseListResponse
 
 public class EvictionCaseListQuery : ListQuery
 {
-    [FromQuery(Name = "leaseId")]
-    public int? LeaseId { get; set; }
+    [FromQuery(Name = "leaseManagementId")]
+    public int? LeaseManagementId { get; set; }
 
     [FromQuery(Name = "propertyId")]
     public int? PropertyId { get; set; }
 
-    [FromQuery(Name = "tenantId")]
-    public int? TenantId { get; set; }
+    [FromQuery(Name = "leaseManagementPartyId")]
+    public int? LeaseManagementPartyId { get; set; }
 
     [FromQuery(Name = "status")]
     public EvictionCaseStatus? Status { get; set; }
@@ -119,7 +97,14 @@ public class CreateEvictionCaseRequest
 {
     [Required]
     [Range(1, int.MaxValue)]
-    public int LeaseId { get; set; }
+    public int LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? LeaseAgreementId { get; set; }
+
+    [Required]
+    [MinLength(1)]
+    public IReadOnlyList<int> RespondentLeaseManagementPartyIds { get; set; } = [];
 
     [EnumDataType(typeof(EvictionCaseStatus))]
     public EvictionCaseStatus Status { get; set; } = EvictionCaseStatus.Filed;

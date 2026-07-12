@@ -194,7 +194,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             PropertyId = target.PropertyId,
             UnitId = target.UnitId,
             TenantId = target.TenantId,
-            LeaseId = target.LeaseId,
+            LeaseManagementId = target.LeaseManagementId,
             VendorId = target.VendorId,
             Title = title,
             Description = description,
@@ -401,13 +401,13 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         {
             throw new ScanConfirmationValidationException("Selected vendor is not in this portfolio.");
         }
-        if (target.LeaseId is int leaseId && !await persistence.Query<Lease>()
-                .AnyAsync(lease => lease.Id == leaseId
-                    && lease.PortfolioId == portfolioId
-                    && lease.PropertyId == target.PropertyId
-                    && (target.UnitId == null || lease.UnitId == target.UnitId), ct))
+        if (target.LeaseManagementId is int leaseManagementId && !await persistence.Query<LeaseManagement>()
+                .AnyAsync(relationship => relationship.Id == leaseManagementId
+                    && relationship.PortfolioId == portfolioId
+                    && relationship.PropertyId == target.PropertyId
+                    && (target.UnitId == null || relationship.UnitId == target.UnitId), ct))
         {
-            throw new ScanConfirmationValidationException("Selected lease is not in this portfolio or location.");
+            throw new ScanConfirmationValidationException("Selected lease relationship is not in this portfolio or location.");
         }
         if (target.TenantId is int tenantId && !await TenantMatchesLocationAsync(
                 portfolioId, tenantId, target.PropertyId, target.UnitId, persistence, ct))

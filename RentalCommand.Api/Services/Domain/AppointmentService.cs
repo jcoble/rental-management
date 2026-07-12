@@ -145,7 +145,7 @@ public class AppointmentService : IAppointmentService
 
     public async Task<AppointmentResponse?> CreateAsync(int portfolioId, CreateAppointmentRequest request, CancellationToken ct = default)
     {
-        if (!await ReferencesInScopeAsync(portfolioId, request.PropertyId, request.UnitId, request.LeaseId, request.TenantId, ct))
+        if (!await ReferencesInScopeAsync(portfolioId, request.PropertyId, request.UnitId, request.LeaseManagementId, request.RentalApplicationId, request.TenantId, ct))
         {
             return null;
         }
@@ -160,7 +160,8 @@ public class AppointmentService : IAppointmentService
             PortfolioId = portfolioId,
             PropertyId = request.PropertyId,
             UnitId = request.UnitId,
-            LeaseId = request.LeaseId,
+            LeaseManagementId = request.LeaseManagementId,
+            RentalApplicationId = request.RentalApplicationId,
             TenantId = request.TenantId,
             Title = request.Title,
             ProspectName = request.ProspectName,
@@ -192,14 +193,15 @@ public class AppointmentService : IAppointmentService
             return null;
         }
 
-        if (!await ReferencesInScopeAsync(portfolioId, request.PropertyId, request.UnitId, request.LeaseId, request.TenantId, ct))
+        if (!await ReferencesInScopeAsync(portfolioId, request.PropertyId, request.UnitId, request.LeaseManagementId, request.RentalApplicationId, request.TenantId, ct))
         {
             return null;
         }
 
         if (request.PropertyId.HasValue) entity.PropertyId = request.PropertyId;
         if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
-        if (request.LeaseId.HasValue) entity.LeaseId = request.LeaseId;
+        if (request.LeaseManagementId.HasValue) entity.LeaseManagementId = request.LeaseManagementId;
+        if (request.RentalApplicationId.HasValue) entity.RentalApplicationId = request.RentalApplicationId;
         if (request.TenantId.HasValue) entity.TenantId = request.TenantId;
         if (request.Title != null) entity.Title = request.Title;
         if (request.ProspectName != null) entity.ProspectName = request.ProspectName;
@@ -256,7 +258,7 @@ public class AppointmentService : IAppointmentService
     }
 
     /// <summary>Confirms each supplied optional FK belongs to the caller's portfolio (no cross-tenant linking).</summary>
-    private async Task<bool> ReferencesInScopeAsync(int portfolioId, int? propertyId, int? unitId, int? leaseId, int? tenantId, CancellationToken ct)
+    private async Task<bool> ReferencesInScopeAsync(int portfolioId, int? propertyId, int? unitId, int? leaseManagementId, int? applicationId, int? tenantId, CancellationToken ct)
     {
         if (propertyId.HasValue &&
             !await _db.EnsurePropertyInPortfolioAsync(portfolioId, propertyId.Value, ct))
@@ -270,8 +272,14 @@ public class AppointmentService : IAppointmentService
             return false;
         }
 
-        if (leaseId.HasValue &&
-            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, leaseId.Value, ct))
+        if (leaseManagementId.HasValue &&
+            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, leaseManagementId.Value, ct))
+        {
+            return false;
+        }
+
+        if (applicationId.HasValue &&
+            !await _db.EnsureApplicationInPortfolioAsync(portfolioId, applicationId.Value, ct))
         {
             return false;
         }

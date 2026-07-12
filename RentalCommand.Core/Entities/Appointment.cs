@@ -9,7 +9,8 @@ public class Appointment : IAuditable, IPortfolioScoped
     public int PortfolioId { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+    public int? RentalApplicationId { get; set; }
     public int? TenantId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? ProspectName { get; set; }
@@ -26,6 +27,7 @@ public class Appointment : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
-    public Lease? Lease { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
+    public RentalApplication? RentalApplication { get; set; }
     public Tenant? Tenant { get; set; }
 }

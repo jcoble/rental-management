@@ -12,7 +12,7 @@ public class WorkOrderResponse
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? TenantId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
     public int? VendorId { get; set; }
     public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
@@ -54,7 +54,7 @@ public class WorkOrderResponse
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
         TenantId = e.TenantId,
-        LeaseId = e.LeaseId,
+        LeaseManagementId = e.LeaseManagementId,
         VendorId = e.VendorId,
         RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
         Title = e.Title,
@@ -160,7 +160,7 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             PropertyId = e.PropertyId,
             UnitId = e.UnitId,
             TenantId = e.TenantId,
-            LeaseId = e.LeaseId,
+            LeaseManagementId = e.LeaseManagementId,
             VendorId = e.VendorId,
             RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
             Title = e.Title,
@@ -199,7 +199,7 @@ public class CreateWorkOrderRequest
     public int? TenantId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
@@ -262,9 +262,9 @@ public class UpdateWorkOrderRequest
     public bool ClearTenant { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
 
-    public bool ClearLease { get; set; }
+    public bool ClearLeaseManagement { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
