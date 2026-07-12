@@ -223,6 +223,9 @@ internal static class TenantAccountModelConfiguration
             entity.HasIndex(e => new { e.PortfolioId, e.TenantAccountId, e.DueOn, e.Id })
                 .HasFilter("\"Direction\" = 'Debit'");
             entity.HasIndex(e => new { e.PortfolioId, e.EntryType, e.EffectiveOn, e.Id });
+            entity.HasIndex(e => new { e.PortfolioId, e.TransferPublicId, e.EntryType })
+                .IsUnique()
+                .HasFilter("\"TransferPublicId\" IS NOT NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseAgreementId, e.EffectiveOn })
                 .HasFilter("\"LeaseAgreementId\" IS NOT NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseAddendumId, e.EffectiveOn })
@@ -233,14 +236,16 @@ internal static class TenantAccountModelConfiguration
                 table.HasCheckConstraint(
                     "CK_TenantLedgerEntry_Type",
                     "\"EntryType\" IN ('OpeningBalance', 'RentCharge', 'AddendumCharge', 'LateFeeCharge', " +
-                    "'DepositCharge', 'ManualCharge', 'PaymentReceipt', 'Credit', 'Adjustment', 'Refund', 'Reversal')");
+                    "'DepositCharge', 'ManualCharge', 'PaymentReceipt', 'Credit', 'Adjustment', 'Refund', " +
+                    "'TransferIn', 'TransferOut', 'Reversal')");
                 table.HasCheckConstraint(
                     "CK_TenantLedgerEntry_Direction",
                     "\"Direction\" IN ('Debit','Credit') AND ((\"EntryType\" = 'OpeningBalance') OR " +
                     "(\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') " +
                     "AND \"Direction\" = 'Debit') OR " +
                     "(\"EntryType\" IN ('PaymentReceipt','Credit','Refund') AND \"Direction\" = 'Credit') OR " +
-                    "(\"EntryType\" IN ('Adjustment','Reversal') AND \"Direction\" IN ('Debit','Credit')))");
+                    "(\"EntryType\" IN ('Adjustment','TransferIn','TransferOut','Reversal') " +
+                    "AND \"Direction\" IN ('Debit','Credit')))");
                 table.HasCheckConstraint("CK_TenantLedgerEntry_Amount", "\"Amount\" > 0");
                 table.HasCheckConstraint("CK_TenantLedgerEntry_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
                 table.HasCheckConstraint(
@@ -248,11 +253,14 @@ internal static class TenantAccountModelConfiguration
                     "(\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') " +
                     "AND \"DueOn\" IS NOT NULL) OR " +
                     "(\"EntryType\" IN ('PaymentReceipt','Credit','Refund','Reversal') AND \"DueOn\" IS NULL) OR " +
-                    "(\"EntryType\" IN ('OpeningBalance','Adjustment'))");
+                    "(\"EntryType\" IN ('OpeningBalance','Adjustment','TransferIn','TransferOut'))");
                 table.HasCheckConstraint(
                     "CK_TenantLedgerEntry_Provenance",
                     "(\"EntryType\" <> 'RentCharge' OR \"LeaseAgreementId\" IS NOT NULL) AND " +
                     "(\"EntryType\" <> 'AddendumCharge' OR \"LeaseAddendumId\" IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_TenantLedgerEntry_TransferProvenance",
+                    "(\"EntryType\" IN ('TransferIn','TransferOut')) = (\"TransferPublicId\" IS NOT NULL)");
                 table.HasCheckConstraint(
                     "CK_TenantLedgerEntry_ReversalReference",
                     "(\"EntryType\" = 'Reversal') = (\"ReversesEntryId\" IS NOT NULL)");
@@ -480,6 +488,9 @@ internal static class TenantAccountModelConfiguration
             entity.HasIndex(e => new { e.SecurityDepositAccountId, e.BusinessKey }).IsUnique();
             entity.HasIndex(e => e.ReversesEntryId).IsUnique().HasFilter("\"ReversesEntryId\" IS NOT NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.SecurityDepositAccountId, e.EffectiveOn, e.Id });
+            entity.HasIndex(e => new { e.PortfolioId, e.TransferPublicId, e.EntryType })
+                .IsUnique()
+                .HasFilter("\"TransferPublicId\" IS NOT NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseAgreementId, e.EffectiveOn })
                 .HasFilter("\"LeaseAgreementId\" IS NOT NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseAddendumId, e.EffectiveOn })
@@ -498,6 +509,9 @@ internal static class TenantAccountModelConfiguration
                     "(\"EntryType\" IN ('Adjustment','Reversal') AND \"Direction\" IN ('Increase','Decrease'))");
                 table.HasCheckConstraint("CK_SecurityDepositEntry_Amount", "\"Amount\" > 0");
                 table.HasCheckConstraint("CK_SecurityDepositEntry_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
+                table.HasCheckConstraint(
+                    "CK_SecurityDepositEntry_TransferProvenance",
+                    "(\"EntryType\" IN ('TransferIn','TransferOut')) = (\"TransferPublicId\" IS NOT NULL)");
                 table.HasCheckConstraint(
                     "CK_SecurityDepositEntry_ReversalReference",
                     "(\"EntryType\" = 'Reversal') = (\"ReversesEntryId\" IS NOT NULL)");

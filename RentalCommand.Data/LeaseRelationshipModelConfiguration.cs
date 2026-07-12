@@ -26,6 +26,7 @@ internal static class LeaseRelationshipModelConfiguration
 
             entity.Property(e => e.PublicId).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.RelationshipNumber).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.TransferReason).HasMaxLength(1000);
             entity.Property(e => e.PossessionAgreementExceptionReason).HasMaxLength(1000);
             entity.Property(e => e.CancellationReasonCode).HasMaxLength(40);
             entity.Property(e => e.CancellationNote).HasMaxLength(2000);
@@ -40,6 +41,10 @@ internal static class LeaseRelationshipModelConfiguration
                 .IsConcurrencyToken();
 
             entity.HasIndex(e => e.PublicId).IsUnique();
+            entity.HasIndex(e => e.TransferPublicId).IsUnique().HasFilter("\"TransferPublicId\" IS NOT NULL");
+            entity.HasIndex(e => e.TransferredFromLeaseManagementId)
+                .IsUnique()
+                .HasFilter("\"TransferredFromLeaseManagementId\" IS NOT NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.RelationshipNumber }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.UnitId, e.CreatedAtUtc, e.Id })
                 .IsDescending(false, false, true, true);
@@ -52,6 +57,12 @@ internal static class LeaseRelationshipModelConfiguration
 
             entity.ToTable(table =>
             {
+                table.HasCheckConstraint(
+                    "CK_LeaseManagement_TransferProvenance",
+                    "(\"TransferredFromLeaseManagementId\" IS NULL AND \"TransferPublicId\" IS NULL " +
+                    "AND \"TransferredAtUtc\" IS NULL AND \"TransferReason\" IS NULL) OR " +
+                    "(\"TransferredFromLeaseManagementId\" IS NOT NULL AND \"TransferPublicId\" IS NOT NULL " +
+                    "AND \"TransferredAtUtc\" IS NOT NULL AND \"TransferReason\" IS NOT NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseManagement_PossessionNotCanceled",
                     "\"PossessionGivenAtUtc\" IS NULL OR \"CanceledAtUtc\" IS NULL");
@@ -100,6 +111,11 @@ internal static class LeaseRelationshipModelConfiguration
                 .WithMany(u => u.LeaseManagements)
                 .HasForeignKey(e => new { e.UnitId, e.PropertyId, e.PortfolioId })
                 .HasPrincipalKey(u => new { u.Id, u.PropertyId, u.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.TransferredFromLeaseManagement)
+                .WithOne(e => e.TransferredToLeaseManagement)
+                .HasForeignKey<LeaseManagement>(e => new { e.TransferredFromLeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey<LeaseManagement>(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.PossessionAgreementExceptionAuthorizedByUser)
                 .WithMany()

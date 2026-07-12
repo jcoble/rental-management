@@ -123,7 +123,7 @@ internal static class LeaseLegalArtifactModelConfiguration
                 table.HasCheckConstraint("CK_LeaseAgreement_DraftRevision", "\"DraftRevision\" >= 1");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_ChangeType",
-                    "\"ChangeType\" IN ('Initial', 'Correction', 'Renewal', 'MonthToMonth', 'Restatement')");
+                    "\"ChangeType\" IN ('Initial', 'Transfer', 'Correction', 'Renewal', 'MonthToMonth', 'Restatement')");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Term",
                     "(\"TermType\" = 'FixedTerm' AND \"TermEndOn\" IS NOT NULL " +
@@ -161,11 +161,17 @@ internal static class LeaseLegalArtifactModelConfiguration
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Lineage",
                     "(\"ChangeType\" = 'Initial' AND \"VersionNumber\" = 1 " +
+                    "AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL " +
+                    "AND \"TransferredFromAgreementId\" IS NULL) OR " +
+                    "(\"ChangeType\" = 'Transfer' AND \"VersionNumber\" = 1 " +
+                    "AND \"TransferredFromAgreementId\" IS NOT NULL " +
                     "AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR " +
                     "(\"ChangeType\" IN ('Correction', 'Restatement') " +
-                    "AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL) OR " +
+                    "AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL " +
+                    "AND \"TransferredFromAgreementId\" IS NULL) OR " +
                     "(\"ChangeType\" IN ('Renewal', 'MonthToMonth') " +
-                    "AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL)");
+                    "AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL " +
+                    "AND \"TransferredFromAgreementId\" IS NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Money",
                     "\"BaseRentAmount\" >= 0 AND \"SecurityDepositObligation\" >= 0 " +
@@ -194,6 +200,11 @@ internal static class LeaseLegalArtifactModelConfiguration
                 .WithMany(e => e.CorrectionsAndRestatements)
                 .HasForeignKey(e => new { e.ReplacesAgreementId, e.LeaseManagementId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.TransferredFromAgreement)
+                .WithMany(e => e.TransferSuccessors)
+                .HasForeignKey(e => new { e.TransferredFromAgreementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.RenewsAgreement)
                 .WithMany(e => e.Renewals)

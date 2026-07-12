@@ -32,6 +32,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.return-possession.v1");
     private static readonly AtomicJsonResultCodec<CancelPlannedRelationshipResult> CancelCodec =
         new("lease-management.cancel-planned.v1");
+    private static readonly AtomicJsonResultCodec<TransferLeaseManagementResult> TransferCodec =
+        new("lease-management.transfer-unit.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
@@ -671,6 +673,114 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     Conflict(new { error = outcome.Value.Error }),
                 CancelPlannedRelationshipOutcome.PossessionAlreadyGiven
                     or CancelPlannedRelationshipOutcome.InvalidAccessPolicy =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseManagementId:int}/transfer")]
+    [ProducesResponseType(typeof(TransferLeaseManagementResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> TransferToUnit(
+        int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] TransferLeaseManagementRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+        if (!HasRequiredTextWithinLimit(request.TransferReason, 500)
+            || request.SourceUnitId <= 0
+            || request.DestinationUnitId <= 0
+            || request.SourceUnitId == request.DestinationUnitId
+            || request.EffectiveOn == default
+            || request.DestinationDocumentTemplateId <= 0
+            || request.DestinationDocumentTemplateVersion <= 0
+            || (request.GiveDestinationPossessionNow
+                && !HasRequiredTextWithinLimit(request.PossessionAgreementExceptionReason, 1000))
+            || (!request.GiveDestinationPossessionNow
+                && !string.IsNullOrWhiteSpace(request.PossessionAgreementExceptionReason)))
+        {
+            return BadRequest(new
+            {
+                error = "Destination Unit, transfer date, template, reason, and possession policy are invalid.",
+            });
+        }
+
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        var transferPublicId = new Guid(Convert.FromHexString(digest[..32]));
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-management.transfer-unit",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new TransferLeaseManagementCommand(
+                    portfolioId,
+                    leaseManagementId,
+                    request.SourceUnitId,
+                    request.DestinationUnitId,
+                    userId,
+                    sessionId,
+                    accessContextId,
+                    accessRevision,
+                    transferPublicId,
+                    request.EffectiveOn,
+                    request.PlannedDestinationPossessionAtUtc,
+                    request.GiveDestinationPossessionNow,
+                    request.PossessionAgreementExceptionReason,
+                    request.DestinationDocumentTemplateId,
+                    request.DestinationDocumentTemplateVersion,
+                    request.CarryTenantBalance,
+                    request.CarrySecurityDeposit,
+                    request.TransferReason,
+                    $"unit-transfer:{portfolioId}:{leaseManagementId}:{digest}"),
+                TransferCodec,
+                ct);
+
+            return outcome.Value.Outcome switch
+            {
+                TransferLeaseManagementOutcome.Transferred
+                    when outcome.Value.SourcePossessionReturnedAtUtc.HasValue =>
+                    StatusCode(StatusCodes.Status201Created, new TransferLeaseManagementResponse(
+                        outcome.Value.TransferPublicId,
+                        outcome.Value.SourceLeaseManagementId,
+                        outcome.Value.SourceUnitId,
+                        outcome.Value.DestinationLeaseManagementId,
+                        outcome.Value.DestinationUnitId,
+                        outcome.Value.DestinationTenantAccountId,
+                        outcome.Value.DestinationAgreementId,
+                        outcome.Value.DestinationSecurityDepositAccountId,
+                        outcome.Value.TurnoverPeriodId,
+                        outcome.Value.SourcePossessionReturnedAtUtc.Value,
+                        outcome.Value.DestinationPossessionGivenAtUtc,
+                        outcome.Value.CarriedTenantBalance,
+                        outcome.Value.CarriedSecurityDeposit,
+                        outcome.Value.DestinationPartyIds,
+                        outcome.Value.DestinationSignerIds,
+                        outcome.Value.DestinationAccessIds,
+                        DestinationAgreementRequiresSignature: true,
+                        outcome.Disposition != AtomicCommandDisposition.Executed)),
+                TransferLeaseManagementOutcome.AlreadyTransferred
+                    or TransferLeaseManagementOutcome.DestinationUnavailable
+                    or TransferLeaseManagementOutcome.InvalidFinancialState =>
+                    Conflict(new { error = outcome.Value.Error }),
+                TransferLeaseManagementOutcome.SourcePossessionNotOpen
+                    or TransferLeaseManagementOutcome.GoverningAgreementRequired
+                    or TransferLeaseManagementOutcome.TenantAccountNotOpen
+                    or TransferLeaseManagementOutcome.InvalidTemplate
+                    or TransferLeaseManagementOutcome.InvalidHousehold =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
                 _ => StatusCode(StatusCodes.Status500InternalServerError),
             };

@@ -14,6 +14,11 @@ public class LeaseManagement : IAuditable, IPortfolioScoped
     public int PortfolioId { get; set; }
     public int PropertyId { get; set; }
     public int UnitId { get; set; }
+    /// <summary>The prior Unit relationship when this relationship was opened by a transfer.</summary>
+    public int? TransferredFromLeaseManagementId { get; set; }
+    public Guid? TransferPublicId { get; set; }
+    public DateTime? TransferredAtUtc { get; set; }
+    public string? TransferReason { get; set; }
     public string RelationshipNumber { get; set; } = string.Empty;
     public DateTime? PlannedPossessionAtUtc { get; set; }
     public DateTime? PossessionGivenAtUtc { get; set; }
@@ -38,6 +43,8 @@ public class LeaseManagement : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
+    public LeaseManagement? TransferredFromLeaseManagement { get; set; }
+    public LeaseManagement? TransferredToLeaseManagement { get; set; }
     public ApplicationUser? PossessionAgreementExceptionAuthorizedByUser { get; set; }
     public ApplicationUser? EndingDispositionDecidedByUser { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }

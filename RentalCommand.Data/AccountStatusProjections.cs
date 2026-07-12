@@ -310,7 +310,7 @@ internal static class TenantChargeBalanceViewSql
            AND debit_allocations."TenantAccountId" = entry."TenantAccountId"
            AND debit_allocations."TenantLedgerEntryId" = entry."Id"
           WHERE entry."Direction" = 'Debit'
-            AND entry."EntryType" <> 'Reversal'
+            AND entry."EntryType" NOT IN ('Reversal', 'TransferOut')
         )
         SELECT "PortfolioId",
                "TenantAccountId",

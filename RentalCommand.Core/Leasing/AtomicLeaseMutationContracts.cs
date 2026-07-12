@@ -45,6 +45,28 @@ public sealed record AtomicCancelPlannedRelationshipMutationResult(
     IReadOnlyList<int> RevokedAccessIds,
     IReadOnlyList<int> RetainedAccessIds);
 
+public sealed record AtomicTransferLeaseManagementMutationResult(
+    TransferLeaseManagementOutcome Outcome,
+    Guid TransferPublicId,
+    int SourceTenantAccountId,
+    int? SourceSecurityDepositAccountId,
+    int DestinationLeaseManagementId,
+    int DestinationTenantAccountId,
+    int DestinationAgreementId,
+    int? DestinationSecurityDepositAccountId,
+    int TurnoverPeriodId,
+    DateTime? SourcePossessionReturnedAtUtc,
+    DateTime? DestinationPossessionGivenAtUtc,
+    decimal CarriedTenantBalance,
+    decimal CarriedSecurityDeposit,
+    IReadOnlyList<int> EndedSourcePartyIds,
+    IReadOnlyList<int> DestinationPartyIds,
+    IReadOnlyList<int> DestinationSignerIds,
+    IReadOnlyList<int> RevokedSourceAccessIds,
+    IReadOnlyList<int> DestinationAccessIds,
+    IReadOnlyList<long> TenantLedgerEntryIds,
+    IReadOnlyList<long> SecurityDepositEntryIds);
+
 /// <summary>
 /// PostgreSQL-owned lease graph mutations. Input sets are validated, joined, partitioned, and
 /// applied by one statement per operation; handlers never materialize a relationship graph.
@@ -81,5 +103,10 @@ public interface IAtomicLeaseMutationPersistence
         string cancellationReasonCode,
         string? cancellationNote,
         string draftCancellationReason,
+        CancellationToken ct = default);
+
+    Task<AtomicTransferLeaseManagementMutationResult> TransferLeaseManagementAsync(
+        TransferLeaseManagementCommand command,
+        DateTime changedAtUtc,
         CancellationToken ct = default);
 }

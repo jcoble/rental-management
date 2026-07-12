@@ -7,7 +7,7 @@ using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Leasing;
 
-internal sealed class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersistence
+internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersistence
 {
     private readonly RentalCommandDbContext _db;
     private readonly AtomicAuditScope _auditScope;
