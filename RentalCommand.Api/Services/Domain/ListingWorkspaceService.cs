@@ -27,14 +27,16 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly IAtomicInfrastructureWriteGate _infrastructureWrites;
     private readonly IFileStorage _files;
     private readonly IPendingFileUploadStore _pendingUploads;
+    private readonly IListingChannelAdapterResolver _listingChannels;
     private readonly ILogger<ListingWorkspaceService> _logger;
     private readonly TimeProvider _time;
 
     public ListingWorkspaceService(RentalCommandDbContext db, IDataUpdateService updates, IAuditTrailService audit,
         IAtomicInfrastructureWriteGate infrastructureWrites, IFileStorage files,
-        IPendingFileUploadStore pendingUploads, ILogger<ListingWorkspaceService> logger, TimeProvider time)
-        => (_db, _updates, _audit, _infrastructureWrites, _files, _pendingUploads, _logger, _time) =
-            (db, updates, audit, infrastructureWrites, files, pendingUploads, logger, time);
+        IPendingFileUploadStore pendingUploads, IListingChannelAdapterResolver listingChannels,
+        ILogger<ListingWorkspaceService> logger, TimeProvider time)
+        => (_db, _updates, _audit, _infrastructureWrites, _files, _pendingUploads, _listingChannels, _logger, _time) =
+            (db, updates, audit, infrastructureWrites, files, pendingUploads, listingChannels, logger, time);
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
         => _db.Units.AsNoTracking().AnyAsync(unit => unit.Id == unitId && unit.PortfolioId == portfolioId, ct);
@@ -42,7 +44,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     public async Task<ListingWorkspaceResponse?> GetAsync(int portfolioId, int unitId, CancellationToken ct = default)
     {
         var listing = await WorkspaceQuery(portfolioId, unitId).FirstOrDefaultAsync(ct);
-        return listing is null ? null : ListingWorkspaceResponse.FromEntity(listing);
+        return listing is null ? null : ToResponse(listing);
     }
 
     public async Task<ListingWorkspaceResponse?> GenerateAsync(int portfolioId, int unitId, int userId, CancellationToken ct = default)
@@ -83,7 +85,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                     : "Synchronized non-editable unit details without replacing customized listing content",
                 ct: ct);
             await transaction.CommitAsync(ct);
-            response = ListingWorkspaceResponse.FromEntity(listing);
+            response = ToResponse(listing);
         });
 
         await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response!.Id, response, ct);
@@ -116,7 +118,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             await _audit.LogAsync(portfolioId, EntityType, listing.Id, AuditLogOperation.Updated,
                 userId: userId, changeReason: "Updated rental listing and Zillow Guided workspace", ct: ct);
             await transaction.CommitAsync(ct);
-            response = ListingWorkspaceResponse.FromEntity(listing);
+            response = ToResponse(listing);
         });
 
         if (response is not null)
@@ -203,7 +205,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                 userId: userId, newValues: JsonSerializer.Serialize(new { photo.Position, photo.Category, photo.Caption, fileName, sha256 }),
                 changeReason: "Attached listing photo", ct: ct);
             await transaction.CommitAsync(ct);
-            response = ListingWorkspaceResponse.FromEntity(listing);
+            response = ToResponse(listing);
         }
 
         if (response is not null)
@@ -313,10 +315,202 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                     userId: userId, changeReason: reason, ct: ct);
             }
             await transaction.CommitAsync(ct);
-            response = ListingWorkspaceResponse.FromEntity(listing);
+            response = ToResponse(listing);
         });
         if (response is not null)
             await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response.Id, response, ct);
+        return response;
+    }
+
+    public async Task<ListingWorkspaceResponse?> PrepareConnectedAsync(
+        int portfolioId, int unitId, int publicationId, int userId, CancellationToken ct = default)
+    {
+        var snapshot = await LoadConnectedSnapshotAsync(portfolioId, unitId, publicationId, ct);
+        if (snapshot is null) return null;
+        var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
+        var prepared = await adapter.PrepareAsync(new PrepareListingPublicationCommand(snapshot.Package), ct);
+        if (prepared.ContentVersion != snapshot.Package.ContentVersion)
+            throw new DomainValidationException("The provider prepared a different listing content version.");
+
+        return await PersistConnectedResultAsync(snapshot, userId, ListingPublicationStatus.Ready,
+            EncodePreparedPackageKey(prepared), "Prepared", null, null, null, false,
+            "Prepared Connected listing package", ct);
+    }
+
+    public Task<ListingWorkspaceResponse?> PublishConnectedAsync(
+        int portfolioId, int unitId, int publicationId, string clientOperationId, int userId,
+        CancellationToken ct = default)
+        => DeliverConnectedAsync(portfolioId, unitId, publicationId, clientOperationId, userId,
+            ConnectedListingOperation.Publish, ct);
+
+    public Task<ListingWorkspaceResponse?> UpdateConnectedAsync(
+        int portfolioId, int unitId, int publicationId, string clientOperationId, int userId,
+        CancellationToken ct = default)
+        => DeliverConnectedAsync(portfolioId, unitId, publicationId, clientOperationId, userId,
+            ConnectedListingOperation.Update, ct);
+
+    public Task<ListingWorkspaceResponse?> UnpublishConnectedAsync(
+        int portfolioId, int unitId, int publicationId, string clientOperationId, int userId,
+        CancellationToken ct = default)
+        => DeliverConnectedAsync(portfolioId, unitId, publicationId, clientOperationId, userId,
+            ConnectedListingOperation.Unpublish, ct);
+
+    private async Task<ListingWorkspaceResponse?> DeliverConnectedAsync(
+        int portfolioId, int unitId, int publicationId, string clientOperationId, int userId,
+        ConnectedListingOperation operation, CancellationToken ct)
+    {
+        var operationId = CleanRequired(clientOperationId, "Client operation ID");
+        if (operationId.Length > 160)
+            throw new DomainValidationException("Client operation ID cannot exceed 160 characters.");
+
+        var snapshot = await LoadConnectedSnapshotAsync(portfolioId, unitId, publicationId, ct);
+        if (snapshot is null) return null;
+        var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
+        ListingPublicationDelivery delivery;
+        try
+        {
+            delivery = operation switch
+            {
+                ConnectedListingOperation.Publish => await adapter.PublishAsync(
+                    new PublishListingCommand(snapshot.Package,
+                        DecodePreparedPackageKey(snapshot.PreparedPackageKey, snapshot.Package.ContentVersion),
+                        operationId), ct),
+                ConnectedListingOperation.Update => await adapter.UpdateAsync(
+                    new UpdateListingCommand(snapshot.Package, snapshot.ExternalListingId, operationId), ct),
+                ConnectedListingOperation.Unpublish => await adapter.UnpublishAsync(
+                    new UnpublishListingCommand(publicationId, snapshot.ExternalListingId, operationId), ct),
+                _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not DomainValidationException)
+        {
+            await PersistConnectedResultAsync(snapshot, userId, ListingPublicationStatus.Failed,
+                operationId, "Failed", ex.Message, null, null, false,
+                $"Connected listing {operation.ToString().ToLowerInvariant()} failed", ct);
+            throw;
+        }
+
+        var succeeded = string.IsNullOrWhiteSpace(delivery.Error);
+        var status = !succeeded
+            ? ListingPublicationStatus.Failed
+            : operation == ConnectedListingOperation.Unpublish
+                ? ListingPublicationStatus.Removed
+                : ListingPublicationStatus.Published;
+        return await PersistConnectedResultAsync(snapshot, userId, status,
+            delivery.DeliveryKey, delivery.Status, delivery.Error, delivery.ExternalListingId,
+            delivery.ListingUrl, succeeded && operation != ConnectedListingOperation.Unpublish,
+            $"Connected listing {operation.ToString().ToLowerInvariant()} completed", ct);
+    }
+
+    private IListingChannelAdapter RequireAvailableAdapter(string providerKey)
+    {
+        IListingChannelAdapter adapter;
+        try { adapter = _listingChannels.Resolve(providerKey); }
+        catch (ListingChannelUnavailableException exception)
+        {
+            throw new DomainValidationException(exception.Message, StatusCodes.Status409Conflict);
+        }
+        if (!adapter.Availability.Available)
+            throw new DomainValidationException(
+                adapter.Availability.Reason ?? $"Connected publishing for {providerKey} is not configured.",
+                StatusCodes.Status409Conflict);
+        return adapter;
+    }
+
+    private async Task<ConnectedListingSnapshot?> LoadConnectedSnapshotAsync(
+        int portfolioId, int unitId, int publicationId, CancellationToken ct)
+    {
+        var publication = await _db.ListingPublications.AsNoTracking()
+            .Where(item => item.Id == publicationId && item.PortfolioId == portfolioId
+                && item.Mode == ListingPublicationMode.Connected
+                && item.RentalListing != null && item.RentalListing.UnitId == unitId)
+            .Include(item => item.RentalListing)!.ThenInclude(listing => listing!.Photos.OrderBy(photo => photo.Position))
+            .Include(item => item.RentalListing)!.ThenInclude(listing => listing!.Unit)!.ThenInclude(unit => unit!.Property)
+            .AsSingleQuery()
+            .SingleOrDefaultAsync(ct);
+        if (publication?.RentalListing is not { } listing) return null;
+        var unit = listing.Unit ?? throw new DomainValidationException("The listing unit is missing.");
+        var property = unit.Property ?? throw new DomainValidationException("The listing property is missing.");
+        if (listing.Rent <= 0 || string.IsNullOrWhiteSpace(listing.Headline) || string.IsNullOrWhiteSpace(listing.Description))
+            throw new DomainValidationException("Complete the listing headline, description, and rent before Connected publishing.");
+
+        var package = new ListingChannelPackage(
+            listing.Id, publication.Id, listing.ContentVersion, listing.PortfolioId, listing.PropertyId, listing.UnitId,
+            property.Name, property.AddressLine1, property.AddressLine2, property.City, property.State,
+            property.PostalCode, unit.UnitNumber,
+            listing.Headline, listing.Description, listing.Rent, listing.SecurityDeposit, listing.Bedrooms,
+            listing.Bathrooms, listing.SquareFeet, listing.AvailableOn, listing.LeaseTerms, listing.PetPolicy,
+            listing.Utilities, listing.Parking, listing.Amenities,
+            listing.Photos.Select(photo => new ListingChannelPhoto(
+                photo.Position, photo.Category, photo.Caption, photo.StoredFileId, photo.FileName, photo.Sha256)).ToArray());
+        return new ConnectedListingSnapshot(package, publication.ProviderKey, publication.LastDeliveryKey,
+            publication.ExternalListingId);
+    }
+
+    private async Task<ListingWorkspaceResponse> PersistConnectedResultAsync(
+        ConnectedListingSnapshot snapshot, int userId, ListingPublicationStatus status,
+        string deliveryKey, string deliveryStatus, string? deliveryError, string? externalListingId,
+        string? listingUrl, bool markPublishedVersion, string reason, CancellationToken ct)
+    {
+        deliveryKey = CleanRequiredMax(deliveryKey, "Provider delivery key", 200);
+        deliveryStatus = CleanRequiredMax(deliveryStatus, "Provider delivery status", 80);
+        deliveryError = CleanOptionalMax(deliveryError, "Provider delivery error", 2000);
+        externalListingId = CleanOptionalMax(externalListingId, "External listing ID", 200);
+        listingUrl = CleanOptionalMax(listingUrl, "External listing URL", 1000);
+        ListingWorkspaceResponse? response = null;
+        var strategy = _db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+            var publication = await _db.ListingPublications
+                .Include(item => item.RentalListing)!.ThenInclude(listing => listing!.Photos.OrderBy(photo => photo.Position))
+                .Include(item => item.RentalListing)!.ThenInclude(listing => listing!.Publications.OrderBy(item => item.Mode))
+                    .ThenInclude(item => item.ExternalSignals
+                        .Where(signal => signal.Disposition == ExternalListingSignalDisposition.Unconfirmed)
+                        .OrderByDescending(signal => signal.ReceivedAtUtc))
+                .AsSingleQuery()
+                .SingleAsync(item => item.Id == snapshot.Package.PublicationId
+                    && item.PortfolioId == snapshot.Package.PortfolioId
+                    && item.Mode == ListingPublicationMode.Connected, ct);
+            var listing = publication.RentalListing
+                ?? throw new DomainValidationException("The canonical rental listing is missing.");
+            if (listing.Id != snapshot.Package.RentalListingId || listing.UnitId != snapshot.Package.UnitId)
+                throw new DomainValidationException("The Connected publication no longer belongs to this listing.");
+            if (listing.ContentVersion != snapshot.Package.ContentVersion)
+                throw new DomainValidationException("The listing changed while the provider request was running. Prepare it again.");
+
+            var now = _time.UtcNow();
+            publication.Status = status;
+            publication.LastDeliveryKey = deliveryKey;
+            publication.LastDeliveryStatus = deliveryStatus;
+            publication.LastDeliveryError = CleanOptional(deliveryError);
+            publication.LastDeliveryAttemptAtUtc = now;
+            publication.ExternalListingId = CleanOptional(externalListingId) ?? publication.ExternalListingId;
+            publication.ListingUrl = CleanOptional(listingUrl) ?? publication.ListingUrl;
+            publication.UpdatedAt = now;
+            if (markPublishedVersion)
+            {
+                publication.PublishedContentVersion = listing.ContentVersion;
+                listing.Status = RentalListingStatus.Published;
+            }
+            else if (status == ListingPublicationStatus.Removed)
+            {
+                var anotherPublishedChannelExists = await _db.ListingPublications.AsNoTracking().AnyAsync(item =>
+                    item.RentalListingId == listing.Id && item.PortfolioId == listing.PortfolioId
+                    && item.Id != publication.Id && item.Status == ListingPublicationStatus.Published, ct);
+                listing.Status = anotherPublishedChannelExists
+                    ? RentalListingStatus.Published
+                    : RentalListingStatus.ReadyToPublish;
+            }
+            listing.UpdatedAt = now;
+            await _db.SaveChangesAsync(ct);
+            await _audit.LogAsync(listing.PortfolioId, nameof(ListingPublication), publication.Id,
+                AuditLogOperation.Updated, userId: userId, changeReason: reason, ct: ct);
+            await transaction.CommitAsync(ct);
+            response = ToResponse(listing);
+        });
+
+        await _updates.BroadcastEntityUpdateAsync(response!.PortfolioId, EntityType, response.Id, response, ct);
         return response;
     }
 
@@ -551,6 +745,38 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private static string CleanRequired(string value, string label)
         => string.IsNullOrWhiteSpace(value) ? throw new DomainValidationException($"{label} is required.") : value.Trim();
     private static string? CleanOptional(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string CleanRequiredMax(string value, string label, int maxLength)
+    {
+        var cleaned = CleanRequired(value, label);
+        return cleaned.Length <= maxLength
+            ? cleaned
+            : throw new DomainValidationException($"{label} cannot exceed {maxLength} characters.");
+    }
+    private static string? CleanOptionalMax(string? value, string label, int maxLength)
+    {
+        var cleaned = CleanOptional(value);
+        return cleaned is null || cleaned.Length <= maxLength
+            ? cleaned
+            : throw new DomainValidationException($"{label} cannot exceed {maxLength} characters.");
+    }
+    private static string EncodePreparedPackageKey(ListingPreparedPackage prepared)
+        => $"{prepared.ContentVersion}:{Convert.ToBase64String(Encoding.UTF8.GetBytes(prepared.PackageKey))}";
+    private static string DecodePreparedPackageKey(string? storedKey, int expectedContentVersion)
+    {
+        var separator = storedKey?.IndexOf(':') ?? -1;
+        if (separator <= 0
+            || !int.TryParse(storedKey![..separator], CultureInfo.InvariantCulture, out var preparedVersion)
+            || preparedVersion != expectedContentVersion)
+            throw new DomainValidationException("Prepare the current listing version before publishing.");
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(storedKey[(separator + 1)..]));
+        }
+        catch (FormatException)
+        {
+            throw new DomainValidationException("Prepare the current listing version before publishing.");
+        }
+    }
     private static bool SetRequired(string? value, string current, Action<string> setter, string label)
     {
         if (value is null) return false;
@@ -577,8 +803,17 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private static SynchronizedUnitDetails CaptureSynchronizedUnitDetails(RentalListing listing)
         => new(listing.PropertyId, listing.Bedrooms, listing.Bathrooms, listing.SquareFeet);
 
+    private ListingWorkspaceResponse ToResponse(RentalListing listing)
+        => ListingWorkspaceResponse.FromEntity(listing, _listingChannels.GetAvailability);
+
     private sealed record ListingSeed(int PortfolioId, int PropertyId, int UnitId, string PropertyName, string AddressLine1,
         string? AddressLine2, string City, string State, string PostalCode, string UnitNumber,
         decimal Bedrooms, decimal Bathrooms, int? SquareFeet, decimal MarketRent);
     private sealed record SynchronizedUnitDetails(int PropertyId, decimal Bedrooms, decimal Bathrooms, int? SquareFeet);
+    private sealed record ConnectedListingSnapshot(
+        ListingChannelPackage Package,
+        string ProviderKey,
+        string? PreparedPackageKey,
+        string? ExternalListingId);
+    private enum ConnectedListingOperation { Publish, Update, Unpublish }
 }

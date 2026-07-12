@@ -72,6 +72,19 @@ export const units = {
 	downloadListingPhoto: (id: number, photoId: number) =>
 		downloadFile(`/units/${id}/listing-workspace/photos/${photoId}/content`),
 
+	prepareConnectedListing: (id: number, publicationId: number) =>
+		api.post<ListingWorkspace>(`/units/${id}/listing-workspace/publications/${publicationId}/connected/prepare`),
+
+	runConnectedListingCommand: (
+		id: number,
+		publicationId: number,
+		action: 'publish' | 'update' | 'unpublish',
+		clientOperationId: string
+	) => api.post<ListingWorkspace>(
+		`/units/${id}/listing-workspace/publications/${publicationId}/connected/${action}`,
+		{ clientOperationId }
+	),
+
 	confirmListingSignal: (id: number, signalId: number, accept: boolean) =>
 		api.post<ListingWorkspace>(`/units/${id}/listing-workspace/signals/${signalId}/confirm?accept=${accept}`),
 

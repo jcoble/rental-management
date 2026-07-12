@@ -193,6 +193,9 @@ export interface ListingPublication {
 	lastDeliveryStatus?: string | null;
 	lastDeliveryError?: string | null;
 	lastDeliveryAttemptAtUtc?: string | null;
+	channelAvailable: boolean;
+	channelState: string;
+	channelUnavailableReason?: string | null;
 	unconfirmedSignals: ExternalListingSignal[];
 }
 

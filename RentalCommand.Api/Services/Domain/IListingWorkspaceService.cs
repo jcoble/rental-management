@@ -16,6 +16,14 @@ public interface IListingWorkspaceService
         CancellationToken ct = default);
     Task<ListingWorkspaceResponse?> ReorderPhotosAsync(int portfolioId, int unitId,
         ReorderListingPhotosRequest request, int userId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> PrepareConnectedAsync(int portfolioId, int unitId, int publicationId,
+        int userId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> PublishConnectedAsync(int portfolioId, int unitId, int publicationId,
+        string clientOperationId, int userId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> UpdateConnectedAsync(int portfolioId, int unitId, int publicationId,
+        string clientOperationId, int userId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> UnpublishConnectedAsync(int portfolioId, int unitId, int publicationId,
+        string clientOperationId, int userId, CancellationToken ct = default);
     Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default);
     Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
         IngestExternalListingSignalRequest request, CancellationToken ct = default);
