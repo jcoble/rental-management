@@ -204,7 +204,13 @@ class ApplicantScreening {
     this.completedAtUtc,
     this.failedAtUtc,
     this.decision,
+    this.decisionReason,
     this.consumerReportUsedForDecision = false,
+    this.creditReportingAgencyName,
+    this.creditReportingAgencyAddress,
+    this.creditReportingAgencyPhone,
+    this.hasCompleteCreditReportingAgencyContact = false,
+    this.canGenerateAdverseAction = false,
   });
 
   final int id;
@@ -221,7 +227,13 @@ class ApplicantScreening {
   final DateTime? failedAtUtc;
   final DateTime lastStatusAtUtc;
   final String? decision;
+  final String? decisionReason;
   final bool consumerReportUsedForDecision;
+  final String? creditReportingAgencyName;
+  final String? creditReportingAgencyAddress;
+  final String? creditReportingAgencyPhone;
+  final bool hasCompleteCreditReportingAgencyContact;
+  final bool canGenerateAdverseAction;
 
   bool get isCompleted => status == 'Completed';
   bool get canMarkExternalComplete =>
@@ -256,8 +268,16 @@ class ApplicantScreening {
       failedAtUtc: parseDate('failedAtUtc'),
       lastStatusAtUtc: parseDate('lastStatusAtUtc') ?? DateTime(0),
       decision: asString('decision'),
+      decisionReason: asString('decisionReason'),
       consumerReportUsedForDecision:
           json['consumerReportUsedForDecision'] as bool? ?? false,
+      creditReportingAgencyName: asString('creditReportingAgencyName'),
+      creditReportingAgencyAddress: asString('creditReportingAgencyAddress'),
+      creditReportingAgencyPhone: asString('creditReportingAgencyPhone'),
+      hasCompleteCreditReportingAgencyContact:
+          json['hasCompleteCreditReportingAgencyContact'] as bool? ?? false,
+      canGenerateAdverseAction:
+          json['canGenerateAdverseAction'] as bool? ?? false,
     );
   }
 }

@@ -448,7 +448,13 @@ public sealed class ApplicantScreeningResponse
     public DateTime? FailedAtUtc { get; init; }
     public DateTime LastStatusAtUtc { get; init; }
     public ScreeningDecision? Decision { get; init; }
+    public string? DecisionReason { get; init; }
     public bool ConsumerReportUsedForDecision { get; init; }
+    public string? CreditReportingAgencyName { get; init; }
+    public string? CreditReportingAgencyAddress { get; init; }
+    public string? CreditReportingAgencyPhone { get; init; }
+    public bool HasCompleteCreditReportingAgencyContact { get; init; }
+    public bool CanGenerateAdverseAction { get; init; }
 
     public static ApplicantScreeningResponse FromEntity(ApplicantScreening e) => new()
     {
@@ -466,8 +472,22 @@ public sealed class ApplicantScreeningResponse
         FailedAtUtc = e.FailedAtUtc,
         LastStatusAtUtc = e.LastStatusAtUtc,
         Decision = e.Decision,
+        DecisionReason = e.DecisionReason,
         ConsumerReportUsedForDecision = e.ConsumerReportUsedForDecision,
+        CreditReportingAgencyName = e.CreditReportingAgencyName,
+        CreditReportingAgencyAddress = e.CreditReportingAgencyAddress,
+        CreditReportingAgencyPhone = e.CreditReportingAgencyPhone,
+        HasCompleteCreditReportingAgencyContact = HasCompleteCraContact(e),
+        CanGenerateAdverseAction = e.Status == ApplicantScreeningStatus.Completed
+            && e.Decision == ScreeningDecision.Decline
+            && e.ConsumerReportUsedForDecision
+            && HasCompleteCraContact(e),
     };
+
+    private static bool HasCompleteCraContact(ApplicantScreening e) =>
+        !string.IsNullOrWhiteSpace(e.CreditReportingAgencyName)
+        && !string.IsNullOrWhiteSpace(e.CreditReportingAgencyAddress)
+        && !string.IsNullOrWhiteSpace(e.CreditReportingAgencyPhone);
 }
 
 public sealed class ScreeningWorkspaceResponse
@@ -496,9 +516,12 @@ public sealed class TrackExternalScreeningRequest
 public sealed class UpdateExternalScreeningRequest
 {
     [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
-    public ApplicantScreeningStatus Status { get; init; }
+    public ApplicantScreeningStatus? Status { get; init; }
     [MaxLength(200)] public string? ProviderReference { get; init; }
     [Url, MaxLength(2000)] public string? ProviderHostedUrl { get; init; }
+    [MaxLength(300)] public string? CreditReportingAgencyName { get; init; }
+    [MaxLength(500)] public string? CreditReportingAgencyAddress { get; init; }
+    [MaxLength(80)] public string? CreditReportingAgencyPhone { get; init; }
     public DateTime? OccurredAtUtc { get; init; }
 }
 

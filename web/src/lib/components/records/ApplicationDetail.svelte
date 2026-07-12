@@ -5,6 +5,7 @@
 		applications,
 		type ApplicationResponse,
 		type ApplicantScreeningResponse,
+		type ScreeningRecommendation,
 		type AdverseActionNoticeResponse,
 		type UpdateApplicationRequest,
 		type RecordApplicationFeeRequest,
@@ -347,6 +348,16 @@
 	let integratedScreeningOperationKey = $state<string | null>(null);
 	let externalScreeningOperationKey = $state<string | null>(null);
 	let completeExternalOperationKey = $state<string | null>(null);
+	let updateCraOperationKey = $state<string | null>(null);
+	let screeningDecisionOperationKey = $state<string | null>(null);
+	let showCraContact = $state(false);
+	let showScreeningDecision = $state(false);
+	let craName = $state('');
+	let craAddress = $state('');
+	let craPhone = $state('');
+	let screeningDecision = $state<ScreeningRecommendation>('Accept');
+	let screeningDecisionReason = $state('');
+	let consumerReportUsed = $state(false);
 
 	const screenMutation = createMutation(() => ({
 		mutationFn: () =>
@@ -408,6 +419,71 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Screening status could not be updated.')),
 	}));
+
+	function openCraContact(screening: ApplicantScreeningResponse) {
+		craName = screening.creditReportingAgencyName ?? '';
+		craAddress = screening.creditReportingAgencyAddress ?? '';
+		craPhone = screening.creditReportingAgencyPhone ?? '';
+		updateCraOperationKey = crypto.randomUUID();
+		showCraContact = true;
+	}
+
+	const updateCraMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.updateExternalScreening(id, screeningId, {
+				operationKey: (updateCraOperationKey ??= crypto.randomUUID()),
+				creditReportingAgencyName: craName.trim(),
+				creditReportingAgencyAddress: craAddress.trim(),
+				creditReportingAgencyPhone: craPhone.trim(),
+			}),
+		onSuccess: () => {
+			updateCraOperationKey = null;
+			showCraContact = false;
+			showSuccess('Consumer reporting agency contact saved.');
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Agency contact could not be saved.')),
+	}));
+
+	function openScreeningDecision(screening: ApplicantScreeningResponse) {
+		screeningDecision = screening.decision ?? 'Accept';
+		screeningDecisionReason = screening.decisionReason ?? '';
+		consumerReportUsed = screening.consumerReportUsedForDecision;
+		screeningDecisionOperationKey = crypto.randomUUID();
+		showScreeningDecision = true;
+	}
+
+	const screeningDecisionMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.recordScreeningDecision(id, screeningId, {
+				operationKey: (screeningDecisionOperationKey ??= crypto.randomUUID()),
+				decision: screeningDecision,
+				reason: screeningDecisionReason.trim() || null,
+				consumerReportUsed,
+			}),
+		onSuccess: () => {
+			screeningDecisionOperationKey = null;
+			showScreeningDecision = false;
+			showSuccess('Screening decision recorded.');
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Screening decision could not be recorded.')),
+	}));
+
+	function openApplicationOutcome(outcome: 'Approve' | 'Decline') {
+		if (latestScreening?.status === 'Completed') {
+			const compatible = outcome === 'Approve'
+				? latestScreening.decision === 'Accept' || latestScreening.decision === 'Conditional'
+				: latestScreening.decision === 'Decline';
+			if (!compatible) {
+				showWarning(`Record a ${outcome.toLowerCase()} screening decision first.`);
+				openScreeningDecision(latestScreening);
+				return;
+			}
+		}
+		if (outcome === 'Approve') showApprove = true;
+		else showDecline = true;
+	}
 
 	// ── Adverse-action notice ──────────────────────────────────────────────────────
 	let showAdverseAction = $state(false);
@@ -525,10 +601,10 @@
 					<Button variant="outline" class="gap-2" onclick={openRecordFee} data-testid="application-record-fee">
 						<DollarSign class="h-4 w-4" /> Record fee
 					</Button>
-					<Button class="gap-2" onclick={() => (showApprove = true)} data-testid="application-approve">
+					<Button class="gap-2" onclick={() => openApplicationOutcome('Approve')} data-testid="application-approve">
 						<CheckCircle2 class="h-4 w-4" /> Approve
 					</Button>
-					<Button variant="outline" class="gap-2" onclick={() => (showDecline = true)} data-testid="application-decline">
+					<Button variant="outline" class="gap-2" onclick={() => openApplicationOutcome('Decline')} data-testid="application-decline">
 						<XCircle class="h-4 w-4" /> Decline
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={() => (showWithdraw = true)} data-testid="application-withdraw">
@@ -749,7 +825,7 @@
 								<Input bind:value={externalUrl} type="url" placeholder="https://…" />
 							</label>
 							<div class="space-y-3 rounded-lg bg-muted/40 p-3 sm:col-span-2">
-								<p class="text-xs text-muted-foreground">Optional: add the credit reporting agency contact details now so an adverse-action notice can be generated later.</p>
+								<p class="text-xs text-muted-foreground">Add the consumer reporting agency name, mailing address, and phone if its report may influence your decision. These are not required when no consumer report is used.</p>
 								<div class="grid gap-3 sm:grid-cols-2">
 									<Input bind:value={externalCraName} placeholder="Credit reporting agency name" />
 									<Input bind:value={externalCraPhone} placeholder="Agency phone" />
@@ -790,6 +866,11 @@
 							<div class="grid gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
 								{@render fieldRow('Provider', latestScreening.providerDisplayName)}
 								{@render fieldRow('Reference', latestScreening.providerReference || '—')}
+								{@render fieldRow('Consumer report used', latestScreening.decision ? (latestScreening.consumerReportUsedForDecision ? 'Yes' : 'No') : 'Not recorded yet')}
+								{@render fieldRow('Agency contact', latestScreening.hasCompleteCreditReportingAgencyContact ? 'Complete' : (latestScreening.decision && !latestScreening.consumerReportUsedForDecision ? 'Not required for this decision' : 'Missing'))}
+								{#if latestScreening.decisionReason}
+									{@render fieldRow('Decision reason', latestScreening.decisionReason)}
+								{/if}
 								{#if latestScreening.providerHostedUrl}
 									<a class="text-primary underline underline-offset-2" href={latestScreening.providerHostedUrl} target="_blank" rel="noopener noreferrer">Open provider</a>
 								{/if}
@@ -803,6 +884,24 @@
 									Mark outside screening complete
 								</Button>
 							{/if}
+							<div class="flex flex-wrap gap-2">
+								{#if latestScreening.mode === 'External'}
+									<Button variant="outline" onclick={() => openCraContact(latestScreening)}>
+										{latestScreening.hasCompleteCreditReportingAgencyContact ? 'Update agency contact' : 'Add agency contact'}
+									</Button>
+								{/if}
+								{#if latestScreening.status === 'Completed'}
+									<Button variant="outline" onclick={() => openScreeningDecision(latestScreening)}>
+										{latestScreening.decision ? 'Update screening decision' : 'Record screening decision'}
+									</Button>
+								{/if}
+							</div>
+							{#if latestScreening.status === 'Completed' && !latestScreening.decision}
+								<p class="text-xs text-muted-foreground">Record whether the consumer report influenced your decision before approving or declining this application.</p>
+							{/if}
+							{#if latestScreening.decision && latestScreening.consumerReportUsedForDecision && !latestScreening.hasCompleteCreditReportingAgencyContact}
+								<p class="text-xs text-destructive">Agency name, mailing address, and phone are required for a report-based decision. Add them to continue to adverse action.</p>
+							{/if}
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground" data-testid="application-screening-empty">
@@ -815,7 +914,9 @@
 				{#if hasScreening && application.status === 'Declined'}
 					<Card.Footer class="flex-col items-stretch gap-3 border-t pt-4">
 						<p class="text-xs text-muted-foreground" data-testid="application-adverse-action-help">
-							When you decline based on a report, the law requires sending the applicant this notice.
+							{latestScreening?.consumerReportUsedForDecision
+								? 'When you decline based on a report, the law requires sending the applicant this notice.'
+								: 'No adverse-action notice is offered here unless you record that a consumer report influenced the decline.'}
 						</p>
 						{#if adverseNotice}
 							<div
@@ -847,7 +948,7 @@
 									</Button>
 								</div>
 							</div>
-						{:else}
+						{:else if latestScreening?.canGenerateAdverseAction}
 							<div>
 								<Button
 									variant="outline"
@@ -989,6 +1090,86 @@
 				data-testid="application-decline-confirm"
 			>
 				{declineMutation.isPending ? 'Declining…' : 'Decline'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Correct consumer reporting agency contact without creating another screening -->
+<Dialog.Root open={showCraContact} onOpenChange={(v) => { if (!v) showCraContact = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Consumer reporting agency contact</Dialog.Title>
+			<Dialog.Description>
+				Required only when a consumer report influences the decision. Correcting this contact updates the existing screening; it does not create a new one.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Agency name</span>
+				<Input bind:value={craName} placeholder="Consumer reporting agency" />
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Mailing address</span>
+				<Input bind:value={craAddress} placeholder="Street, city, state, postal code" />
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Phone</span>
+				<Input bind:value={craPhone} placeholder="Agency phone" />
+			</label>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showCraContact = false)}>Cancel</Button>
+			<Button
+				onclick={() => latestScreening && updateCraMutation.mutate(latestScreening.id)}
+				disabled={!craName.trim() || !craAddress.trim() || !craPhone.trim() || updateCraMutation.isPending}
+			>
+				{updateCraMutation.isPending ? 'Saving…' : 'Save agency contact'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Explicit landlord decision about the completed screening -->
+<Dialog.Root open={showScreeningDecision} onOpenChange={(v) => { if (!v) showScreeningDecision = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Record screening decision</Dialog.Title>
+			<Dialog.Description>
+				Record your decision and whether a consumer report influenced it. Rental Command stores this workflow metadata, not the report or its findings.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-4">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Decision</span>
+				<select bind:value={screeningDecision} class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+					<option value="Accept">Accept</option>
+					<option value="Conditional">Conditional</option>
+					<option value="Decline">Decline</option>
+				</select>
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Principal reason</span>
+				<textarea bind:value={screeningDecisionReason} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Required when a consumer report influenced the decision"></textarea>
+			</label>
+			<label class="flex items-start gap-3 rounded-lg border border-border p-3 text-sm">
+				<Checkbox bind:checked={consumerReportUsed} />
+				<span>
+					<strong class="block">A consumer report influenced this decision</strong>
+					<span class="text-xs text-muted-foreground">Turn this on even if the report was only one factor. Adverse-action guidance is enabled for a decline.</span>
+				</span>
+			</label>
+			{#if consumerReportUsed && !latestScreening?.hasCompleteCreditReportingAgencyContact}
+				<p class="text-xs text-destructive">Save the agency name, mailing address, and phone before recording a report-based decision.</p>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showScreeningDecision = false)}>Cancel</Button>
+			<Button
+				onclick={() => latestScreening && screeningDecisionMutation.mutate(latestScreening.id)}
+				disabled={screeningDecisionMutation.isPending || (consumerReportUsed && (!screeningDecisionReason.trim() || !latestScreening?.hasCompleteCreditReportingAgencyContact))}
+			>
+				{screeningDecisionMutation.isPending ? 'Saving…' : 'Save decision'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

@@ -67,7 +67,20 @@ public sealed class ScreeningService : IScreeningService
                 FailedAtUtc = r.FailedAtUtc,
                 LastStatusAtUtc = r.LastStatusAtUtc,
                 Decision = r.Decision,
+                DecisionReason = r.DecisionReason,
                 ConsumerReportUsedForDecision = r.ConsumerReportUsedForDecision,
+                CreditReportingAgencyName = r.CreditReportingAgencyName,
+                CreditReportingAgencyAddress = r.CreditReportingAgencyAddress,
+                CreditReportingAgencyPhone = r.CreditReportingAgencyPhone,
+                HasCompleteCreditReportingAgencyContact = r.CreditReportingAgencyName != null
+                    && r.CreditReportingAgencyAddress != null
+                    && r.CreditReportingAgencyPhone != null,
+                CanGenerateAdverseAction = r.Status == ApplicantScreeningStatus.Completed
+                    && r.Decision == ScreeningDecision.Decline
+                    && r.ConsumerReportUsedForDecision
+                    && r.CreditReportingAgencyName != null
+                    && r.CreditReportingAgencyAddress != null
+                    && r.CreditReportingAgencyPhone != null,
             })
             .ToListAsync(ct);
 
@@ -93,13 +106,16 @@ public sealed class ScreeningService : IScreeningService
         int portfolioId, int applicationId, int userId, TrackExternalScreeningRequest request, CancellationToken ct = default)
     {
         ValidateOperationKey(request.OperationKey);
+        var operationKey = request.OperationKey.Trim();
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ProviderDisplayName);
         if (request.Status is ApplicantScreeningStatus.AwaitingProvider)
             throw new ArgumentException("AwaitingProvider is reserved for integrated screening.");
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await LockIdempotencyKeyAsync(
+            $"screening:create:{portfolioId}:{applicationId}:{operationKey}", ct);
         var existing = await _db.ApplicantScreenings.FirstOrDefaultAsync(
-            s => s.PortfolioId == portfolioId && s.ApplicationId == applicationId && s.OperationKey == request.OperationKey, ct);
+            s => s.PortfolioId == portfolioId && s.ApplicationId == applicationId && s.OperationKey == operationKey, ct);
         if (existing != null)
         {
             await transaction.CommitAsync(ct);
@@ -123,7 +139,7 @@ public sealed class ScreeningService : IScreeningService
             CreditReportingAgencyName = NullIfBlank(request.CreditReportingAgencyName),
             CreditReportingAgencyAddress = NullIfBlank(request.CreditReportingAgencyAddress),
             CreditReportingAgencyPhone = NullIfBlank(request.CreditReportingAgencyPhone),
-            OperationKey = request.OperationKey.Trim(),
+            OperationKey = operationKey,
             ConsentConfirmed = application.ConsentGiven,
             ConsentAtUtc = application.ConsentAtUtc,
             CompletedAtUtc = request.Status == ApplicantScreeningStatus.Completed ? now : null,
@@ -145,6 +161,7 @@ public sealed class ScreeningService : IScreeningService
         int portfolioId, int applicationId, int userId, StartIntegratedScreeningRequest request, CancellationToken ct = default)
     {
         ValidateOperationKey(request.OperationKey);
+        var operationKey = request.OperationKey.Trim();
         if (!_provider.Descriptor.IsConfigured)
             throw new ScreeningNotConfiguredException();
 
@@ -154,8 +171,10 @@ public sealed class ScreeningService : IScreeningService
         ScreeningInvitationRequest invitation;
         await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
         {
+            await LockIdempotencyKeyAsync(
+                $"screening:create:{portfolioId}:{applicationId}:{operationKey}", ct);
             var existing = await _db.ApplicantScreenings.FirstOrDefaultAsync(
-                s => s.PortfolioId == portfolioId && s.ApplicationId == applicationId && s.OperationKey == request.OperationKey, ct);
+                s => s.PortfolioId == portfolioId && s.ApplicationId == applicationId && s.OperationKey == operationKey, ct);
             if (existing != null && existing.Status != ApplicantScreeningStatus.AwaitingProvider)
             {
                 await transaction.CommitAsync(ct);
@@ -178,7 +197,7 @@ public sealed class ScreeningService : IScreeningService
                 Mode = ScreeningMode.Integrated,
                 ProviderKey = _provider.Descriptor.Key,
                 ProviderDisplayName = _provider.Descriptor.DisplayName,
-                OperationKey = request.OperationKey.Trim(),
+                OperationKey = operationKey,
                 ConsentConfirmed = true,
                 ConsentAtUtc = application.ConsentAtUtc,
                 CreatedByUserId = userId,
@@ -193,7 +212,7 @@ public sealed class ScreeningService : IScreeningService
             await _db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             invitation = new ScreeningInvitationRequest(
-                applicationId, request.OperationKey.Trim(), $"{application.FirstName} {application.LastName}".Trim(),
+                applicationId, operationKey, $"{application.FirstName} {application.LastName}".Trim(),
                 application.Email, application.ConsentAtUtc.Value);
         }
 
@@ -204,8 +223,19 @@ public sealed class ScreeningService : IScreeningService
         // FINALIZE: this is intentionally a second atomic DB command, never a transaction held open
         // over HTTP. It records provider metadata and the content-free delivery receipt together.
         await using var completionTransaction = await _db.Database.BeginTransactionAsync(ct);
+        await LockIdempotencyKeyAsync(
+            $"screening:invitation:{portfolioId}:{applicationId}:{operationKey}", ct);
         var persisted = await _db.ApplicantScreenings.FirstAsync(
             s => s.Id == screening.Id && s.PortfolioId == portfolioId, ct);
+        var invitationDeliveryId = ReceiptKey(
+            $"invitation:{portfolioId}:{applicationId}", operationKey);
+        if (await _db.ApplicantScreeningMilestones.AsNoTracking()
+                .AnyAsync(m => m.Source == _provider.Descriptor.Key
+                    && m.DeliveryId == invitationDeliveryId, ct))
+        {
+            await completionTransaction.CommitAsync(ct);
+            return ApplicantScreeningResponse.FromEntity(persisted);
+        }
         var completedAt = _timeProvider.UtcNow();
         persisted.ProviderReference = NullIfBlank(providerResult.ProviderReference);
         persisted.ProviderHostedUrl = NullIfBlank(providerResult.ProviderHostedUrl);
@@ -224,7 +254,7 @@ public sealed class ScreeningService : IScreeningService
             PortfolioId = portfolioId,
             ApplicantScreeningId = persisted.Id,
             Source = _provider.Descriptor.Key,
-            DeliveryId = $"invitation:{request.OperationKey.Trim()}",
+            DeliveryId = invitationDeliveryId,
             EventType = providerResult.Accepted ? "invitation.accepted" : $"invitation.failed:{providerResult.ErrorCode ?? "unknown"}",
             Status = persisted.Status,
             OccurredAtUtc = completedAt,
@@ -244,12 +274,13 @@ public sealed class ScreeningService : IScreeningService
             throw new ArgumentException("That status is not valid for an externally managed screening.");
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        var deliveryId = ReceiptKey($"manual:{screeningId}", request.OperationKey);
+        await LockIdempotencyKeyAsync($"screening:{deliveryId}", ct);
         var screening = await _db.ApplicantScreenings.FirstOrDefaultAsync(
             s => s.Id == screeningId && s.PortfolioId == portfolioId
                 && s.ApplicationId == applicationId && s.Mode == ScreeningMode.External, ct);
         if (screening == null) return null;
 
-        var deliveryId = $"manual:{screeningId}:{request.OperationKey.Trim()}";
         if (await _db.ApplicantScreeningMilestones.AsNoTracking()
                 .AnyAsync(m => m.Source == "manual" && m.DeliveryId == deliveryId, ct))
         {
@@ -258,12 +289,16 @@ public sealed class ScreeningService : IScreeningService
         }
 
         var occurredAt = request.OccurredAtUtc ?? _timeProvider.UtcNow();
-        screening.Status = request.Status;
+        var nextStatus = request.Status ?? screening.Status;
+        screening.Status = nextStatus;
         screening.ProviderReference = NullIfBlank(request.ProviderReference) ?? screening.ProviderReference;
         screening.ProviderHostedUrl = NullIfBlank(request.ProviderHostedUrl) ?? screening.ProviderHostedUrl;
-        screening.ApplicantSubmittedAtUtc ??= request.Status == ApplicantScreeningStatus.InProgress ? occurredAt : null;
-        screening.CompletedAtUtc = request.Status == ApplicantScreeningStatus.Completed ? occurredAt : screening.CompletedAtUtc;
-        screening.FailedAtUtc = request.Status == ApplicantScreeningStatus.Failed ? occurredAt : null;
+        screening.CreditReportingAgencyName = NullIfBlank(request.CreditReportingAgencyName) ?? screening.CreditReportingAgencyName;
+        screening.CreditReportingAgencyAddress = NullIfBlank(request.CreditReportingAgencyAddress) ?? screening.CreditReportingAgencyAddress;
+        screening.CreditReportingAgencyPhone = NullIfBlank(request.CreditReportingAgencyPhone) ?? screening.CreditReportingAgencyPhone;
+        screening.ApplicantSubmittedAtUtc ??= nextStatus == ApplicantScreeningStatus.InProgress ? occurredAt : null;
+        screening.CompletedAtUtc = nextStatus == ApplicantScreeningStatus.Completed ? occurredAt : screening.CompletedAtUtc;
+        screening.FailedAtUtc = nextStatus == ApplicantScreeningStatus.Failed ? occurredAt : null;
         screening.LastStatusAtUtc = occurredAt;
         screening.UpdatedAt = _timeProvider.UtcNow();
         _db.ApplicantScreeningMilestones.Add(new ApplicantScreeningMilestone
@@ -272,8 +307,10 @@ public sealed class ScreeningService : IScreeningService
             ApplicantScreeningId = screening.Id,
             Source = "manual",
             DeliveryId = deliveryId,
-            EventType = $"external.{request.Status.ToString().ToLowerInvariant()}",
-            Status = request.Status,
+            EventType = request.Status == null
+                ? "external.cra-contact-updated"
+                : $"external.{nextStatus.ToString().ToLowerInvariant()}",
+            Status = nextStatus,
             OccurredAtUtc = occurredAt,
             RecordedAtUtc = _timeProvider.UtcNow(),
         });
@@ -293,17 +330,24 @@ public sealed class ScreeningService : IScreeningService
             throw new ArgumentException("Record the principal decision reason when a consumer report was used.");
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        var deliveryId = ReceiptKey($"decision:{screeningId}", request.OperationKey);
+        await LockIdempotencyKeyAsync($"screening:{deliveryId}", ct);
         var screening = await _db.ApplicantScreenings.FirstOrDefaultAsync(
             s => s.Id == screeningId && s.PortfolioId == portfolioId && s.ApplicationId == applicationId, ct);
         if (screening == null) return null;
 
-        var deliveryId = $"decision:{screeningId}:{request.OperationKey.Trim()}";
         if (await _db.ApplicantScreeningMilestones.AsNoTracking()
                 .AnyAsync(m => m.Source == "decision" && m.DeliveryId == deliveryId, ct))
         {
             await transaction.CommitAsync(ct);
             return ApplicantScreeningResponse.FromEntity(screening);
         }
+
+        if (request.ConsumerReportUsed && screening.Status != ApplicantScreeningStatus.Completed)
+            throw new ArgumentException("Mark the screening complete before recording a decision influenced by its consumer report.");
+        if (request.ConsumerReportUsed && !HasCompleteCraContact(screening))
+            throw new ArgumentException(
+                "Add the consumer reporting agency name, mailing address, and phone before recording a report-based decision.");
 
         var now = _timeProvider.UtcNow();
         screening.Decision = request.Decision.Value;
@@ -336,6 +380,8 @@ public sealed class ScreeningService : IScreeningService
         ArgumentException.ThrowIfNullOrWhiteSpace(delivery.ProviderReference);
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await LockIdempotencyKeyAsync(
+            $"screening:provider:{delivery.ProviderKey}:{delivery.DeliveryId}", ct);
         var duplicate = await _db.ApplicantScreeningMilestones.AsNoTracking()
             .Where(m => m.Source == delivery.ProviderKey && m.DeliveryId == delivery.DeliveryId)
             .Select(m => m.ApplicantScreeningId)
@@ -388,6 +434,32 @@ public sealed class ScreeningService : IScreeningService
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static bool HasCompleteCraContact(ApplicantScreening screening) =>
+        !string.IsNullOrWhiteSpace(screening.CreditReportingAgencyName)
+        && !string.IsNullOrWhiteSpace(screening.CreditReportingAgencyAddress)
+        && !string.IsNullOrWhiteSpace(screening.CreditReportingAgencyPhone);
+
+    private static string ReceiptKey(string purpose, string operationKey)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(operationKey.Trim()))).ToLowerInvariant();
+        return $"{purpose}:{hash}";
+    }
+
+    /// <summary>
+    /// Serializes one logical receipt inside its transaction so concurrent first attempts cannot
+    /// both pass a check-then-insert window. PostgreSQL advisory locks are transaction-scoped; test
+    /// providers keep their existing single-threaded behavior.
+    /// </summary>
+    private async Task LockIdempotencyKeyAsync(string resource, CancellationToken ct)
+    {
+        if (!_db.Database.IsNpgsql())
+            return;
+
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({resource}, 0))", ct);
+    }
+
     public async Task<AdverseActionNoticeResponse?> GenerateAdverseActionAsync(
         int portfolioId, int applicationId, int userId, GenerateAdverseActionRequest request, CancellationToken ct = default)
     {
@@ -405,17 +477,27 @@ public sealed class ScreeningService : IScreeningService
             .Select(p => new { p.Name, p.ManagementCompanyName })
             .FirstOrDefaultAsync(ct);
 
-        // Reason precedence: explicit override → application decision reason → screening-derived reason.
+        var screening = await GetLatestCompletedScreeningAsync(portfolioId, applicationId, ct);
+        if (screening is not
+            {
+                Decision: ScreeningDecision.Decline,
+                ConsumerReportUsed: true,
+                Name: not null,
+                Address: not null,
+                Phone: not null,
+            })
+            throw new ArgumentException(
+                "Record a declined screening decision that was influenced by a consumer report, including the consumer reporting agency name, mailing address, and phone, before generating an adverse-action notice.");
+        var craBlock = $"{screening.Name}, {screening.Address}, {screening.Phone}";
+
+        // Reason precedence: explicit override → application decision reason → recorded screening reason.
         var reason = !string.IsNullOrWhiteSpace(request.Reason)
             ? request.Reason!.Trim()
             : !string.IsNullOrWhiteSpace(application.DecisionReason)
                 ? application.DecisionReason!.Trim()
-                : await DeriveScreeningReasonAsync(portfolioId, applicationId, ct);
-
-        var cra = await GetCreditReportingAgencyAsync(portfolioId, applicationId, ct);
-        if (cra == null)
-            throw new ArgumentException("Credit reporting agency contact details are required before generating an adverse-action notice.");
-        var craBlock = $"{cra.Name}, {cra.Address}, {cra.Phone}";
+                : string.IsNullOrWhiteSpace(screening.DecisionReason)
+                    ? "Information contained in a consumer report obtained from the consumer reporting agency named below."
+                    : screening.DecisionReason;
 
         var now = _timeProvider.UtcNow();
         var pdfBytes = _pdf.Generate(new AdverseActionNoticeData
@@ -426,9 +508,9 @@ public sealed class ScreeningService : IScreeningService
             PropertyLine = PropertyLine(application.Property),
             NoticeDate = now,
             Reason = reason,
-            CreditReportingAgencyName = cra.Name,
-            CreditReportingAgencyAddress = cra.Address,
-            CreditReportingAgencyPhone = cra.Phone,
+            CreditReportingAgencyName = screening.Name,
+            CreditReportingAgencyAddress = screening.Address,
+            CreditReportingAgencyPhone = screening.Phone,
         });
 
         // Store the PDF as a StoredFile attached to the application.
@@ -557,36 +639,28 @@ public sealed class ScreeningService : IScreeningService
         return $"adverse-action:{portfolioId}:{applicationId}:{hash}";
     }
 
-    private async Task<CreditReportingAgencySnapshot?> GetCreditReportingAgencyAsync(
+    private async Task<CompletedScreeningSnapshot?> GetLatestCompletedScreeningAsync(
         int portfolioId, int applicationId, CancellationToken ct) =>
         await _db.ApplicantScreenings.AsNoTracking()
             .Where(s => s.PortfolioId == portfolioId && s.ApplicationId == applicationId
-                && s.Status == ApplicantScreeningStatus.Completed
-                && s.CreditReportingAgencyName != null
-                && s.CreditReportingAgencyAddress != null
-                && s.CreditReportingAgencyPhone != null)
+                && s.Status == ApplicantScreeningStatus.Completed)
             .OrderByDescending(s => s.CompletedAtUtc)
-            .Select(s => new CreditReportingAgencySnapshot(
-                s.CreditReportingAgencyName!, s.CreditReportingAgencyAddress!, s.CreditReportingAgencyPhone!))
+            .Select(s => new CompletedScreeningSnapshot(
+                s.Decision,
+                s.ConsumerReportUsedForDecision,
+                s.CreditReportingAgencyName,
+                s.CreditReportingAgencyAddress,
+                s.CreditReportingAgencyPhone,
+                s.DecisionReason))
             .FirstOrDefaultAsync(ct);
 
-    /// <summary>Uses only the landlord's recorded decision reason, never restricted report content.</summary>
-    private async Task<string> DeriveScreeningReasonAsync(int portfolioId, int applicationId, CancellationToken ct)
-    {
-        var latest = await _db.ApplicantScreenings
-            .AsNoTracking()
-            .Where(r => r.PortfolioId == portfolioId && r.ApplicationId == applicationId
-                && r.Status == ApplicantScreeningStatus.Completed)
-            .OrderByDescending(r => r.CompletedAtUtc)
-            .Select(r => r.DecisionReason)
-            .FirstOrDefaultAsync(ct);
-
-        return string.IsNullOrWhiteSpace(latest)
-            ? "Information contained in a consumer report obtained from the consumer reporting agency named below."
-            : latest;
-    }
-
-    private sealed record CreditReportingAgencySnapshot(string Name, string Address, string Phone);
+    private sealed record CompletedScreeningSnapshot(
+        ScreeningDecision? Decision,
+        bool ConsumerReportUsed,
+        string? Name,
+        string? Address,
+        string? Phone,
+        string? DecisionReason);
 
     private static string? PropertyLine(Property? property) =>
         property == null
