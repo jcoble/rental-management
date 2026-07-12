@@ -13,8 +13,10 @@ namespace RentalCommand.Data.Atomic;
 /// </summary>
 internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandInterceptor
 {
+    // A DML keyword must own a table target. PostgreSQL row-lock clauses such as FOR UPDATE OF
+    // are query operations and must not consume an UPDATE mutation permit.
     private static readonly Regex RawDml = new(
-        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)|(?<delete>DELETE\s+FROM))\b",
+        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)(?!\s+(?:OF|SKIP|NOWAIT)\b)|(?<delete>DELETE\s+FROM))\s+(?:""[^""]+""|[A-Za-z_][A-Za-z0-9_$]*)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly AtomicAuditScope _scope;
 
@@ -67,15 +69,10 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
 
         if (eventData.CommandSource is CommandSource.ExecuteSqlRaw or CommandSource.FromSqlQuery)
         {
-            var match = RawDml.Match(command.CommandText);
-            if (match.Success)
+            var rawOperation = ClassifyRawDml(command.CommandText);
+            if (rawOperation is not null)
             {
-                var rawOperation = match.Groups["insert"].Success
-                    ? AtomicRawDmlOperation.Insert
-                    : match.Groups["update"].Success
-                        ? AtomicRawDmlOperation.Update
-                        : AtomicRawDmlOperation.Delete;
-                _scope.GuardRawDml(command.CommandText, rawOperation);
+                _scope.GuardRawDml(command.CommandText, rawOperation.Value);
             }
 
             return;
@@ -99,6 +96,21 @@ internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandIntercept
         {
             _scope.GuardSetBasedCommand(entityType.ClrType, operation.Value);
         }
+    }
+
+    internal static AtomicRawDmlOperation? ClassifyRawDml(string commandText)
+    {
+        var match = RawDml.Match(commandText);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return match.Groups["insert"].Success
+            ? AtomicRawDmlOperation.Insert
+            : match.Groups["update"].Success
+                ? AtomicRawDmlOperation.Update
+                : AtomicRawDmlOperation.Delete;
     }
 
     private static bool Targets(string sql, IReadOnlyEntityType entityType) =>
