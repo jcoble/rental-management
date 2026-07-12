@@ -1,6 +1,7 @@
 import { api } from '$lib/api/client';
 import { buildListQuery, type ListParams } from '$lib/api/list-params';
 import { voiceUploadFileName } from '$lib/scan/voice-capture';
+import type { ScanContext } from '$lib/scan/scan-context';
 
 const scanUploadOperationIds = new WeakMap<File, Map<string, string>>();
 const scanBatchUploadOperationIds = new WeakMap<File[], string>();
@@ -90,7 +91,7 @@ export interface ScanConfirmResponse {
 	expenseId?: number | null;
 	receiptId?: number | null;
 	workOrderId?: number | null;
-	leaseId?: number | null;
+	agreementId?: number | null;
 	applicationId?: number | null;
 	loanId?: number | null;
 	unitId?: number | null;
@@ -181,12 +182,19 @@ export const scan = {
 
 	get: (id: number): Promise<ScanDraftResponse> => api.get<ScanDraftResponse>(`/scans/${id}`),
 
-	upload: async (file: File, targetEntityType: string): Promise<ScanCreatedResponse> => {
+	upload: async (file: File, targetEntityType: string, context: ScanContext = {}): Promise<ScanCreatedResponse> => {
 		const operationId = singleUploadOperationId(file, targetEntityType);
 		const fd = new FormData();
 		fd.append('file', file);
 		fd.append('targetEntityType', targetEntityType);
 		fd.append('clientOperationId', operationId);
+		if (context.propertyId) fd.append('propertyId', String(context.propertyId));
+		if (context.unitId) fd.append('unitId', String(context.unitId));
+		if (context.leaseManagementId) fd.append('leaseManagementId', String(context.leaseManagementId));
+		if (context.tenantAccountId) fd.append('tenantAccountId', String(context.tenantAccountId));
+		if (context.focusedRecordKind) fd.append('focusedRecordKind', context.focusedRecordKind);
+		if (context.focusedRecordId) fd.append('focusedRecordId', String(context.focusedRecordId));
+		if (context.sourceLabel) fd.append('sourceLabel', context.sourceLabel);
 		const response = await api.upload<ScanCreatedResponse>('/scans', fd);
 		scanUploadOperationIds.get(file)?.delete(targetEntityType);
 		return response;
@@ -224,7 +232,7 @@ export const scan = {
 
 	// ---- Bulk batch helpers ----
 
-	/** Upload many files as one batch of scan drafts (defaults to Lease). */
+	/** Upload many files as one batch of scan drafts (defaults to LeaseAgreement). */
 	uploadBatch: (
 		files: File[],
 		options: UploadBatchOptions = {}
@@ -235,7 +243,7 @@ export const scan = {
 		for (const file of files) {
 			fd.append('files', file);
 		}
-		fd.append('targetEntityType', options.targetEntityType ?? 'Lease');
+		fd.append('targetEntityType', options.targetEntityType ?? 'LeaseAgreement');
 		if (options.name) fd.append('name', options.name);
 		fd.append('clientOperationId', operationId);
 		return api.upload<ScanBatchCreatedResponse>('/scans/batch', fd).then((response) => {

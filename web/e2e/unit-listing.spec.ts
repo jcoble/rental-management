@@ -3,6 +3,7 @@ import { apiToken, bearer, login, unique } from './helpers';
 
 type UnitRow = {
 	id: number;
+	propertyId: number;
 	status?: string | number;
 };
 
@@ -23,6 +24,7 @@ type ListingPublication = {
 type ListingWorkspace = {
 	id: number;
 	unitId: number;
+	propertyId: number;
 	contentVersion: number;
 	headline: string;
 	description: string;
@@ -202,7 +204,7 @@ test.describe('Unit listing workspace', () => {
 		const signedLeaseLink = page.getByRole('link', { name: 'Import signed Zillow lease' });
 		await expect(signedLeaseLink).toHaveAttribute(
 			'href',
-			`/scan?type=Lease&unitId=${unitId}&returnTo=/units/${unitId}?tab=lease`
+			`/scan?type=LeaseAgreement&propertyId=${changed.propertyId}&unitId=${unitId}&focusedRecordKind=RentalListing&focusedRecordId=${changed.id}&sourceLabel=Zillow%20signed%20lease%20import&returnTo=%2Funits%2F${unitId}%3Ftab%3Dlease`
 		);
 	});
 

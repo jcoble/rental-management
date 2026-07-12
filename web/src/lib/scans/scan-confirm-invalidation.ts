@@ -5,7 +5,7 @@ interface QueryInvalidator {
 const COMMON_SCAN_KEYS: unknown[][] = [['scans']];
 
 const ENTITY_KEYS: Record<string, unknown[][]> = {
-	Lease: [['leases'], ['properties'], ['tenants'], ['units'], ['units-for-lease'], ['dashboard']],
+	LeaseAgreement: [['leases'], ['properties'], ['tenants'], ['units'], ['units-for-lease'], ['dashboard']],
 	Application: [['applications'], ['dashboard']],
 	Payment: [['payments'], ['accounting-summary'], ['accounting-transactions'], ['dashboard']],
 	Expense: [['expenses'], ['accounting-summary'], ['accounting-transactions'], ['dashboard']],

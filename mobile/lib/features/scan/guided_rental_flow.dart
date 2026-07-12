@@ -264,7 +264,7 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Your rental is set up.')));
-      Navigator.of(context).pop(res?['leaseId']);
+      Navigator.of(context).pop(res?['agreementId']);
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

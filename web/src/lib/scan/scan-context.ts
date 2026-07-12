@@ -1,12 +1,16 @@
-export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'Lease', 'Application', 'Loan'] as const;
+export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', 'Loan'] as const;
 export type ScanDocType = (typeof SCAN_DOC_TYPES)[number];
 
 export interface ScanContext {
 	type?: ScanDocType;
 	propertyId?: number;
 	unitId?: number;
-	leaseId?: number;
+	leaseManagementId?: number;
+	tenantAccountId?: number;
 	workOrderId?: number;
+	focusedRecordKind?: string;
+	focusedRecordId?: number;
+	sourceLabel?: string;
 	returnTo?: string;
 }
 
@@ -30,15 +34,23 @@ export function parseScanContext(searchParams: URLSearchParams): ScanContext {
 	const type = typeParam && DOC_TYPE_SET.has(typeParam) ? (typeParam as ScanDocType) : undefined;
 	const propertyId = parsePositiveInt(searchParams.get('propertyId'));
 	const unitId = parsePositiveInt(searchParams.get('unitId'));
-	const leaseId = parsePositiveInt(searchParams.get('leaseId'));
+	const leaseManagementId = parsePositiveInt(searchParams.get('leaseManagementId'));
+	const tenantAccountId = parsePositiveInt(searchParams.get('tenantAccountId'));
 	const workOrderId = parsePositiveInt(searchParams.get('workOrderId'));
+	const focusedRecordKind = searchParams.get('focusedRecordKind')?.trim() || undefined;
+	const focusedRecordId = parsePositiveInt(searchParams.get('focusedRecordId'));
+	const sourceLabel = searchParams.get('sourceLabel')?.trim() || undefined;
 	const returnTo = safeReturnTo(searchParams.get('returnTo'));
 	return {
 		...(type ? { type } : {}),
 		...(propertyId ? { propertyId } : {}),
 		...(unitId ? { unitId } : {}),
-		...(leaseId ? { leaseId } : {}),
+		...(leaseManagementId ? { leaseManagementId } : {}),
+		...(tenantAccountId ? { tenantAccountId } : {}),
 		...(workOrderId ? { workOrderId } : {}),
+		...(focusedRecordKind ? { focusedRecordKind } : {}),
+		...(focusedRecordId ? { focusedRecordId } : {}),
+		...(sourceLabel ? { sourceLabel } : {}),
 		...(returnTo ? { returnTo } : {})
 	};
 }
@@ -52,15 +64,23 @@ export function appendScanContext(href: string, context: ScanContext = {}): stri
 	url.searchParams.delete('type');
 	url.searchParams.delete('propertyId');
 	url.searchParams.delete('unitId');
-	url.searchParams.delete('leaseId');
+	url.searchParams.delete('leaseManagementId');
+	url.searchParams.delete('tenantAccountId');
 	url.searchParams.delete('workOrderId');
+	url.searchParams.delete('focusedRecordKind');
+	url.searchParams.delete('focusedRecordId');
+	url.searchParams.delete('sourceLabel');
 	url.searchParams.delete('returnTo');
 
 	if (context.type) url.searchParams.set('type', context.type);
 	if (context.propertyId) url.searchParams.set('propertyId', String(context.propertyId));
 	if (context.unitId) url.searchParams.set('unitId', String(context.unitId));
-	if (context.leaseId) url.searchParams.set('leaseId', String(context.leaseId));
+	if (context.leaseManagementId) url.searchParams.set('leaseManagementId', String(context.leaseManagementId));
+	if (context.tenantAccountId) url.searchParams.set('tenantAccountId', String(context.tenantAccountId));
 	if (context.workOrderId) url.searchParams.set('workOrderId', String(context.workOrderId));
+	if (context.focusedRecordKind) url.searchParams.set('focusedRecordKind', context.focusedRecordKind);
+	if (context.focusedRecordId) url.searchParams.set('focusedRecordId', String(context.focusedRecordId));
+	if (context.sourceLabel) url.searchParams.set('sourceLabel', context.sourceLabel);
 	const returnTo = safeReturnTo(context.returnTo);
 	if (returnTo) url.searchParams.set('returnTo', returnTo);
 

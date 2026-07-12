@@ -110,7 +110,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
   }
 
   /// A lease can be captured as multi-page phone photos OR imported as a PDF.
-  /// Tapping "Scan a lease" first asks which; both paths upload as a `Lease`
+  /// Tapping "Scan a lease" first asks which; both paths upload as a `LeaseAgreement`
   /// draft so the server runs the lease schema (not the receipt/expense one)
   /// and the draft routes to the guided "New rental from your lease" flow.
   Future<void> _scanLease() async {
@@ -169,7 +169,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
   }
 
   /// Captures MANY photos of a lease, stitches them into one PDF client-side,
-  /// then uploads as a Lease draft and opens the guided flow.
+  /// then uploads as a LeaseAgreement draft and opens the guided flow.
   Future<void> _scanLeaseFromPhotos() async {
     final picked = await ImagePicker().pickMultiImage(
       imageQuality: 80,
@@ -203,7 +203,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
     }
   }
 
-  /// Imports an existing lease PDF (or image) and uploads it as a Lease draft so
+  /// Imports an existing lease PDF (or image) and uploads it as a LeaseAgreement draft so
   /// it routes to the guided flow rather than being misclassified as an expense.
   Future<void> _scanLeaseFromFile() async {
     final result = await FilePicker.platform.pickFiles(
@@ -239,7 +239,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
     }
   }
 
-  /// Uploads lease bytes as a `Lease` draft, closes the sheet, and opens the
+  /// Uploads lease bytes as a `LeaseAgreement` draft, closes the sheet, and opens the
   /// guided rental flow for the new draft.
   Future<void> _uploadLeaseAndOpen(
     Uint8List bytes,
@@ -250,7 +250,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
           bytes,
           filename,
           contentType,
-          targetEntityType: 'Lease',
+          targetEntityType: 'LeaseAgreement',
         );
     if (!mounted) return;
     final navigator = Navigator.of(context);

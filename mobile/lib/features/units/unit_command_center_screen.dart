@@ -1048,7 +1048,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
 
   Future<void> _importSignedLease() => openMobileScan(
     context,
-    initialTargetEntityType: 'Lease',
+    initialTargetEntityType: 'LeaseAgreement',
     lockTargetEntityType: true,
     propertyId: widget.dashboard.unit.propertyId,
     unitId: widget.dashboard.unit.id,

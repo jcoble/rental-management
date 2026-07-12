@@ -9,7 +9,7 @@
 
 	/**
 	 * Snap-a-photo pre-fill for the lease step. Routes through the EXISTING scan pipeline
-	 * (`targetEntityType: 'Lease'`, the same path "import your PDF leases" uses) — no parallel
+	 * (`targetEntityType: 'LeaseAgreement'`, the same path "import your PDF leases" uses) — no parallel
 	 * extraction. The user CONFIRMS each extracted value before it is applied; nothing is silently
 	 * committed. Confidence is shown so a non-technical landlord knows what to double-check.
 	 *
@@ -52,7 +52,7 @@
 	let review = $state<{ name: string; label: string; key: keyof PrefillValues; value: string; confidence: number; include: boolean }[]>([]);
 
 	const uploadMutation = createMutation(() => ({
-		mutationFn: (file: File) => scan.upload(file, 'Lease'),
+		mutationFn: (file: File) => scan.upload(file, 'LeaseAgreement'),
 		onSuccess: (res) => {
 			draftId = res.draftId;
 			review = [];
@@ -95,7 +95,7 @@
 	async function handleFiles(files: File[]) {
 		try {
 			isPreparingUpload = true;
-			uploadMutation.mutate(await prepareScanDocumentUpload(files, { targetEntityType: 'Lease' }));
+			uploadMutation.mutate(await prepareScanDocumentUpload(files, { targetEntityType: 'LeaseAgreement' }));
 		} catch (err) {
 			showError(apiErrorMessage(err, 'Could not prepare those files. Try one PDF or a few clear photos.'));
 		} finally {

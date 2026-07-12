@@ -25,7 +25,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         ScanConfirmationTargetKind.Expense or
         ScanConfirmationTargetKind.Payment or
         ScanConfirmationTargetKind.WorkOrder or
-        ScanConfirmationTargetKind.Lease or
+        ScanConfirmationTargetKind.LeaseAgreement or
         ScanConfirmationTargetKind.Application or
         ScanConfirmationTargetKind.Loan;
 
@@ -41,8 +41,8 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                 command, Required(command.Target.Payment), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.WorkOrder => WriteWorkOrderAsync(
                 command, Required(command.Target.WorkOrder), extractedFieldsJson, attempt, ct),
-            ScanConfirmationTargetKind.Lease => CanonicalLeaseScanConfirmationWriter.WriteAsync(
-                command, Required(command.Target.Lease), attempt, ct),
+            ScanConfirmationTargetKind.LeaseAgreement => CanonicalLeaseScanConfirmationWriter.WriteAsync(
+                command, Required(command.Target.LeaseAgreement), attempt, ct),
             ScanConfirmationTargetKind.Application => WriteApplicationAsync(
                 command, Required(command.Target.Application), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.Loan => WriteLoanAsync(
@@ -54,7 +54,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     public Task AuthorizeReplayAsync(
         ConfirmScanDraftCommand command,
         IAtomicPersistenceSession persistence,
-        CancellationToken ct) => command.Target.Kind == ScanConfirmationTargetKind.Lease
+        CancellationToken ct) => command.Target.Kind == ScanConfirmationTargetKind.LeaseAgreement
             ? CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(command, persistence, ct)
             : Task.CompletedTask;
 

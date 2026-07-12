@@ -51,7 +51,7 @@ public class ScanProcessingWorkerSchemaTests
     [Fact]
     public void ChooseExtractionSchema_LeaseTarget_UsesLeaseSchema()
     {
-        var schema = ScanProcessingWorker.ChooseExtractionSchema("Lease");
+        var schema = ScanProcessingWorker.ChooseExtractionSchema("LeaseAgreement");
 
         schema.Instructions.Should().Be(LeaseExtractionSchema.Instructions);
         schema.Fields.Select(f => f.Name).Should().Contain([

@@ -44,10 +44,10 @@ public class ScanController : ManagementControllerBase
     };
 
     // Recognised scan targets. Empty/null at single-file upload is allowed (the worker auto-classifies);
-    // a batch always has a concrete target (defaulting to "Lease", the migration on-ramp).
+    // a batch always has a concrete target (defaulting to the canonical Agreement import on-ramp).
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", "Lease", "Application", "Loan"
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan"
     };
 
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
@@ -90,7 +90,7 @@ public class ScanController : ManagementControllerBase
         // Empty/null is allowed — the LLM worker will classify it during processing.
         if (!string.IsNullOrEmpty(targetEntityType) && !ValidTargets.Contains(targetEntityType))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
         }
         if (!string.IsNullOrEmpty(targetEntityType))
             targetEntityType = ValidTargets.First(target =>
@@ -160,9 +160,9 @@ public class ScanController : ManagementControllerBase
             return BadRequest(new { error = $"A batch can contain at most {MaxBatchFiles} files (got {nonEmpty.Count})." });
 
         // A batch always targets a concrete entity; default to the lease-import on-ramp.
-        var target = string.IsNullOrWhiteSpace(targetEntityType) ? "Lease" : targetEntityType.Trim();
+        var target = string.IsNullOrWhiteSpace(targetEntityType) ? nameof(LeaseAgreement) : targetEntityType.Trim();
         if (!ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan." });
 
         // Normalize to the canonical casing so the worker's case-sensitive target checks match.
         target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
@@ -522,7 +522,7 @@ public class ScanController : ManagementControllerBase
         // For a lease draft, attach the property/unit import proposal (link-existing vs create-new) so the
         // review UI can show what confirming will do — the empty-portfolio bootstrap is visible up front.
         // Uses no overrides: this is the default preview before the reviewer edits anything.
-        if (draft.TargetEntityType is "Lease")
+        if (draft.TargetEntityType is nameof(LeaseAgreement))
         {
             var proposal = await _scan.BuildLeaseProposalAsync(portfolioId, id, overridesJson: "{}", ct);
             response = response.WithLeaseProposal(proposal);
@@ -614,7 +614,7 @@ public class ScanController : ManagementControllerBase
                 CaptureFocusedRecordKind = d.CaptureFocusedRecordKind,
                 CaptureFocusedRecordId = d.CaptureFocusedRecordId,
                 CreatedEntityType = d.Status == "Confirmed" && d.ConfirmedEntityId != null
-                    ? d.TargetEntityType == "Lease" ? nameof(LeaseAgreement) : d.TargetEntityType
+                    ? d.TargetEntityType
                     : null,
                 CreatedEntityId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
                     ? null
@@ -647,7 +647,7 @@ public class ScanController : ManagementControllerBase
                                     .Where(w => w.PortfolioId == portfolioId && w.Id == d.ConfirmedEntityId)
                                     .Select(w => w.UnitId)
                                     .FirstOrDefault()
-                                : d.TargetEntityType == "Lease"
+                                : d.TargetEntityType == nameof(LeaseAgreement)
                                     ? _db.LeaseAgreements
                                         .Where(agreement => agreement.PortfolioId == portfolioId
                                             && agreement.Id == d.ConfirmedEntityId)
@@ -706,7 +706,7 @@ public class ScanController : ManagementControllerBase
                 .Where(w => w.PortfolioId == portfolioId && w.Id == entityId.Value)
                 .Select(w => w.UnitId)
                 .FirstOrDefaultAsync(ct),
-            "Lease" or nameof(LeaseAgreement) => await _db.LeaseAgreements
+            nameof(LeaseAgreement) => await _db.LeaseAgreements
                 .AsNoTracking()
                 .Where(agreement => agreement.PortfolioId == portfolioId && agreement.Id == entityId.Value)
                 .Select(agreement => (int?)agreement.LeaseManagement!.UnitId)
@@ -963,7 +963,7 @@ public class ScanController : ManagementControllerBase
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
-            "Lease" or nameof(LeaseAgreement) => Ok(new { agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            nameof(LeaseAgreement) => Ok(new { agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };
     }

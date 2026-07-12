@@ -25,7 +25,7 @@ const UPLOAD_COPY: Record<ScanDocType, ScanUploadCopy> = {
 		title: 'Drop a maintenance request, estimate, or repair photo here',
 		helperText: DEFAULT_HELPER
 	},
-	Lease: {
+	LeaseAgreement: {
 		title: 'Drop a lease agreement here',
 		helperText: DEFAULT_HELPER
 	},
@@ -52,7 +52,7 @@ const PROCESSING_COPY: Record<ScanDocType, ScanProcessingCopy> = {
 		title: 'Reading your maintenance request…',
 		body: 'The computer is pulling out repair details, priority, and property context for you. This usually takes just a few seconds.'
 	},
-	Lease: {
+	LeaseAgreement: {
 		title: 'Reading your lease…',
 		body: 'The computer is pulling out parties, rent, dates, and lease terms for you. This usually takes just a few seconds.'
 	},
@@ -67,7 +67,7 @@ const PROCESSING_COPY: Record<ScanDocType, ScanProcessingCopy> = {
 };
 
 function normalizeDocType(type: ScanDocType | string | null | undefined): ScanDocType {
-	return type === 'Payment' || type === 'WorkOrder' || type === 'Lease' || type === 'Application' || type === 'Loan'
+	return type === 'Payment' || type === 'WorkOrder' || type === 'LeaseAgreement' || type === 'Application' || type === 'Loan'
 		? type
 		: 'Expense';
 }

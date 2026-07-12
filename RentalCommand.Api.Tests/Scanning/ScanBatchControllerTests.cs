@@ -78,7 +78,7 @@ public class ScanBatchControllerTests : IDisposable
         var body = created.Value.Should().BeOfType<ScanBatchCreatedResponse>().Subject;
 
         body.FileCount.Should().Be(3);
-        body.TargetEntityType.Should().Be("Lease"); // default target
+        body.TargetEntityType.Should().Be("LeaseAgreement"); // default target
         body.Name.Should().Be("Spring imports");
         body.Status.Should().Be(nameof(ScanBatchStatus.Processing));
         body.DraftIds.Should().HaveCount(3);
@@ -91,7 +91,7 @@ public class ScanBatchControllerTests : IDisposable
         var drafts = await _db.ScanDrafts.Where(d => d.BatchId == batch.Id).ToListAsync();
         drafts.Should().HaveCount(3);
         drafts.Should().OnlyContain(d => d.Status == "Pending");
-        drafts.Should().OnlyContain(d => d.TargetEntityType == "Lease");
+        drafts.Should().OnlyContain(d => d.TargetEntityType == "LeaseAgreement");
         drafts.Should().OnlyContain(d => d.PortfolioId == PortfolioId);
         drafts.Select(d => d.Id).Should().BeEquivalentTo(body.DraftIds);
     }
@@ -136,7 +136,7 @@ public class ScanBatchControllerTests : IDisposable
         };
 
         var result = await controller.UploadBatch(
-            files, targetEntityType: "Lease", name: "Bad batch", clientOperationId: "batch-fail", CancellationToken.None);
+            files, targetEntityType: "LeaseAgreement", name: "Bad batch", clientOperationId: "batch-fail", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
         (await _db.ScanBatches.CountAsync()).Should().Be(0);
@@ -188,7 +188,7 @@ public class ScanBatchControllerTests : IDisposable
         var batch = SeedBatch(PortfolioId, fileCount: 4);
         SeedDraft(batch.Id, "Reviewing", targetEntityType: "Application");
         SeedDraft(batch.Id, "Reviewing", targetEntityType: "Expense");
-        SeedDraft(batch.Id, "Reviewing", targetEntityType: "Lease");
+        SeedDraft(batch.Id, "Reviewing", targetEntityType: "LeaseAgreement");
         SeedDraft(batch.Id, "Reviewing", targetEntityType: "Payment");
         SeedDraft(batch.Id, "Failed", targetEntityType: "WorkOrder");
 
@@ -206,7 +206,7 @@ public class ScanBatchControllerTests : IDisposable
         page.TotalCount.Should().Be(4);
         page.Skip.Should().Be(1);
         page.Take.Should().Be(2);
-        page.Items.Select(d => d.TargetEntityType).Should().Equal("Expense", "Lease");
+        page.Items.Select(d => d.TargetEntityType).Should().Equal("Expense", "LeaseAgreement");
         page.Items.Should().OnlyContain(d => d.Status == "Reviewing");
 
         _executedSql.Should().Contain(sql =>
@@ -467,7 +467,7 @@ public class ScanBatchControllerTests : IDisposable
         var batch = new ScanBatch
         {
             PortfolioId = portfolioId,
-            TargetEntityType = "Lease",
+            TargetEntityType = "LeaseAgreement",
             Status = ScanBatchStatus.Processing,
             FileCount = fileCount,
             CreatedAtUtc = DateTime.UtcNow,
@@ -482,7 +482,7 @@ public class ScanBatchControllerTests : IDisposable
         string status,
         string? extractedFields = null,
         int? portfolioId = null,
-        string targetEntityType = "Lease",
+        string targetEntityType = "LeaseAgreement",
         string? failureReason = null,
         int? confirmedEntityId = null)
     {

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Scanning;       // ReceiptExtractionSchema
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
@@ -51,13 +52,10 @@ public class ScanProcessingWorker : EngineWorkerBase
                         : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
     /// <summary>
-    /// A lease import is requested either by the explicit upload target "Lease", or by a document the
-    /// model classified as a lease ("Lease"/"LeaseAgreement"). Both pick the lease extraction schema and
-    /// confirm as a Lease.
+    /// A lease import uses the explicit canonical upload target "LeaseAgreement".
     /// </summary>
     private static bool IsLeaseTarget(string? targetEntityType) =>
-        string.Equals(targetEntityType, "Lease", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(targetEntityType, "LeaseAgreement", StringComparison.OrdinalIgnoreCase);
+        string.Equals(targetEntityType, "LeaseAgreement", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// An application import is requested by the explicit upload target "Application" (a landlord scanning
@@ -185,9 +183,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                 }
                 else if (IsLeaseTarget(draft.TargetEntityType))
                 {
-                    // A lease PDF was uploaded with the Lease target (the "import your PDF leases" path):
-                    // it was extracted with the lease schema, so confirm it as a Lease.
-                    targetEntityType = "Lease";
+                    targetEntityType = nameof(LeaseAgreement);
                 }
                 else if (IsApplicationTarget(draft.TargetEntityType))
                 {
@@ -212,7 +208,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                         : string.Empty;
                     targetEntityType = classifiedKind switch
                     {
-                        "Lease" or "LeaseAgreement" => "Lease",
+                        "Lease" or "LeaseAgreement" => nameof(LeaseAgreement),
                         "RentCheck" => "Payment",
                         _ => "Expense",
                     };

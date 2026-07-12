@@ -27,7 +27,7 @@
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
-		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' },
+		{ value: 'LeaseAgreement', label: 'Lease Agreement', hint: 'Becomes an agreement record' },
 		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' },
 		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' }
 	];
@@ -73,7 +73,7 @@
 	}
 
 	const uploadMutation = createMutation(() => ({
-		mutationFn: (file: File) => scan.upload(file, docType),
+		mutationFn: (file: File) => scan.upload(file, docType, context),
 		onSuccess: (res) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			navigateToDraft(res.draftId);

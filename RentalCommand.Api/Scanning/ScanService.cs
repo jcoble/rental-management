@@ -133,7 +133,7 @@ public sealed class ScanService : IScanService
                 fields.PropertyId, fields.UnitId, fields.TenantId, fields.LeaseManagementId, fields.VendorId,
                 fields.Title, fields.Description, fields.Category, fields.Priority, fields.EstimatedCost));
         }
-        else if (kind == ScanConfirmationTargetKind.Lease)
+        else if (kind == ScanConfirmationTargetKind.LeaseAgreement)
         {
             var fields = BuildLeaseFields(draft.ExtractedFields);
             await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
@@ -165,7 +165,7 @@ public sealed class ScanService : IScanService
                     "Choose whether the uploaded lease is AlreadyFullySigned or NeedsSignatures.");
             }
 
-            target = new(kind, Lease: new ScanLeaseTargetData(
+            target = new(kind, LeaseAgreement: new ScanLeaseTargetData(
                 fields.PropertyId, fields.UnitId, fields.TenantId, fields.TenantName,
                 fields.TenantEmail, fields.TenantPhone, fields.TenantEmergencyContact,
                 fields.PropertyName, fields.PropertyType, fields.PropertyAddress, fields.PropertyCity,
@@ -236,10 +236,12 @@ public sealed class ScanService : IScanService
                     draft.CaptureLeaseManagementId,
                     draft.CaptureTenantAccountId,
                     draft.CaptureFocusedRecordKind,
-                    draft.CaptureFocusedRecordId),
+                    draft.CaptureFocusedRecordId,
+                    draft.SourceLabel),
                 target,
                 draft.SourceStoredFileId,
-                SourceContentSha256: draft.SourceContentSha256));
+                SourceContentSha256: draft.SourceContentSha256,
+                SourceLabel: draft.SourceLabel));
     }
 
     private static int? PositiveOverride(JsonElement root, params string[] names) =>
@@ -271,7 +273,7 @@ public sealed class ScanService : IScanService
             .FirstOrDefaultAsync(d => d.Id == draftId && d.PortfolioId == portfolioId, ct);
 
         // Only lease drafts have a property/unit proposal; everything else returns null (no preview).
-        if (draft is null || draft.TargetEntityType is not "Lease")
+        if (draft is null || draft.TargetEntityType is not nameof(LeaseAgreement))
             return null;
 
         // Same field-building → IDOR validation → overrides chain the confirm path uses, so the preview

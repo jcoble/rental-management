@@ -11,7 +11,7 @@ public enum ScanConfirmationTargetKind
     Expense,
     Payment,
     WorkOrder,
-    Lease,
+    LeaseAgreement,
     Application,
     Loan,
 }
@@ -161,7 +161,7 @@ public sealed record ScanConfirmationTargetData(
     ScanExpenseTargetData? Expense = null,
     ScanPaymentTargetData? Payment = null,
     ScanWorkOrderTargetData? WorkOrder = null,
-    ScanLeaseTargetData? Lease = null,
+    ScanLeaseTargetData? LeaseAgreement = null,
     ScanApplicationTargetData? Application = null,
     ScanLoanTargetData? Loan = null) : IAtomicCommandData
 {
@@ -170,7 +170,7 @@ public sealed record ScanConfirmationTargetData(
         var populated = (Expense is null ? 0 : 1)
             + (Payment is null ? 0 : 1)
             + (WorkOrder is null ? 0 : 1)
-            + (Lease is null ? 0 : 1)
+            + (LeaseAgreement is null ? 0 : 1)
             + (Application is null ? 0 : 1)
             + (Loan is null ? 0 : 1);
         var selectedIsPresent = Kind switch
@@ -178,7 +178,7 @@ public sealed record ScanConfirmationTargetData(
             ScanConfirmationTargetKind.Expense => Expense is not null,
             ScanConfirmationTargetKind.Payment => Payment is not null,
             ScanConfirmationTargetKind.WorkOrder => WorkOrder is not null,
-            ScanConfirmationTargetKind.Lease => Lease is not null,
+            ScanConfirmationTargetKind.LeaseAgreement => LeaseAgreement is not null,
             ScanConfirmationTargetKind.Application => Application is not null,
             ScanConfirmationTargetKind.Loan => Loan is not null,
             _ => false,
@@ -204,7 +204,8 @@ public sealed record ConfirmScanDraftCommand(
     int AccessContextId = 0,
     long ExpectedAccessRevision = 0,
     string DeliveryIdempotencyKey = "",
-    string? SourceContentSha256 = null) : IAtomicCommandData;
+    string? SourceContentSha256 = null,
+    string? SourceLabel = null) : IAtomicCommandData;
 
 /// <summary>
 /// Stable version token for the exact draft facts used to prepare a confirmation command. The
@@ -213,7 +214,7 @@ public sealed record ConfirmScanDraftCommand(
 /// </summary>
 public static class ScanConfirmationDraftFingerprint
 {
-    private const int EncodingVersion = 2;
+    private const int EncodingVersion = 3;
 
     public static string Create(
         string targetEntityType,
@@ -227,7 +228,8 @@ public static class ScanConfirmationDraftFingerprint
         int? captureLeaseManagementId = null,
         int? captureTenantAccountId = null,
         string? captureFocusedRecordKind = null,
-        long? captureFocusedRecordId = null)
+        long? captureFocusedRecordId = null,
+        string? sourceLabel = null)
     {
         ArgumentNullException.ThrowIfNull(targetEntityType);
 
@@ -249,6 +251,7 @@ public static class ScanConfirmationDraftFingerprint
             WriteNullableInt32(writer, captureTenantAccountId);
             WriteNullableString(writer, captureFocusedRecordKind);
             WriteNullableInt64(writer, captureFocusedRecordId);
+            WriteNullableString(writer, sourceLabel);
         }
 
         return Convert.ToHexStringLower(SHA256.HashData(payload.GetBuffer().AsSpan(0, checked((int)payload.Length))));

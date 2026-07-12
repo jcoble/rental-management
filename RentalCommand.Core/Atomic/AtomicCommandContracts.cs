@@ -308,6 +308,7 @@ public sealed record AtomicScanDraftClaim(
     string TargetEntityType,
     int? SourceStoredFileId,
     string? ExtractedFieldsJson,
+    string? SourceLabel,
     string? CanonicalEntityType,
     int? CanonicalEntityId);
 

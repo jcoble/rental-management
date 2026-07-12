@@ -13,7 +13,7 @@ public sealed class CanonicalLeaseScanImportContractTests
     {
         var writer = new ProductionScanConfirmationTargetWriter();
 
-        writer.Supports(ScanConfirmationTargetKind.Lease).Should().BeTrue();
+        writer.Supports(ScanConfirmationTargetKind.LeaseAgreement).Should().BeTrue();
         typeof(ScanLeaseTargetData).GetProperty("LeaseId").Should().BeNull();
     }
 

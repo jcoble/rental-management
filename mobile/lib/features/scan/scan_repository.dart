@@ -105,7 +105,7 @@ class ScanRepository {
   /// [bytes]            — raw file bytes
   /// [filename]         — e.g. 'receipt.jpg'
   /// [contentType]      — MIME type, e.g. 'image/jpeg'
-  /// [targetEntityType] — 'Expense' (default), 'Payment', 'WorkOrder', 'Lease', or 'Loan'
+  /// [targetEntityType] — 'Expense' (default), 'Payment', 'WorkOrder', 'LeaseAgreement', or 'Loan'
   /// [onSendProgress]   — optional progress callback (0.0–1.0)
   Future<ScanCreatedResponse> uploadImage(
     Uint8List bytes,
