@@ -18,7 +18,6 @@ namespace RentalCommand.Api.Services.Domain;
 public class LeaseService : ILeaseService
 {
     private const string EntityType = "Lease";
-    private const string PaymentEntityType = "Payment";
     private const string GeneratedAgreementContentType = "application/pdf";
 
     // Allowed lease lifecycle transitions. A lease is a legal contract, so status may only move along
@@ -184,122 +183,6 @@ public class LeaseService : ILeaseService
         }
     }
 
-    private static DateTime RentChargeGenerationStart(Lease lease)
-    {
-        var leaseStart = lease.StartDate.Date;
-        var trackingStart = lease.RentTrackingStartDate?.Date;
-        if (!trackingStart.HasValue || trackingStart.Value < leaseStart)
-        {
-            return leaseStart;
-        }
-
-        return trackingStart.Value;
-    }
-
-    private static DateTime EffectiveRentEndDate(Lease lease)
-    {
-        var end = lease.EndDate.Date;
-        if (lease.MoveOutDate.HasValue && lease.MoveOutDate.Value.Date < end)
-        {
-            return lease.MoveOutDate.Value.Date;
-        }
-
-        return end;
-    }
-
-    private static decimal RentAmountForPeriod(
-        Lease lease,
-        RentChargePeriod period,
-        ProrationConvention convention)
-        => period.IsPartial
-            ? ProrationCalculator.Prorate(lease.MonthlyRent, period.PeriodStart, period.PeriodEnd, convention)
-            : lease.MonthlyRent;
-
-    private async Task<ProrationConvention> GetProrationConventionAsync(int portfolioId, CancellationToken ct)
-    {
-        var settings = await _db.Portfolios
-            .AsNoTracking()
-            .Where(p => p.Id == portfolioId)
-            .Select(p => p.Settings)
-            .FirstOrDefaultAsync(ct);
-
-        return PortfolioProrationSettings.ReadConvention(settings);
-    }
-
-    private async Task<Payment?> AdjustFinalRentChargeForProrationAsync(
-        Lease lease,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        if (lease.MonthlyRent <= 0m)
-        {
-            return null;
-        }
-
-        var rentEnd = EffectiveRentEndDate(lease);
-        var finalOccupiedDate = rentEnd.AddDays(-1);
-        if (finalOccupiedDate < lease.StartDate.Date)
-        {
-            return null;
-        }
-
-        var finalMonthStart = new DateTime(
-            finalOccupiedDate.Year,
-            finalOccupiedDate.Month,
-            1,
-            0,
-            0,
-            0,
-            DateTimeKind.Utc);
-        var cutoff = RentChargeSchedule.GetDueDate(finalOccupiedDate.Year, finalOccupiedDate.Month, lease.RentDueDay);
-        var finalPeriod = RentChargeSchedule.GetDuePeriods(
-                lease.StartDate,
-                rentEnd,
-                lease.RentDueDay,
-                cutoff,
-                generationStart: finalMonthStart)
-            .FirstOrDefault(p => p.PeriodKey == cutoff.ToString("yyyy-MM"));
-
-        if (finalPeriod.PeriodKey is null || !finalPeriod.IsPartial)
-        {
-            return null;
-        }
-
-        var payment = await _db.Payments
-            .FirstOrDefaultAsync(p => p.PortfolioId == lease.PortfolioId
-                && p.LeaseId == lease.Id
-                && p.PaymentType == PaymentType.Rent
-                && p.PeriodKey == finalPeriod.PeriodKey
-                && (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late),
-                ct);
-        if (payment is null)
-        {
-            return null;
-        }
-
-        var convention = await GetProrationConventionAsync(lease.PortfolioId, ct);
-        var proratedAmount = RentAmountForPeriod(lease, finalPeriod, convention);
-        if (payment.Amount == proratedAmount)
-        {
-            return null;
-        }
-
-        payment.Amount = proratedAmount;
-        payment.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                lease.PortfolioId,
-                PaymentEntityType,
-                payment.Id,
-                PaymentResponse.FromEntity(payment),
-                ct);
-        }
-
-        return payment;
-    }
-
     private static DateTime? ResolveRentTrackingStartDate(
         DateTime leaseStart,
         RentTrackingStartMode mode,
@@ -337,155 +220,16 @@ public class LeaseService : ILeaseService
         DateTime? asOfDate,
         string? note)
     {
-        if (!HasOpeningBalanceRequest(amount, asOfDate, note))
+        if (mode != RentTrackingStartMode.OpeningBalanceOnly
+            && !HasOpeningBalanceRequest(amount, asOfDate, note))
         {
             return;
         }
 
-        if (mode != RentTrackingStartMode.OpeningBalanceOnly)
-        {
-            throw new DomainValidationException(
-                "Opening balance fields can only be used with the opening balance rent tracking option.");
-        }
-
-        if (!amount.HasValue)
-        {
-            throw new DomainValidationException("Opening balance amount is required.");
-        }
-
-        if (!asOfDate.HasValue)
-        {
-            throw new DomainValidationException("Opening balance as-of date is required.");
-        }
-    }
-
-    private async Task<OpeningBalance?> UpsertOpeningBalanceAsync(
-        Lease lease,
-        decimal? amount,
-        DateTime? asOfDate,
-        string? note,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        if (!HasOpeningBalanceRequest(amount, asOfDate, note))
-        {
-            return null;
-        }
-
-        if (!amount.HasValue || !asOfDate.HasValue)
-        {
-            throw new DomainValidationException("Opening balance amount and as-of date are required.");
-        }
-
-        var now = _timeProvider.UtcNow();
-        var opening = await _db.OpeningBalances
-            .FirstOrDefaultAsync(o => o.PortfolioId == lease.PortfolioId && o.LeaseId == lease.Id, ct);
-
-        if (opening is null)
-        {
-            opening = new OpeningBalance
-            {
-                PortfolioId = lease.PortfolioId,
-                LeaseId = lease.Id,
-                CreatedAt = now,
-            };
-            _db.OpeningBalances.Add(opening);
-        }
-
-        opening.Amount = amount.Value;
-        opening.AsOfDate = asOfDate.Value.ToUtc();
-        opening.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
-        opening.UpdatedAt = now;
-
-        await _db.SaveChangesAsync(ct);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                lease.PortfolioId,
-                "OpeningBalance",
-                opening.Id,
-                OpeningBalanceResponse.FromEntity(opening),
-                ct);
-        }
-
-        return opening;
-    }
-
-    private async Task<IReadOnlyList<Payment>> EnsureRentChargesThroughTodayAsync(
-        Lease lease,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        if (lease.Status != LeaseStatus.Active || lease.MonthlyRent <= 0)
-        {
-            return [];
-        }
-
-        var periods = RentChargeSchedule.GetDuePeriods(
-            lease.StartDate,
-            EffectiveRentEndDate(lease),
-            lease.RentDueDay,
-            _timeProvider.BusinessToday(_tz),
-            generationStart: RentChargeGenerationStart(lease));
-        if (periods.Count == 0)
-        {
-            return [];
-        }
-
-        var periodKeys = periods
-            .Select(p => p.PeriodKey)
-            .ToList();
-        var existingPeriodKeys = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == lease.PortfolioId
-                && p.LeaseId == lease.Id
-                && p.PaymentType == PaymentType.Rent
-                && p.PeriodKey != null
-                && periodKeys.Contains(p.PeriodKey))
-            .Select(p => p.PeriodKey!)
-            .ToListAsync(ct);
-
-        var existing = existingPeriodKeys.ToHashSet(StringComparer.Ordinal);
-        var convention = await GetProrationConventionAsync(lease.PortfolioId, ct);
-        var now = _timeProvider.UtcNow();
-        var created = periods
-            .Where(p => !existing.Contains(p.PeriodKey))
-            .Select(period => new Payment
-            {
-                PortfolioId = lease.PortfolioId,
-                LeaseId = lease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = RentAmountForPeriod(lease, period, convention),
-                DueDate = period.DueDate,
-                PeriodKey = period.PeriodKey,
-                CreatedAt = now,
-                UpdatedAt = now,
-            })
-            .ToList();
-
-        if (created.Count == 0)
-        {
-            return [];
-        }
-
-        _db.Payments.AddRange(created);
-        await _db.SaveChangesAsync(ct);
-
-        if (broadcast)
-        {
-            foreach (var payment in created)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    lease.PortfolioId,
-                    PaymentEntityType,
-                    payment.Id,
-                    PaymentResponse.FromEntity(payment),
-                    ct);
-            }
-        }
-
-        return created;
+        throw new DomainValidationException(
+            "Opening balances are posted to the Tenant account during Prepare move-in. "
+            + "The legacy lease endpoint no longer creates or edits financial records.",
+            statusCode: 409);
     }
 
     // Reject a status move that isn't on the lifecycle graph. A same→same move is always allowed (a PATCH
@@ -1257,14 +1001,6 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Created,
             changeReason: $"Lease {entity.LeaseNumber} created (status {entity.Status})", ct: ct);
 
-        var openingBalance = await UpsertOpeningBalanceAsync(
-            entity,
-            request.OpeningBalanceAmount,
-            request.OpeningBalanceAsOfDate,
-            request.OpeningBalanceNote,
-            ct,
-            broadcast: false);
-        var rentCharges = await EnsureRentChargesThroughTodayAsync(entity, ct, broadcast: false);
         if (createdTenant is not null)
         {
             await EnsureCreatedTenantPortalAsync(createdTenant.Id, portfolioId, ct);
@@ -1280,8 +1016,6 @@ public class LeaseService : ILeaseService
                 portfolioId: portfolioId,
                 lease: response,
                 tenant: createdTenant,
-                openingBalance: openingBalance,
-                payments: rentCharges,
                 deletedLeaseId: null,
                 ct: ct);
         }
@@ -1292,8 +1026,6 @@ public class LeaseService : ILeaseService
         int portfolioId,
         LeaseResponse? lease,
         Tenant? tenant,
-        OpeningBalance? openingBalance,
-        IEnumerable<Payment> payments,
         int? deletedLeaseId,
         CancellationToken ct)
     {
@@ -1306,24 +1038,6 @@ public class LeaseService : ILeaseService
                     "Tenant",
                     tenant.Id,
                     TenantResponse.FromEntity(tenant),
-                    ct);
-            }
-            if (openingBalance is not null)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    portfolioId,
-                    "OpeningBalance",
-                    openingBalance.Id,
-                    OpeningBalanceResponse.FromEntity(openingBalance),
-                    ct);
-            }
-            foreach (var payment in payments.DistinctBy(p => p.Id))
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    portfolioId,
-                    PaymentEntityType,
-                    payment.Id,
-                    PaymentResponse.FromEntity(payment),
                     ct);
             }
             if (lease is not null)
@@ -1525,29 +1239,6 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
 
-        var openingBalance = await UpsertOpeningBalanceAsync(
-            entity,
-            request.OpeningBalanceAmount,
-            request.OpeningBalanceAsOfDate,
-            request.OpeningBalanceNote,
-            ct,
-            broadcast: false);
-
-        IReadOnlyList<Payment> rentCharges = [];
-        if ((prevStatus != LeaseStatus.Active && entity.Status == LeaseStatus.Active)
-            || (entity.Status == LeaseStatus.Active && rentTrackingMode.HasValue))
-        {
-            rentCharges = await EnsureRentChargesThroughTodayAsync(entity, ct, broadcast: false);
-        }
-
-        Payment? adjustedFinalCharge = null;
-        if (entity.EndDate != prevEnd
-            || entity.MoveOutDate != prevMoveOutDate
-            || entity.MonthlyRent != prevRent)
-        {
-            adjustedFinalCharge = await AdjustFinalRentChargeForProrationAsync(entity, ct, broadcast: false);
-        }
-
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity, includeNavigations: true);
         if (ownsTransaction)
         {
@@ -1556,8 +1247,6 @@ public class LeaseService : ILeaseService
                 portfolioId: portfolioId,
                 lease: response,
                 tenant: null,
-                openingBalance: openingBalance,
-                payments: adjustedFinalCharge is null ? rentCharges : rentCharges.Append(adjustedFinalCharge),
                 deletedLeaseId: null,
                 ct: ct);
         }
@@ -1602,8 +1291,6 @@ public class LeaseService : ILeaseService
                 portfolioId: portfolioId,
                 lease: null,
                 tenant: null,
-                openingBalance: null,
-                payments: [],
                 deletedLeaseId: id,
                 ct: ct);
         }
