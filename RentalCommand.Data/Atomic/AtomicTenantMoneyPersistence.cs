@@ -47,7 +47,8 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                 WHERE balance."PortfolioId" = {portfolioId}
                   AND balance."TenantAccountId" = {tenantAccountId}
                   AND balance."OpenAmount" > 0
-                  AND ({entryType} IS NULL OR balance."EntryType" = {entryType})
+                  AND (CAST({entryType} AS text) IS NULL
+                       OR balance."EntryType" = CAST({entryType} AS text))
             ), inserted AS (
                 INSERT INTO "TenantLedgerAllocations" (
                     "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
