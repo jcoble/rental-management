@@ -474,6 +474,18 @@ From the current Tenant & lease relationship, the user chooses Renew, Offer mont
 
 An issued Agreement is never edited. Correction voids/replaces the affected artifact under its legal rules and preserves provenance. An Addendum remains a separately signed document linked to the Agreement it amends. Neither operation rewrites posted money; explicit ledger reversals/adjustments express any retroactive financial effect.
 
+The product action is **Correct signed lease**, not Edit and not Create new lease. It opens the
+existing Agreement stepper prefilled, collapses unchanged sections, marks every changed field,
+requires a correction reason, and ends with an old-versus-corrected comparison. Confirmation
+creates a linked Correction draft and replacement PDF; the prior issued Agreement remains
+governing until the corrected version is fully executed. The completed version then supersedes
+the predecessor at its explicit governing date and both remain visible in version history.
+
+Editing a Tenant contact/profile does not rewrite a signed artifact. If a misspelled name, date,
+or other value appears in the signed PDF, the UI explains that correcting the document requires
+the corrected version to be signed again. Operational facts that were never contract terms may
+still be changed through their normal LeaseManagement command without creating an Agreement.
+
 ## Unit Command Center information architecture
 
 The Unit remains the contextual home. Fewer destinations are useful only when their labels remain obvious.
