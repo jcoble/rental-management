@@ -49,6 +49,8 @@ builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 64_000
 
 // --- Configuration binding ---
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
+builder.Services.Configure<AtomicAuthSessionCredentialOptions>(
+    builder.Configuration.GetSection(AtomicAuthSessionCredentialOptions.SectionName));
 builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiKeySettings.SectionName));
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.PlatformAdminOptions>(
@@ -377,6 +379,13 @@ builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddSingleton(serviceProvider =>
+    new RentalCommand.Core.Auth.RefreshCredentialTokenFactory(
+        serviceProvider
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<AtomicAuthSessionCredentialOptions>>()
+            .Value
+            .SigningKey));
+builder.Services.AddScoped<IAtomicAuthSessionCredentialService, AtomicAuthSessionCredentialService>();
 builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
 builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
 builder.Services.AddScoped<IAuthService, AuthService>();

@@ -58,8 +58,10 @@ internal static class AccessEnvelopeViewSql
 {
     public const string Drop = "DROP VIEW IF EXISTS \"vw_access_envelopes\";";
 
-    public const string Create = """
-        CREATE VIEW "vw_access_envelopes" AS
+    public const string Create =
+        "CREATE VIEW \"vw_access_envelopes\" WITH (security_invoker = true) AS\n" + Definition;
+
+    public const string Definition = """
         WITH effective_contexts AS (
             SELECT c."Id", c."UserId", c."PortfolioId", c."AccessRevision",
                    c."LastAuthorizedExperience", u."DisplayName", u."Email",
