@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Services.Domain;
 /// first <see cref="OwnerEntity"/>, so onboarding should never make them perform a separate "add an
 /// owner" step before they can add a property. This provisioner auto-creates that owner (flagged
 /// <see cref="OwnerEntity.IsPrimary"/>) and links it back to the user via
-/// <see cref="ApplicationUser.OwnerEntityId"/>.
+/// an explicit <see cref="OwnerUserAccess"/> beneath the user's workspace access context.
 ///
 /// Every method is idempotent and self-contained so it can run at the three moments a portfolio first
 /// has (or regains) a real, empty owner list — registration, Google sign-in, and Go-Live (which wipes
@@ -23,8 +23,8 @@ public interface ISelfOwnerProvisioner
 {
     /// <summary>
     /// Ensures the portfolio has a primary self-owner derived from <paramref name="user"/>, creating it
-    /// if absent and pointing <see cref="ApplicationUser.OwnerEntityId"/> at it. No-op (beyond ensuring
-    /// the link) when a primary owner already exists. The owner and the user link are persisted via the
+    /// if absent and granting an explicit owner relationship when needed. No-op when both already exist.
+    /// The owner and relationship are persisted via the
     /// shared <see cref="RentalCommandDbContext"/> — when called inside a caller's transaction the writes
     /// participate in it. Returns the resolved primary owner.
     /// </summary>
@@ -50,17 +50,10 @@ public sealed class SelfOwnerProvisioner : ISelfOwnerProvisioner
 
     public async Task<OwnerEntity?> EnsureSelfOwnerAsync(ApplicationUser user, int portfolioId, CancellationToken ct = default)
     {
-        // Already have a primary owner? Just make sure the user is linked to it, then we're done.
         var existingPrimary = await _db.OwnerEntities
             .FirstOrDefaultAsync(o => o.PortfolioId == portfolioId && o.IsPrimary, ct);
-        if (existingPrimary != null)
-        {
-            await EnsureUserLinkAsync(user, existingPrimary.Id, ct);
-            return existingPrimary;
-        }
-
         var now = _timeProvider.UtcNow();
-        var owner = new OwnerEntity
+        var owner = existingPrimary ?? new OwnerEntity
         {
             PortfolioId = portfolioId,
             // The landlord defaults to a Person; they can edit this to an LLC/Trust at any time.
@@ -71,14 +64,59 @@ public sealed class SelfOwnerProvisioner : ISelfOwnerProvisioner
             CreatedAt = now,
             UpdatedAt = now,
         };
+        if (existingPrimary is null)
+        {
+            _db.OwnerEntities.Add(owner);
+        }
 
-        _db.OwnerEntities.Add(owner);
+        var context = await _db.WorkspaceAccessContexts
+            .SingleOrDefaultAsync(candidate =>
+                candidate.UserId == user.Id && candidate.PortfolioId == portfolioId, ct);
+        var contextWasCreated = context is null;
+        context ??= new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Owner,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        if (contextWasCreated)
+        {
+            _db.WorkspaceAccessContexts.Add(context);
+        }
+
+        var alreadyGranted = existingPrimary is not null && await _db.OwnerUserAccesses.AnyAsync(access =>
+            access.AccessContextId == context.Id && access.OwnerEntityId == owner.Id &&
+            access.PortfolioId == portfolioId && access.RevokedAtUtc == null &&
+            access.EffectiveFromUtc <= now &&
+            (access.EffectiveToUtc == null || access.EffectiveToUtc > now), ct);
+        if (!alreadyGranted)
+        {
+            _db.OwnerUserAccesses.Add(new OwnerUserAccess
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = portfolioId,
+                AccessContext = context,
+                ApplicationUser = user,
+                OwnerEntity = owner,
+                EffectiveFromUtc = now,
+                GrantedAtUtc = now,
+                GrantedByUser = user,
+                Reason = "Primary self-owner relationship",
+            });
+            if (!contextWasCreated)
+            {
+                context.AdvanceRevision(context.AccessRevision);
+                context.UpdatedAtUtc = now;
+            }
+        }
+
         await _db.SaveChangesAsync(ct);
 
-        await EnsureUserLinkAsync(user, owner.Id, ct);
-
         _logger.LogInformation(
-            "Auto-created primary self-owner {OwnerId} ({OwnerName}) for portfolio {PortfolioId} from user {Email} (id {UserId}).",
+            "Ensured primary self-owner {OwnerId} ({OwnerName}) for portfolio {PortfolioId} from user {Email} (id {UserId}).",
             owner.Id, owner.Name, portfolioId, user.Email, user.Id);
 
         return owner;
@@ -109,27 +147,4 @@ public sealed class SelfOwnerProvisioner : ISelfOwnerProvisioner
         return "Me (primary owner)";
     }
 
-    /// <summary>
-    /// Point <see cref="ApplicationUser.OwnerEntityId"/> at the primary owner when not already set,
-    /// writing through the shared DbContext (Identity's store uses the same context, so the passed user
-    /// is tracked; if a detached instance is ever passed we attach and mark just this column modified).
-    /// </summary>
-    private async Task EnsureUserLinkAsync(ApplicationUser user, int ownerEntityId, CancellationToken ct)
-    {
-        if (user.OwnerEntityId == ownerEntityId)
-        {
-            return;
-        }
-
-        user.OwnerEntityId = ownerEntityId;
-
-        var entry = _db.Entry(user);
-        if (entry.State == EntityState.Detached)
-        {
-            _db.Attach(user);
-        }
-        entry.Property(u => u.OwnerEntityId).IsModified = true;
-
-        await _db.SaveChangesAsync(ct);
-    }
 }

@@ -28,6 +28,8 @@ public sealed class WorkspaceAccessContext
     public ApplicationUser? User { get; set; }
     public Portfolio? Portfolio { get; set; }
     public WorkspaceMembership? Membership { get; set; }
+    public ICollection<OwnerUserAccess> OwnerRelationships { get; set; } = new List<OwnerUserAccess>();
+    public ICollection<TenantUserAccess> TenantRelationships { get; set; } = new List<TenantUserAccess>();
     public ICollection<AuthSession> ActiveSessions { get; set; } = new List<AuthSession>();
 
     /// <summary>

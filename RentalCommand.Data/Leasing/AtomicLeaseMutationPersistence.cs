@@ -440,21 +440,29 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             CROSS JOIN input_validation
             WHERE input_validation.is_valid
         ),
+        locked_contexts AS MATERIALIZED (
+            SELECT context."Id"
+            FROM "WorkspaceAccessContexts" AS context
+            WHERE context."Id" IN (SELECT DISTINCT "AccessContextId" FROM source_access)
+            FOR UPDATE
+        ),
         revoked AS (
             UPDATE "TenantUserAccesses" AS access
             SET "RevokedAtUtc" = @changedAt,
                 "RevokedByUserId" = @actorUserId,
                 "Reason" = @reason
             FROM source_access AS source
+            INNER JOIN locked_contexts AS locked ON locked."Id" = source."AccessContextId"
             WHERE access."Id" = source."Id"
               AND source.kind <> @retain
-            RETURNING access."Id", access."ApplicationUserId", source.replacement_party_id, source.kind
+            RETURNING access."Id", access."AccessContextId", access."ApplicationUserId",
+                      source.replacement_party_id, source.kind
         ),
         continued AS (
             INSERT INTO "TenantUserAccesses"
-                ("PublicId", "PortfolioId", "ApplicationUserId", "LeaseManagementPartyId",
+                ("PublicId", "PortfolioId", "AccessContextId", "ApplicationUserId", "LeaseManagementPartyId",
                  "GrantedAtUtc", "GrantedByUserId", "Reason")
-            SELECT gen_random_uuid(), @portfolioId, revoked."ApplicationUserId",
+            SELECT gen_random_uuid(), @portfolioId, revoked."AccessContextId", revoked."ApplicationUserId",
                    revoked.replacement_party_id, @changedAt, @actorUserId, @reason
             FROM revoked
             INNER JOIN "LeaseManagementParties" AS replacement
@@ -463,6 +471,13 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                AND replacement."LeaseManagementId" = @leaseManagementId
             WHERE revoked.kind = @continue
             RETURNING "Id"
+        ),
+        revised_contexts AS (
+            UPDATE "WorkspaceAccessContexts" AS context
+            SET "AccessRevision" = context."AccessRevision" + 1,
+                "UpdatedAtUtc" = @changedAt
+            WHERE context."Id" IN (SELECT DISTINCT "AccessContextId" FROM revoked)
+            RETURNING context."Id"
         )
         SELECT
             (SELECT is_valid FROM input_validation) AS "InputValid",
@@ -844,7 +859,14 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
               AND access."Id" = input.access_id
               AND access."PortfolioId" = @portfolioId
               AND access."RevokedAtUtc" IS NULL
-            RETURNING access."Id"
+            RETURNING access."Id", access."AccessContextId"
+        ),
+        revised_access_contexts AS (
+            UPDATE "WorkspaceAccessContexts" AS context
+            SET "AccessRevision" = context."AccessRevision" + 1,
+                "UpdatedAtUtc" = @changedAt
+            WHERE context."Id" IN (SELECT DISTINCT "AccessContextId" FROM revoked_access)
+            RETURNING context."Id"
         ),
         returned_relationship AS (
             UPDATE "LeaseManagements" AS relationship
@@ -1032,7 +1054,14 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
               AND access."Id" = input.access_id
               AND access."PortfolioId" = @portfolioId
               AND access."RevokedAtUtc" IS NULL
-            RETURNING access."Id"
+            RETURNING access."Id", access."AccessContextId"
+        ),
+        revised_access_contexts AS (
+            UPDATE "WorkspaceAccessContexts" AS context
+            SET "AccessRevision" = context."AccessRevision" + 1,
+                "UpdatedAtUtc" = @changedAt
+            WHERE context."Id" IN (SELECT DISTINCT "AccessContextId" FROM revoked_access)
+            RETURNING context."Id"
         ),
         closed_account AS (
             UPDATE "TenantAccounts" AS account

@@ -43,4 +43,5 @@ public class OwnerEntity : IAuditable, IPortfolioScoped
     public DateTime? DeletedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
+    public ICollection<OwnerUserAccess> UserAccesses { get; set; } = new List<OwnerUserAccess>();
 }

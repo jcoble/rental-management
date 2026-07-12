@@ -19,7 +19,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// General-purpose document attachment hub: upload, list, download, and soft-delete
 /// <see cref="Core.Entities.StoredFile"/> rows for any entity type within the caller's portfolio.
-/// All routes are portfolio-scoped via the JWT <c>portfolioId</c> claim.
+/// All routes are scoped through the validated canonical access context.
 ///
 /// <para>
 /// This controller is tenant-reachable on purpose (tenants attach a photo to their own maintenance
@@ -28,7 +28,7 @@ namespace RentalCommand.Api.Controllers;
 /// sufficient for a Tenant principal — every other tenant in the same portfolio shares that scope — so a
 /// tenant caller is additionally constrained to documents on a <c>WorkOrder</c> they own (their only
 /// legitimate document surface). Staff callers keep full portfolio access, even when an example/demo user
-/// also carries a <c>tenantId</c> claim. See <see cref="TenantMayAccessEntityAsync"/>.
+/// also has tenant relationships. See <see cref="TenantMayAccessEntityAsync"/>.
 /// </para>
 /// </summary>
 [ApiController]
@@ -127,8 +127,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             || !Enum.TryParse<StoredDocumentTarget>(normalizedEntityType, ignoreCase: true, out var target)
             || !Enum.IsDefined(target))
             return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
-        var tenantId = GetTenantIdOrNull();
         var isStaff = HasWorkspaceMembership();
+        var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
         if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
@@ -331,8 +331,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
 
         var portfolioId = GetPortfolioId();
-        var tenantId = GetTenantIdOrNull();
         var isStaff = HasWorkspaceMembership();
+        var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
         var deleted = await _documents.DeleteAsync(
             portfolioId,
             id,
@@ -351,7 +351,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     /// <summary>
     /// Whether the CALLER may act on a document attached to <paramref name="entityType"/>/
     /// <paramref name="entityId"/>. Staff callers always may — portfolio scope is enforced elsewhere —
-    /// even if their token also carries a <c>tenantId</c> claim. A tenant-only caller may ONLY when the
+    /// even if the same identity also has tenant relationships. A tenant-only caller may ONLY when the
     /// entity is a <c>WorkOrder</c> that belongs to that tenant (their single legitimate document surface —
     /// a maintenance-request photo). Every other entity type, or a work order owned by a different tenant,
     /// is denied. Fail-closed: an unknown/missing entity reference returns <c>false</c> for a tenant.
@@ -365,12 +365,6 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             return true;
         }
 
-        var tenantId = GetTenantIdOrNull();
-        if (tenantId is null)
-        {
-            return false;
-        }
-
         if (entityId is null || string.IsNullOrWhiteSpace(entityType))
             return false;
 
@@ -378,8 +372,23 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         if (!string.Equals(entityType.Trim(), "WorkOrder", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        return await _db.WorkOrders.AnyAsync(
-            w => w.Id == entityId.Value && w.PortfolioId == portfolioId && w.TenantId == tenantId.Value, ct);
+        var accessContextId = GetAccessContextId();
+        return await _db.EffectiveTenantAccess.AnyAsync(access =>
+            access.AccessContextId == accessContextId && access.PortfolioId == portfolioId &&
+            _db.WorkOrders.Any(workOrder =>
+                workOrder.Id == entityId.Value && workOrder.PortfolioId == portfolioId &&
+                workOrder.TenantId == access.TenantId), ct);
+    }
+
+    private Task<int?> ResolveTenantIdAsync(int portfolioId, CancellationToken ct)
+    {
+        var accessContextId = GetAccessContextId();
+        return _db.EffectiveTenantAccess
+            .Where(access => access.AccessContextId == accessContextId &&
+                access.PortfolioId == portfolioId)
+            .OrderBy(access => access.LeaseManagementPartyId)
+            .Select(access => (int?)access.TenantId)
+            .FirstOrDefaultAsync(ct);
     }
 
 

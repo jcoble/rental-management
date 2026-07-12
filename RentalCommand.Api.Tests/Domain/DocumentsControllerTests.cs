@@ -14,6 +14,8 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Data.Documents;
 using SkiaSharp;
 
@@ -80,7 +82,7 @@ public sealed class DocumentsControllerTests : IDisposable
 
     [Theory]
     [MemberData(nameof(StaffUploadTargets))]
-    public async Task Upload_WithStaffRoleAndTenantClaim_AllowsPortfolioDocumentTargets(string entityType)
+    public async Task Upload_WithCanonicalStaffContext_AllowsPortfolioDocumentTargets(string entityType)
     {
         var entityId = SeedDocumentTarget(entityType);
 
@@ -102,7 +104,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 Enum.Parse<StoredDocumentTarget>(entityType),
                 entityId,
                 7,
-                6,
+                null,
                 true,
                 "upload-operation",
                 It.IsAny<string>(),
@@ -136,7 +138,6 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", "6"),
             new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
@@ -158,7 +159,7 @@ public sealed class DocumentsControllerTests : IDisposable
             Enum.Parse<StoredDocumentTarget>(entityType),
             entityId,
             7,
-            6,
+            null,
             true,
             "upload-operation",
             It.IsAny<string>(),
@@ -171,7 +172,7 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Upload_WithTenantOnlyRole_AllowsOwnedWorkOrder()
+    public async Task Upload_WithTenantRelationshipContext_AllowsOwnedWorkOrder()
     {
         const string entityType = "WorkOrder";
         var entityId = SeedDocumentTarget(entityType);
@@ -262,17 +263,18 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Upload_WithTenantOnlyRole_RejectsKnownInvalidTargetBeforeBlobIo()
+    public async Task Upload_WithTenantRelationshipContext_RejectsKnownInvalidTargetBeforeBlobIo()
     {
         const string entityType = "Unit";
         var entityId = SeedDocumentTarget(entityType);
+        var tenantId = _ctx.Db.Tenants.OrderByDescending(tenant => tenant.Id).Select(tenant => tenant.Id).First();
 
         var documents = new Mock<IDocumentService>();
         var storage = new Mock<IFileStorage>();
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", "6"),
+            new Claim("tenantId", tenantId.ToString()),
             new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
@@ -301,7 +303,7 @@ public sealed class DocumentsControllerTests : IDisposable
     [InlineData(null)]
     [InlineData("MaintenanceTechnician")]
     [InlineData("UnknownRole")]
-    public async Task List_WithoutExplicitStaffRole_FailsClosed(string? role)
+    public async Task List_WithoutCanonicalStaffOrTenantRelationship_FailsClosed(string? role)
     {
         var documents = new Mock<IDocumentService>();
         Claim[] claims = role is null ? [] : [new Claim(ClaimTypes.Role, role)];
@@ -317,7 +319,7 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task List_WithTenantClaim_AllowsOwnedWorkOrder()
+    public async Task List_WithTenantRelationshipContext_AllowsOwnedWorkOrder()
     {
         var workOrderId = SeedDocumentTarget("WorkOrder");
         var tenantId = _ctx.Db.WorkOrders.Single(workOrder => workOrder.Id == workOrderId).TenantId!.Value;
@@ -339,7 +341,7 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task List_WithExplicitStaffRole_AllowsPortfolioEntity()
+    public async Task List_WithCanonicalStaffContext_AllowsPortfolioEntity()
     {
         var expected = new[] { new DocumentDto { Id = 45, EntityType = "Unit", EntityId = 10 } };
         var documents = new Mock<IDocumentService>();
@@ -367,10 +369,19 @@ public sealed class DocumentsControllerTests : IDisposable
 
     private DocumentsController CreateController(IDocumentService documents, IFileStorage storage, params Claim[] claims)
     {
+        EnsureRelationshipProjectionView();
+        var user = EnsureUser();
+        var context = EnsureAccessContext(user.Id);
+        var tenantClaim = claims.SingleOrDefault(claim => claim.Type == "tenantId")?.Value;
+        if (int.TryParse(tenantClaim, out var tenantId))
+            EnsureTenantRelationship(context, user, tenantId);
+
+        var isStaff = claims.Any(claim =>
+            claim.Type == ClaimTypes.Role && claim.Value == nameof(UserRole.Admin));
         var baseClaims = new List<Claim>
         {
             new("portfolioId", PortfolioId.ToString()),
-            new(ClaimTypes.NameIdentifier, "7"),
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
         };
         baseClaims.AddRange(claims);
 
@@ -393,8 +404,156 @@ public sealed class DocumentsControllerTests : IDisposable
                 },
             },
         };
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.NewGuid(), user.Id, context.Id, PortfolioId, 1,
+            isStaff ? WorkspaceExperience.Management : WorkspaceExperience.Tenant,
+            isStaff ? 1 : null,
+            isStaff ? WorkspaceExperience.Management : WorkspaceExperience.Tenant);
 
         return controller;
+    }
+
+    private ApplicationUser EnsureUser()
+    {
+        var user = _ctx.Db.Users.SingleOrDefault(existing => existing.UserName == "documents-test-user");
+        if (user is not null)
+            return user;
+
+        user = new ApplicationUser
+        {
+            Id = 7,
+            UserName = "documents-test-user",
+            NormalizedUserName = "DOCUMENTS-TEST-USER",
+            Email = "documents@example.test",
+            NormalizedEmail = "DOCUMENTS@EXAMPLE.TEST",
+            DisplayName = "Documents Test User",
+            PortfolioId = PortfolioId,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Users.Add(user);
+        _ctx.Db.SaveChanges();
+        return user;
+    }
+
+    private WorkspaceAccessContext EnsureAccessContext(int userId)
+    {
+        var existing = _ctx.Db.WorkspaceAccessContexts.SingleOrDefault(context =>
+            context.UserId == userId && context.PortfolioId == PortfolioId);
+        if (existing is not null)
+            return existing;
+
+        var now = DateTime.UtcNow;
+        var context = new WorkspaceAccessContext
+        {
+            UserId = userId,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(context);
+        _ctx.Db.SaveChanges();
+        return context;
+    }
+
+    private void EnsureTenantRelationship(
+        WorkspaceAccessContext context,
+        ApplicationUser user,
+        int tenantId)
+    {
+        if (_ctx.Db.TenantUserAccesses.Any(access =>
+                access.AccessContextId == context.Id && access.RevokedAtUtc == null))
+            return;
+
+        var target = _ctx.Db.WorkOrders
+            .Where(candidate => candidate.PortfolioId == PortfolioId && candidate.TenantId == tenantId)
+            .OrderBy(candidate => candidate.Id)
+            .Select(candidate => new { candidate.PropertyId, candidate.UnitId })
+            .FirstOrDefault();
+        if (target is null)
+        {
+            if (!_ctx.Db.Tenants.Any(tenant => tenant.Id == tenantId && tenant.PortfolioId == PortfolioId))
+                return;
+
+            target = _ctx.Db.Units
+                .Where(unit => unit.Property!.PortfolioId == PortfolioId)
+                .OrderByDescending(unit => unit.Id)
+                .Select(unit => new { unit.PropertyId, UnitId = unit.Id })
+                .FirstOrDefault();
+            if (target is null)
+                return;
+        }
+
+        var now = DateTime.UtcNow;
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = target.PropertyId,
+            UnitId = target.UnitId,
+            RelationshipNumber = $"DOC-{tenantId}-{Guid.NewGuid():N}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            TenantId = tenantId,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "Document access test",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        _ctx.Db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = context,
+            ApplicationUser = user,
+            LeaseManagementParty = party,
+            GrantedAtUtc = now,
+            GrantedByUserId = user.Id,
+            Reason = "Document access test",
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private void EnsureRelationshipProjectionView()
+    {
+        using var command = _ctx.Connection.CreateCommand();
+        command.CommandText = """
+            DROP VIEW IF EXISTS "vw_effective_tenant_access";
+            CREATE VIEW "vw_effective_tenant_access" AS
+            SELECT context."Id" AS "AccessContextId", context."UserId", context."PortfolioId",
+                   context."AccessRevision", access."Id" AS "TenantUserAccessId",
+                   party."Id" AS "LeaseManagementPartyId", party."TenantId",
+                   party."LeaseManagementId", NULL AS "TenantAccountId",
+                   relationship."PropertyId", relationship."UnitId"
+            FROM "WorkspaceAccessContexts" context
+            JOIN "TenantUserAccesses" access
+              ON access."AccessContextId" = context."Id"
+             AND access."ApplicationUserId" = context."UserId"
+             AND access."PortfolioId" = context."PortfolioId"
+            JOIN "LeaseManagementParties" party
+              ON party."Id" = access."LeaseManagementPartyId"
+             AND party."PortfolioId" = access."PortfolioId"
+            JOIN "LeaseManagements" relationship
+              ON relationship."Id" = party."LeaseManagementId"
+             AND relationship."PortfolioId" = party."PortfolioId"
+            WHERE context."Status" = 'Active'
+              AND context."SuspendedAtUtc" IS NULL
+              AND context."RevokedAtUtc" IS NULL
+              AND access."RevokedAtUtc" IS NULL
+              AND party."EffectiveFrom" <= date('now')
+              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= date('now'));
+            """;
+        command.ExecuteNonQuery();
     }
 
     private static FormFile FormFile(string fileName, string contentType, string contents)

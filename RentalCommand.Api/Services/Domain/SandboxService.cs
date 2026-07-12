@@ -136,7 +136,8 @@ public sealed class SandboxService : ISandboxService
     private async Task EnsureSelfOwnerAfterWipeAsync(int portfolioId, CancellationToken ct)
     {
         var user = await _db.Users
-            .Where(u => u.PortfolioId == portfolioId && u.TenantId == null)
+            .Where(u => u.WorkspaceAccessContexts.Any(context =>
+                context.PortfolioId == portfolioId && context.Membership != null))
             .OrderBy(u => u.Id)
             .FirstOrDefaultAsync(ct);
 

@@ -3,17 +3,20 @@ using RentalCommand.Core.Interfaces;
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
-/// Explicit tenant-portal access rooted in one workspace access context and one household party.
-/// The context, not a legacy tenant/user shortcut, is the authorization subject.
+/// Effective, explicitly granted owner-portal relationship. The composite context/user/workspace
+/// foreign key proves the relationship belongs to the same signed-in identity and workspace without
+/// making a legacy user column the authorization source.
 /// </summary>
-public class TenantUserAccess : IAuditable, IPortfolioScoped
+public sealed class OwnerUserAccess : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public Guid PublicId { get; set; }
     public int PortfolioId { get; set; }
     public int AccessContextId { get; set; }
     public int ApplicationUserId { get; set; }
-    public int LeaseManagementPartyId { get; set; }
+    public int OwnerEntityId { get; set; }
+    public DateTime EffectiveFromUtc { get; set; }
+    public DateTime? EffectiveToUtc { get; set; }
     public DateTime GrantedAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }
     public int GrantedByUserId { get; set; }
@@ -23,7 +26,7 @@ public class TenantUserAccess : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public WorkspaceAccessContext? AccessContext { get; set; }
     public ApplicationUser? ApplicationUser { get; set; }
-    public LeaseManagementParty? LeaseManagementParty { get; set; }
+    public OwnerEntity? OwnerEntity { get; set; }
     public ApplicationUser? GrantedByUser { get; set; }
     public ApplicationUser? RevokedByUser { get; set; }
 }

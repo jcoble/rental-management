@@ -548,13 +548,14 @@ internal sealed partial class AtomicLeaseMutationPersistence
                 "Reason" = 'Unit transfer: access continued on destination relationship.'
             FROM active_access
             WHERE access."Id" = active_access."Id"
-            RETURNING access."Id", access."ApplicationUserId", access."LeaseManagementPartyId"
+            RETURNING access."Id", access."AccessContextId", access."ApplicationUserId",
+                      access."LeaseManagementPartyId"
         ),
         destination_access AS (
             INSERT INTO "TenantUserAccesses"
-                ("PublicId", "PortfolioId", "ApplicationUserId", "LeaseManagementPartyId",
+                ("PublicId", "PortfolioId", "AccessContextId", "ApplicationUserId", "LeaseManagementPartyId",
                  "GrantedAtUtc", "GrantedByUserId", "Reason")
-            SELECT gen_random_uuid(), @portfolioId, revoked."ApplicationUserId", party."Id",
+            SELECT gen_random_uuid(), @portfolioId, revoked."AccessContextId", revoked."ApplicationUserId", party."Id",
                    @changedAt, @actorUserId, 'Unit transfer: access continued from source relationship.'
             FROM revoked_access AS revoked
             INNER JOIN current_parties AS source_party
@@ -562,6 +563,13 @@ internal sealed partial class AtomicLeaseMutationPersistence
             INNER JOIN destination_parties AS party
               ON party."TenantId" = source_party."TenantId" AND party."Role" = source_party."Role"
             RETURNING "Id"
+        ),
+        revised_access_contexts AS (
+            UPDATE "WorkspaceAccessContexts" AS context
+            SET "AccessRevision" = context."AccessRevision" + 1,
+                "UpdatedAtUtc" = @changedAt
+            WHERE context."Id" IN (SELECT DISTINCT "AccessContextId" FROM revoked_access)
+            RETURNING context."Id"
         ),
         turnover AS (
             INSERT INTO "UnitOperationalPeriods"

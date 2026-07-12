@@ -46,9 +46,11 @@ public sealed class SwitchAuthSessionContextHandler
         }
 
         var selected = await attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffectiveTeamAccess(
+            .WhereEffectiveAccess(
                 attempt.Persistence.Query<WorkspaceMembership>(),
                 attempt.Persistence.Query<MembershipRoleAssignment>(),
+                attempt.Persistence.Query<OwnerUserAccess>(),
+                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
                 command.UserId,
                 command.ChangedAtUtc)
             .Where(item => item.Id == command.SelectedAccessContextId)

@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -586,6 +585,22 @@ public sealed class GrantTenantUserAccessHandler
         var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
+        var targetContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            .Where(context => context.UserId == command.ApplicationUserId
+                && context.PortfolioId == command.PortfolioId
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null
+                && context.RevokedAtUtc == null)
+            .Select(context => context.Id)
+            .SingleOrDefaultAsync(ct);
+        if (targetContextId <= 0)
+        {
+            return LeasePartyAccessCommandSupport.Error(
+                LeasePartyMutationOutcome.InvalidParty, command,
+                "The user has no active access context in this workspace.", command.PartyId);
+        }
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, targetContextId, ct);
 
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
             .Select(relationship => new GrantAccessTarget(
@@ -593,27 +608,22 @@ public sealed class GrantTenantUserAccessHandler
                 relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId
                     && party.EffectiveFrom <= currentDate
                     && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate)),
-                attempt.Persistence.Query<ApplicationUser>().Any(user =>
-                    user.Id == command.ApplicationUserId
-                    && user.PortfolioId == command.PortfolioId
-                    && user.TenantId == relationship.Parties
-                        .Where(party => party.Id == command.PartyId)
-                        .Select(party => (int?)party.TenantId)
-                        .FirstOrDefault()
-                    && attempt.Persistence.Query<IdentityUserRole<int>>().Any(userRole =>
-                        userRole.UserId == user.Id
-                        && attempt.Persistence.Query<IdentityRole<int>>().Any(role =>
-                            role.Id == userRole.RoleId
-                            && role.Name == nameof(UserRole.Tenant)))),
+                attempt.Persistence.Query<WorkspaceAccessContext>().FirstOrDefault(context =>
+                    context.Id == targetContextId
+                    && context.UserId == command.ApplicationUserId
+                    && context.PortfolioId == command.PortfolioId
+                    && context.Status == WorkspaceAccessContextStatus.Active
+                    && context.SuspendedAtUtc == null
+                    && context.RevokedAtUtc == null),
                 attempt.Persistence.Query<TenantUserAccess>().Any(access =>
                     access.PortfolioId == command.PortfolioId
-                    && access.ApplicationUserId == command.ApplicationUserId
+                    && access.AccessContext!.UserId == command.ApplicationUserId
                     && access.LeaseManagementPartyId == command.PartyId
                     && access.RevokedAtUtc == null)))
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (target.Party is null || !target.UserMatchesParty
+        if (target.Party is null || target.TargetContext is null
             || string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
@@ -627,12 +637,14 @@ public sealed class GrantTenantUserAccessHandler
 
         var access = LeasePartyAccessCommandSupport.NewAccess(
             command.PortfolioId,
-            command.ApplicationUserId,
+            target.TargetContext,
             target.Party,
             nowUtc,
             command.ActorUserId,
             command.Reason);
         attempt.Persistence.Add(access);
+        target.TargetContext.AdvanceRevision(target.TargetContext.AccessRevision);
+        target.TargetContext.UpdatedAtUtc = nowUtc;
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindCreated(attempt, access, command, "Granted tenant portal access.");
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
@@ -659,7 +671,7 @@ public sealed class GrantTenantUserAccessHandler
     private sealed record GrantAccessTarget(
         LeaseManagement Relationship,
         LeaseManagementParty? Party,
-        bool UserMatchesParty,
+        WorkspaceAccessContext? TargetContext,
         bool HasActiveGrant);
 }
 
@@ -676,6 +688,19 @@ public sealed class RevokeTenantUserAccessHandler
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
         var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var targetContextId = await attempt.Persistence.Query<TenantUserAccess>()
+            .Where(access => access.Id == command.TenantUserAccessId
+                && access.PortfolioId == command.PortfolioId)
+            .Select(access => access.AccessContextId)
+            .SingleOrDefaultAsync(ct);
+        if (targetContextId <= 0)
+        {
+            return LeasePartyAccessCommandSupport.Error(
+                LeasePartyMutationOutcome.InvalidParty, command,
+                "The tenant access grant does not exist in this workspace.", command.PartyId);
+        }
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, targetContextId, ct);
 
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
             .Select(relationship => new RevokeAccessTarget(
@@ -684,11 +709,14 @@ public sealed class RevokeTenantUserAccessHandler
                     access.Id == command.TenantUserAccessId
                     && access.PortfolioId == command.PortfolioId
                     && access.LeaseManagementPartyId == command.PartyId
-                    && access.LeaseManagementParty!.LeaseManagementId == relationship.Id)))
+                    && access.LeaseManagementParty!.LeaseManagementId == relationship.Id),
+                attempt.Persistence.Query<WorkspaceAccessContext>().FirstOrDefault(context =>
+                    context.Id == targetContextId
+                    && context.PortfolioId == command.PortfolioId)))
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (target.Access is null || string.IsNullOrWhiteSpace(command.Reason)
+        if (target.Access is null || target.TargetContext is null || string.IsNullOrWhiteSpace(command.Reason)
             || command.Reason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
@@ -704,6 +732,8 @@ public sealed class RevokeTenantUserAccessHandler
         target.Access.RevokedAtUtc = nowUtc;
         target.Access.RevokedByUserId = command.ActorUserId;
         target.Access.Reason = command.Reason.Trim();
+        target.TargetContext.AdvanceRevision(target.TargetContext.AccessRevision);
+        target.TargetContext.UpdatedAtUtc = nowUtc;
         LeasePartyAccessCommandSupport.BindUpdated(
             attempt, target.Access, command, "Revoked tenant portal access.");
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
@@ -730,7 +760,8 @@ public sealed class RevokeTenantUserAccessHandler
 
     private sealed record RevokeAccessTarget(
         LeaseManagement Relationship,
-        TenantUserAccess? Access);
+        TenantUserAccess? Access,
+        WorkspaceAccessContext? TargetContext);
 }
 
 internal static class LeasePartyAccessCommandSupport
@@ -855,7 +886,7 @@ internal static class LeasePartyAccessCommandSupport
 
     internal static TenantUserAccess NewAccess(
         int portfolioId,
-        int applicationUserId,
+        WorkspaceAccessContext accessContext,
         LeaseManagementParty party,
         DateTime nowUtc,
         int actorUserId,
@@ -863,7 +894,8 @@ internal static class LeasePartyAccessCommandSupport
         {
             PublicId = Guid.NewGuid(),
             PortfolioId = portfolioId,
-            ApplicationUserId = applicationUserId,
+            AccessContext = accessContext,
+            ApplicationUserId = accessContext.UserId,
             LeaseManagementParty = party,
             GrantedAtUtc = nowUtc,
             GrantedByUserId = actorUserId,

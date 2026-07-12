@@ -394,7 +394,6 @@ public class ConversationNotificationTests : IDisposable
             {
                 Id = 20,
                 PortfolioId = 1,
-                TenantId = tenant.Id,
                 UserName = "emily@example.test",
                 NormalizedUserName = "EMILY@EXAMPLE.TEST",
                 Email = "emily@example.test",
@@ -470,8 +469,54 @@ public class ConversationNotificationTests : IDisposable
 
         var authorizedContext = NewAccessContext(10, now);
         var decoyContext = NewAccessContext(30, now);
-        _ctx.Db.WorkspaceAccessContexts.AddRange(authorizedContext, decoyContext);
+        var tenantContext = new WorkspaceAccessContext
+        {
+            UserId = 20,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.AddRange(authorizedContext, decoyContext, tenantContext);
         _ctx.Db.SaveChanges();
+
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            PropertyId = tenantProperty.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = "LM-CONVERSATION-TENANT",
+            CreatedAtUtc = now,
+            CreatedByUserId = 10,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "Conversation portal test",
+            CreatedAtUtc = now,
+            CreatedByUserId = 10,
+        };
+        _ctx.Db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            AccessContext = tenantContext,
+            ApplicationUserId = 20,
+            LeaseManagementParty = party,
+            GrantedAtUtc = now,
+            GrantedByUserId = 10,
+            Reason = "Conversation portal test",
+        });
+        _ctx.Db.SaveChanges();
+
         var authorizedMembership = NewMembership(authorizedContext.Id, now);
         var decoyMembership = NewMembership(decoyContext.Id, now);
         _ctx.Db.WorkspaceMemberships.AddRange(authorizedMembership, decoyMembership);

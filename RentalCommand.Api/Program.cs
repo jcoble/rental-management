@@ -365,6 +365,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.LeasePartyMutationResult,
     RentalCommand.Data.Leasing.RevokeTenantUserAccessHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.GrantOwnerUserAccessCommand,
+    RentalCommand.Core.Authorization.OwnerRelationshipAccessMutationResult,
+    RentalCommand.Data.Authorization.GrantOwnerUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.RevokeOwnerUserAccessCommand,
+    RentalCommand.Core.Authorization.OwnerRelationshipAccessMutationResult,
+    RentalCommand.Data.Authorization.RevokeOwnerUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.GivePossessionCommand,
     RentalCommand.Core.Leasing.GivePossessionResult,
     RentalCommand.Data.Leasing.GivePossessionHandler>();

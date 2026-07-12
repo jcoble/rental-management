@@ -21,6 +21,18 @@ public class PortalService : IPortalService
         _timeProvider = timeProvider;
     }
 
+    public Task<int?> ResolveTenantIdAsync(
+        int portfolioId,
+        int accessContextId,
+        CancellationToken ct = default) =>
+        _db.EffectiveTenantAccess
+            .AsNoTracking()
+            .Where(access => access.PortfolioId == portfolioId &&
+                access.AccessContextId == accessContextId)
+            .OrderBy(access => access.LeaseManagementPartyId)
+            .Select(access => (int?)access.TenantId)
+            .FirstOrDefaultAsync(ct);
+
     public async Task<IReadOnlyList<LeaseResponse>> GetLeasesAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
         return await _db.Leases

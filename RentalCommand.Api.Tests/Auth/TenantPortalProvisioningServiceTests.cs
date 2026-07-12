@@ -58,27 +58,25 @@ public class TenantPortalProvisioningServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task EnsurePortalAccount_NewTenant_CreatesIdentityUserWithSeedPassword_AndUserAccount()
+    public async Task EnsurePortalAccount_NewTenant_CreatesIdentityAndContextWithoutLegacyRoleOrAccount()
     {
         var tenant = SeedTenant(id: 30, email: "new.tenant@example.local");
         var userManager = CreateUserManagerMock();
         ApplicationUser? created = null;
         string? password = null;
-        string? assignedRole = null;
 
         userManager
             .Setup(m => m.FindByEmailAsync("new.tenant@example.local"))
             .ReturnsAsync((ApplicationUser?)null);
         userManager
             .Setup(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()))
-            .Callback<ApplicationUser, string>((u, pwd) => { u.Id = 555; created = u; password = pwd; })
-            .ReturnsAsync(IdentityResult.Success);
-        userManager
-            .Setup(m => m.GetRolesAsync(It.IsAny<ApplicationUser>()))
-            .ReturnsAsync(new List<string>());
-        userManager
-            .Setup(m => m.AddToRoleAsync(It.IsAny<ApplicationUser>(), nameof(UserRole.Tenant)))
-            .Callback<ApplicationUser, string>((_, role) => assignedRole = role)
+            .Callback<ApplicationUser, string>((u, pwd) =>
+            {
+                u.Id = 555;
+                created = u;
+                password = pwd;
+                _ctx.Db.Users.Attach(u);
+            })
             .ReturnsAsync(IdentityResult.Success);
 
         var service = CreateService(userManager.Object);
@@ -90,16 +88,13 @@ public class TenantPortalProvisioningServiceTests : IDisposable
         created.Should().NotBeNull();
         created!.Email.Should().Be("new.tenant@example.local");
         created.PortfolioId.Should().Be(PortfolioId);
-        created.TenantId.Should().Be(tenant.Id);
         created.EmailConfirmed.Should().BeTrue();
         password.Should().Be(new SeedSettings().TenantPassword);
-        assignedRole.Should().Be(nameof(UserRole.Tenant));
-
-        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "new.tenant@example.local");
-        account.PortfolioId.Should().Be(PortfolioId);
-        account.TenantId.Should().Be(tenant.Id);
-        account.Role.Should().Be(UserRole.Tenant);
-        account.IsActive.Should().BeTrue();
+        _ctx.Db.WorkspaceAccessContexts.Should().ContainSingle(context =>
+            context.UserId == created.Id && context.PortfolioId == PortfolioId);
+        _ctx.Db.TenantUserAccesses.Should().BeEmpty(
+            "portal authority begins only when an effective lease party exists");
+        _ctx.Db.UserAccounts.Should().BeEmpty();
     }
 
     [Fact]
@@ -114,17 +109,14 @@ public class TenantPortalProvisioningServiceTests : IDisposable
             EmailConfirmed = true,
             DisplayName = "Has Login",
             PortfolioId = PortfolioId,
-            TenantId = tenant.Id,
         };
+        _ctx.Db.Users.Add(existing);
+        _ctx.Db.SaveChanges();
 
         var userManager = CreateUserManagerMock();
         userManager
             .Setup(m => m.FindByEmailAsync("has.login@example.local"))
             .ReturnsAsync(existing);
-        userManager
-            .Setup(m => m.GetRolesAsync(existing))
-            .ReturnsAsync(new List<string> { nameof(UserRole.Tenant) });
-
         var service = CreateService(userManager.Object);
         var result = await service.EnsurePortalAccountForTenantAsync(tenant.Id, PortfolioId, CancellationToken.None);
 

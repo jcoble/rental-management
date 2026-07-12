@@ -179,7 +179,6 @@ public class AdminUsersController : ManagementControllerBase
             EmailConfirmed = true, // admin-created accounts skip the email-verify gate
             DisplayName = request.DisplayName ?? string.Empty,
             PortfolioId = portfolioId,
-            TenantId = request.TenantId,
             CreatedAt = now,
         };
 

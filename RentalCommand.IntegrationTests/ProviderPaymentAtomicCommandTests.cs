@@ -248,6 +248,15 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         };
         db.AddRange(user, portfolio);
         await db.SaveChangesAsync();
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = user.Id, PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = now, UpdatedAtUtc = now,
+        };
+        db.Add(accessContext);
+        await db.SaveChangesAsync();
         var property = new Property
         {
             PortfolioId = portfolio.Id, Name = $"Property {suffix}", AddressLine1 = "1 Pay Way",
@@ -316,6 +325,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         var access = new TenantUserAccess
         {
             PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
+            AccessContextId = accessContext.Id,
             ApplicationUserId = user.Id, LeaseManagementPartyId = party.Id,
             GrantedAtUtc = now, GrantedByUserId = user.Id, Reason = "integration portal access",
         };

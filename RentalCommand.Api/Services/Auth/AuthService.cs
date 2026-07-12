@@ -177,19 +177,14 @@ public class AuthService : IAuthService
         }
 
         // lockoutOnFailure: true enables Identity's lockout (configured in Program.cs: 5 attempts / 5 min).
-        // CheckPasswordSignInAsync also rejects an already-locked-out user up front (its PreSignInCheck),
-        // which is exactly how a tenant whose portal access was turned OFF is blocked — disabling sets a
-        // far-future lockout end (TenantPortalProvisioningService.SetPortalAccessAsync).
+        // CheckPasswordSignInAsync also rejects an already-locked-out identity up front. Relationship
+        // access is evaluated separately when selecting a canonical workspace context.
         var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
         if (!result.Succeeded)
         {
             if (result.IsLockedOut)
             {
-                // Distinguish a deliberate "portal access off" (indefinite lock) from a transient
-                // failed-login auto-lockout so the tenant gets a message that points them at their landlord.
-                return TenantPortalProvisioningService.IsPortalDisabled(user.LockoutEnd)
-                    ? AuthResult.Fail("Your portal access has been turned off. Please contact your landlord.")
-                    : AuthResult.Fail("Account is locked. Try again later.");
+                return AuthResult.Fail("Account is locked. Try again later.");
             }
             return AuthResult.Fail("Invalid email or password");
         }
@@ -571,8 +566,6 @@ public class AuthService : IAuthService
             Email = user.Email ?? string.Empty,
             DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
             PortfolioId = user.PortfolioId,
-            OwnerEntityId = user.OwnerEntityId,
-            TenantId = user.TenantId,
             Roles = roles.ToList(),
             EmailVerified = user.EmailConfirmed
         });
