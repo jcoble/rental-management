@@ -4,7 +4,7 @@
 	import {
 		applications,
 		type ApplicationResponse,
-		type ScreeningResultResponse,
+		type ApplicantScreeningResponse,
 		type AdverseActionNoticeResponse,
 		type UpdateApplicationRequest,
 		type RecordApplicationFeeRequest,
@@ -315,8 +315,8 @@
 		enabled: !isNaN(id) && id > 0,
 	}));
 
-	const latestScreening = $derived<ScreeningResultResponse | undefined>(
-		screeningQuery.data?.[0]
+	const latestScreening = $derived<ApplicantScreeningResponse | undefined>(
+		screeningQuery.data?.screenings[0]
 	);
 	const hasScreening = $derived(!!latestScreening);
 	const canScreen = $derived(
@@ -329,15 +329,34 @@
 		Decline: { label: 'Decline', class: 'm3-tone-chip border m3-tone--error' },
 	};
 	const SCREEN_STATUS_MAP = {
-		Requested: { label: 'Requested', class: 'm3-tone-chip border m3-tone--info' },
+		Created: { label: 'Created', class: 'm3-tone-chip border m3-tone--info' },
+		AwaitingProvider: { label: 'Connecting', class: 'm3-tone-chip border m3-tone--info' },
+		AwaitingApplicant: { label: 'Waiting for applicant', class: 'm3-tone-chip border m3-tone--warning' },
+		InProgress: { label: 'In progress', class: 'm3-tone-chip border m3-tone--primary' },
 		Completed: { label: 'Completed', class: 'm3-tone-chip border m3-tone--success' },
 		Failed: { label: 'Failed', class: 'm3-tone-chip border m3-tone--error' },
+		Cancelled: { label: 'Cancelled', class: 'm3-tone-chip border' },
 	};
+	let screeningMode = $state<'Integrated' | 'External'>('Integrated');
+	let externalProvider = $state('Zillow');
+	let externalReference = $state('');
+	let externalUrl = $state('');
+	let externalCraName = $state('');
+	let externalCraAddress = $state('');
+	let externalCraPhone = $state('');
+	let integratedScreeningOperationKey = $state<string | null>(null);
+	let externalScreeningOperationKey = $state<string | null>(null);
+	let completeExternalOperationKey = $state<string | null>(null);
 
 	const screenMutation = createMutation(() => ({
-		mutationFn: () => applications.screen(id),
+		mutationFn: () =>
+			applications.startIntegratedScreening(
+				id,
+				(integratedScreeningOperationKey ??= crypto.randomUUID())
+			),
 		onSuccess: () => {
-			showSuccess('Screening complete.');
+			showSuccess('Screening invitation created.');
+			integratedScreeningOperationKey = null;
 			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
 			invalidate(); // screening flips the application to UnderReview
 		},
@@ -348,6 +367,46 @@
 			}
 			showError(apiErrorMessage(err));
 		},
+	}));
+
+	const externalScreeningMutation = createMutation(() => ({
+		mutationFn: () =>
+			applications.trackExternalScreening(id, {
+				operationKey: (externalScreeningOperationKey ??= crypto.randomUUID()),
+				providerDisplayName: externalProvider.trim(),
+				providerReference: externalReference.trim() || null,
+				providerHostedUrl: externalUrl.trim() || null,
+				creditReportingAgencyName: externalCraName.trim() || null,
+				creditReportingAgencyAddress: externalCraAddress.trim() || null,
+				creditReportingAgencyPhone: externalCraPhone.trim() || null,
+				status: 'InProgress',
+			}),
+		onSuccess: () => {
+			showSuccess('External screening added.');
+			externalScreeningOperationKey = null;
+			externalReference = '';
+			externalUrl = '';
+			externalCraName = '';
+			externalCraAddress = '';
+			externalCraPhone = '';
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'External screening could not be added.')),
+	}));
+
+	const completeExternalScreeningMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.updateExternalScreening(id, screeningId, {
+				operationKey: (completeExternalOperationKey ??= crypto.randomUUID()),
+				status: 'Completed',
+			}),
+		onSuccess: () => {
+			showSuccess('Outside screening marked complete.');
+			completeExternalOperationKey = null;
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Screening status could not be updated.')),
 	}));
 
 	// ── Adverse-action notice ──────────────────────────────────────────────────────
@@ -622,33 +681,92 @@
 			<!-- Screening -->
 			<Card.Root class="lg:col-span-2" data-testid="application-screening-card">
 				<Card.Header>
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Screening</Card.Title>
-							<div class="flex flex-col items-end gap-1">
-								{#if isOpen}
-									<Button
-										class="gap-2"
-										disabled={!canScreen || screenMutation.isPending}
-										onclick={() => screenMutation.mutate()}
-										data-testid="application-run-screening"
-									>
-										<ScanSearch class="h-4 w-4" />
-										{screenMutation.isPending ? 'Screening…' : hasScreening ? 'Re-run screening' : 'Run screening'}
-									</Button>
-								{/if}
-								{#if !isOpen}
-									<p class="text-xs text-muted-foreground" data-testid="application-screening-terminal-note">
-										Screening can only be run before a decision
-									</p>
-								{:else if !canScreen}
-									<p class="text-xs text-muted-foreground" data-testid="application-screening-consent-note">
-										Applicant consent is required to screen
-									</p>
-								{/if}
-						</div>
-					</div>
+					<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Applicant screening</Card.Title>
+					<p class="text-sm text-muted-foreground">
+						Invite through Rental Command once a provider is connected, or track a screening completed in Zillow or another service.
+					</p>
+					<p class="text-xs text-muted-foreground">
+						Do not paste Social Security numbers, identity answers, or report contents here. Review those only in the provider's secure site.
+					</p>
 				</Card.Header>
-				<Card.Content>
+				<Card.Content class="space-y-5">
+					<div class="grid gap-3 sm:grid-cols-2" data-testid="screening-mode-picker">
+						<button
+							type="button"
+							class="rounded-xl border p-4 text-left transition {screeningMode === 'Integrated' ? 'border-primary bg-primary/5' : 'border-border'}"
+							onclick={() => (screeningMode = 'Integrated')}
+						>
+							<p class="font-medium">Screen through Rental Command</p>
+							<p class="mt-1 text-xs text-muted-foreground">The applicant securely enters sensitive information on the screening provider's site.</p>
+						</button>
+						<button
+							type="button"
+							class="rounded-xl border p-4 text-left transition {screeningMode === 'External' ? 'border-primary bg-primary/5' : 'border-border'}"
+							onclick={() => (screeningMode = 'External')}
+						>
+							<p class="font-medium">Track an outside screening</p>
+							<p class="mt-1 text-xs text-muted-foreground">Use Zillow or any other checker. Rental Command records progress but does not claim to sync it.</p>
+						</button>
+					</div>
+
+					{#if screeningMode === 'Integrated'}
+						<div class="rounded-xl border border-border p-4">
+							<div class="flex flex-wrap items-center justify-between gap-3">
+								<div>
+									<p class="font-medium">{screeningQuery.data?.integratedProvider.displayName ?? 'Integrated screening'}</p>
+									<p class="text-xs text-muted-foreground">
+										{screeningQuery.data?.integratedProvider.isConfigured
+											? 'Ready to create a secure applicant invitation.'
+											: 'Provider selection is still being finalized. Outside screening remains available.'}
+									</p>
+								</div>
+								<Button
+									class="gap-2"
+									disabled={!canScreen || !screeningQuery.data?.integratedProvider.isConfigured || screenMutation.isPending}
+									onclick={() => screenMutation.mutate()}
+									data-testid="application-run-screening"
+								>
+									<ScanSearch class="h-4 w-4" />
+									{screenMutation.isPending ? 'Creating invitation…' : 'Invite applicant'}
+								</Button>
+							</div>
+							{#if !application?.consentGiven}
+								<p class="mt-3 text-xs text-muted-foreground">Applicant consent is required before an integrated screening can start.</p>
+							{/if}
+						</div>
+					{:else}
+						<div class="grid gap-3 rounded-xl border border-border p-4 sm:grid-cols-2" data-testid="external-screening-form">
+							<label class="space-y-1 text-sm">
+								<span class="font-medium">Screening service</span>
+								<Input bind:value={externalProvider} placeholder="Zillow, another service, local agency…" />
+							</label>
+							<label class="space-y-1 text-sm">
+								<span class="font-medium">Reference (optional)</span>
+								<Input bind:value={externalReference} placeholder="Order or application number" />
+							</label>
+							<label class="space-y-1 text-sm sm:col-span-2">
+								<span class="font-medium">Provider link (optional)</span>
+								<Input bind:value={externalUrl} type="url" placeholder="https://…" />
+							</label>
+							<div class="space-y-3 rounded-lg bg-muted/40 p-3 sm:col-span-2">
+								<p class="text-xs text-muted-foreground">Optional: add the credit reporting agency contact details now so an adverse-action notice can be generated later.</p>
+								<div class="grid gap-3 sm:grid-cols-2">
+									<Input bind:value={externalCraName} placeholder="Credit reporting agency name" />
+									<Input bind:value={externalCraPhone} placeholder="Agency phone" />
+									<Input class="sm:col-span-2" bind:value={externalCraAddress} placeholder="Agency mailing address" />
+								</div>
+							</div>
+							<div class="sm:col-span-2">
+								<Button
+									disabled={!isOpen || !externalProvider.trim() || externalScreeningMutation.isPending}
+									onclick={() => externalScreeningMutation.mutate()}
+								>
+									{externalScreeningMutation.isPending ? 'Adding…' : 'Add outside screening'}
+								</Button>
+							</div>
+						</div>
+					{/if}
+
 					{#if screeningQuery.isLoading}
 						<div class="flex items-center gap-2 text-sm text-muted-foreground">
 							<div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
@@ -658,49 +776,37 @@
 						<div class="space-y-4" data-testid="application-screening-result">
 							<div class="flex flex-wrap items-center gap-2">
 								<StatusBadge status={latestScreening.status} map={SCREEN_STATUS_MAP} />
-								{#if latestScreening.recommendation}
+								<span class="m3-tone-chip border">{latestScreening.mode}</span>
+								{#if latestScreening.decision}
 									<StatusBadge
-										status={latestScreening.recommendation}
+										status={latestScreening.decision}
 										map={RECOMMENDATION_MAP}
 									/>
 								{/if}
 								<span class="text-xs text-muted-foreground">
-									Screened {fmtDateTime(latestScreening.completedAtUtc ?? latestScreening.requestedAtUtc)}
+									Updated {fmtDateTime(latestScreening.lastStatusAtUtc)}
 								</span>
 							</div>
-							<div class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
-								{@render fieldRow('Credit score band', latestScreening.creditScoreBand || '—')}
-								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Criminal records</p>
-									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasCriminalRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
-										data-testid="application-screening-criminal"
-									>
-										{#if latestScreening.hasCriminalRecord}
-											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
-										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No criminal records found
-										{/if}
-									</p>
-								</div>
-								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Eviction records</p>
-									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasEvictionRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
-										data-testid="application-screening-eviction"
-									>
-										{#if latestScreening.hasEvictionRecord}
-											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
-										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No eviction records found
-										{/if}
-									</p>
-								</div>
+							<div class="grid gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
+								{@render fieldRow('Provider', latestScreening.providerDisplayName)}
+								{@render fieldRow('Reference', latestScreening.providerReference || '—')}
+								{#if latestScreening.providerHostedUrl}
+									<a class="text-primary underline underline-offset-2" href={latestScreening.providerHostedUrl} target="_blank" rel="noopener noreferrer">Open provider</a>
+								{/if}
 							</div>
+							{#if latestScreening.mode === 'External' && latestScreening.status !== 'Completed' && latestScreening.status !== 'Cancelled'}
+								<Button
+									variant="outline"
+									disabled={completeExternalScreeningMutation.isPending}
+									onclick={() => completeExternalScreeningMutation.mutate(latestScreening.id)}
+								>
+									Mark outside screening complete
+								</Button>
+							{/if}
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground" data-testid="application-screening-empty">
-							No screening has been run yet.
+							No screening has been added yet. Choose either path above.
 						</p>
 					{/if}
 				</Card.Content>
