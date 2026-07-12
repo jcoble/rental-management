@@ -5,13 +5,12 @@ using NpgsqlTypes;
 
 namespace RentalCommand.Data.Payments;
 
-public sealed record ProviderInboxClaim(long Id, Guid ClaimToken, int AttemptCount);
+public sealed record ProviderInboxClaim(long Id, string ClaimOwner, Guid ClaimToken, int AttemptCount);
 
 public interface IProviderInboxClaimStore
 {
     Task<IReadOnlyList<ProviderInboxClaim>> ClaimAsync(
         string claimOwner,
-        DateTime nowUtc,
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct = default);
@@ -25,28 +24,35 @@ public interface IProviderInboxClaimStore
 public sealed class ProviderInboxClaimStore : IProviderInboxClaimStore
 {
     private const string ClaimSql = """
-        WITH candidates AS (
-            SELECT "Id"
-            FROM "ProviderInboxEvents"
-            WHERE "ProcessedAtUtc" IS NULL
-              AND "DeadLetteredAtUtc" IS NULL
-              AND "NextAttemptAtUtc" <= @now
-              AND ("ClaimToken" IS NULL OR "ClaimExpiresAtUtc" <= @now)
-            ORDER BY "NextAttemptAtUtc", "ReceivedAtUtc", "Id"
-            FOR UPDATE SKIP LOCKED
+        WITH claim_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_utc
+        ), candidates AS MATERIALIZED (
+            SELECT candidate."Id", candidate."NextAttemptAtUtc", candidate."ReceivedAtUtc"
+            FROM "ProviderInboxEvents" AS candidate, claim_clock
+            WHERE candidate."ProcessedAtUtc" IS NULL
+              AND candidate."DeadLetteredAtUtc" IS NULL
+              AND candidate."NextAttemptAtUtc" <= claim_clock.now_utc
+              AND (candidate."ClaimToken" IS NULL OR candidate."ClaimExpiresAtUtc" <= claim_clock.now_utc)
+            ORDER BY candidate."NextAttemptAtUtc", candidate."ReceivedAtUtc", candidate."Id"
             LIMIT @batchSize
+            FOR UPDATE OF candidate SKIP LOCKED
+        ), claimed AS (
+            UPDATE "ProviderInboxEvents" AS inbox
+            SET "ClaimOwner" = @claimOwner,
+                "ClaimToken" = gen_random_uuid(),
+                "ClaimExpiresAtUtc" = claim_clock.now_utc + @leaseDuration,
+                "AttemptCount" = inbox."AttemptCount" + 1,
+                "LastAttemptAtUtc" = claim_clock.now_utc,
+                "FailureKind" = NULL,
+                "LastError" = NULL
+            FROM candidates, claim_clock
+            WHERE inbox."Id" = candidates."Id"
+            RETURNING inbox."Id", inbox."ClaimOwner", inbox."ClaimToken", inbox."AttemptCount"
         )
-        UPDATE "ProviderInboxEvents" AS inbox
-        SET "ClaimOwner" = @claimOwner,
-            "ClaimToken" = @claimToken,
-            "ClaimExpiresAtUtc" = @claimExpiresAtUtc,
-            "AttemptCount" = inbox."AttemptCount" + 1,
-            "LastAttemptAtUtc" = @now,
-            "FailureKind" = NULL,
-            "LastError" = NULL
-        FROM candidates
-        WHERE inbox."Id" = candidates."Id"
-        RETURNING inbox."Id", inbox."ClaimToken", inbox."AttemptCount";
+        SELECT claimed."Id", claimed."ClaimOwner", claimed."ClaimToken", claimed."AttemptCount"
+        FROM claimed
+        JOIN candidates ON candidates."Id" = claimed."Id"
+        ORDER BY candidates."NextAttemptAtUtc", candidates."ReceivedAtUtc", candidates."Id";
         """;
 
     private readonly RentalCommandDbContext _db;
@@ -55,7 +61,6 @@ public sealed class ProviderInboxClaimStore : IProviderInboxClaimStore
 
     public async Task<IReadOnlyList<ProviderInboxClaim>> ClaimAsync(
         string claimOwner,
-        DateTime nowUtc,
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct = default)
@@ -65,7 +70,6 @@ public sealed class ProviderInboxClaimStore : IProviderInboxClaimStore
         if (leaseDuration <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(leaseDuration));
         if (batchSize is <= 0 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
 
-        var now = AsUtc(nowUtc);
         var connection = _db.Database.GetDbConnection();
         var closeWhenDone = connection.State != ConnectionState.Open;
         if (closeWhenDone) await connection.OpenAsync(ct);
@@ -74,20 +78,19 @@ public sealed class ProviderInboxClaimStore : IProviderInboxClaimStore
         {
             await using var command = connection.CreateCommand();
             command.CommandText = ClaimSql;
-            command.Parameters.Add(new NpgsqlParameter("now", NpgsqlDbType.TimestampTz) { Value = now });
             command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
-            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
-            command.Parameters.Add(new NpgsqlParameter("claimExpiresAtUtc", NpgsqlDbType.TimestampTz)
-            {
-                Value = now.Add(leaseDuration),
-            });
+            command.Parameters.Add(new NpgsqlParameter("leaseDuration", NpgsqlDbType.Interval) { Value = leaseDuration });
             command.Parameters.Add(new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize });
 
             var claims = new List<ProviderInboxClaim>();
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                claims.Add(new ProviderInboxClaim(reader.GetInt64(0), reader.GetGuid(1), reader.GetInt32(2)));
+                claims.Add(new ProviderInboxClaim(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetGuid(2),
+                    reader.GetInt32(3)));
             }
 
             return claims;
@@ -97,11 +100,4 @@ public sealed class ProviderInboxClaimStore : IProviderInboxClaimStore
             if (closeWhenDone) await connection.CloseAsync();
         }
     }
-
-    private static DateTime AsUtc(DateTime value) => value.Kind switch
-    {
-        DateTimeKind.Utc => value,
-        DateTimeKind.Local => value.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
-    };
 }

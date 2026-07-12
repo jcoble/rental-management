@@ -31,9 +31,8 @@ public sealed class ProviderInboxReconciliationService
 
     public async Task<int> ReconcileAsync(CancellationToken ct = default)
     {
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
         var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
-        var claims = await _claimStore.ClaimAsync(owner, now, LeaseDuration, BatchSize, ct);
+        var claims = await _claimStore.ClaimAsync(owner, LeaseDuration, BatchSize, ct);
         var completed = 0;
 
         foreach (var claim in claims)
@@ -46,7 +45,11 @@ public sealed class ProviderInboxReconciliationService
                     new AtomicCommandIdentity(
                         "payments.provider-inbox.reconcile",
                         $"{claim.Id}:{claim.ClaimToken:N}"),
-                    new ReconcileClaimedProviderPaymentEventCommand(claim.Id, claim.ClaimToken, reconciledAt),
+                    new ReconcileClaimedProviderPaymentEventCommand(
+                        claim.Id,
+                        claim.ClaimOwner,
+                        claim.ClaimToken,
+                        reconciledAt),
                     ResultCodec,
                     ct);
                 if (outcome.Value.Outcome == ReconcileProviderPaymentEventOutcome.Applied)

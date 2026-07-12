@@ -3901,7 +3901,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PortfolioId");
 
-                    b.HasIndex("ProviderPaymentIntentId")
+                    b.HasIndex("Provider", "ProviderPaymentIntentId")
                         .IsUnique()
                         .HasFilter("\"ProviderPaymentIntentId\" IS NOT NULL");
 
