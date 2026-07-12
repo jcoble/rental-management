@@ -428,20 +428,162 @@ class UnitAppointmentSummary {
   }
 }
 
-class UnitListing {
-  const UnitListing({
+class ListingPhoto {
+  const ListingPhoto({
+    required this.id,
+    required this.position,
+    required this.category,
+    this.caption,
+    this.storedFileId,
+    this.fileName,
+    this.sha256,
+  });
+
+  final int id;
+  final int position;
+  final String category;
+  final String? caption;
+  final int? storedFileId;
+  final String? fileName;
+  final String? sha256;
+
+  factory ListingPhoto.fromJson(Map<String, dynamic> json) => ListingPhoto(
+    id: (json['id'] as num?)?.toInt() ?? 0,
+    position: (json['position'] as num?)?.toInt() ?? 0,
+    category: json['category'] as String? ?? '',
+    caption: json['caption'] as String?,
+    storedFileId: (json['storedFileId'] as num?)?.toInt(),
+    fileName: json['fileName'] as String?,
+    sha256: json['sha256'] as String?,
+  );
+}
+
+class ExternalListingSignal {
+  const ExternalListingSignal({
+    required this.id,
+    required this.signalType,
+    required this.disposition,
+    required this.receivedAtUtc,
+    this.suggestedExternalListingId,
+    this.suggestedListingUrl,
+    this.suggestedExternalStatus,
+  });
+
+  final int id;
+  final String signalType;
+  final String? suggestedExternalListingId;
+  final String? suggestedListingUrl;
+  final String? suggestedExternalStatus;
+  final String disposition;
+  final DateTime receivedAtUtc;
+
+  factory ExternalListingSignal.fromJson(Map<String, dynamic> json) =>
+      ExternalListingSignal(
+        id: (json['id'] as num?)?.toInt() ?? 0,
+        signalType: json['signalType'] as String? ?? '',
+        suggestedExternalListingId:
+            json['suggestedExternalListingId'] as String?,
+        suggestedListingUrl: json['suggestedListingUrl'] as String?,
+        suggestedExternalStatus: json['suggestedExternalStatus'] as String?,
+        disposition: json['disposition'] as String? ?? 'Unconfirmed',
+        receivedAtUtc: _parseDate(json['receivedAtUtc']),
+      );
+}
+
+class ListingPublication {
+  const ListingPublication({
+    required this.id,
+    required this.providerKey,
+    required this.mode,
+    required this.status,
+    required this.copyConfirmed,
+    required this.termsConfirmed,
+    required this.photosConfirmed,
+    required this.providerWorkspaceOpened,
+    required this.needsRepublish,
+    required this.unconfirmedSignals,
+    this.externalListingId,
+    this.listingUrl,
+    this.applicationUrl,
+    this.managementUrl,
+    this.lastConfirmedExternalStatus,
+    this.lastConfirmedAtUtc,
+    this.publishedContentVersion,
+    this.lastDeliveryKey,
+    this.lastDeliveryStatus,
+    this.lastDeliveryError,
+    this.lastDeliveryAttemptAtUtc,
+  });
+
+  final int id;
+  final String providerKey;
+  final String mode;
+  final String status;
+  final String? externalListingId;
+  final String? listingUrl;
+  final String? applicationUrl;
+  final String? managementUrl;
+  final String? lastConfirmedExternalStatus;
+  final DateTime? lastConfirmedAtUtc;
+  final bool copyConfirmed;
+  final bool termsConfirmed;
+  final bool photosConfirmed;
+  final bool providerWorkspaceOpened;
+  final bool needsRepublish;
+  final int? publishedContentVersion;
+  final String? lastDeliveryKey;
+  final String? lastDeliveryStatus;
+  final String? lastDeliveryError;
+  final DateTime? lastDeliveryAttemptAtUtc;
+  final List<ExternalListingSignal> unconfirmedSignals;
+
+  factory ListingPublication.fromJson(
+    Map<String, dynamic> json,
+  ) => ListingPublication(
+    id: (json['id'] as num?)?.toInt() ?? 0,
+    providerKey: json['providerKey'] as String? ?? '',
+    mode: json['mode'] as String? ?? 'Guided',
+    status: json['status'] as String? ?? 'Draft',
+    externalListingId: json['externalListingId'] as String?,
+    listingUrl: json['listingUrl'] as String?,
+    applicationUrl: json['applicationUrl'] as String?,
+    managementUrl: json['managementUrl'] as String?,
+    lastConfirmedExternalStatus: json['lastConfirmedExternalStatus'] as String?,
+    lastConfirmedAtUtc: _parseOptionalDate(json['lastConfirmedAtUtc']),
+    copyConfirmed: json['copyConfirmed'] as bool? ?? false,
+    termsConfirmed: json['termsConfirmed'] as bool? ?? false,
+    photosConfirmed: json['photosConfirmed'] as bool? ?? false,
+    providerWorkspaceOpened: json['providerWorkspaceOpened'] as bool? ?? false,
+    needsRepublish: json['needsRepublish'] as bool? ?? false,
+    publishedContentVersion: (json['publishedContentVersion'] as num?)?.toInt(),
+    lastDeliveryKey: json['lastDeliveryKey'] as String?,
+    lastDeliveryStatus: json['lastDeliveryStatus'] as String?,
+    lastDeliveryError: json['lastDeliveryError'] as String?,
+    lastDeliveryAttemptAtUtc: _parseOptionalDate(
+      json['lastDeliveryAttemptAtUtc'],
+    ),
+    unconfirmedSignals: _jsonList(
+      json['unconfirmedSignals'],
+    ).map(ExternalListingSignal.fromJson).toList(),
+  );
+}
+
+class ListingWorkspace {
+  const ListingWorkspace({
     required this.id,
     required this.portfolioId,
     required this.propertyId,
     required this.unitId,
-    required this.channel,
     required this.status,
+    required this.contentVersion,
     required this.headline,
     required this.description,
     required this.rent,
     required this.bedrooms,
     required this.bathrooms,
-    required this.isPosted,
+    required this.photoManifest,
+    required this.publications,
+    required this.signedLeaseImportUrl,
     required this.createdAt,
     required this.updatedAt,
     this.securityDeposit,
@@ -452,18 +594,14 @@ class UnitListing {
     this.utilities,
     this.parking,
     this.amenities,
-    this.photoNotes,
-    this.zillowListingUrl,
-    this.zillowApplicationUrl,
-    this.postedAtUtc,
   });
 
   final int id;
   final int portfolioId;
   final int propertyId;
   final int unitId;
-  final String channel;
   final String status;
+  final int contentVersion;
   final String headline;
   final String description;
   final double rent;
@@ -477,22 +615,20 @@ class UnitListing {
   final String? utilities;
   final String? parking;
   final String? amenities;
-  final String? photoNotes;
-  final String? zillowListingUrl;
-  final String? zillowApplicationUrl;
-  final DateTime? postedAtUtc;
-  final bool isPosted;
+  final List<ListingPhoto> photoManifest;
+  final List<ListingPublication> publications;
+  final String signedLeaseImportUrl;
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  factory UnitListing.fromJson(Map<String, dynamic> json) {
-    return UnitListing(
+  factory ListingWorkspace.fromJson(Map<String, dynamic> json) {
+    return ListingWorkspace(
       id: (json['id'] as num?)?.toInt() ?? 0,
       portfolioId: (json['portfolioId'] as num?)?.toInt() ?? 0,
       propertyId: (json['propertyId'] as num?)?.toInt() ?? 0,
       unitId: (json['unitId'] as num?)?.toInt() ?? 0,
-      channel: json['channel'] as String? ?? '',
       status: json['status'] as String? ?? 'Draft',
+      contentVersion: (json['contentVersion'] as num?)?.toInt() ?? 0,
       headline: json['headline'] as String? ?? '',
       description: json['description'] as String? ?? '',
       rent: (json['rent'] as num?)?.toDouble() ?? 0,
@@ -506,37 +642,82 @@ class UnitListing {
       utilities: json['utilities'] as String?,
       parking: json['parking'] as String?,
       amenities: json['amenities'] as String?,
-      photoNotes: json['photoNotes'] as String?,
-      zillowListingUrl: json['zillowListingUrl'] as String?,
-      zillowApplicationUrl: json['zillowApplicationUrl'] as String?,
-      postedAtUtc: _parseOptionalDate(json['postedAtUtc']),
-      isPosted: json['isPosted'] as bool? ?? false,
+      photoManifest: _jsonList(
+        json['photoManifest'],
+      ).map(ListingPhoto.fromJson).toList(),
+      publications: _jsonList(
+        json['publications'],
+      ).map(ListingPublication.fromJson).toList(),
+      signedLeaseImportUrl: json['signedLeaseImportUrl'] as String? ?? '',
       createdAt: _parseDate(json['createdAt']),
       updatedAt: _parseDate(json['updatedAt']),
     );
   }
 }
 
-class SaveUnitListingRequest {
-  const SaveUnitListingRequest({
+class SaveGuidedPublicationRequest {
+  const SaveGuidedPublicationRequest({
+    this.status,
+    this.externalListingId,
+    this.listingUrl,
+    this.applicationUrl,
+    this.managementUrl,
+    this.lastConfirmedExternalStatus,
+    this.lastConfirmedAtUtc,
+    this.copyConfirmed,
+    this.termsConfirmed,
+    this.photosConfirmed,
+    this.providerWorkspaceOpened,
+    this.markCurrentVersionPublished,
+  });
+
+  final String? status;
+  final String? externalListingId;
+  final String? listingUrl;
+  final String? applicationUrl;
+  final String? managementUrl;
+  final String? lastConfirmedExternalStatus;
+  final DateTime? lastConfirmedAtUtc;
+  final bool? copyConfirmed;
+  final bool? termsConfirmed;
+  final bool? photosConfirmed;
+  final bool? providerWorkspaceOpened;
+  final bool? markCurrentVersionPublished;
+
+  Map<String, dynamic> toJson() => {
+    if (status != null) 'status': status,
+    if (externalListingId != null) 'externalListingId': externalListingId,
+    if (listingUrl != null) 'listingUrl': listingUrl,
+    if (applicationUrl != null) 'applicationUrl': applicationUrl,
+    if (managementUrl != null) 'managementUrl': managementUrl,
+    if (lastConfirmedExternalStatus != null)
+      'lastConfirmedExternalStatus': lastConfirmedExternalStatus,
+    if (lastConfirmedAtUtc != null)
+      'lastConfirmedAtUtc': lastConfirmedAtUtc!.toUtc().toIso8601String(),
+    if (copyConfirmed != null) 'copyConfirmed': copyConfirmed,
+    if (termsConfirmed != null) 'termsConfirmed': termsConfirmed,
+    if (photosConfirmed != null) 'photosConfirmed': photosConfirmed,
+    if (providerWorkspaceOpened != null)
+      'providerWorkspaceOpened': providerWorkspaceOpened,
+    if (markCurrentVersionPublished != null)
+      'markCurrentVersionPublished': markCurrentVersionPublished,
+  };
+}
+
+class SaveListingWorkspaceRequest {
+  const SaveListingWorkspaceRequest({
     this.status,
     this.headline,
     this.description,
     this.rent,
     this.securityDeposit,
-    this.bedrooms,
-    this.bathrooms,
-    this.squareFeet,
     this.availableOn,
     this.leaseTerms,
     this.petPolicy,
     this.utilities,
     this.parking,
     this.amenities,
-    this.photoNotes,
-    this.zillowListingUrl,
-    this.zillowApplicationUrl,
-    this.postedAtUtc,
+    this.zillowGuided,
   });
 
   final String? status;
@@ -544,19 +725,13 @@ class SaveUnitListingRequest {
   final String? description;
   final double? rent;
   final double? securityDeposit;
-  final double? bedrooms;
-  final double? bathrooms;
-  final int? squareFeet;
   final DateTime? availableOn;
   final String? leaseTerms;
   final String? petPolicy;
   final String? utilities;
   final String? parking;
   final String? amenities;
-  final String? photoNotes;
-  final String? zillowListingUrl;
-  final String? zillowApplicationUrl;
-  final DateTime? postedAtUtc;
+  final SaveGuidedPublicationRequest? zillowGuided;
 
   Map<String, dynamic> toJson() => {
     if (status != null) 'status': status,
@@ -564,9 +739,6 @@ class SaveUnitListingRequest {
     if (description != null) 'description': description,
     if (rent != null) 'rent': rent,
     if (securityDeposit != null) 'securityDeposit': securityDeposit,
-    if (bedrooms != null) 'bedrooms': bedrooms,
-    if (bathrooms != null) 'bathrooms': bathrooms,
-    if (squareFeet != null) 'squareFeet': squareFeet,
     if (availableOn != null)
       'availableOn': availableOn!.toUtc().toIso8601String(),
     if (leaseTerms != null) 'leaseTerms': leaseTerms,
@@ -574,12 +746,7 @@ class SaveUnitListingRequest {
     if (utilities != null) 'utilities': utilities,
     if (parking != null) 'parking': parking,
     if (amenities != null) 'amenities': amenities,
-    if (photoNotes != null) 'photoNotes': photoNotes,
-    if (zillowListingUrl != null) 'zillowListingUrl': zillowListingUrl,
-    if (zillowApplicationUrl != null)
-      'zillowApplicationUrl': zillowApplicationUrl,
-    if (postedAtUtc != null)
-      'postedAtUtc': postedAtUtc!.toUtc().toIso8601String(),
+    if (zillowGuided != null) 'zillowGuided': zillowGuided!.toJson(),
   };
 }
 
@@ -673,22 +840,22 @@ class UnitsRepository {
     }
   }
 
-  Future<UnitListing?> listing(int unitId) async {
+  Future<ListingWorkspace?> listingWorkspace(int unitId) async {
     try {
       final response = await _dio.get<Map<String, dynamic>?>(
-        '/units/$unitId/listing',
+        '/units/$unitId/listing-workspace',
       );
       final data = response.data;
-      return data == null ? null : UnitListing.fromJson(data);
+      return data == null ? null : ListingWorkspace.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  Future<UnitListing> generateListing(int unitId) async {
+  Future<ListingWorkspace> generateListingWorkspace(int unitId) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/units/$unitId/listing/generate',
+        '/units/$unitId/listing-workspace/generate',
       );
       final data = response.data;
       if (data == null) {
@@ -697,19 +864,19 @@ class UnitsRepository {
           message: 'Empty response from server.',
         );
       }
-      return UnitListing.fromJson(data);
+      return ListingWorkspace.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  Future<UnitListing> saveListing(
+  Future<ListingWorkspace> saveListingWorkspace(
     int unitId,
-    SaveUnitListingRequest request,
+    SaveListingWorkspaceRequest request,
   ) async {
     try {
       final response = await _dio.put<Map<String, dynamic>>(
-        '/units/$unitId/listing',
+        '/units/$unitId/listing-workspace',
         data: request.toJson(),
       );
       final data = response.data;
@@ -719,7 +886,30 @@ class UnitsRepository {
           message: 'Empty response from server.',
         );
       }
-      return UnitListing.fromJson(data);
+      return ListingWorkspace.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ListingWorkspace> confirmListingSignal(
+    int unitId,
+    int signalId, {
+    required bool accept,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/units/$unitId/listing-workspace/signals/$signalId/confirm',
+        queryParameters: {'accept': accept},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ListingWorkspace.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -749,9 +939,9 @@ final unitDashboardProvider = FutureProvider.autoDispose
       return ref.watch(unitsRepositoryProvider).dashboard(unitId);
     });
 
-final unitListingProvider = FutureProvider.autoDispose
-    .family<UnitListing?, int>((ref, unitId) {
-      return ref.watch(unitsRepositoryProvider).listing(unitId);
+final unitListingWorkspaceProvider = FutureProvider.autoDispose
+    .family<ListingWorkspace?, int>((ref, unitId) {
+      return ref.watch(unitsRepositoryProvider).listingWorkspace(unitId);
     });
 
 Map<String, dynamic> _jsonObject(Object? value) {

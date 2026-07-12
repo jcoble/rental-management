@@ -469,13 +469,20 @@ class _UnitListingTab extends ConsumerStatefulWidget {
 class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   static const _zillowRentalManagerUrl =
       'https://www.zillow.com/rental-manager/properties';
-  static const _statusOptions = [
+  static const _workspaceStatusOptions = [
     'Draft',
-    'ReadyToPost',
-    'Posted',
+    'ReadyToPublish',
+    'Published',
     'Paused',
     'Filled',
     'Archived',
+  ];
+  static const _publicationStatusOptions = [
+    'Draft',
+    'Ready',
+    'Published',
+    'Paused',
+    'Removed',
   ];
 
   final _headlineController = TextEditingController();
@@ -487,12 +494,17 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   final _utilitiesController = TextEditingController();
   final _parkingController = TextEditingController();
   final _amenitiesController = TextEditingController();
-  final _photoNotesController = TextEditingController();
+  final _externalListingIdController = TextEditingController();
   final _zillowListingUrlController = TextEditingController();
   final _zillowApplicationUrlController = TextEditingController();
+  final _externalStatusController = TextEditingController();
 
-  int? _loadedListingId;
+  int? _loadedContentVersion;
   String _status = 'Draft';
+  String _publicationStatus = 'Draft';
+  bool _copyConfirmed = false;
+  bool _termsConfirmed = false;
+  bool _photosConfirmed = false;
   bool _isGenerating = false;
   bool _isSaving = false;
   bool _isSyncingForm = false;
@@ -524,9 +536,10 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     _utilitiesController,
     _parkingController,
     _amenitiesController,
-    _photoNotesController,
+    _externalListingIdController,
     _zillowListingUrlController,
     _zillowApplicationUrlController,
+    _externalStatusController,
   ];
 
   void _onFormChanged() {
@@ -536,22 +549,22 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   @override
   Widget build(BuildContext context) {
     final unitId = widget.dashboard.unit.id;
-    final listingAsync = ref.watch(unitListingProvider(unitId));
+    final listingAsync = ref.watch(unitListingWorkspaceProvider(unitId));
 
     return listingAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => _UnitErrorBody(
         message: e is ApiException ? e.message : e.toString(),
-        onRetry: () => ref.invalidate(unitListingProvider(unitId)),
+        onRetry: () => ref.invalidate(unitListingWorkspaceProvider(unitId)),
       ),
       data: (listing) {
         _syncFromListing(listing);
         if (listing == null) {
           return _EmptyTab(
             icon: Symbols.real_estate_agent_rounded,
-            title: 'No listing packet',
+            title: 'No listing workspace',
             body:
-                'Generate a Zillow-ready packet, then copy it into Zillow Rental Manager.',
+                'Prepare reusable listing copy, terms, and an ordered photo package for this unit.',
             action: FilledButton.icon(
               icon: _isGenerating
                   ? const SizedBox.square(
@@ -559,7 +572,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Symbols.auto_awesome_rounded),
-              label: Text(_isGenerating ? 'Generating...' : 'Generate packet'),
+              label: Text(_isGenerating ? 'Preparing...' : 'Prepare listing'),
               onPressed: _isGenerating ? null : _generateListing,
             ),
           );
@@ -572,15 +585,28 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
               status: _status,
               updatedAt: listing.updatedAt,
               onGenerate: _isGenerating ? null : _generateListing,
-              onSave: _canSave ? _saveListing : null,
+              onSave: _canSave ? () => _saveListing() : null,
               isGenerating: _isGenerating,
               isSaving: _isSaving,
             ),
+            if (_guidedPublication(listing)?.needsRepublish == true) ...[
+              const SizedBox(height: 14),
+              _ListingWarning(
+                message:
+                    'Changes need republishing. Rental Command has listing version ${listing.contentVersion}, but Zillow was last confirmed at version ${_guidedPublication(listing)?.publishedContentVersion ?? 'an earlier version'}.',
+              ),
+            ],
             const SizedBox(height: 14),
             _Section(
-              title: 'Zillow packet',
-              empty: 'No packet fields',
+              title: 'Listing copy',
+              empty: 'No listing fields',
               children: [
+                _ListingStatusRow(
+                  label: 'Workspace state',
+                  value: _status,
+                  options: _workspaceStatusOptions,
+                  onChanged: (value) => setState(() => _status = value),
+                ),
                 _ListingField(
                   label: 'Headline',
                   controller: _headlineController,
@@ -628,28 +654,50 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                   controller: _amenitiesController,
                   maxLines: 3,
                 ),
-                _ListingField(
-                  label: 'Photo notes',
-                  controller: _photoNotesController,
-                  maxLines: 3,
-                ),
               ],
             ),
             const SizedBox(height: 14),
+            _ListingPhotoPackage(photos: listing.photoManifest),
+            const SizedBox(height: 14),
             _Section(
-              title: 'Manual handoff',
-              empty: 'No handoff fields',
+              title: 'Zillow Guided',
+              empty: 'No guided publication fields',
               children: [
-                _ListingStatusRow(
-                  value: _status,
-                  options: _statusOptions,
-                  onChanged: (value) => setState(() => _status = value),
-                ),
                 _CompactRow(
                   icon: Symbols.open_in_new_rounded,
                   title: 'Open Zillow Rental Manager',
-                  subtitle: 'Post the copied packet manually',
-                  onTap: () => _openExternalUrl(_zillowRentalManagerUrl),
+                  subtitle: 'You stay signed in and publish there',
+                  onTap: _openZillowWorkspace,
+                ),
+                _CompactRow(
+                  icon: Symbols.search_rounded,
+                  title: 'Search Zillow rentals',
+                  subtitle: 'Compare nearby listings in a browser',
+                  onTap: () => _openExternalUrl(
+                    'https://www.zillow.com/homes/for_rent/',
+                  ),
+                ),
+                _ListingStatusRow(
+                  label: 'Publication state',
+                  value: _publicationStatus,
+                  options: _publicationStatusOptions,
+                  onChanged: (value) =>
+                      setState(() => _publicationStatus = value),
+                ),
+                _ListingChecklist(
+                  copyConfirmed: _copyConfirmed,
+                  termsConfirmed: _termsConfirmed,
+                  photosConfirmed: _photosConfirmed,
+                  onCopyChanged: (value) =>
+                      setState(() => _copyConfirmed = value),
+                  onTermsChanged: (value) =>
+                      setState(() => _termsConfirmed = value),
+                  onPhotosChanged: (value) =>
+                      setState(() => _photosConfirmed = value),
+                ),
+                _ListingField(
+                  label: 'Zillow listing ID',
+                  controller: _externalListingIdController,
                 ),
                 _ListingField(
                   label: 'Zillow listing URL',
@@ -667,6 +715,42 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                   onAction: () =>
                       _openExternalUrl(_zillowApplicationUrlController.text),
                 ),
+                _ListingField(
+                  label: 'Last status you confirmed',
+                  controller: _externalStatusController,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Symbols.publish_rounded),
+                    label: const Text('Save as published in Zillow'),
+                    onPressed: _isSaving
+                        ? null
+                        : () => _saveListing(markPublished: true),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _ListingConnectedCard(publication: _connectedPublication(listing)),
+            if (_guidedPublication(listing)?.unconfirmedSignals.isNotEmpty ==
+                true) ...[
+              const SizedBox(height: 14),
+              _ListingSignalsSection(
+                signals: _guidedPublication(listing)!.unconfirmedSignals,
+                onDecision: _confirmSignal,
+              ),
+            ],
+            const SizedBox(height: 14),
+            _SurfacePanel(
+              children: [
+                _CompactRow(
+                  icon: Symbols.document_scanner_rounded,
+                  title: 'Import a signed Zillow lease',
+                  subtitle:
+                      'Scan or upload the lease; Rental Command fills the unit context for review.',
+                  onTap: _importSignedLease,
+                ),
               ],
             ),
           ],
@@ -682,20 +766,37 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
       _isOptionalNumber(_rentController.text) &&
       _isOptionalNumber(_depositController.text);
 
-  void _syncFromListing(UnitListing? listing) {
+  ListingPublication? _guidedPublication(ListingWorkspace listing) => listing
+      .publications
+      .where((item) => item.providerKey == 'Zillow' && item.mode == 'Guided')
+      .firstOrNull;
+
+  ListingPublication? _connectedPublication(ListingWorkspace listing) => listing
+      .publications
+      .where((item) => item.providerKey == 'Zillow' && item.mode == 'Connected')
+      .firstOrNull;
+
+  void _syncFromListing(ListingWorkspace? listing) {
     if (listing == null) {
-      if (_loadedListingId != null) {
-        _loadedListingId = null;
+      if (_loadedContentVersion != null) {
+        _loadedContentVersion = null;
         _setFormToBlank();
       }
       return;
     }
-    if (_loadedListingId == listing.id) return;
-    _loadedListingId = listing.id;
+    if (_loadedContentVersion == listing.contentVersion) return;
+    _loadedContentVersion = listing.contentVersion;
+    final guided = _guidedPublication(listing);
     _isSyncingForm = true;
-    _status = _statusOptions.contains(listing.status)
+    _status = _workspaceStatusOptions.contains(listing.status)
         ? listing.status
         : 'Draft';
+    _publicationStatus = _publicationStatusOptions.contains(guided?.status)
+        ? guided!.status
+        : 'Draft';
+    _copyConfirmed = guided?.copyConfirmed ?? false;
+    _termsConfirmed = guided?.termsConfirmed ?? false;
+    _photosConfirmed = guided?.photosConfirmed ?? false;
     _headlineController.text = listing.headline;
     _descriptionController.text = listing.description;
     _rentController.text = _numberToText(listing.rent);
@@ -705,15 +806,20 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     _utilitiesController.text = listing.utilities ?? '';
     _parkingController.text = listing.parking ?? '';
     _amenitiesController.text = listing.amenities ?? '';
-    _photoNotesController.text = listing.photoNotes ?? '';
-    _zillowListingUrlController.text = listing.zillowListingUrl ?? '';
-    _zillowApplicationUrlController.text = listing.zillowApplicationUrl ?? '';
+    _externalListingIdController.text = guided?.externalListingId ?? '';
+    _zillowListingUrlController.text = guided?.listingUrl ?? '';
+    _zillowApplicationUrlController.text = guided?.applicationUrl ?? '';
+    _externalStatusController.text = guided?.lastConfirmedExternalStatus ?? '';
     _isSyncingForm = false;
   }
 
   void _setFormToBlank() {
     _isSyncingForm = true;
     _status = 'Draft';
+    _publicationStatus = 'Draft';
+    _copyConfirmed = false;
+    _termsConfirmed = false;
+    _photosConfirmed = false;
     for (final controller in _formControllers) {
       controller.clear();
     }
@@ -725,11 +831,11 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     try {
       final listing = await ref
           .read(unitsRepositoryProvider)
-          .generateListing(widget.dashboard.unit.id);
-      _loadedListingId = null;
+          .generateListingWorkspace(widget.dashboard.unit.id);
+      _loadedContentVersion = null;
       _syncFromListing(listing);
-      ref.invalidate(unitListingProvider(widget.dashboard.unit.id));
-      _showSnack('Listing packet generated.');
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _showSnack('Listing workspace prepared.');
     } catch (e) {
       _showSnack(e is ApiException ? e.message : e.toString());
     } finally {
@@ -737,7 +843,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     }
   }
 
-  Future<void> _saveListing() async {
+  Future<void> _saveListing({bool markPublished = false}) async {
     if (!_canSave) {
       _showSnack('Headline, description, rent, and deposit must be valid.');
       return;
@@ -746,12 +852,19 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     try {
       final listing = await ref
           .read(unitsRepositoryProvider)
-          .saveListing(widget.dashboard.unit.id, _buildSaveRequest());
-      _loadedListingId = null;
+          .saveListingWorkspace(
+            widget.dashboard.unit.id,
+            _buildSaveRequest(markPublished: markPublished),
+          );
+      _loadedContentVersion = null;
       _syncFromListing(listing);
-      ref.invalidate(unitListingProvider(widget.dashboard.unit.id));
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
       ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));
-      _showSnack('Listing packet saved.');
+      _showSnack(
+        markPublished
+            ? 'Current version marked published in Zillow.'
+            : 'Listing workspace saved.',
+      );
     } catch (e) {
       _showSnack(e is ApiException ? e.message : e.toString());
     } finally {
@@ -759,8 +872,14 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     }
   }
 
-  SaveUnitListingRequest _buildSaveRequest() {
-    return SaveUnitListingRequest(
+  SaveListingWorkspaceRequest _buildSaveRequest({bool markPublished = false}) {
+    final workspace = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    final guided = workspace == null ? null : _guidedPublication(workspace);
+    final currentExternalStatus = guided?.lastConfirmedExternalStatus ?? '';
+    final enteredExternalStatus = _externalStatusController.text.trim();
+    return SaveListingWorkspaceRequest(
       status: _status,
       headline: _headlineController.text.trim(),
       description: _descriptionController.text.trim(),
@@ -771,11 +890,80 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
       utilities: _utilitiesController.text.trim(),
       parking: _parkingController.text.trim(),
       amenities: _amenitiesController.text.trim(),
-      photoNotes: _photoNotesController.text.trim(),
-      zillowListingUrl: _zillowListingUrlController.text.trim(),
-      zillowApplicationUrl: _zillowApplicationUrlController.text.trim(),
+      zillowGuided: SaveGuidedPublicationRequest(
+        status: _publicationStatus,
+        externalListingId: _externalListingIdController.text.trim(),
+        listingUrl: _zillowListingUrlController.text.trim(),
+        applicationUrl: _zillowApplicationUrlController.text.trim(),
+        lastConfirmedExternalStatus: enteredExternalStatus,
+        lastConfirmedAtUtc:
+            enteredExternalStatus.isNotEmpty &&
+                enteredExternalStatus != currentExternalStatus
+            ? DateTime.now().toUtc()
+            : null,
+        copyConfirmed: _copyConfirmed,
+        termsConfirmed: _termsConfirmed,
+        photosConfirmed: _photosConfirmed,
+        providerWorkspaceOpened: guided?.providerWorkspaceOpened ?? false,
+        markCurrentVersionPublished: markPublished,
+      ),
     );
   }
+
+  Future<void> _openZillowWorkspace() async {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    final guided = listing == null ? null : _guidedPublication(listing);
+    await _openExternalUrl(guided?.managementUrl ?? _zillowRentalManagerUrl);
+    if (listing == null) return;
+    try {
+      final saved = await ref
+          .read(unitsRepositoryProvider)
+          .saveListingWorkspace(
+            widget.dashboard.unit.id,
+            const SaveListingWorkspaceRequest(
+              zillowGuided: SaveGuidedPublicationRequest(
+                providerWorkspaceOpened: true,
+              ),
+            ),
+          );
+      _loadedContentVersion = null;
+      _syncFromListing(saved);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+    } catch (_) {
+      // Opening Zillow remains useful if recording the checklist step fails.
+    }
+  }
+
+  Future<void> _confirmSignal(int signalId, bool accept) async {
+    try {
+      final saved = await ref
+          .read(unitsRepositoryProvider)
+          .confirmListingSignal(
+            widget.dashboard.unit.id,
+            signalId,
+            accept: accept,
+          );
+      _loadedContentVersion = null;
+      _syncFromListing(saved);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _showSnack(
+        accept ? 'External update confirmed.' : 'External update ignored.',
+      );
+    } catch (e) {
+      _showSnack(e is ApiException ? e.message : e.toString());
+    }
+  }
+
+  Future<void> _importSignedLease() => openMobileScan(
+    context,
+    initialTargetEntityType: 'Lease',
+    lockTargetEntityType: true,
+    propertyId: widget.dashboard.unit.propertyId,
+    unitId: widget.dashboard.unit.id,
+    sourceLabel: 'Zillow signed lease import',
+  );
 
   Future<void> _copyText(String label, String text) async {
     final value = text.trim();
@@ -865,7 +1053,7 @@ class _ListingHeader extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Zillow listing assistant',
+                    'Listing workspace',
                     style: theme.textTheme.titleMedium?.copyWith(
                       color: colorScheme.onPrimaryContainer,
                       fontWeight: FontWeight.w800,
@@ -877,7 +1065,7 @@ class _ListingHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Prepare listing copy here, then post it manually in Zillow Rental Manager.',
+              'Keep one listing for this unit, then use Guided Zillow now or Connected publishing after provider approval.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onPrimaryContainer,
               ),
@@ -901,7 +1089,9 @@ class _ListingHeader extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Symbols.auto_awesome_rounded),
-                  label: Text(isGenerating ? 'Generating...' : 'Regenerate'),
+                  label: Text(
+                    isGenerating ? 'Preparing...' : 'Refresh from unit',
+                  ),
                   onPressed: onGenerate,
                 ),
                 FilledButton.icon(
@@ -911,7 +1101,7 @@ class _ListingHeader extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Symbols.save_rounded),
-                  label: Text(isSaving ? 'Saving...' : 'Save packet'),
+                  label: Text(isSaving ? 'Saving...' : 'Save listing'),
                   onPressed: onSave,
                 ),
               ],
@@ -971,11 +1161,13 @@ class _ListingField extends StatelessWidget {
 
 class _ListingStatusRow extends StatelessWidget {
   const _ListingStatusRow({
+    required this.label,
     required this.value,
     required this.options,
     required this.onChanged,
   });
 
+  final String label;
   final String value;
   final List<String> options;
   final ValueChanged<String> onChanged;
@@ -986,7 +1178,7 @@ class _ListingStatusRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       child: DropdownButtonFormField<String>(
         initialValue: options.contains(value) ? value : options.first,
-        decoration: const InputDecoration(labelText: 'Status'),
+        decoration: InputDecoration(labelText: label),
         items: [
           for (final option in options)
             DropdownMenuItem<String>(value: option, child: Text(option)),
@@ -995,6 +1187,205 @@ class _ListingStatusRow extends StatelessWidget {
           if (value != null) onChanged(value);
         },
       ),
+    );
+  }
+}
+
+class _ListingWarning extends StatelessWidget {
+  const _ListingWarning({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.tertiaryContainer,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Symbols.warning_rounded, color: colors.onTertiaryContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: colors.onTertiaryContainer),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ListingPhotoPackage extends StatelessWidget {
+  const _ListingPhotoPackage({required this.photos});
+
+  final List<ListingPhoto> photos;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'Ordered photo package',
+      empty: 'No photo checklist was prepared',
+      children: [
+        // The API returns this manifest ordered DB-side by Position.
+        for (final photo in photos)
+          _CompactRow(
+            icon: photo.storedFileId == null
+                ? Symbols.add_a_photo_rounded
+                : Symbols.check_circle_rounded,
+            title: '${photo.position}. ${photo.category}',
+            subtitle:
+                photo.fileName ??
+                photo.caption ??
+                'Photo needed in this position',
+          ),
+      ],
+    );
+  }
+}
+
+class _ListingChecklist extends StatelessWidget {
+  const _ListingChecklist({
+    required this.copyConfirmed,
+    required this.termsConfirmed,
+    required this.photosConfirmed,
+    required this.onCopyChanged,
+    required this.onTermsChanged,
+    required this.onPhotosChanged,
+  });
+
+  final bool copyConfirmed;
+  final bool termsConfirmed;
+  final bool photosConfirmed;
+  final ValueChanged<bool> onCopyChanged;
+  final ValueChanged<bool> onTermsChanged;
+  final ValueChanged<bool> onPhotosChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        CheckboxListTile(
+          value: copyConfirmed,
+          onChanged: (value) => onCopyChanged(value ?? false),
+          title: const Text('Listing copy entered in Zillow'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        CheckboxListTile(
+          value: termsConfirmed,
+          onChanged: (value) => onTermsChanged(value ?? false),
+          title: const Text('Rent and terms reviewed in Zillow'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        CheckboxListTile(
+          value: photosConfirmed,
+          onChanged: (value) => onPhotosChanged(value ?? false),
+          title: const Text('Photos uploaded in the prepared order'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+      ],
+    );
+  }
+}
+
+class _ListingConnectedCard extends StatelessWidget {
+  const _ListingConnectedCard({required this.publication});
+
+  final ListingPublication? publication;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'Zillow Connected — later',
+      empty: 'No connection status',
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Text(
+            'This workspace is ready for a future approved Zillow connection. The same listing will publish and reconcile here without duplicating your data. No Zillow API calls are made today.',
+          ),
+        ),
+        _CompactRow(
+          icon: Symbols.cloud_off_rounded,
+          title: publication?.lastDeliveryStatus ?? 'Not connected',
+          subtitle:
+              publication?.lastDeliveryError ??
+              'Guided publishing remains available while approval is pending.',
+        ),
+      ],
+    );
+  }
+}
+
+class _ListingSignalsSection extends StatelessWidget {
+  const _ListingSignalsSection({
+    required this.signals,
+    required this.onDecision,
+  });
+
+  final List<ExternalListingSignal> signals;
+  final Future<void> Function(int signalId, bool accept) onDecision;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'External updates to confirm',
+      empty: 'No external updates',
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Text(
+            'These are untrusted hints. Rental Command will not change the listing until you confirm one.',
+          ),
+        ),
+        for (final signal in signals)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Material(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(14),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      signal.signalType,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      signal.suggestedExternalStatus ??
+                          signal.suggestedListingUrl ??
+                          signal.suggestedExternalListingId ??
+                          'External listing metadata changed.',
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        FilledButton(
+                          onPressed: () => onDecision(signal.id, true),
+                          child: const Text('Confirm'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () => onDecision(signal.id, false),
+                          child: const Text('Ignore'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

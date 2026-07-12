@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -21,10 +22,16 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
     super.key,
     this.initialTargetEntityType = 'Expense',
     this.lockTargetEntityType = false,
+    this.propertyId,
+    this.unitId,
+    this.sourceLabel,
   });
 
   final String initialTargetEntityType;
   final bool lockTargetEntityType;
+  final int? propertyId;
+  final int? unitId;
+  final String? sourceLabel;
 
   @override
   ConsumerState<ScanCaptureSheet> createState() => _ScanCaptureSheetState();
@@ -40,7 +47,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   String? _recordingPath;
 
   /// What kind of record this scan will become. The global sheet offers
-  /// Expense/Payment/WorkOrder; contextual callers can lock this to Loan.
+  /// Expense/Payment/WorkOrder; contextual callers can lock this to Lease or Loan.
   late String _targetEntityType;
 
   @override
@@ -67,6 +74,33 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     );
     if (picked == null) return; // user cancelled
 
+    await _uploadBytes(
+      Uint8List.fromList(await picked.readAsBytes()),
+      picked.name,
+      _mimeFromExtension(picked.name),
+    );
+  }
+
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
+      withData: true,
+    );
+    final file = result?.files.single;
+    if (file == null) return;
+    if (file.bytes == null) {
+      setState(() => _error = "Couldn't read the selected file.");
+      return;
+    }
+    await _uploadBytes(file.bytes!, file.name, _mimeFromExtension(file.name));
+  }
+
+  Future<void> _uploadBytes(
+    Uint8List bytes,
+    String filename,
+    String contentType,
+  ) async {
     setState(() {
       _uploading = true;
       _uploadProgress = 0;
@@ -74,16 +108,16 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     });
 
     try {
-      final bytes = Uint8List.fromList(await picked.readAsBytes());
-      final contentType = _mimeFromExtension(picked.name);
-
       final created = await ref
           .read(scanRepositoryProvider)
           .uploadImage(
             bytes,
-            picked.name,
+            filename,
             contentType,
             targetEntityType: _targetEntityType,
+            propertyId: widget.propertyId,
+            unitId: widget.unitId,
+            sourceLabel: widget.sourceLabel,
             onSendProgress: (progress) {
               if (mounted) setState(() => _uploadProgress = progress);
             },
@@ -219,6 +253,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     final colorScheme = theme.colorScheme;
     final lockedLoan =
         widget.lockTargetEntityType && _targetEntityType == 'Loan';
+    final lockedLease =
+        widget.lockTargetEntityType && _targetEntityType == 'Lease';
 
     if (_uploading || _voiceUploading) {
       return Padding(
@@ -264,7 +300,11 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              lockedLoan ? 'Scan a mortgage statement' : 'Scan a document',
+              lockedLoan
+                  ? 'Scan a mortgage statement'
+                  : lockedLease
+                  ? 'Import a signed lease'
+                  : 'Scan a document',
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -274,6 +314,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             Text(
               lockedLoan
                   ? 'Take a photo of a mortgage statement or closing disclosure.\nThe app will read the loan details for review.'
+                  : lockedLease
+                  ? 'Take a photo or choose the signed lease PDF.\nRental Command will read it and keep this unit selected for review.'
                   : 'Take a photo of a receipt, bill, check, or maintenance issue.\nThe app will read the details for you.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
@@ -320,7 +362,13 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
               label: const Text('Choose from gallery'),
               onPressed: () => _pick(ImageSource.gallery),
             ),
-            if (!lockedLoan) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.upload_file_outlined),
+              label: const Text('Choose a PDF or image'),
+              onPressed: _pickFile,
+            ),
+            if (!lockedLoan && !lockedLease) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 icon: Icon(
@@ -452,6 +500,9 @@ Future<int?> showScanCaptureSheet(
   BuildContext context, {
   String initialTargetEntityType = 'Expense',
   bool lockTargetEntityType = false,
+  int? propertyId,
+  int? unitId,
+  String? sourceLabel,
 }) {
   return showModalBottomSheet<int>(
     context: context,
@@ -460,6 +511,9 @@ Future<int?> showScanCaptureSheet(
     builder: (_) => ScanCaptureSheet(
       initialTargetEntityType: initialTargetEntityType,
       lockTargetEntityType: lockTargetEntityType,
+      propertyId: propertyId,
+      unitId: unitId,
+      sourceLabel: sourceLabel,
     ),
   );
 }
