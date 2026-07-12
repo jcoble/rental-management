@@ -338,7 +338,7 @@ internal static class TenantMoneyCommandSupport
             throw new ArgumentException("Security deposit account is required.");
         var amount = command switch
         {
-            RecordTenantReceiptCommand receipt => receipt.Amount,
+            RecordTenantReceiptCommand receiptCommand => receiptCommand.Amount,
             FundSecurityDepositCommand fund => fund.Amount,
             DeductSecurityDepositCommand deduction => deduction.Amount,
             RefundSecurityDepositCommand refund => refund.Amount ?? 1m,
