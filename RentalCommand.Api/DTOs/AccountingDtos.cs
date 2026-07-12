@@ -148,7 +148,9 @@ public class PastDueResponse
 /// </summary>
 public class PastDueLeaseResponse
 {
-    public int LeaseId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int? CurrentAgreementId { get; set; }
 
     /// <summary>Unit id on the behind lease, so the "open oldest payment" link can deep-link into the
     /// unit's Command Center Rent tab rather than the generic payment detail page.</summary>
@@ -161,7 +163,7 @@ public class PastDueLeaseResponse
     public string? TenantPhone { get; set; }
 
     /// <summary>Human lease number (e.g. "L-001").</summary>
-    public string? LeaseNumber { get; set; }
+    public string? RelationshipNumber { get; set; }
 
     /// <summary>Property name for context in the list.</summary>
     public string? PropertyName { get; set; }
@@ -176,10 +178,10 @@ public class PastDueLeaseResponse
     public int OverduePaymentCount { get; set; }
 
     /// <summary>Due date of this lease's oldest past-due payment (drives the "N days late" label).</summary>
-    public DateTime OldestDueDate { get; set; }
+    public DateOnly OldestDueOn { get; set; }
 
     /// <summary>Id of this lease's oldest past-due payment, so the row can deep-link into its detail.</summary>
-    public int OldestPaymentId { get; set; }
+    public long OldestLedgerEntryId { get; set; }
 }
 
 /// <summary>

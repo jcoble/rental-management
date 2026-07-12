@@ -22,28 +22,28 @@ public class SecurityDepositsController : ManagementControllerBase
 
     /// <summary>List all deposit holdings for the portfolio, optionally filtered by lease.</summary>
     [HttpGet]
-    [ProducesResponseType(typeof(IReadOnlyList<SecurityDepositResponse>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<SecurityDepositResponse>>> List(
-        [FromQuery] int? leaseId, CancellationToken ct)
+    [ProducesResponseType(typeof(IReadOnlyList<SecurityDepositAccountResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<SecurityDepositAccountResponse>>> List(
+        [FromQuery] int? leaseManagementId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), leaseId, ct);
+        var items = await _service.ListAsync(GetPortfolioId(), leaseManagementId, ct);
         return Ok(items);
     }
 
     [HttpGet("page")]
     [ProducesResponseType(typeof(SecurityDepositListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<SecurityDepositListResponse>> ListPage(
-        [FromQuery] int? leaseId, [FromQuery] ListQuery query, CancellationToken ct)
+        [FromQuery] int? leaseManagementId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), leaseId, query, ct);
+        var page = await _service.ListPageAsync(GetPortfolioId(), leaseManagementId, query, ct);
         return Ok(page);
     }
 
     /// <summary>Get a single deposit holding by id.</summary>
     [HttpGet("{id:int}")]
-    [ProducesResponseType(typeof(SecurityDepositResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(SecurityDepositAccountResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<SecurityDepositResponse>> Get(int id, CancellationToken ct)
+    public async Task<ActionResult<SecurityDepositAccountResponse>> Get(int id, CancellationToken ct)
     {
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Security deposit holding not found" }) : Ok(item);

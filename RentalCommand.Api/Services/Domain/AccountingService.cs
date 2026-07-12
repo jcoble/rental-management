@@ -80,44 +80,33 @@ public class AccountingService : IAccountingService
         // Payment collection rollup. Collected cash remains historical; active receivables (outstanding
         // and overdue) are limited to current leases so old fixed-term lease balances do not become
         // dashboard/Money TODOs after the lease ended without an extension.
-        var now = _timeProvider.UtcNow();
-        var collectedRaw = await _db.Payments
+        var collectedRaw = await _db.TenantLedgerEntries
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.PaymentType != PaymentType.SecurityDeposit)
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                // Collected: Paid contributes its full Amount; a Partial contributes only what's been
-                // paid so far (AmountPaid). Both summed SQL-side.
-                Collected = g.Sum(p =>
-                    p.Status == PaymentStatus.Paid ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
-                    : 0m),
+                Collected = g.Sum(entry => entry.Amount -
+                    (_db.TenantLedgerEntries
+                        .Where(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.ReversesEntryId == entry.Id)
+                        .Sum(reversal => (decimal?)reversal.Amount) ?? 0m)),
             })
             .FirstOrDefaultAsync(ct);
 
-        var receivablesRaw = await _db.Payments
+        var receivablesRaw = await _db.TenantAccountBalanceProjections
             .AsNoTracking()
-            .ForCurrentLeaseAttention(now)
-            .Where(p => p.PortfolioId == portfolioId)
+            .Where(balance => balance.PortfolioId == portfolioId)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                // Owed = Scheduled/Partial/Late (Waived/Failed/Refunded are not money to collect). A
-                // Partial only owes its unpaid remainder (Amount − AmountPaid); Scheduled/Late owe in full.
-                Outstanding = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
+                Outstanding = g.Sum(balance => balance.ReceivableBalance > 0m
+                    ? balance.ReceivableBalance
                     : 0m),
-                Overdue = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
-                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
-                        : 0m),
-                OverdueCount = g.Count(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
+                Overdue = g.Sum(balance => balance.PastDueAmount),
+                OverdueCount = g.Sum(balance => balance.PastDueCount),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -152,8 +141,8 @@ public class AccountingService : IAccountingService
     public async Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default)
     {
         var now = _timeProvider.UtcNow();
-        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var last30Start = now.AddDays(-30);
+        var monthStart = new DateOnly(now.Year, now.Month, 1);
+        var last30Start = DateOnly.FromDateTime(now.AddDays(-30));
 
         // Money in: payments actually collected. "Collected" means Status == Paid AND a real PaidDate
         // (the date the cash landed) — a row marked Paid but lacking a PaidDate is not yet collected and
@@ -165,19 +154,27 @@ public class AccountingService : IAccountingService
         // loaded into memory.
         // A Partial payment's collected cash also lands on its PaidDate, so it counts as money-in for the
         // period — contributing its AmountPaid (not its full Amount). Paid contributes the full Amount.
-        var paymentsCollected = await _db.Payments
+        var paymentsCollected = await _db.TenantLedgerEntries
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId
-                && (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
-                && p.PaymentType != PaymentType.SecurityDeposit
-                && p.PaidDate != null)
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(p => p.PaidDate >= monthStart
-                    ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) : 0m),
-                Last30 = g.Sum(p => p.PaidDate >= last30Start
-                    ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Mtd = g.Sum(entry => entry.EffectiveOn >= monthStart
+                    ? entry.Amount - (_db.TenantLedgerEntries
+                        .Where(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.ReversesEntryId == entry.Id)
+                        .Sum(reversal => (decimal?)reversal.Amount) ?? 0m)
+                    : 0m),
+                Last30 = g.Sum(entry => entry.EffectiveOn >= last30Start
+                    ? entry.Amount - (_db.TenantLedgerEntries
+                        .Where(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.ReversesEntryId == entry.Id)
+                        .Sum(reversal => (decimal?)reversal.Amount) ?? 0m)
+                    : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -188,8 +185,8 @@ public class AccountingService : IAccountingService
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(t => t.PostedAt >= monthStart ? t.Amount : 0m),
-                Last30 = g.Sum(t => t.PostedAt >= last30Start ? t.Amount : 0m),
+                Mtd = g.Sum(t => t.PostedAt >= monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? t.Amount : 0m),
+                Last30 = g.Sum(t => t.PostedAt >= last30Start.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? t.Amount : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -204,8 +201,8 @@ public class AccountingService : IAccountingService
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= monthStart ? e.Amount : 0m),
-                Last30 = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= last30Start ? e.Amount : 0m),
+                Mtd = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? e.Amount : 0m),
+                Last30 = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= last30Start.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? e.Amount : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -216,8 +213,8 @@ public class AccountingService : IAccountingService
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(t => t.PostedAt >= monthStart ? -t.Amount : 0m),
-                Last30 = g.Sum(t => t.PostedAt >= last30Start ? -t.Amount : 0m),
+                Mtd = g.Sum(t => t.PostedAt >= monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? -t.Amount : 0m),
+                Last30 = g.Sum(t => t.PostedAt >= last30Start.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? -t.Amount : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -228,7 +225,7 @@ public class AccountingService : IAccountingService
         // (= tenants behind) come from the SAME per-lease grouped query that powers the "Who's behind"
         // list (GetPastDueAsync), so this KPI can never disagree with the destination row count.
         // Both figures are derived SQL-side; no payment rows are loaded to count.
-        var pastDueSummary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
+        var pastDueSummary = await PastDueSummaryQuery(portfolioId).FirstOrDefaultAsync(ct);
         var pastDueAmount = pastDueSummary?.TotalPastDueAmount ?? 0m;
         var pastDueCount = pastDueSummary?.TotalCount ?? 0;
 
@@ -239,7 +236,7 @@ public class AccountingService : IAccountingService
         {
             PortfolioId = portfolioId,
             PeriodLabel = $"{monthStart:MMMM yyyy} (so far)",
-            PeriodStart = monthStart,
+            PeriodStart = monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
             PeriodEnd = now,
             Collected = collectedMtd,
             Spent = spentMtd,
@@ -255,11 +252,7 @@ public class AccountingService : IAccountingService
 
     public async Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default)
     {
-        var now = _timeProvider.UtcNow();
-
-        // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
-        // payments, and find the oldest past-due due date — the single source of truth for "behind".
-        var summary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
+        var summary = await PastDueSummaryQuery(portfolioId).FirstOrDefaultAsync(ct);
         var totalCount = summary?.TotalCount ?? 0;
         var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
 
@@ -268,34 +261,44 @@ public class AccountingService : IAccountingService
             return new PastDueResponse { Items = [], TotalCount = 0, TotalPastDueAmount = 0m };
         }
 
-        var items = await PastDueByLeaseQuery(portfolioId, now)
-            .Join(
-                _db.Leases.AsNoTracking().Where(l => l.PortfolioId == portfolioId),
-                g => g.LeaseId,
-                l => l.Id,
-                (g, l) => new { Group = g, Lease = l })
-            .OrderBy(x => x.Group.OldestDueDate)
-            .Select(x => new PastDueLeaseResponse
+        var items = await (
+                from balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { balance.PortfolioId, Id = balance.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                    on new { balance.PortfolioId, balance.LeaseManagementId }
+                    equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                where balance.PortfolioId == portfolioId && balance.PastDueAmount > 0m
+                let oldest = _db.TenantChargeBalanceProjections
+                    .Where(charge => charge.PortfolioId == balance.PortfolioId
+                        && charge.TenantAccountId == balance.TenantAccountId
+                        && charge.IsPastDue)
+                    .OrderBy(charge => charge.DueOn)
+                    .ThenBy(charge => charge.TenantLedgerEntryId)
+                    .Select(charge => new { charge.TenantLedgerEntryId, charge.DueOn })
+                    .First()
+                orderby oldest.DueOn, oldest.TenantLedgerEntryId
+                select new PastDueLeaseResponse
             {
-                LeaseId = x.Group.LeaseId,
-                UnitId = x.Lease.UnitId,
-                TenantName = x.Lease.Tenant == null
-                    ? null
-                    : (x.Lease.Tenant.FirstName + " " + x.Lease.Tenant.LastName).Trim(),
-                TenantPhone = x.Lease.Tenant == null ? null : x.Lease.Tenant.Phone,
-                LeaseNumber = x.Lease.LeaseNumber,
-                PropertyName = x.Lease.Property == null ? null : x.Lease.Property.Name,
-                UnitNumber = x.Lease.Unit == null ? null : x.Lease.Unit.UnitNumber,
-                PastDueAmount = x.Group.PastDueAmount,
-                OverduePaymentCount = x.Group.OverduePaymentCount,
-                OldestDueDate = x.Group.OldestDueDate,
-                // Oldest by due date, then by id for a stable pick when due dates tie.
-                OldestPaymentId = PastDuePaymentsQuery(portfolioId, now)
-                    .Where(p => p.LeaseId == x.Group.LeaseId)
-                    .OrderBy(p => p.DueDate)
-                    .ThenBy(p => p.Id)
-                    .Select(p => p.Id)
-                    .First(),
+                LeaseManagementId = management.Id,
+                TenantAccountId = balance.TenantAccountId,
+                CurrentAgreementId = lifecycle.CurrentAgreementId,
+                UnitId = management.UnitId,
+                TenantName = lifecycle.CurrentPrimaryTenantName,
+                TenantPhone = _db.LeaseManagementParties
+                    .Where(party => party.PortfolioId == management.PortfolioId
+                        && party.LeaseManagementId == management.Id
+                        && party.Id == lifecycle.CurrentPrimaryPartyId)
+                    .Select(party => party.Tenant!.Phone)
+                    .FirstOrDefault(),
+                RelationshipNumber = management.RelationshipNumber,
+                PropertyName = management.Property!.Name,
+                UnitNumber = management.Unit!.UnitNumber,
+                PastDueAmount = balance.PastDueAmount,
+                OverduePaymentCount = balance.PastDueCount,
+                OldestDueOn = oldest.DueOn!.Value,
+                OldestLedgerEntryId = oldest.TenantLedgerEntryId,
             })
             .ToListAsync(ct);
 
@@ -313,49 +316,16 @@ public class AccountingService : IAccountingService
     /// is still owed (Scheduled/Partial/Late) AND is either explicitly Late or has a DueDate before
     /// <paramref name="now"/>. Defined once here as the single source of truth.
     /// </summary>
-    private IQueryable<Payment> PastDuePaymentsQuery(int portfolioId, DateTime now) => _db.Payments
-        .AsNoTracking()
-        .ForCurrentLeaseAttention(now)
-        .Where(p => p.PortfolioId == portfolioId &&
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
-                    (p.Status == PaymentStatus.Late || p.DueDate < now));
-
-    /// <summary>
-    /// The past-due payments rolled up per lease (one group = one behind tenant). The distinct-lease
-    /// count of this query is the KPI's "tenants behind", its summed amount is the KPI's past-due
-    /// amount, and its rows are the "Who's behind" list — all from one definition, computed SQL-side.
-    /// </summary>
-    private IQueryable<PastDueLeaseGroup> PastDueByLeaseQuery(int portfolioId, DateTime now) =>
-        PastDuePaymentsQuery(portfolioId, now)
-            .GroupBy(p => p.LeaseId)
-            .Select(g => new PastDueLeaseGroup
-            {
-                // Past-due payments are lease-scoped (ForCurrentLeaseAttention requires a live lease).
-                LeaseId = g.Key!.Value,
-                // A Partial past-due payment only owes its unpaid remainder (Amount − AmountPaid);
-                // Scheduled/Late owe in full. Summed SQL-side.
-                PastDueAmount = g.Sum(p =>
-                    p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount),
-                OverduePaymentCount = g.Count(),
-                OldestDueDate = g.Min(p => p.DueDate),
-            });
-
-    private IQueryable<PastDueSummary> PastDueSummaryQuery(int portfolioId, DateTime now) =>
-        PastDueByLeaseQuery(portfolioId, now)
+    private IQueryable<PastDueSummary> PastDueSummaryQuery(int portfolioId) =>
+        _db.TenantAccountBalanceProjections
+            .AsNoTracking()
+            .Where(balance => balance.PortfolioId == portfolioId && balance.PastDueAmount > 0m)
             .GroupBy(_ => 1)
             .Select(g => new PastDueSummary
             {
                 TotalCount = g.Count(),
-                TotalPastDueAmount = g.Sum(x => x.PastDueAmount),
+                TotalPastDueAmount = g.Sum(balance => balance.PastDueAmount),
             });
-
-    private sealed class PastDueLeaseGroup
-    {
-        public int LeaseId { get; set; }
-        public decimal PastDueAmount { get; set; }
-        public int OverduePaymentCount { get; set; }
-        public DateTime OldestDueDate { get; set; }
-    }
 
     private sealed class PastDueSummary
     {
@@ -1499,36 +1469,35 @@ public class AccountingService : IAccountingService
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         // ── Rent roll ─────────────────────────────────────────────────────────────────────────────
-        // Current leases (active or under notice). Past-due balance is projected with each lease row as
-        // a correlated SQL sum, so the packet does not load a separate aggregate and join it in memory.
-        var rentRollRows = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
-            .OrderBy(l => l.Property!.Name)
-            .ThenBy(l => l.Unit!.UnitNumber)
-            .Select(l => new
-            {
-                PropertyName = l.Property!.Name,
-                UnitNumber = l.Unit!.UnitNumber,
-                TenantFirstName = l.Tenant!.FirstName,
-                TenantLastName = l.Tenant!.LastName,
-                l.MonthlyRent,
-                l.StartDate,
-                l.EndDate,
-                l.Status,
-                PastDueBalance = _db.Payments
-                    .AsNoTracking()
-                    .Where(p => p.PortfolioId == portfolioId &&
-                                p.LeaseId == l.Id &&
-                                (p.Status == PaymentStatus.Scheduled ||
-                                 p.Status == PaymentStatus.Partial ||
-                                 p.Status == PaymentStatus.Late) &&
-                                (p.Status == PaymentStatus.Late || p.DueDate < now))
-                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
-                        ? p.Amount - (p.AmountPaid ?? 0m)
-                        : p.Amount)) ?? 0m,
-            })
+        var rentRollRows = await (
+                from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                join agreement in _db.LeaseAgreements.AsNoTracking()
+                    on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                    equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+                join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                    on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
+                    equals new { status.PortfolioId, status.AgreementId }
+                join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                    on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                    equals new { balance.PortfolioId, balance.LeaseManagementId }
+                where lifecycle.PortfolioId == portfolioId
+                    && status.IsGoverning
+                    && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                orderby management.Property!.Name, management.Unit!.UnitNumber
+                select new
+                {
+                    PropertyName = management.Property!.Name,
+                    UnitNumber = management.Unit!.UnitNumber,
+                    TenantName = lifecycle.CurrentPrimaryTenantName ?? "Tenant",
+                    MonthlyRent = agreement.BaseRentAmount,
+                    agreement.TermStartOn,
+                    agreement.TermEndOn,
+                    status.AgreementStatus,
+                    PastDueBalance = balance.PastDueAmount,
+                })
             .ToListAsync(ct);
 
         var rentRoll = rentRollRows
@@ -1536,11 +1505,11 @@ public class AccountingService : IAccountingService
             {
                 PropertyName = l.PropertyName,
                 UnitNumber = l.UnitNumber,
-                TenantName = FullName(l.TenantFirstName, l.TenantLastName),
+                TenantName = l.TenantName,
                 MonthlyRent = l.MonthlyRent,
-                LeaseStart = l.StartDate,
-                LeaseEnd = l.EndDate,
-                LeaseStatus = l.Status.ToString(),
+                LeaseStart = l.TermStartOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                LeaseEnd = (l.TermEndOn ?? l.TermStartOn).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                LeaseStatus = l.AgreementStatus,
                 PastDueBalance = l.PastDueBalance,
             })
             .ToList();
