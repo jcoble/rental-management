@@ -132,6 +132,59 @@ class ApplicationApproval {
   }
 }
 
+/// Result of an idempotent mutation against an application's pre-tenancy
+/// financial account.
+class ApplicationFinanceMutation {
+  const ApplicationFinanceMutation({
+    required this.applicationId,
+    required this.accountId,
+    required this.entryId,
+    this.relatedEntryId,
+    required this.entryType,
+    required this.direction,
+    required this.amount,
+    required this.currency,
+    required this.effectiveOn,
+    required this.occurredAtUtc,
+    required this.accountCreated,
+    required this.replayed,
+  });
+
+  final int applicationId;
+  final int accountId;
+  final int entryId;
+  final int? relatedEntryId;
+  final String entryType;
+  final String direction;
+  final double amount;
+  final String currency;
+  final DateTime effectiveOn;
+  final DateTime occurredAtUtc;
+  final bool accountCreated;
+  final bool replayed;
+
+  factory ApplicationFinanceMutation.fromJson(Map<String, dynamic> json) {
+    return ApplicationFinanceMutation(
+      applicationId: (json['applicationId'] as num?)?.toInt() ?? 0,
+      accountId: (json['accountId'] as num?)?.toInt() ?? 0,
+      entryId: (json['entryId'] as num?)?.toInt() ?? 0,
+      relatedEntryId: (json['relatedEntryId'] as num?)?.toInt(),
+      entryType: json['entryType'] as String? ?? '',
+      direction: json['direction'] as String? ?? '',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      currency: json['currency'] as String? ?? '',
+      effectiveOn:
+          DateTime.tryParse(json['effectiveOn'] as String? ?? '') ??
+          DateTime(0),
+      occurredAtUtc:
+          DateTime.tryParse(json['occurredAtUtc'] as String? ?? '') ??
+          DateTime(0),
+      accountCreated: json['accountCreated'] as bool? ?? false,
+      replayed: json['replayed'] as bool? ?? false,
+    );
+  }
+}
+
 /// A tenant-screening result for an application.
 ///
 /// Mirrors the API `ScreeningResultResponse` (camelCase, enums as strings).
