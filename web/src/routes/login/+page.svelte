@@ -15,7 +15,9 @@
 	let email = $state('');
 	let password = $state('');
 	let accessContextId = $state('');
-	const contextChoices = $derived(form?.contexts ?? []);
+	const contextChoices = $derived(
+		form && 'contexts' in form ? form.contexts ?? [] : []
+	);
 
 	// "Resend verification" affordance, shown only when the API flags the login as EMAIL_NOT_VERIFIED.
 	let resendingVerification = $state(false);

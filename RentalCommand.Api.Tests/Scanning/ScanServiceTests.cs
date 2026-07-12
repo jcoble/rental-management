@@ -103,6 +103,59 @@ public class ScanServiceTests : IDisposable
     public async Task PrepareConfirmationAsync_LeaseTarget_SealsCanonicalExecutedImportChoice()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "Lease");
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 7,
+            UserName = "scan-reviewer@example.test",
+            NormalizedUserName = "SCAN-REVIEWER@EXAMPLE.TEST",
+            Email = "scan-reviewer@example.test",
+            NormalizedEmail = "SCAN-REVIEWER@EXAMPLE.TEST",
+            DisplayName = "Scan Reviewer",
+        });
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Imported Lease Property",
+            AddressLine1 = "12 Test Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "A",
+        });
+        _db.LeaseManagements.Add(new LeaseManagement
+        {
+            Id = 56,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitId = 34,
+            RelationshipNumber = "LM-TEST-56",
+            CreatedByUserId = 7,
+        });
+        _db.TenantAccounts.Add(new TenantAccount
+        {
+            Id = 78,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = 56,
+            AccountNumber = "TA-TEST-78",
+            Currency = "USD",
+            CreatedByUserId = 7,
+        });
+        _db.StoredFiles.Add(new StoredFile
+        {
+            Id = 44,
+            PortfolioId = PortfolioId,
+            FileName = "signed-lease.pdf",
+            FilePath = "uploads/signed-lease.pdf",
+            ContentType = "application/pdf",
+            FileSize = 1024,
+        });
         draft.SourceStoredFileId = 44;
         draft.SourceContentSha256 = new string('a', 64);
         draft.CapturePropertyId = 12;

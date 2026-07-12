@@ -44,7 +44,7 @@ class AuthRepository {
         data: {
           'email': email,
           'password': password,
-          if (accessContextId != null) 'accessContextId': accessContextId,
+          'accessContextId': ?accessContextId,
         },
         options: Options(headers: {clientTypeHeader: mobileClientType}),
       );

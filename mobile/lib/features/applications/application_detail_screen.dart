@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
-import '../../core/models/models.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../tenants/tenant_detail_screen.dart';
