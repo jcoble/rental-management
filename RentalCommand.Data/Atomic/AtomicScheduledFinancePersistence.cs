@@ -8,8 +8,13 @@ namespace RentalCommand.Data.Atomic;
 internal sealed class AtomicScheduledFinancePersistence : IAtomicScheduledFinancePersistence
 {
     private readonly RentalCommandDbContext _db;
+    private readonly AtomicAuditScope _scope;
 
-    public AtomicScheduledFinancePersistence(RentalCommandDbContext db) => _db = db;
+    public AtomicScheduledFinancePersistence(RentalCommandDbContext db, AtomicAuditScope scope)
+    {
+        _db = db;
+        _scope = scope;
+    }
 
     public async Task<IReadOnlyList<Loan>> LockDebtServiceClaimsAsync(
         int[] loanIds,
@@ -18,6 +23,7 @@ internal sealed class AtomicScheduledFinancePersistence : IAtomicScheduledFinanc
         CancellationToken ct = default)
     {
         if (loanIds.Length == 0) return [];
+        using var lease = _scope.BeginInternalRawDml("Loans", AtomicRawDmlOperation.Update);
         return await _db.Loans.FromSqlInterpolated($"""
             SELECT loan.*
             FROM "Loans" AS loan
@@ -58,6 +64,7 @@ internal sealed class AtomicScheduledFinancePersistence : IAtomicScheduledFinanc
         CancellationToken ct = default)
     {
         if (recurringExpenseIds.Length == 0) return [];
+        using var lease = _scope.BeginInternalRawDml("RecurringExpenses", AtomicRawDmlOperation.Update);
         return await _db.RecurringExpenses.FromSqlInterpolated($"""
             SELECT template.*
             FROM "RecurringExpenses" AS template

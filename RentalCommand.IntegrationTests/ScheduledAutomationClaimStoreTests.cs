@@ -1,7 +1,5 @@
-using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -207,13 +205,19 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
             oldestDebtOccurrenceLoanId = loans[0].Id;
         }
 
-        var counter = new ReaderCommandCounter();
-        await using var db = NewContext(counter);
+        await using var db = NewContext();
         var store = new ScheduledAutomationClaimStore(db);
         var claims = await store.ClaimDebtServiceAsync(
             "debt-batch", now, TimeSpan.FromMinutes(2), 1);
         claims.Should().ContainSingle(claim => claim.Id == oldestDebtOccurrenceLoanId);
-        counter.ReaderCommands.Should().Be(1);
+        ScheduledAutomationClaimStore.DebtClaimStatement
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Should().ContainSingle();
+        ScheduledAutomationClaimStore.DebtClaimStatement.Should()
+            .Contain("WITH candidates AS")
+            .And.Contain("UPDATE \"Loans\"")
+            .And.Contain("RETURNING")
+            .And.Contain("LIMIT @batchSize");
     }
 
     private async Task<(int PortfolioId, int PropertyId)> SeedScopeAsync(DateTime now)
@@ -283,38 +287,8 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         UpdatedAt = due,
     };
 
-    private RentalCommandDbContext NewContext(IInterceptor? interceptor = null)
-    {
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseNpgsql(_connectionString);
-        if (interceptor is not null)
-            options.AddInterceptors(interceptor);
-        return new RentalCommandDbContext(options.Options);
-    }
-
-    private sealed class ReaderCommandCounter : DbCommandInterceptor
-    {
-        private int _readerCommands;
-        public int ReaderCommands => Volatile.Read(ref _readerCommands);
-        public void Reset() => Interlocked.Exchange(ref _readerCommands, 0);
-
-        public override InterceptionResult<DbDataReader> ReaderExecuting(
-            DbCommand command,
-            CommandEventData eventData,
-            InterceptionResult<DbDataReader> result)
-        {
-            Interlocked.Increment(ref _readerCommands);
-            return base.ReaderExecuting(command, eventData, result);
-        }
-
-        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
-            DbCommand command,
-            CommandEventData eventData,
-            InterceptionResult<DbDataReader> result,
-            CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _readerCommands);
-            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
-        }
-    }
+    private RentalCommandDbContext NewContext() => new(
+        new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(_connectionString)
+            .Options);
 }

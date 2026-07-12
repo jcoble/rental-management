@@ -31,6 +31,8 @@ public interface IScheduledAutomationClaimStore
 /// </summary>
 public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimStore
 {
+    internal static string DebtClaimStatement => DebtSql;
+
     private const string DebtSql = """
         WITH candidates AS (
             SELECT loan."Id"
