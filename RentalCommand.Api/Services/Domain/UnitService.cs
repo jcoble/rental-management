@@ -254,7 +254,7 @@ public class UnitService : IUnitService
                         || (file.EntityType == "Inspection" && _db.Inspections.Any(inspection =>
                             inspection.PortfolioId == portfolioId
                             && inspection.UnitId == unit.Id
-                            && inspection.Id == file.EntityId.Value))))),
+                            && inspection.Id == file.EntityId.Value)))),
             };
     }
 
