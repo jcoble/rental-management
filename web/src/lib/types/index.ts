@@ -928,9 +928,10 @@ export interface BankReviewQueueResponse {
 
 export interface NoticeDraft {
 	id: number;
-	leaseId: number;
-	paymentId?: number;
-	tenantId: number;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	tenantLedgerEntryId?: number;
+	recipientTenantId: number;
 	propertyId?: number;
 	tenantName: string;
 	propertyName?: string;
@@ -955,9 +956,10 @@ export interface GenerateNoticeDraftsResponse {
 }
 
 export interface GenerateNoticeDraftsRequest {
-	tenantId?: number;
-	leaseId?: number;
-	paymentId?: number;
+	leaseManagementId?: number;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
+	recipientTenantId?: number;
 	noticeType?: string;
 }
 

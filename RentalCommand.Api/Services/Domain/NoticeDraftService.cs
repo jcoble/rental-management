@@ -18,7 +18,7 @@ public class NoticeDraftService : INoticeDraftService
     // Renewal terms: propose a modest escalation on the current rent for the new term.
     private const decimal RenewalEscalationPercent = 3.0m;
     private const int RenewalTermMonths = 12;
-    // How many days before a scheduled rent payment's due date the autopilot generates a reminder.
+    // How many days before an open rent charge's due date the autopilot generates a reminder.
     // Per-portfolio RentChargeLeadDays wiring is out of scope for Plan 3b Task 4 (see report).
     private const int RentReminderLeadDays = 7;
     private static readonly TimeSpan CopyGenerationTimeout = TimeSpan.FromMilliseconds(1500);
@@ -69,12 +69,13 @@ public class NoticeDraftService : INoticeDraftService
         CancellationToken ct = default)
     {
         var now = _timeProvider.UtcNow();
-        var today = now.Date;
+        var today = DateOnly.FromDateTime(now);
         var created = new List<NoticeDraft>();
 
-        var tenantId = request?.TenantId;
-        var leaseId = request?.LeaseId;
-        var paymentId = request?.PaymentId;
+        var recipientTenantId = request?.RecipientTenantId;
+        var leaseManagementId = request?.LeaseManagementId;
+        var tenantAccountId = request?.TenantAccountId;
+        var tenantLedgerEntryId = request?.TenantLedgerEntryId;
         var requestedType = string.IsNullOrWhiteSpace(request?.NoticeType) ? null : request!.NoticeType!.Trim();
         // When a specific type is requested for a tenant, force renewal/move-out even outside the
         // usual trigger window — the landlord explicitly asked for that notice.
@@ -83,12 +84,14 @@ public class NoticeDraftService : INoticeDraftService
         bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
         var wantsRenewal = WantsType("RenewalOffer");
         var wantsMoveOut = WantsType("MoveOutReminder");
-        // A tenant-page explicit RentReminder remains the Plan-1 manual flow. Lease/payment scoped
-        // reminders are payment-grounded so the draft has a real due date and cannot leak another
-        // lease's candidate into the current lease tab.
+        // A tenant-page explicit RentReminder remains the manual flow. Relationship/ledger-scoped
+        // reminders are charge-grounded so the draft has a real due date and cannot leak another
+        // tenant account's candidate into the current relationship.
         var rentReminderRequested = string.Equals(requestedType, "RentReminder", StringComparison.OrdinalIgnoreCase);
-        var wantsRentReminder = rentReminderRequested && !leaseId.HasValue && !paymentId.HasValue;
-        var wantsUpcomingRentReminder = requestedType == null || (rentReminderRequested && leaseId.HasValue);
+        var wantsRentReminder = rentReminderRequested &&
+            !leaseManagementId.HasValue && !tenantAccountId.HasValue && !tenantLedgerEntryId.HasValue;
+        var wantsUpcomingRentReminder = requestedType == null ||
+            (rentReminderRequested && (leaseManagementId.HasValue || tenantAccountId.HasValue));
         // MonthToMonth is generated portfolio-wide too (within the lease-end window) so the autopilot can
         // auto-send it; it mirrors renewal's lead time.
         var wantsMonthToMonth = requestedType == null || string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
@@ -110,13 +113,14 @@ public class NoticeDraftService : INoticeDraftService
             .Select(p => p.Name)
             .FirstOrDefaultAsync(ct) ?? "";
 
-        if (paymentId.HasValue)
+        if (tenantLedgerEntryId.HasValue)
         {
-            return await GeneratePaymentScopedAsync(
+            return await GenerateLedgerEntryScopedAsync(
                 portfolioId,
-                paymentId.Value,
-                tenantId,
-                leaseId,
+                tenantLedgerEntryId.Value,
+                recipientTenantId,
+                leaseManagementId,
+                tenantAccountId,
                 requestedType,
                 now,
                 today,
@@ -127,248 +131,235 @@ public class NoticeDraftService : INoticeDraftService
 
         if (wantsRenewal || wantsMoveOut || wantsRentReminder || wantsMonthToMonth)
         {
-            var leaseBaseQuery = _db.Leases
-                .Include(l => l.Tenant)
-                .Include(l => l.Property)
-                .Include(l => l.Unit)
-                .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active);
-            if (tenantId.HasValue)
+            var relationshipBaseQuery = ActiveNoticeContextQuery(portfolioId);
+            if (recipientTenantId.HasValue)
             {
-                leaseBaseQuery = leaseBaseQuery.Where(l => l.TenantId == tenantId.Value);
+                relationshipBaseQuery = relationshipBaseQuery.Where(row => row.RecipientTenantId == recipientTenantId.Value);
             }
-            if (leaseId.HasValue)
+            if (leaseManagementId.HasValue)
             {
-                leaseBaseQuery = leaseBaseQuery.Where(l => l.Id == leaseId.Value);
+                relationshipBaseQuery = relationshipBaseQuery.Where(row => row.LeaseManagementId == leaseManagementId.Value);
+            }
+            if (tenantAccountId.HasValue)
+            {
+                relationshipBaseQuery = relationshipBaseQuery.Where(row => row.TenantAccountId == tenantAccountId.Value);
             }
 
             if (wantsRenewal)
             {
-                var renewalQuery = leaseBaseQuery
-                    .Where(l => forced || (l.EndDate >= today && l.EndDate < today.AddDays(76)))
-                    .Where(l => !_db.NoticeDrafts.Any(d =>
+                var renewalQuery = relationshipBaseQuery
+                    .Where(row => row.TermEndOn != null &&
+                        (forced || (row.TermEndOn >= today && row.TermEndOn < today.AddDays(76))))
+                    .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
-                        d.LeaseId == l.Id &&
+                        d.LeaseManagementId == row.LeaseManagementId &&
                         d.NoticeType == "RenewalOffer" &&
                         d.Status == "Draft"));
 
-                var renewalLeases = await renewalQuery
-                    .OrderBy(l => l.EndDate)
-                    .ThenBy(l => l.Id)
+                var renewalRelationships = await renewalQuery
+                    .OrderBy(row => row.TermEndOn)
+                    .ThenBy(row => row.LeaseManagementId)
                     .ToListAsync(ct);
 
-                foreach (var lease in renewalLeases)
+                foreach (var relationship in renewalRelationships)
                 {
-                    if (lease.Tenant == null) continue;
-
-                    var daysToEnd = (lease.EndDate.Date - today).Days;
-                    created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("RenewalOffer"), portfolioName, ct));
+                    var daysToEnd = relationship.TermEndOn!.Value.DayNumber - today.DayNumber;
+                    created.Add(await BuildRenewalDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("RenewalOffer"), portfolioName, ct));
                 }
             }
 
             if (wantsMoveOut)
             {
-                var moveOutQuery = leaseBaseQuery
-                    .Where(l => forced || (l.EndDate >= today && l.EndDate < today.AddDays(31)))
-                    .Where(l => !_db.NoticeDrafts.Any(d =>
+                var moveOutQuery = relationshipBaseQuery
+                    .Where(row => row.TermEndOn != null &&
+                        (forced || (row.TermEndOn >= today && row.TermEndOn < today.AddDays(31))))
+                    .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
-                        d.LeaseId == l.Id &&
+                        d.LeaseManagementId == row.LeaseManagementId &&
                         d.NoticeType == "MoveOutReminder" &&
                         d.Status == "Draft"));
 
-                var moveOutLeases = await moveOutQuery
-                    .OrderBy(l => l.EndDate)
-                    .ThenBy(l => l.Id)
+                var moveOutRelationships = await moveOutQuery
+                    .OrderBy(row => row.TermEndOn)
+                    .ThenBy(row => row.LeaseManagementId)
                     .ToListAsync(ct);
 
-                foreach (var lease in moveOutLeases)
+                foreach (var relationship in moveOutRelationships)
                 {
-                    if (lease.Tenant == null) continue;
-
-                    var daysToEnd = (lease.EndDate.Date - today).Days;
-                    created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MoveOutReminder"), portfolioName, ct));
+                    var daysToEnd = relationship.TermEndOn!.Value.DayNumber - today.DayNumber;
+                    created.Add(await BuildMoveOutDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("MoveOutReminder"), portfolioName, ct));
                 }
             }
 
             if (wantsRentReminder)
             {
-                var reminderLeases = await leaseBaseQuery
-                    .Where(l => !_db.NoticeDrafts.Any(d =>
+                var reminderRelationships = await relationshipBaseQuery
+                    .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
-                        d.LeaseId == l.Id &&
+                        d.LeaseManagementId == row.LeaseManagementId &&
                         d.NoticeType == "RentReminder" &&
                         d.Status == "Draft"))
-                    .OrderBy(l => l.EndDate)
-                    .ThenBy(l => l.Id)
+                    .OrderBy(row => row.TermEndOn)
+                    .ThenBy(row => row.LeaseManagementId)
                     .ToListAsync(ct);
 
-                foreach (var lease in reminderLeases)
+                foreach (var relationship in reminderRelationships)
                 {
-                    if (lease.Tenant == null) continue;
-
-                    created.Add(await BuildRentReminderDraftAsync(portfolioId, lease, now, TemplateFor("RentReminder"), portfolioName, ct));
+                    created.Add(await BuildRentReminderDraftAsync(portfolioId, relationship, now, TemplateFor("RentReminder"), portfolioName, ct));
                 }
             }
 
             if (wantsMonthToMonth)
             {
-                var monthToMonthQuery = leaseBaseQuery
-                    .Where(l => forced || (l.EndDate >= today && l.EndDate < today.AddDays(76)))
-                    .Where(l => !_db.NoticeDrafts.Any(d =>
+                var monthToMonthQuery = relationshipBaseQuery
+                    .Where(row => row.TermEndOn != null &&
+                        (forced || (row.TermEndOn >= today && row.TermEndOn < today.AddDays(76))))
+                    .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
-                        d.LeaseId == l.Id &&
+                        d.LeaseManagementId == row.LeaseManagementId &&
                         d.NoticeType == "MonthToMonthConversion" &&
                         d.Status == "Draft"));
 
-                var monthToMonthLeases = await monthToMonthQuery
-                    .OrderBy(l => l.EndDate)
-                    .ThenBy(l => l.Id)
+                var monthToMonthRelationships = await monthToMonthQuery
+                    .OrderBy(row => row.TermEndOn)
+                    .ThenBy(row => row.LeaseManagementId)
                     .ToListAsync(ct);
 
-                foreach (var lease in monthToMonthLeases)
+                foreach (var relationship in monthToMonthRelationships)
                 {
-                    if (lease.Tenant == null) continue;
-
-                    var daysToEnd = (lease.EndDate.Date - today).Days;
-                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MonthToMonthConversion"), portfolioName, ct));
+                    var daysToEnd = relationship.TermEndOn!.Value.DayNumber - today.DayNumber;
+                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("MonthToMonthConversion"), portfolioName, ct));
                 }
             }
         }
 
-        // Late-rent notices are always grounded in a real overdue payment (we need the amount/due
-        // date), so even a forced request only produces one when such a payment exists.
+        // Late-rent notices are always grounded in a real open tenant-ledger charge, so even a
+        // forced request only produces one when such a charge exists.
         if (WantsType("LateRentNotice"))
         {
-            var lateQuery = _db.Payments
-                .AsNoTracking()
-                .ForCurrentLeaseAttention(today)
-                .Where(p =>
-                    p.PortfolioId == portfolioId &&
-                    p.DueDate < today &&
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial) &&
-                    (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+            var lateQuery = MoneyNoticeCandidateQuery(portfolioId)
+                .Where(row =>
+                    row.IsPastDue &&
+                    (row.EntryType == nameof(TenantLedgerEntryType.RentCharge) ||
+                     row.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge)) &&
                     !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
-                        d.LeaseId == p.LeaseId &&
+                        d.LeaseManagementId == row.LeaseManagementId &&
                         d.NoticeType == "LateRentNotice" &&
                         d.Status == "Draft"));
-            if (tenantId.HasValue)
+            if (recipientTenantId.HasValue)
             {
-                lateQuery = lateQuery.Where(p => p.Lease != null && p.Lease.TenantId == tenantId.Value);
+                lateQuery = lateQuery.Where(row => row.RecipientTenantId == recipientTenantId.Value);
             }
-            if (leaseId.HasValue)
+            if (leaseManagementId.HasValue)
             {
-                lateQuery = lateQuery.Where(p => p.LeaseId == leaseId.Value);
+                lateQuery = lateQuery.Where(row => row.LeaseManagementId == leaseManagementId.Value);
+            }
+            if (tenantAccountId.HasValue)
+            {
+                lateQuery = lateQuery.Where(row => row.TenantAccountId == tenantAccountId.Value);
             }
 
-            // Pick one overdue row per lease in SQL so a rent row and its late-fee row do not create
-            // duplicate-looking late notices for the same lease context. Prefer the substantive rent
-            // balance over older prorates or standalone late-fee rows, then fold same-period fees into it.
-            var latePaymentIds = await lateQuery
-                .GroupBy(p => p.LeaseId)
+            // Pick one overdue charge per relationship in SQL. Prefer the substantive rent balance,
+            // then fold same-due-date late fees into it without client-side grouping.
+            var lateLedgerEntryIds = await lateQuery
+                .GroupBy(row => row.LeaseManagementId)
                 .Select(g => g
-                    .OrderBy(p => p.PaymentType == PaymentType.Rent ? 0 : 1)
-                    .ThenByDescending(p => p.Status == PaymentStatus.Partial
-                        ? p.Amount - (p.AmountPaid ?? 0m)
-                        : p.Amount)
-                    .ThenByDescending(p => p.DueDate)
-                    .ThenBy(p => p.Id)
-                    .Select(p => p.Id)
+                    .OrderBy(row => row.EntryType == nameof(TenantLedgerEntryType.RentCharge) ? 0 : 1)
+                    .ThenByDescending(row => row.OpenAmount)
+                    .ThenByDescending(row => row.DueOn)
+                    .ThenBy(row => row.TenantLedgerEntryId)
+                    .Select(row => row.TenantLedgerEntryId)
                     .First())
                 .ToListAsync(ct);
 
-            var lateCandidates = await _db.Payments
-                .AsNoTracking()
-                .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
-                .Include(p => p.Lease).ThenInclude(l => l!.Property)
-                .Include(p => p.Lease).ThenInclude(l => l!.Unit)
-                .Where(p => latePaymentIds.Contains(p.Id))
-                .Select(p => new
+            var lateCandidates = await MoneyNoticeCandidateQuery(portfolioId)
+                .Where(row => lateLedgerEntryIds.Contains(row.TenantLedgerEntryId))
+                .Select(row => new
                 {
-                    Payment = p,
-                    RelatedLateFeeAmount = p.PaymentType == PaymentType.Rent && p.PeriodKey != null
-                        ? _db.Payments
-                            .Where(f =>
-                                f.PortfolioId == portfolioId &&
-                                f.LeaseId == p.LeaseId &&
-                                f.PaymentType == PaymentType.LateFee &&
-                                f.PeriodKey == p.PeriodKey &&
-                                (f.Status == PaymentStatus.Scheduled || f.Status == PaymentStatus.Late || f.Status == PaymentStatus.Partial))
-                            .Sum(f => (decimal?)(f.Status == PaymentStatus.Partial
-                                ? f.Amount - (f.AmountPaid ?? 0m)
-                                : f.Amount)) ?? 0m
+                    Candidate = row,
+                    RelatedLateFeeAmount = row.EntryType == nameof(TenantLedgerEntryType.RentCharge)
+                        ? _db.TenantChargeBalanceProjections
+                            .Where(fee =>
+                                fee.PortfolioId == portfolioId &&
+                                fee.TenantAccountId == row.TenantAccountId &&
+                                fee.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge) &&
+                                fee.DueOn == row.DueOn &&
+                                fee.OpenAmount > 0m)
+                            .Sum(fee => (decimal?)fee.OpenAmount) ?? 0m
                         : 0m,
                 })
-                .OrderBy(c => c.Payment.DueDate)
+                .OrderBy(row => row.Candidate.DueOn)
+                .ThenBy(row => row.Candidate.LeaseManagementId)
                 .ToListAsync(ct);
 
-            foreach (var candidate in lateCandidates)
+            foreach (var row in lateCandidates)
             {
-                var payment = candidate.Payment;
-                if (payment.Lease?.Tenant == null) continue;
-                var daysLate = (today - payment.DueDate.Date).Days;
+                var candidate = row.Candidate;
+                var daysLate = today.DayNumber - candidate.DueOn.DayNumber;
                 created.Add(await BuildLateDraftAsync(
                     portfolioId,
-                    payment,
+                    candidate,
                     daysLate,
                     now,
                     TemplateFor("LateRentNotice"),
                     portfolioName,
                     ct,
-                    relatedLateFeeAmount: candidate.RelatedLateFeeAmount));
+                    relatedLateFeeAmount: row.RelatedLateFeeAmount));
             }
         }
 
-        // Periodic, payment-grounded rent reminders: one per active in-portfolio lease with a scheduled
-        // rent payment due within the lead window. Per-period idempotent (keyed on the payment's due date)
+        // Periodic, charge-grounded rent reminders: one per active relationship with an open rent
+        // charge due within the lead window. Per-period idempotent (keyed on the charge's due date)
         // so monthly reminders recur but a given period's reminder is never duplicated/recreated.
         if (wantsUpcomingRentReminder)
         {
             var leadWindowEndExclusive = today.AddDays(RentReminderLeadDays + 1);
-            var upcomingQuery = _db.Payments
-                .AsNoTracking()
-                .Where(p =>
-                    p.PortfolioId == portfolioId &&
-                    p.PaymentType == PaymentType.Rent &&
-                    p.Status == PaymentStatus.Scheduled &&
-                    p.DueDate >= today &&
-                    p.DueDate < leadWindowEndExclusive &&
-                    p.Lease != null &&
-                    p.Lease.Status == LeaseStatus.Active &&
+            var upcomingQuery = MoneyNoticeCandidateQuery(portfolioId)
+                .Where(row =>
+                    row.EntryType == nameof(TenantLedgerEntryType.RentCharge) &&
+                    row.OpenAmount > 0m &&
+                    row.DueOn >= today &&
+                    row.DueOn < leadWindowEndExclusive &&
                     !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
                         d.NoticeType == "RentReminder" &&
-                        ((d.PaymentId != null && d.PaymentId == p.Id) ||
-                         (d.PaymentId == null && d.LeaseId == p.LeaseId && d.TriggerDate == p.DueDate.Date))));
-            if (tenantId.HasValue)
+                        d.TenantLedgerEntryId == row.TenantLedgerEntryId));
+            if (recipientTenantId.HasValue)
             {
-                upcomingQuery = upcomingQuery.Where(p => p.Lease != null && p.Lease.TenantId == tenantId.Value);
+                upcomingQuery = upcomingQuery.Where(row => row.RecipientTenantId == recipientTenantId.Value);
             }
-            if (leaseId.HasValue)
+            if (leaseManagementId.HasValue)
             {
-                upcomingQuery = upcomingQuery.Where(p => p.LeaseId == leaseId.Value);
+                upcomingQuery = upcomingQuery.Where(row => row.LeaseManagementId == leaseManagementId.Value);
+            }
+            if (tenantAccountId.HasValue)
+            {
+                upcomingQuery = upcomingQuery.Where(row => row.TenantAccountId == tenantAccountId.Value);
             }
 
-            var upcomingPaymentIds = await upcomingQuery
-                .GroupBy(p => new { p.LeaseId, p.DueDate })
-                .Select(g => g.Min(p => p.Id))
+            var upcomingLedgerEntryIds = await upcomingQuery
+                .GroupBy(row => new { row.LeaseManagementId, row.DueOn })
+                .Select(g => g.Min(row => row.TenantLedgerEntryId))
                 .ToListAsync(ct);
 
-            var upcomingPayments = await _db.Payments
-                .AsNoTracking()
-                .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
-                .Include(p => p.Lease).ThenInclude(l => l!.Property)
-                .Include(p => p.Lease).ThenInclude(l => l!.Unit)
-                .Where(p => upcomingPaymentIds.Contains(p.Id))
-                .OrderBy(p => p.DueDate)
-                .ThenBy(p => p.LeaseId)
+            var upcomingCharges = await MoneyNoticeCandidateQuery(portfolioId)
+                .Where(row => upcomingLedgerEntryIds.Contains(row.TenantLedgerEntryId))
+                .OrderBy(row => row.DueOn)
+                .ThenBy(row => row.LeaseManagementId)
                 .ToListAsync(ct);
 
-            foreach (var payment in upcomingPayments)
+            foreach (var charge in upcomingCharges)
             {
-                if (payment.Lease?.Tenant == null) continue;
-                var dueDate = payment.DueDate.Date;
                 created.Add(await BuildRentReminderDraftAsync(
-                    portfolioId, payment.Lease, now, TemplateFor("RentReminder"), portfolioName, ct, dueDate, payment.Id));
+                    portfolioId,
+                    charge,
+                    now,
+                    TemplateFor("RentReminder"),
+                    portfolioName,
+                    ct,
+                    charge.DueOn,
+                    charge.TenantLedgerEntryId));
             }
         }
 
@@ -381,67 +372,78 @@ public class NoticeDraftService : INoticeDraftService
         return new GenerateNoticeDraftsResponse
         {
             CreatedCount = created.Count,
-            Drafts = await BuildGenerateResponseDraftsAsync(portfolioId, tenantId, leaseId, null, requestedType, created, ct)
+            Drafts = await BuildGenerateResponseDraftsAsync(
+                portfolioId,
+                recipientTenantId,
+                leaseManagementId,
+                tenantAccountId,
+                null,
+                requestedType,
+                created,
+                ct)
         };
     }
 
-    private async Task<GenerateNoticeDraftsResponse> GeneratePaymentScopedAsync(
+    private async Task<GenerateNoticeDraftsResponse> GenerateLedgerEntryScopedAsync(
         int portfolioId,
-        int paymentId,
-        int? tenantId,
-        int? leaseId,
+        long tenantLedgerEntryId,
+        int? recipientTenantId,
+        int? leaseManagementId,
+        int? tenantAccountId,
         string? requestedType,
         DateTime now,
-        DateTime today,
+        DateOnly today,
         Func<string, NoticeTemplate?> templateFor,
         string portfolioName,
         CancellationToken ct)
     {
-        var payment = await _db.Payments
-            .AsNoTracking()
-            .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
-            .Include(p => p.Lease).ThenInclude(l => l!.Property)
-            .Include(p => p.Lease).ThenInclude(l => l!.Unit)
-            .Where(p => p.PortfolioId == portfolioId && p.Id == paymentId)
+        var charge = await MoneyNoticeCandidateQuery(portfolioId)
+            .Where(row => row.TenantLedgerEntryId == tenantLedgerEntryId)
             .FirstOrDefaultAsync(ct);
 
-        if (payment?.Lease?.Tenant == null)
+        if (charge == null)
         {
             return new GenerateNoticeDraftsResponse();
         }
 
-        if (leaseId.HasValue && payment.LeaseId != leaseId.Value)
+        if (leaseManagementId.HasValue && charge.LeaseManagementId != leaseManagementId.Value)
         {
-            throw new DomainValidationException("Payment does not belong to the selected lease.");
+            throw new DomainValidationException("Ledger entry does not belong to the selected lease relationship.");
         }
 
-        if (tenantId.HasValue && payment.Lease.TenantId != tenantId.Value)
+        if (tenantAccountId.HasValue && charge.TenantAccountId != tenantAccountId.Value)
         {
-            throw new DomainValidationException("Payment does not belong to the selected tenant.");
+            throw new DomainValidationException("Ledger entry does not belong to the selected tenant account.");
+        }
+
+        if (recipientTenantId.HasValue && charge.RecipientTenantId != recipientTenantId.Value)
+        {
+            throw new DomainValidationException("Ledger entry does not belong to the selected recipient.");
         }
 
         var noticeType = requestedType;
         if (string.IsNullOrWhiteSpace(noticeType))
         {
-            noticeType = InferPaymentNoticeType(payment, today);
+            noticeType = InferChargeNoticeType(charge, today);
         }
 
-        if (string.IsNullOrWhiteSpace(noticeType) || !IsEligibleForPaymentNotice(payment, noticeType, today))
+        if (string.IsNullOrWhiteSpace(noticeType) || !IsEligibleForChargeNotice(charge, noticeType, today))
         {
             return new GenerateNoticeDraftsResponse
             {
                 Drafts = await BuildGenerateResponseDraftsAsync(
                     portfolioId,
-                    payment.Lease.TenantId,
-                    payment.LeaseId,
-                    payment.Id,
+                    charge.RecipientTenantId,
+                    charge.LeaseManagementId,
+                    charge.TenantAccountId,
+                    charge.TenantLedgerEntryId,
                     noticeType,
                     [],
                     ct)
             };
         }
 
-        var existing = await PaymentScopedExistingDraftsQuery(portfolioId, payment, noticeType)
+        var existing = await LedgerEntryScopedExistingDraftsQuery(portfolioId, charge, noticeType)
             .OrderBy(d => d.Status == "Draft" ? 0 : 1)
             .ThenByDescending(d => d.CreatedAt)
             .ToListAsync(ct);
@@ -459,27 +461,27 @@ public class NoticeDraftService : INoticeDraftService
         {
             draft = await BuildRentReminderDraftAsync(
                 portfolioId,
-                payment.Lease,
+                charge,
                 now,
                 templateFor("RentReminder"),
                 portfolioName,
                 ct,
-                payment.DueDate.Date,
-                payment.Id);
+                charge.DueOn,
+                charge.TenantLedgerEntryId);
         }
         else
         {
-            var relatedLateFeeAmount = await RelatedLateFeeOutstandingAsync(portfolioId, payment, ct);
+            var relatedLateFeeAmount = await RelatedLateFeeOutstandingAsync(portfolioId, charge, ct);
             draft = await BuildLateDraftAsync(
                 portfolioId,
-                payment,
-                Math.Max(0, (today - payment.DueDate.Date).Days),
+                charge,
+                Math.Max(0, today.DayNumber - charge.DueOn.DayNumber),
                 now,
                 templateFor("LateRentNotice"),
                 portfolioName,
                 ct,
                 relatedLateFeeAmount,
-                payment.Id);
+                charge.TenantLedgerEntryId);
         }
 
         _db.NoticeDrafts.Add(draft);
@@ -525,7 +527,7 @@ public class NoticeDraftService : INoticeDraftService
         // the review; the draft stays in "Draft" so they can revise and re-approve.
         var conversation = await _conversations.StartAsync(
             portfolioId,
-            draft.TenantId,
+            draft.RecipientTenantId,
             draft.Subject,
             draft.Body,
             channels,
@@ -556,30 +558,26 @@ public class NoticeDraftService : INoticeDraftService
         return Map(draft);
     }
 
-    private IQueryable<NoticeDraft> PaymentScopedExistingDraftsQuery(
+    private IQueryable<NoticeDraft> LedgerEntryScopedExistingDraftsQuery(
         int portfolioId,
-        Payment payment,
+        MoneyNoticeCandidate charge,
         string noticeType)
     {
-        var triggerDate = payment.DueDate.Date;
         return BaseQuery(portfolioId)
             .Where(d =>
                 d.NoticeType == noticeType &&
                 (d.Status == "Draft" || d.Status == "Approved") &&
-                ((d.PaymentId != null && d.PaymentId == payment.Id) ||
-                 (d.PaymentId == null &&
-                  d.LeaseId == payment.LeaseId &&
-                  d.TriggerDate == triggerDate)));
+                d.TenantLedgerEntryId == charge.TenantLedgerEntryId);
     }
 
-    private static string? InferPaymentNoticeType(Payment payment, DateTime today)
+    private static string? InferChargeNoticeType(MoneyNoticeCandidate charge, DateOnly today)
     {
-        if (IsEligibleForPaymentNotice(payment, "LateRentNotice", today))
+        if (IsEligibleForChargeNotice(charge, "LateRentNotice", today))
         {
             return "LateRentNotice";
         }
 
-        if (IsEligibleForPaymentNotice(payment, "RentReminder", today))
+        if (IsEligibleForChargeNotice(charge, "RentReminder", today))
         {
             return "RentReminder";
         }
@@ -587,25 +585,24 @@ public class NoticeDraftService : INoticeDraftService
         return null;
     }
 
-    private static bool IsEligibleForPaymentNotice(Payment payment, string noticeType, DateTime today)
+    private static bool IsEligibleForChargeNotice(MoneyNoticeCandidate charge, string noticeType, DateOnly today)
     {
-        var activeCharge = payment.Status is PaymentStatus.Scheduled or PaymentStatus.Late or PaymentStatus.Partial;
-        if (!activeCharge)
+        if (charge.OpenAmount <= 0m)
         {
             return false;
         }
 
         if (string.Equals(noticeType, "RentReminder", StringComparison.OrdinalIgnoreCase))
         {
-            return payment.PaymentType == PaymentType.Rent &&
-                   payment.Status == PaymentStatus.Scheduled &&
-                   payment.DueDate >= today;
+            return charge.EntryType == nameof(TenantLedgerEntryType.RentCharge) &&
+                   charge.DueOn >= today;
         }
 
         if (string.Equals(noticeType, "LateRentNotice", StringComparison.OrdinalIgnoreCase))
         {
-            return (payment.PaymentType == PaymentType.Rent || payment.PaymentType == PaymentType.LateFee) &&
-                   (payment.Status is PaymentStatus.Late or PaymentStatus.Partial || payment.DueDate < today);
+            return (charge.EntryType == nameof(TenantLedgerEntryType.RentCharge) ||
+                    charge.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge)) &&
+                   charge.DueOn < today;
         }
 
         return false;
@@ -613,78 +610,177 @@ public class NoticeDraftService : INoticeDraftService
 
     private async Task<decimal> RelatedLateFeeOutstandingAsync(
         int portfolioId,
-        Payment payment,
+        MoneyNoticeCandidate charge,
         CancellationToken ct)
     {
-        if (payment.PaymentType == PaymentType.LateFee)
+        if (charge.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge))
         {
-            return OutstandingAmount(payment);
+            return charge.OpenAmount;
         }
 
-        if (payment.PaymentType != PaymentType.Rent || string.IsNullOrWhiteSpace(payment.PeriodKey))
+        if (charge.EntryType != nameof(TenantLedgerEntryType.RentCharge))
         {
             return 0m;
         }
 
-        return await _db.Payments
+        return await _db.TenantChargeBalanceProjections
             .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.LeaseId == payment.LeaseId &&
-                p.PaymentType == PaymentType.LateFee &&
-                p.PeriodKey == payment.PeriodKey &&
-                (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial))
-            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial
-                ? p.Amount - (p.AmountPaid ?? 0m)
-                : p.Amount), ct) ?? 0m;
+            .Where(fee =>
+                fee.PortfolioId == portfolioId &&
+                fee.TenantAccountId == charge.TenantAccountId &&
+                fee.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge) &&
+                fee.DueOn == charge.DueOn &&
+                fee.OpenAmount > 0m)
+            .SumAsync(fee => (decimal?)fee.OpenAmount, ct) ?? 0m;
     }
 
-    private static decimal OutstandingAmount(Payment payment) =>
-        payment.Status == PaymentStatus.Partial
-            ? Math.Max(0m, payment.Amount - (payment.AmountPaid ?? 0m))
-            : payment.Amount;
+    private class NoticeContext
+    {
+        public int LeaseManagementId { get; init; }
+        public int TenantAccountId { get; init; }
+        public int RecipientTenantId { get; init; }
+        public int PropertyId { get; init; }
+        public int UnitId { get; init; }
+        public int CurrentAgreementId { get; init; }
+        public string TenantName { get; init; } = string.Empty;
+        public string PropertyName { get; init; } = string.Empty;
+        public string? UnitNumber { get; init; }
+        public string RelationshipNumber { get; init; } = string.Empty;
+        public DateOnly TermStartOn { get; init; }
+        public DateOnly? TermEndOn { get; init; }
+        public decimal BaseRentAmount { get; init; }
+        public short RentDueDay { get; init; }
+    }
+
+    private sealed class MoneyNoticeCandidate : NoticeContext
+    {
+        public long TenantLedgerEntryId { get; init; }
+        public string EntryType { get; init; } = string.Empty;
+        public DateOnly DueOn { get; init; }
+        public decimal OpenAmount { get; init; }
+        public bool IsPastDue { get; init; }
+    }
+
+    private IQueryable<NoticeContext> ActiveNoticeContextQuery(int portfolioId) =>
+        from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+        join management in _db.LeaseManagements.AsNoTracking()
+            on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+            equals new { management.PortfolioId, management.Id }
+        join agreement in _db.LeaseAgreements.AsNoTracking()
+            on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+            equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+        join account in _db.TenantAccounts.AsNoTracking()
+            on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            equals new { account.PortfolioId, account.LeaseManagementId }
+        join tenant in _db.Tenants.AsNoTracking()
+            on new { lifecycle.PortfolioId, Id = lifecycle.CurrentPrimaryTenantId }
+            equals new { tenant.PortfolioId, Id = (int?)tenant.Id }
+        where lifecycle.PortfolioId == portfolioId
+            && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+            && !lifecycle.HasReconciliationException
+        select new NoticeContext
+        {
+            LeaseManagementId = management.Id,
+            TenantAccountId = account.Id,
+            RecipientTenantId = tenant.Id,
+            PropertyId = management.PropertyId,
+            UnitId = management.UnitId,
+            CurrentAgreementId = agreement.Id,
+            TenantName = (tenant.FirstName + " " + tenant.LastName).Trim(),
+            PropertyName = management.Property!.Name,
+            UnitNumber = management.Unit!.UnitNumber,
+            RelationshipNumber = management.RelationshipNumber,
+            TermStartOn = agreement.TermStartOn,
+            TermEndOn = agreement.TermEndOn,
+            BaseRentAmount = agreement.BaseRentAmount,
+            RentDueDay = agreement.RentDueDay,
+        };
+
+    private IQueryable<MoneyNoticeCandidate> MoneyNoticeCandidateQuery(int portfolioId) =>
+        from context in ActiveNoticeContextQuery(portfolioId)
+        join charge in _db.TenantChargeBalanceProjections.AsNoTracking()
+            on new { PortfolioId = portfolioId, context.TenantAccountId }
+            equals new { charge.PortfolioId, charge.TenantAccountId }
+        join entry in _db.TenantLedgerEntries.AsNoTracking()
+            on new
+            {
+                charge.PortfolioId,
+                charge.TenantAccountId,
+                Id = charge.TenantLedgerEntryId,
+            }
+            equals new { entry.PortfolioId, entry.TenantAccountId, entry.Id }
+        where charge.DueOn != null
+        select new MoneyNoticeCandidate
+        {
+            LeaseManagementId = context.LeaseManagementId,
+            TenantAccountId = context.TenantAccountId,
+            RecipientTenantId = context.RecipientTenantId,
+            PropertyId = context.PropertyId,
+            UnitId = context.UnitId,
+            CurrentAgreementId = context.CurrentAgreementId,
+            TenantName = context.TenantName,
+            PropertyName = context.PropertyName,
+            UnitNumber = context.UnitNumber,
+            RelationshipNumber = context.RelationshipNumber,
+            TermStartOn = context.TermStartOn,
+            TermEndOn = context.TermEndOn,
+            BaseRentAmount = context.BaseRentAmount,
+            RentDueDay = context.RentDueDay,
+            TenantLedgerEntryId = entry.Id,
+            EntryType = charge.EntryType,
+            DueOn = charge.DueOn.Value,
+            OpenAmount = charge.OpenAmount,
+            IsPastDue = charge.IsPastDue,
+        };
 
     private IQueryable<NoticeDraft> BaseQuery(int portfolioId) =>
         _db.NoticeDrafts
-            .Include(d => d.Tenant)
+            .Include(d => d.RecipientTenant)
             .Include(d => d.Property)
-            .Include(d => d.Payment)
-            .Include(d => d.Lease).ThenInclude(l => l!.Unit)
+            .Include(d => d.LeaseManagement).ThenInclude(l => l!.Unit)
             .Where(d => d.PortfolioId == portfolioId);
 
     private async Task<IReadOnlyList<NoticeDraftResponse>> BuildGenerateResponseDraftsAsync(
         int portfolioId,
-        int? tenantId,
-        int? leaseId,
-        int? paymentId,
+        int? recipientTenantId,
+        int? leaseManagementId,
+        int? tenantAccountId,
+        long? tenantLedgerEntryId,
         string? requestedType,
         List<NoticeDraft> created,
         CancellationToken ct)
     {
-        if (!tenantId.HasValue && !leaseId.HasValue && !paymentId.HasValue)
+        if (!recipientTenantId.HasValue && !leaseManagementId.HasValue && !tenantAccountId.HasValue && !tenantLedgerEntryId.HasValue)
         {
             return created.Select(Map).ToList();
         }
 
         var query = BaseQuery(portfolioId);
 
-        if (paymentId.HasValue)
+        if (tenantLedgerEntryId.HasValue)
         {
-            query = query.Where(d => d.PaymentId == paymentId.Value && (d.Status == "Draft" || d.Status == "Approved"));
+            query = query.Where(d =>
+                d.TenantLedgerEntryId == tenantLedgerEntryId.Value &&
+                (d.Status == "Draft" || d.Status == "Approved"));
         }
         else
         {
             query = query.Where(d => d.Status == "Draft");
         }
 
-        if (tenantId.HasValue)
+        if (recipientTenantId.HasValue)
         {
-            query = query.Where(d => d.TenantId == tenantId.Value);
+            query = query.Where(d => d.RecipientTenantId == recipientTenantId.Value);
         }
 
-        if (leaseId.HasValue)
+        if (leaseManagementId.HasValue)
         {
-            query = query.Where(d => d.LeaseId == leaseId.Value);
+            query = query.Where(d => d.LeaseManagementId == leaseManagementId.Value);
+        }
+
+        if (tenantAccountId.HasValue)
+        {
+            query = query.Where(d => d.TenantAccountId == tenantAccountId.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(requestedType))
@@ -708,44 +804,44 @@ public class NoticeDraftService : INoticeDraftService
     // ===========================================================================================
 
     private async Task<NoticeDraft> BuildRenewalDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
+        int portfolioId, NoticeContext context, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
-        var tenant = lease.Tenant!;
-        var propertyName = lease.Property?.Name ?? "your home";
-        var unit = UnitSuffix(lease.Unit?.UnitNumber);
-        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+        var propertyName = context.PropertyName;
+        var unit = UnitSuffix(context.UnitNumber);
+        var tenantName = context.TenantName;
+        var endOn = context.TermEndOn!.Value;
 
         // Renewal terms: escalate the current rent and extend the term by a year.
-        var proposedRent = Math.Round(lease.MonthlyRent * (1 + RenewalEscalationPercent / 100m), 0, MidpointRounding.AwayFromZero);
-        var newEndDate = lease.EndDate.Date.AddMonths(RenewalTermMonths);
+        var proposedRent = Math.Round(context.BaseRentAmount * (1 + RenewalEscalationPercent / 100m), 0, MidpointRounding.AwayFromZero);
+        var newEndDate = endOn.AddMonths(RenewalTermMonths);
 
         var facts =
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
-            $"- Current lease ends: {lease.EndDate:MMMM d, yyyy} ({daysToEnd} days away)\n" +
-            $"- Current rent: {Usd(lease.MonthlyRent)}/month\n" +
+            $"- Current lease ends: {endOn:MMMM d, yyyy} ({daysToEnd} days away)\n" +
+            $"- Current rent: {Usd(context.BaseRentAmount)}/month\n" +
             $"- Proposed new rent: {Usd(proposedRent)}/month (a {RenewalEscalationPercent:0.#}% increase)\n" +
             $"- Proposed new term: {RenewalTermMonths} months, new end date {newEndDate:MMMM d, yyyy}\n" +
             "- Ask the tenant to reply to accept, decline, or ask questions.";
 
         var deterministicSubject = $"Lease renewal for {propertyName}{unit}";
         var deterministicBody =
-            $"Hi {tenantName}, your current lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
+            $"Hi {tenantName}, your current lease for {propertyName}{unit} ends on {endOn:MMMM d, yyyy}. "
             + $"We would like to offer a {RenewalTermMonths}-month renewal at {Usd(proposedRent)} per month "
-            + $"(currently {Usd(lease.MonthlyRent)}), running through {newEndDate:MMMM d, yyyy}. "
+            + $"(currently {Usd(context.BaseRentAmount)}), running through {newEndDate:MMMM d, yyyy}. "
             + "Please reply here to accept, decline, or ask any questions.";
 
-        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+        var tokens = BuildTokens(context,
             [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         var draft = await ComposeAsync(
-            portfolioId, lease, "RenewalOffer",
+            portfolioId, context, "RenewalOffer",
             intent: "a friendly lease-renewal offer",
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
             reason: $"Lease ends in {daysToEnd} days. Proposed {Usd(proposedRent)}/mo ({RenewalEscalationPercent:0.#}% increase) through {newEndDate:MMM d, yyyy}.",
-            triggerDate: lease.EndDate.Date,
+            triggerDate: endOn.ToDateTime(TimeOnly.MinValue),
             now: now,
             template: template,
             tokens: tokens,
@@ -755,36 +851,36 @@ public class NoticeDraftService : INoticeDraftService
     }
 
     private async Task<NoticeDraft> BuildMoveOutDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
+        int portfolioId, NoticeContext context, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
-        var tenant = lease.Tenant!;
-        var propertyName = lease.Property?.Name ?? "your home";
-        var unit = UnitSuffix(lease.Unit?.UnitNumber);
-        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+        var propertyName = context.PropertyName;
+        var unit = UnitSuffix(context.UnitNumber);
+        var tenantName = context.TenantName;
+        var endOn = context.TermEndOn!.Value;
 
         var facts =
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
-            $"- Lease ends: {lease.EndDate:MMMM d, yyyy} ({daysToEnd} days away)\n" +
+            $"- Lease ends: {endOn:MMMM d, yyyy} ({daysToEnd} days away)\n" +
             "- Coordinate: key return, the move-out inspection time, and a forwarding address for the deposit.\n" +
             "- Ask the tenant to reply to set up those details.";
 
         var deterministicSubject = $"Move-out reminder for {propertyName}{unit}";
         var deterministicBody =
-            $"Hi {tenantName}, this is a reminder that your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
+            $"Hi {tenantName}, this is a reminder that your lease for {propertyName}{unit} ends on {endOn:MMMM d, yyyy}. "
             + "Please reply to coordinate keys, inspection timing, and forwarding-address details so we can return your deposit promptly.";
 
-        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+        var tokens = BuildTokens(context,
             [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, lease, "MoveOutReminder",
+            portfolioId, context, "MoveOutReminder",
             intent: "a courteous move-out coordination reminder",
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
             reason: $"Lease ends in {daysToEnd} days.",
-            triggerDate: lease.EndDate.Date,
+            triggerDate: endOn.ToDateTime(TimeOnly.MinValue),
             now: now,
             template: template,
             tokens: tokens,
@@ -793,25 +889,23 @@ public class NoticeDraftService : INoticeDraftService
 
     private async Task<NoticeDraft> BuildLateDraftAsync(
         int portfolioId,
-        Payment payment,
+        MoneyNoticeCandidate charge,
         int daysLate,
         DateTime now,
         NoticeTemplate? template,
         string portfolioName,
         CancellationToken ct,
         decimal relatedLateFeeAmount = 0m,
-        int? paymentId = null)
+        long? tenantLedgerEntryId = null)
     {
-        var lease = payment.Lease!;
-        var tenant = lease.Tenant!;
-        var propertyName = lease.Property?.Name ?? "your home";
-        var unit = UnitSuffix(lease.Unit?.UnitNumber);
-        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
-        var baseOutstanding = OutstandingAmount(payment);
-        var lateFeeAmount = payment.PaymentType == PaymentType.LateFee ? baseOutstanding : relatedLateFeeAmount;
-        var totalDue = payment.PaymentType == PaymentType.Rent ? baseOutstanding + lateFeeAmount : baseOutstanding;
-        var chargeLabel = payment.PaymentType == PaymentType.LateFee ? "late fee" : "rent";
-        var lateFeeClause = lateFeeAmount > 0m && payment.PaymentType == PaymentType.Rent
+        var propertyName = charge.PropertyName;
+        var unit = UnitSuffix(charge.UnitNumber);
+        var tenantName = charge.TenantName;
+        var isLateFee = charge.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge);
+        var lateFeeAmount = isLateFee ? charge.OpenAmount : relatedLateFeeAmount;
+        var totalDue = isLateFee ? charge.OpenAmount : charge.OpenAmount + lateFeeAmount;
+        var chargeLabel = isLateFee ? "late fee" : "rent";
+        var lateFeeClause = lateFeeAmount > 0m && !isLateFee
             ? $" This includes {Usd(lateFeeAmount)} in late fees."
             : "";
 
@@ -824,11 +918,11 @@ public class NoticeDraftService : INoticeDraftService
             $"- Charge type: {chargeLabel}\n" +
             $"- Amount due: {Usd(totalDue)}\n" +
             (lateFeeAmount > 0m ? $"- Late fee amount: {Usd(lateFeeAmount)}\n" : "") +
-            $"- Was due: {payment.DueDate:MMMM d, yyyy} ({daysLate} days ago)\n" +
+            $"- Was due: {charge.DueOn:MMMM d, yyyy} ({daysLate} days ago)\n" +
             $"- This is the {levelLabel} reminder. {tone}\n" +
             "- Ask the tenant to reply with payment status or to arrange a plan.";
 
-        var deterministicSubject = payment.PaymentType == PaymentType.LateFee
+        var deterministicSubject = isLateFee
             ? $"Late fee notice for {propertyName}{unit}"
             : level switch
             {
@@ -836,129 +930,128 @@ public class NoticeDraftService : INoticeDraftService
                 2 => $"Second notice: rent {daysLate} days past due for {propertyName}{unit}",
                 _ => $"Final notice: overdue rent for {propertyName}{unit}"
             };
-        var deterministicBody = payment.PaymentType == PaymentType.LateFee
-            ? $"Hi {tenantName}, our records show a late fee of {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
+        var deterministicBody = isLateFee
+            ? $"Hi {tenantName}, our records show a late fee of {Usd(totalDue)} due on {charge.DueOn:MMMM d, yyyy} "
               + $"for {propertyName}{unit} remains unpaid. Please reply with your payment status or any questions."
             : level switch
         {
-            1 => $"Hi {tenantName}, our records show {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
+            1 => $"Hi {tenantName}, our records show {Usd(totalDue)} due on {charge.DueOn:MMMM d, yyyy} "
                  + $"for {propertyName}{unit} is now {daysLate} days past due.{lateFeeClause} If you've already paid, thank you - "
                  + "please disregard. Otherwise, please reply with your payment status or any questions.",
-            2 => $"Hi {tenantName}, this is a second reminder that {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
+            2 => $"Hi {tenantName}, this is a second reminder that {Usd(totalDue)} due on {charge.DueOn:MMMM d, yyyy} "
                  + $"for {propertyName}{unit} remains unpaid ({daysLate} days past due).{lateFeeClause} Please bring the balance current "
                  + "or reply so we can arrange a payment plan.",
-            _ => $"Hi {tenantName}, this is a final notice that {Usd(totalDue)} due on {payment.DueDate:MMMM d, yyyy} "
+            _ => $"Hi {tenantName}, this is a final notice that {Usd(totalDue)} due on {charge.DueOn:MMMM d, yyyy} "
                  + $"for {propertyName}{unit} remains unpaid and is now {daysLate} days past due.{lateFeeClause} Please pay in full "
                  + "immediately or contact us today to avoid further action under your lease."
         };
 
-        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+        var tokens = BuildTokens(charge,
             [(NoticeMergeFields.OverdueAmount, Usd(totalDue)),
-             (NoticeMergeFields.RentDueDate, payment.DueDate.ToString("MMMM d, yyyy")),
+             (NoticeMergeFields.RentDueDate, charge.DueOn.ToString("MMMM d, yyyy")),
              (NoticeMergeFields.LateFeeAmount, lateFeeAmount > 0m ? Usd(lateFeeAmount) : ""),
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, lease, "LateRentNotice",
+            portfolioId, charge, "LateRentNotice",
             intent: $"a {levelLabel} past-due rent reminder ({tone})",
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
-            reason: lateFeeAmount > 0m && payment.PaymentType == PaymentType.Rent
-                ? $"Payment is {daysLate} days past due ({levelLabel} notice), including {Usd(lateFeeAmount)} in late fees."
-                : $"{chargeLabel} payment is {daysLate} days past due ({levelLabel} notice).",
-            triggerDate: payment.DueDate.Date,
+            reason: lateFeeAmount > 0m && !isLateFee
+                ? $"Rent is {daysLate} days past due ({levelLabel} notice), including {Usd(lateFeeAmount)} in late fees."
+                : $"{chargeLabel} is {daysLate} days past due ({levelLabel} notice).",
+            triggerDate: charge.DueOn.ToDateTime(TimeOnly.MinValue),
             now: now,
             template: template,
             tokens: tokens,
-            paymentId: paymentId,
+            tenantLedgerEntryId: tenantLedgerEntryId,
             ct: ct);
     }
 
     /// <summary>
     /// Builds an upcoming-rent reminder. When <paramref name="dueDate"/> is supplied (the periodic,
-    /// payment-grounded path) the draft's <see cref="NoticeDraft.TriggerDate"/> and the
+    /// charge-grounded path) the draft's <see cref="NoticeDraft.TriggerDate"/> and the
     /// <c>rent_due_date</c> token are set to that date; on the explicit/forced path with no upcoming
-    /// payment, <paramref name="dueDate"/> is null → TriggerDate falls back to today and the token blanks.
+    /// charge, <paramref name="dueDate"/> is null → TriggerDate falls back to today and the token blanks.
     /// </summary>
     private async Task<NoticeDraft> BuildRentReminderDraftAsync(
-        int portfolioId, Lease lease, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct,
-        DateTime? dueDate = null,
-        int? paymentId = null)
+        int portfolioId, NoticeContext context, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct,
+        DateOnly? dueDate = null,
+        long? tenantLedgerEntryId = null)
     {
-        var tenant = lease.Tenant!;
-        var propertyName = lease.Property?.Name ?? "your home";
-        var unit = UnitSuffix(lease.Unit?.UnitNumber);
-        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+        var propertyName = context.PropertyName;
+        var unit = UnitSuffix(context.UnitNumber);
+        var tenantName = context.TenantName;
 
-        var dueOn = dueDate?.Date;
+        var dueOn = dueDate;
         var dueClause = dueOn.HasValue ? $" on {dueOn:MMMM d, yyyy}" : "";
 
         var facts =
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
-            $"- Monthly rent: {Usd(lease.MonthlyRent)}\n" +
+            $"- Monthly rent: {Usd(context.BaseRentAmount)}\n" +
             (dueOn.HasValue ? $"- Rent due date: {dueOn:MMMM d, yyyy}\n" : "") +
             "- This is a friendly heads-up that rent is coming due.\n" +
             "- Ask the tenant to reply with any questions.";
 
         var deterministicSubject = $"Rent reminder for {propertyName}{unit}";
         var deterministicBody =
-            $"Hi {tenantName}, this is a friendly reminder that your rent of {Usd(lease.MonthlyRent)} "
+            $"Hi {tenantName}, this is a friendly reminder that your rent of {Usd(context.BaseRentAmount)} "
             + $"for {propertyName}{unit} is coming due{dueClause}. Please reach out with any questions. Thank you!";
 
-        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+        var tokens = BuildTokens(context,
             [(NoticeMergeFields.RentDueDate, dueOn.HasValue ? dueOn.Value.ToString("MMMM d, yyyy") : ""),
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, lease, "RentReminder",
+            portfolioId, context, "RentReminder",
             intent: "a friendly upcoming-rent reminder",
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
             reason: dueOn.HasValue ? $"Rent due {dueOn:MMM d, yyyy}." : "Manual rent reminder.",
-            triggerDate: dueOn ?? now.Date,
+            triggerDate: dueOn?.ToDateTime(TimeOnly.MinValue) ?? now.Date,
             now: now,
             template: template,
             tokens: tokens,
-            paymentId: paymentId,
+            tenantLedgerEntryId: tenantLedgerEntryId,
             ct: ct);
     }
 
     private async Task<NoticeDraft> BuildMonthToMonthDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
+        int portfolioId, NoticeContext context, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
-        var tenant = lease.Tenant!;
-        var propertyName = lease.Property?.Name ?? "your home";
-        var unit = UnitSuffix(lease.Unit?.UnitNumber);
-        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+        var propertyName = context.PropertyName;
+        var unit = UnitSuffix(context.UnitNumber);
+        var tenantName = context.TenantName;
+        var endOn = context.TermEndOn!.Value;
 
         var facts =
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
-            $"- Current lease ends: {lease.EndDate:MMMM d, yyyy}\n" +
-            $"- Current rent: {Usd(lease.MonthlyRent)}/month\n" +
+            $"- Current lease ends: {endOn:MMMM d, yyyy}\n" +
+            $"- Current rent: {Usd(context.BaseRentAmount)}/month\n" +
             "- Offer to continue on a month-to-month basis at the current rent after the lease ends.\n" +
             "- Ask the tenant to reply to accept or ask questions.";
 
         var deterministicSubject = $"Month-to-month option for {propertyName}{unit}";
         var deterministicBody =
-            $"Hi {tenantName}, your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
-            + $"We're happy to continue on a month-to-month basis at {Usd(lease.MonthlyRent)} per month. "
+            $"Hi {tenantName}, your lease for {propertyName}{unit} ends on {endOn:MMMM d, yyyy}. "
+            + $"We're happy to continue on a month-to-month basis at {Usd(context.BaseRentAmount)} per month. "
             + "Please reply to accept or with any questions.";
 
-        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+        var tokens = BuildTokens(context,
             [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, lease, "MonthToMonthConversion",
+            portfolioId, context, "MonthToMonthConversion",
             intent: "a friendly month-to-month continuation offer",
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
             reason: "Manual month-to-month conversion offer.",
-            triggerDate: lease.EndDate.Date,
+            triggerDate: endOn.ToDateTime(TimeOnly.MinValue),
             now: now,
             template: template,
             tokens: tokens,
@@ -986,7 +1079,7 @@ public class NoticeDraftService : INoticeDraftService
     /// </summary>
     private async Task<NoticeDraft> ComposeAsync(
         int portfolioId,
-        Lease lease,
+        NoticeContext context,
         string noticeType,
         string intent,
         string facts,
@@ -998,7 +1091,7 @@ public class NoticeDraftService : INoticeDraftService
         NoticeTemplate? template,
         IReadOnlyDictionary<string, string> tokens,
         CancellationToken ct,
-        int? paymentId = null)
+        long? tenantLedgerEntryId = null)
     {
         var subject = deterministicSubject;
         var body = deterministicBody;
@@ -1026,7 +1119,7 @@ public class NoticeDraftService : INoticeDraftService
             var prompt = BuildPrompt(intent, facts);
             try
             {
-                var raw = await GenerateCopyAsync(prompt, noticeType, lease.Id, ct);
+                var raw = await GenerateCopyAsync(prompt, noticeType, context.LeaseManagementId, ct);
                 if (TryParseCopy(raw, out var llmSubject, out var llmBody))
                 {
                     subject = Truncate(llmSubject, 200);
@@ -1042,17 +1135,22 @@ public class NoticeDraftService : INoticeDraftService
             catch (Exception ex)
             {
                 // Never let a copy-generation failure block the proactive draft — fall back to the template.
-                _logger.LogWarning(ex, "LLM copy generation failed for {NoticeType} (lease {LeaseId}); using template.", noticeType, lease.Id);
+                _logger.LogWarning(
+                    ex,
+                    "LLM copy generation failed for {NoticeType} (lease relationship {LeaseManagementId}); using template.",
+                    noticeType,
+                    context.LeaseManagementId);
             }
         }
 
         return new NoticeDraft
         {
             PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            PaymentId = paymentId,
-            TenantId = lease.TenantId,
-            PropertyId = lease.PropertyId,
+            LeaseManagementId = context.LeaseManagementId,
+            TenantAccountId = context.TenantAccountId,
+            TenantLedgerEntryId = tenantLedgerEntryId,
+            RecipientTenantId = context.RecipientTenantId,
+            PropertyId = context.PropertyId,
             NoticeType = noticeType,
             Subject = subject,
             Body = body,
@@ -1069,20 +1167,17 @@ public class NoticeDraftService : INoticeDraftService
     /// real value; the renderer blanks anything missing. Currency/dates are pre-formatted strings.
     /// </summary>
     private static Dictionary<string, string> BuildTokens(
-        Lease lease,
-        string tenantName,
-        string propertyName,
-        string? unitNumber,
+        NoticeContext context,
         (string Key, string Value)[] extra)
     {
         var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            [NoticeMergeFields.TenantName] = tenantName,
-            [NoticeMergeFields.PropertyAddress] = propertyName,
-            [NoticeMergeFields.UnitNumber] = unitNumber ?? "",
-            [NoticeMergeFields.LeaseStartDate] = lease.StartDate.ToString("MMMM d, yyyy"),
-            [NoticeMergeFields.LeaseEndDate] = lease.EndDate.ToString("MMMM d, yyyy"),
-            [NoticeMergeFields.RentAmount] = Usd(lease.MonthlyRent),
+            [NoticeMergeFields.TenantName] = context.TenantName,
+            [NoticeMergeFields.PropertyAddress] = context.PropertyName,
+            [NoticeMergeFields.UnitNumber] = context.UnitNumber ?? "",
+            [NoticeMergeFields.LeaseStartDate] = context.TermStartOn.ToString("MMMM d, yyyy"),
+            [NoticeMergeFields.LeaseEndDate] = context.TermEndOn?.ToString("MMMM d, yyyy") ?? "",
+            [NoticeMergeFields.RentAmount] = Usd(context.BaseRentAmount),
         };
         foreach (var (key, value) in extra) tokens[key] = value;
         return tokens;
@@ -1097,7 +1192,7 @@ public class NoticeDraftService : INoticeDraftService
     private async Task<string?> GenerateCopyAsync(
         string prompt,
         string noticeType,
-        int leaseId,
+        int leaseManagementId,
         CancellationToken ct)
     {
         using var copyCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1117,9 +1212,9 @@ public class NoticeDraftService : INoticeDraftService
             _ = t.Exception;
         }, TaskContinuationOptions.OnlyOnFaulted);
         _logger.LogInformation(
-            "LLM copy generation timed out for {NoticeType} (lease {LeaseId}); using template.",
+            "LLM copy generation timed out for {NoticeType} (lease relationship {LeaseManagementId}); using template.",
             noticeType,
-            leaseId);
+            leaseManagementId);
         return null;
     }
 
@@ -1202,17 +1297,20 @@ public class NoticeDraftService : INoticeDraftService
 
     private static NoticeDraftResponse Map(NoticeDraft d)
     {
-        var tenantName = d.Tenant == null ? "" : $"{d.Tenant.FirstName} {d.Tenant.LastName}".Trim();
+        var tenantName = d.RecipientTenant == null
+            ? ""
+            : $"{d.RecipientTenant.FirstName} {d.RecipientTenant.LastName}".Trim();
         return new NoticeDraftResponse
         {
             Id = d.Id,
-            LeaseId = d.LeaseId,
-            PaymentId = d.PaymentId,
-            TenantId = d.TenantId,
+            LeaseManagementId = d.LeaseManagementId,
+            TenantAccountId = d.TenantAccountId,
+            TenantLedgerEntryId = d.TenantLedgerEntryId,
+            RecipientTenantId = d.RecipientTenantId,
             PropertyId = d.PropertyId,
             TenantName = tenantName,
             PropertyName = d.Property?.Name,
-            UnitNumber = d.Lease?.Unit?.UnitNumber,
+            UnitNumber = d.LeaseManagement?.Unit?.UnitNumber,
             NoticeType = d.NoticeType,
             Status = d.Status,
             Subject = d.Subject,

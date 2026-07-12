@@ -32,26 +32,28 @@ class NoticesRepository {
       throw ApiException.fromDioException(e);
     }
   }
-
-  /// Generates notice draft(s), optionally limited to a tenant, lease, payment,
-  /// and/or [noticeType]. Returns the drafts that were created or already exist
+  /// Generates notice draft(s), optionally limited to a recipient, lease relationship,
+  /// tenant account, or exact ledger charge and/or [noticeType]. Returns the drafts
+  /// that were created or already exist
   /// for the requested scope so the caller can review / send them. An empty list
-  /// means nothing applied (e.g. a late notice with no overdue payment).
+  /// means nothing applied (e.g. a late notice with no overdue charge).
   ///
-  /// POST /notices/generate  body: { tenantId?, leaseId?, paymentId?, noticeType? }
-  Future<List<NoticeDraft>> generateForTenant(
-    int? tenantId, {
-    int? leaseId,
-    int? paymentId,
+  /// POST /notices/generate body: canonical notice scope plus optional noticeType.
+  Future<List<NoticeDraft>> generateScoped(
+    int? recipientTenantId, {
+    int? leaseManagementId,
+    int? tenantAccountId,
+    int? tenantLedgerEntryId,
     String? noticeType,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/notices/generate',
         data: {
-          'tenantId': ?tenantId,
-          'leaseId': ?leaseId,
-          'paymentId': ?paymentId,
+          'recipientTenantId': ?recipientTenantId,
+          'leaseManagementId': ?leaseManagementId,
+          'tenantAccountId': ?tenantAccountId,
+          'tenantLedgerEntryId': ?tenantLedgerEntryId,
           'noticeType': ?noticeType,
         },
       );

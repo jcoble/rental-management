@@ -4,9 +4,10 @@ public class NoticeDraft
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int LeaseId { get; set; }
-    public int? PaymentId { get; set; }
-    public int TenantId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public long? TenantLedgerEntryId { get; set; }
+    public int RecipientTenantId { get; set; }
     public int? PropertyId { get; set; }
     public string NoticeType { get; set; } = string.Empty;
     public string Status { get; set; } = "Draft";
@@ -30,9 +31,10 @@ public class NoticeDraft
     public DateTime? DismissedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
-    public Lease? Lease { get; set; }
-    public Payment? Payment { get; set; }
-    public Tenant? Tenant { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
+    public TenantAccount? TenantAccount { get; set; }
+    public TenantLedgerEntry? TenantLedgerEntry { get; set; }
+    public Tenant? RecipientTenant { get; set; }
     public Property? Property { get; set; }
     public Conversation? Conversation { get; set; }
 }

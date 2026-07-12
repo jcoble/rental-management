@@ -143,7 +143,7 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
     await showCreateTenantNoticeFlow(
       context,
       ref,
-      tenantId: _tenant.id,
+      recipientTenantId: _tenant.id,
       tenantName: '${_tenant.firstName} ${_tenant.lastName}'.trim(),
     );
   }

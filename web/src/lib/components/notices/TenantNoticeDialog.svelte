@@ -13,17 +13,13 @@
 
 	let {
 		open = $bindable(false),
-		tenantId = 0,
-		leaseId,
-		paymentId,
+		recipientTenantId = 0,
 		tenantName = 'this tenant',
 		activeLeaseCount = 0,
 		initialNoticeType,
 	}: {
 		open: boolean;
-		tenantId?: number;
-		leaseId?: number;
-		paymentId?: number;
+		recipientTenantId?: number;
 		tenantName?: string;
 		activeLeaseCount?: number;
 		initialNoticeType?: string;
@@ -38,23 +34,14 @@
 	let noticeEdits = $state<Record<number, { subject: string; body: string }>>({});
 	let lastOpenKey: string | null = null;
 
-	const isPaymentScoped = $derived((paymentId ?? 0) > 0);
-	const hasNoticeScope = $derived(tenantId > 0 || (leaseId ?? 0) > 0 || isPaymentScoped);
+	const hasNoticeScope = $derived(recipientTenantId > 0);
 
 	const noticeEmptyState = $derived(
-		isPaymentScoped
-			? {
-					message: 'No notice is needed for this payment.',
-					description: 'The selected payment is not eligible for a new notice, or an existing notice already covers it.',
-					showForceControls: false,
-					leaseActionHref: undefined,
-					leaseActionLabel: undefined,
-				}
-			: getTenantNoticeEmptyState({
-					forcedNoticeLabel,
-					activeLeaseCount,
-					tenantId,
-				})
+		getTenantNoticeEmptyState({
+			forcedNoticeLabel,
+			activeLeaseCount,
+			tenantId: recipientTenantId,
+		})
 	);
 
 	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
@@ -127,9 +114,7 @@
 
 	function generateRequest(noticeType?: string) {
 		return {
-			...(tenantId > 0 ? { tenantId } : {}),
-			...(leaseId != null ? { leaseId } : {}),
-			...(paymentId != null ? { paymentId } : {}),
+			...(recipientTenantId > 0 ? { recipientTenantId } : {}),
 			...(noticeType ? { noticeType } : {}),
 		};
 	}
@@ -145,7 +130,7 @@
 			return;
 		}
 
-		const openKey = `${tenantId}:${leaseId ?? 0}:${paymentId ?? 0}:${initialNoticeType ?? 'due'}`;
+		const openKey = `${recipientTenantId}:${initialNoticeType ?? 'due'}`;
 		if (lastOpenKey === openKey) return;
 		lastOpenKey = openKey;
 		generateNoticeDrafts(initialNoticeType);
@@ -170,13 +155,11 @@
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) {
 				showSuccess(
-					isPaymentScoped
-						? noticeEmptyState.message
-						: getTenantNoticeEmptyState({
-								forcedNoticeLabel: selectedForcedNoticeLabel,
-								activeLeaseCount,
-								tenantId,
-							}).message
+					getTenantNoticeEmptyState({
+						forcedNoticeLabel: selectedForcedNoticeLabel,
+						activeLeaseCount,
+						tenantId: recipientTenantId,
+					}).message
 				);
 			}
 		},
@@ -245,7 +228,7 @@
 				<p class="mt-1 text-xs text-muted-foreground">
 					{noticeEmptyState.description}
 				</p>
-				{#if noticeEmptyState.showForceControls && !isPaymentScoped}
+				{#if noticeEmptyState.showForceControls}
 					<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
 					<div class="mt-2 flex flex-wrap items-center justify-center gap-2">
 						{#each FORCEABLE_NOTICE_TYPES as nt (nt.type)}

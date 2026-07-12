@@ -346,8 +346,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     await showCreateTenantNoticeFlow(
       context,
       ref,
-      tenantId: _lease.tenantId,
-      leaseId: _lease.id,
+      recipientTenantId: _lease.tenantId,
       tenantName: tenantName.isEmpty
           ? 'tenant #${_lease.tenantId}'
           : tenantName,

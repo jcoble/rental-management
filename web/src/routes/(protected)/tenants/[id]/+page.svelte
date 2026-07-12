@@ -441,7 +441,7 @@
 
 <TenantNoticeDialog
 	bind:open={showNoticeDialog}
-	tenantId={id}
+	recipientTenantId={id}
 	tenantName={fullName}
 	activeLeaseCount={activeTenantLeaseCount}
 	initialNoticeType={noticeDialogType}

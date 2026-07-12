@@ -13,7 +13,8 @@ export const notices = {
 	list: (status?: string) =>
 		api.get<NoticeDraft[]>(`/notices${status ? `?status=${encodeURIComponent(status)}` : ''}`),
 	// POST /api/v1/notices/generate. Portfolio-wide with an empty request; otherwise scoped
-	// to tenant, lease, or one exact payment. Supplying a noticeType generates only that type.
+	// to a recipient, lease relationship, tenant account, or exact ledger charge. Supplying a
+	// noticeType generates only that type.
 	generate: (request: GenerateNoticeDraftsRequest = {}) =>
 		api.post<GenerateNoticeDraftsResponse>('/notices/generate', request),
 	update: (id: number, request: UpdateNoticeDraftRequest) =>

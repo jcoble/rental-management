@@ -1,9 +1,10 @@
 class NoticeDraft {
   const NoticeDraft({
     required this.id,
-    required this.leaseId,
-    this.paymentId,
-    required this.tenantId,
+    required this.leaseManagementId,
+    required this.tenantAccountId,
+    this.tenantLedgerEntryId,
+    required this.recipientTenantId,
     required this.tenantName,
     this.propertyName,
     this.unitNumber,
@@ -17,9 +18,10 @@ class NoticeDraft {
   });
 
   final int id;
-  final int leaseId;
-  final int? paymentId;
-  final int tenantId;
+  final int leaseManagementId;
+  final int tenantAccountId;
+  final int? tenantLedgerEntryId;
+  final int recipientTenantId;
   final String tenantName;
   final String? propertyName;
   final String? unitNumber;
@@ -34,9 +36,10 @@ class NoticeDraft {
   factory NoticeDraft.fromJson(Map<String, dynamic> json) {
     return NoticeDraft(
       id: (json['id'] as num).toInt(),
-      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
-      paymentId: (json['paymentId'] as num?)?.toInt(),
-      tenantId: (json['tenantId'] as num?)?.toInt() ?? 0,
+      leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt() ?? 0,
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num?)?.toInt(),
+      recipientTenantId: (json['recipientTenantId'] as num?)?.toInt() ?? 0,
       tenantName: json['tenantName'] as String? ?? '',
       propertyName: json['propertyName'] as String?,
       unitNumber: json['unitNumber'] as String?,
