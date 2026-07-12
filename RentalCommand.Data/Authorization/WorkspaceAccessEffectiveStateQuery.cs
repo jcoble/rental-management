@@ -8,7 +8,7 @@ namespace RentalCommand.Data.Authorization;
 /// record queries compose these IQueryable filters so an Active label can never override a stored
 /// suspension/revocation fact or an expired effective period.
 /// </summary>
-internal static class WorkspaceAccessEffectiveStateQuery
+public static class WorkspaceAccessEffectiveStateQuery
 {
     /// <summary>
     /// Limits login/session candidates to management-business contexts that still have an effective
