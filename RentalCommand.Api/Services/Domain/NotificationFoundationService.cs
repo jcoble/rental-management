@@ -277,24 +277,33 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                         (policy.Classification != NoticeClassification.Legal || party.GuarantorLegalNoticeEligible))
                     || (party.Role == LeaseManagementPartyRole.Occupant && policy.IncludeOccupant &&
                         policy.Classification != NoticeClassification.Legal))
-            select new { tenant.Id, party.Role, tenant.Email, tenant.Phone };
+            select new
+            {
+                TenantId = tenant.Id,
+                LeaseManagementPartyId = party.Id,
+                party.Role,
+                tenant.Email,
+                tenant.Phone,
+            };
 
         var portal = eligibleParties
             .Where(_ => request.Channels.Contains(NoticeDeliveryChannel.TenantPortal) && policy.SendTenantPortal)
-            .Select(row => new DeliveryProjection(row.Id, row.Role, NoticeDeliveryChannel.TenantPortal, row.Id.ToString()));
+            .Select(row => new DeliveryProjection(row.TenantId, row.Role, NoticeDeliveryChannel.TenantPortal, row.TenantId.ToString()));
         var email = eligibleParties
             .Where(row => request.Channels.Contains(NoticeDeliveryChannel.Email) && policy.SendEmail && row.Email != null && row.Email != "")
-            .Select(row => new DeliveryProjection(row.Id, row.Role, NoticeDeliveryChannel.Email, row.Email!));
+            .Select(row => new DeliveryProjection(row.TenantId, row.Role, NoticeDeliveryChannel.Email, row.Email!));
         var sms = eligibleParties
             .Where(row => request.Channels.Contains(NoticeDeliveryChannel.Sms) && policy.SendSms && row.Phone != null && row.Phone != "")
-            .Select(row => new DeliveryProjection(row.Id, row.Role, NoticeDeliveryChannel.Sms, row.Phone!));
+            .Select(row => new DeliveryProjection(row.TenantId, row.Role, NoticeDeliveryChannel.Sms, row.Phone!));
         var push =
             from party in eligibleParties
-            join user in _db.Users.AsNoTracking() on party.Id equals user.TenantId
-            join device in _db.DeviceTokens.AsNoTracking() on user.Id equals device.UserId
+            join access in _db.EffectiveTenantAccess.AsNoTracking()
+                on new { party.LeaseManagementPartyId, PortfolioId = portfolioId }
+                equals new { access.LeaseManagementPartyId, access.PortfolioId }
+            join device in _db.DeviceTokens.AsNoTracking() on access.UserId equals device.UserId
             where request.Channels.Contains(NoticeDeliveryChannel.MobilePush) && policy.SendMobilePush
-                && user.PortfolioId == portfolioId && device.PortfolioId == portfolioId
-            select new DeliveryProjection(party.Id, party.Role, NoticeDeliveryChannel.MobilePush, device.Token);
+                && device.PortfolioId == portfolioId
+            select new DeliveryProjection(party.TenantId, party.Role, NoticeDeliveryChannel.MobilePush, device.Token);
         var destinations = await portal.Union(email).Union(sms).Union(push)
             .OrderBy(row => row.TenantId).ThenBy(row => row.Channel).ThenBy(row => row.Destination)
             .TagWith("TSK-668 exact effective tenant notice recipients and destinations")
