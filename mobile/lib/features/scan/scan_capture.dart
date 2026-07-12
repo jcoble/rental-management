@@ -254,7 +254,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     final lockedLoan =
         widget.lockTargetEntityType && _targetEntityType == 'Loan';
     final lockedLease =
-        widget.lockTargetEntityType && _targetEntityType == 'Lease';
+        widget.lockTargetEntityType && _targetEntityType == 'LeaseAgreement';
 
     if (_uploading || _voiceUploading) {
       return Padding(

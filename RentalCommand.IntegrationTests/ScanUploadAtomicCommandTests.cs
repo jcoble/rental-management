@@ -367,7 +367,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             UploadedByUserId: 73,
             ClientOperationId: operationId,
             RequestFingerprint: fingerprint,
-            TargetEntityType: "Lease",
+            TargetEntityType: "LeaseAgreement",
             CreateBatch: false,
             BatchName: null,
             UploadedAtUtc: DateTime.UtcNow,
@@ -420,7 +420,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             _portfolioId,
             73,
             operationId,
-            "Lease",
+            "LeaseAgreement",
             createBatch,
             batchName,
             files);

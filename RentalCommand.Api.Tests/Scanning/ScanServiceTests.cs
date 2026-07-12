@@ -102,7 +102,7 @@ public class ScanServiceTests : IDisposable
     [Fact]
     public async Task PrepareConfirmationAsync_LeaseTarget_SealsCanonicalExecutedImportChoice()
     {
-        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "Lease");
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
         _db.Users.Add(new ApplicationUser
         {
             Id = 7,
@@ -158,6 +158,7 @@ public class ScanServiceTests : IDisposable
         });
         draft.SourceStoredFileId = 44;
         draft.SourceContentSha256 = new string('a', 64);
+        draft.SourceLabel = "Zillow signed lease import";
         draft.CapturePropertyId = 12;
         draft.CaptureUnitId = 34;
         draft.CaptureLeaseManagementId = 56;
@@ -176,20 +177,21 @@ public class ScanServiceTests : IDisposable
         var command = result.Command!;
         command.SourceStoredFileId.Should().Be(44);
         command.SourceContentSha256.Should().Be(new string('a', 64));
-        command.Target.Kind.Should().Be(ScanConfirmationTargetKind.Lease);
-        command.Target.Lease.Should().NotBeNull();
-        command.Target.Lease!.ReviewDisposition.Should().Be(LeaseScanReviewDisposition.AlreadyFullySigned);
-        command.Target.Lease.PropertyId.Should().Be(12);
-        command.Target.Lease.UnitId.Should().Be(34);
-        command.Target.Lease.LeaseManagementId.Should().Be(56);
-        command.Target.Lease.TenantAccountId.Should().Be(78);
-        command.Target.Lease.DocumentTemplateId.Should().BeNull();
+        command.SourceLabel.Should().Be("Zillow signed lease import");
+        command.Target.Kind.Should().Be(ScanConfirmationTargetKind.LeaseAgreement);
+        command.Target.LeaseAgreement.Should().NotBeNull();
+        command.Target.LeaseAgreement!.ReviewDisposition.Should().Be(LeaseScanReviewDisposition.AlreadyFullySigned);
+        command.Target.LeaseAgreement.PropertyId.Should().Be(12);
+        command.Target.LeaseAgreement.UnitId.Should().Be(34);
+        command.Target.LeaseAgreement.LeaseManagementId.Should().Be(56);
+        command.Target.LeaseAgreement.TenantAccountId.Should().Be(78);
+        command.Target.LeaseAgreement.DocumentTemplateId.Should().BeNull();
     }
 
     [Fact]
     public async Task PrepareConfirmationAsync_LeaseTarget_RequiresExplicitSignatureDisposition()
     {
-        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "Lease");
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
 
         var action = () => _sut.PrepareConfirmationAsync(
             PortfolioId, draft.Id, userId: 7, overridesJson: "{}");

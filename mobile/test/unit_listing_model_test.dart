@@ -40,7 +40,7 @@ void main() {
           'unconfirmedSignals': [],
         },
       ],
-      'signedLeaseImportUrl': '/scan?type=Lease&unitId=42',
+      'signedLeaseImportUrl': '/scan?type=LeaseAgreement&unitId=42',
       'createdAt': '2026-06-30T12:00:00Z',
       'updatedAt': '2026-06-30T13:00:00Z',
     });

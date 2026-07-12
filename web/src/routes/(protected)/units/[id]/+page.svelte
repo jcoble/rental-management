@@ -282,7 +282,7 @@
 						<ListingTab {dashboard} />
 					</Tabs.Content>
 					<Tabs.Content value="lease" class="mt-4">
-						<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
+						<LeaseTab {dashboard} onScan={() => goScan({ type: 'LeaseAgreement', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, focusedRecordKind: 'Unit', focusedRecordId: dashboard.unit.id, returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
 					</Tabs.Content>
 					<Tabs.Content value="applications" class="mt-4">
 						<ApplicationsTab {dashboard} />

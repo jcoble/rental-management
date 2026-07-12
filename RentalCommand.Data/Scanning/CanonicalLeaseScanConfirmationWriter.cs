@@ -148,7 +148,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         attempt.Persistence.Add(agreement);
         attempt.BindSemanticAudit(agreement, Created(command, nameof(LeaseAgreement),
             target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
-                ? "Created Agreement for externally executed scan import."
+                ? $"Created Agreement for externally executed scan import{SourceSuffix(command.SourceLabel)}."
                 : "Created Agreement draft from reviewed scan."));
         await attempt.FlushBusinessAsync(ct);
 
@@ -202,7 +202,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             };
             attempt.Persistence.Add(artifact);
             attempt.BindSemanticAudit(artifact, Created(command, nameof(LegalDocumentArtifact),
-                "Preserved exact externally executed Agreement bytes and SHA-256."));
+                $"Preserved exact externally executed Agreement bytes and SHA-256{SourceSuffix(command.SourceLabel)}."));
             await attempt.FlushBusinessAsync(ct);
 
             // An externally executed original is both the issued text and the executed evidence.
@@ -222,7 +222,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                     agreement.ExecutedArtifactId,
                     agreement.FullyExecutedAtUtc,
                 }),
-                ChangeReason: "Marked imported external Agreement fully executed."));
+                ChangeReason: $"Marked imported external Agreement fully executed{SourceSuffix(command.SourceLabel)}."));
         }
         await attempt.FlushBusinessAsync(ct);
 
@@ -235,12 +235,15 @@ internal static class CanonicalLeaseScanConfirmationWriter
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        if (command.Target.Lease is not { UnitId: > 0 } target)
+        if (command.Target.LeaseAgreement is not { UnitId: > 0 } target)
             throw new UnauthorizedAccessException("Lease import has no authorized Unit scope.");
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
         if (!await AuthorizedHomes(command, target, persistence, now).AnyAsync(ct))
             throw new UnauthorizedAccessException("Lease import is outside the caller's current access scope.");
     }
+
+    private static string SourceSuffix(string? sourceLabel) =>
+        string.IsNullOrWhiteSpace(sourceLabel) ? string.Empty : $" from {sourceLabel.Trim()}";
 
     private static IQueryable<Unit> AuthorizedHomes(
         ConfirmScanDraftCommand command,

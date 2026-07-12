@@ -138,7 +138,7 @@
 
 	// ----- upload: one PDF passes straight through; many photos are stitched first -----
 	const uploadOne = createMutation(() => ({
-		mutationFn: (file: File) => scan.upload(file, 'Lease'),
+		mutationFn: (file: File) => scan.upload(file, 'LeaseAgreement'),
 		onSuccess: (res) => {
 			resetReviewStateForDraft();
 			draftId = res.draftId;
@@ -393,7 +393,7 @@
 			// A linked existing unit has an id in scope; a freshly created unit (unitChoice === CREATE)
 			// does not, so we hand the parent null and it falls back to /leases/{id}.
 			const unitId = unitChoice !== CREATE ? Number(unitChoice) : null;
-			oncomplete({ leaseId: res.leaseId, propertyId: null, unitId, tenantId: null });
+			oncomplete({ leaseId: res.agreementId, propertyId: null, unitId, tenantId: null });
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not create the rental. Check the details and try again.'))
 	}));

@@ -125,7 +125,10 @@ public sealed record ListingWorkspaceResponse(
                             signal.SuggestedExternalStatus, signal.Disposition.ToString(), signal.ReceivedAtUtc))
                         .ToArray()))
                 .ToArray(),
-            $"/scan?type=Lease&unitId={listing.UnitId}&returnTo=/units/{listing.UnitId}?tab=lease",
+            $"/scan?type={nameof(LeaseAgreement)}&propertyId={listing.PropertyId}&unitId={listing.UnitId}" +
+            $"&focusedRecordKind=RentalListing&focusedRecordId={listing.Id}" +
+            $"&sourceLabel={Uri.EscapeDataString("Zillow signed lease import")}" +
+            $"&returnTo={Uri.EscapeDataString($"/units/{listing.UnitId}?tab=lease")}",
             listing.CreatedAt,
             listing.UpdatedAt);
 }

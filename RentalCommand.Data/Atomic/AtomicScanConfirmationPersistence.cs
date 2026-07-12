@@ -58,6 +58,7 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
                 draft.TargetEntityType,
                 draft.SourceStoredFileId,
                 draft.ExtractedFields,
+                draft.SourceLabel,
                 draft.TargetEntityType,
                 draft.ConfirmedEntityId);
         }
@@ -84,7 +85,8 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
             draft.CaptureLeaseManagementId,
             draft.CaptureTenantAccountId,
             draft.CaptureFocusedRecordKind,
-            draft.CaptureFocusedRecordId);
+            draft.CaptureFocusedRecordId,
+            draft.SourceLabel);
         if (!string.Equals(currentFingerprint, expectedDraftFingerprint, StringComparison.Ordinal))
         {
             return Snapshot(AtomicScanDraftClaimOutcome.StalePreparation, draft);
@@ -178,13 +180,13 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         AtomicScanDraftClaimOutcome outcome,
         ScanDraft draft) =>
         new(outcome, draft.PortfolioId, draft.Id, draft.TargetEntityType, draft.SourceStoredFileId,
-            draft.ExtractedFields, null, null);
+            draft.ExtractedFields, draft.SourceLabel, null, null);
 
     private static AtomicScanDraftClaim Empty(
         AtomicScanDraftClaimOutcome outcome,
         int portfolioId,
         int draftId) =>
-        new(outcome, portfolioId, draftId, string.Empty, null, null, null, null);
+        new(outcome, portfolioId, draftId, string.Empty, null, null, null, null, null);
 
     private async Task ValidateSourceFileAsync(ScanDraft draft, CancellationToken ct)
     {

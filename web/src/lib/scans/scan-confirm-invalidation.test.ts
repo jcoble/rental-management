@@ -16,7 +16,7 @@ describe('invalidateQueriesAfterScanConfirm', () => {
 	it('refreshes lookup caches that were empty before a scanned lease created records', () => {
 		const { client, invalidated } = createQueryClientSpy();
 
-		invalidateQueriesAfterScanConfirm(client, 'Lease');
+		invalidateQueriesAfterScanConfirm(client, 'LeaseAgreement');
 
 		assert.deepEqual(invalidated, [
 			['scans'],

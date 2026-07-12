@@ -109,7 +109,7 @@ const _fieldGroups = <({String label, List<String> fields})>[
   (label: 'Details', fields: ['document_kind', 'category', 'notes']),
 ];
 
-// Lease-draft field group (target == 'Lease'). The property/unit/tenant are
+// Lease-draft field group (target == 'LeaseAgreement'). The property/unit/tenant are
 // chosen with pickers below, so only the lease *terms* live here.
 const _leaseFieldOrder = <String>[
   'lease_number',
@@ -638,7 +638,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       // For a lease, jump straight to the new lease so the landlord can review
       // it (and generate the agreement). Replace this review screen so Back
       // returns to the scan list rather than the consumed draft.
-      final leaseId = (result?['leaseId'] as num?)?.toInt();
+      final leaseId = (result?['agreementId'] as num?)?.toInt();
       if (draft.isLease && leaseId != null) {
         final lease = await _loadLease(leaseId);
         if (!mounted) return;

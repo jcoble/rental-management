@@ -37,7 +37,7 @@ describe("scan review terminal state", () => {
     assert.equal(createdRecordHref("Application", 123), "/applications/123");
     assert.equal(createdRecordHref("Payment", 45), "/accounting/payments/45");
     assert.equal(createdRecordHref("WorkOrder", 46), "/maintenance/46");
-    assert.equal(createdRecordHref("Lease", 47), "/leases/47");
+    assert.equal(createdRecordHref("LeaseAgreement", 47), "/leases/47");
     assert.equal(createdRecordHref("Expense", 48), "/accounting/expenses/48");
     assert.equal(createdRecordHref(null, 48), "/accounting");
     assert.equal(createdRecordHref("Application", null), "/accounting");
@@ -61,7 +61,7 @@ describe("scan review terminal state", () => {
       "/units/9?tab=maintenance&wo=46"
     );
     assert.equal(
-      createdRecordHref("Lease", 47, 9),
+      createdRecordHref("LeaseAgreement", 47, 9),
       "/units/9?tab=lease&lease=47"
     );
     assert.equal(

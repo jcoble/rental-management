@@ -88,7 +88,7 @@
 	// Whether this draft targets a Payment (rent check) rather than an Expense
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
 	const isWorkOrder = $derived(data?.targetEntityType === 'WorkOrder');
-	const isLease = $derived(data?.targetEntityType === 'Lease');
+	const isLease = $derived(data?.targetEntityType === 'LeaseAgreement');
 	// A scanned completed paper rental application → creates an applicant / RentalApplication.
 	const isApplication = $derived(data?.targetEntityType === 'Application');
 	// A scanned mortgage statement / closing disclosure → creates a Loan on the property.
@@ -504,7 +504,7 @@
 			}
 			// Lease drafts: seed the property/unit pickers + the create-new fields. Tenant stays on
 			// "create new" unless the user picks.
-			if (data.targetEntityType === 'Lease' && shouldSeedLeaseReviewState(data.status, data.fields.length)) {
+			if (data.targetEntityType === 'LeaseAgreement' && shouldSeedLeaseReviewState(data.status, data.fields.length)) {
 				// Seed editable new-property fields from the extracted lease fields (one-shot, so later
 				// refetches / the user's own edits aren't clobbered).
 				if (!newPropertyFieldsSeeded) {
@@ -685,7 +685,7 @@
 			invalidateQueriesAfterScanConfirm(queryClient, result.entityType);
 			// Lease drafts go straight to the new lease detail page.
 			if (isLease) {
-				const leaseId = result.leaseId ?? result.entityId ?? null;
+				const leaseId = result.agreementId ?? result.entityId ?? null;
 				toast.success('Lease created');
 				if (leaseId) {
 					const unitId = result.unitId ?? (selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null) ?? scanContext.unitId ?? null;

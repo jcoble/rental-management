@@ -153,7 +153,7 @@ class ScanDraft {
   final int id;
   final int portfolioId;
 
-  /// 'Expense', 'Payment', 'WorkOrder', 'Lease', 'Application', or 'Loan'
+  /// 'Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', or 'Loan'
   final String targetEntityType;
 
   /// Lifecycle: 'Pending' -> 'Processing' -> 'Reviewing' -> 'Confirmed'
@@ -182,7 +182,7 @@ class ScanDraft {
   bool get isWorkOrder => targetEntityType == 'WorkOrder';
 
   /// Target is a lease draft (scanned/imported lease agreement).
-  bool get isLease => targetEntityType == 'Lease';
+  bool get isLease => targetEntityType == 'LeaseAgreement';
 
   /// Target is a scanned completed paper rental application; confirming creates
   /// a RentalApplication (applicant), mirroring the public apply form.

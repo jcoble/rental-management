@@ -242,9 +242,9 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     [Fact]
     public async Task Cycle_LeaseWithZeroBedBath_BlanksInvalidUnitCountsBeforeReview()
     {
-        var draftId = SeedPendingDraft(targetEntityType: "Lease");
+        var draftId = SeedPendingDraft(targetEntityType: "LeaseAgreement");
         _llm.Result = Extracted(
-            ("target_entity_type", "Lease"),
+            ("target_entity_type", "LeaseAgreement"),
             ("tenant_name", "Dana Brooks"),
             ("property_address", "742 Evergreen St"),
             ("unit_number", "3C"),
