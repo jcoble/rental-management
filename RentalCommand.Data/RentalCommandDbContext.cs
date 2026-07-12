@@ -29,6 +29,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<LeaseManagementParty> LeaseManagementParties => Set<LeaseManagementParty>();
     public DbSet<TenantUserAccess> TenantUserAccesses => Set<TenantUserAccess>();
     public DbSet<UnitOperationalPeriod> UnitOperationalPeriods => Set<UnitOperationalPeriod>();
+    public DbSet<LeaseAgreementStatusProjection> LeaseAgreementStatusProjections =>
+        Set<LeaseAgreementStatusProjection>();
     public DbSet<UnitOccupancyProjection> UnitOccupancyProjections => Set<UnitOccupancyProjection>();
     public DbSet<LeaseManagementLifecycleProjection> LeaseManagementLifecycleProjections =>
         Set<LeaseManagementLifecycleProjection>();
