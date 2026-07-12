@@ -496,7 +496,11 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
         attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(WorkspaceMembership), target.Membership.Id,
             AuditLogOperation.Updated, command.ActorUserId, $"Team membership {command.Action}",
-            new { command.Action, target.Context.Status, target.Membership.Status,
+            new
+            {
+                command.Action,
+                AccessContextStatus = target.Context.Status,
+                MembershipStatus = target.Membership.Status,
                 Revision = command.ExpectedRevision + 1 }));
         return AddWorkspaceRoleAssignmentHandler.Result(target, null, command.ExpectedRevision + 1);
     }
