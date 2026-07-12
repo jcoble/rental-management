@@ -1557,8 +1557,7 @@
 {#if lease}
 	<TenantNoticeDialog
 		bind:open={showNoticeDialog}
-		tenantId={lease.tenantId}
-		leaseId={lease.id}
+		recipientTenantId={lease.tenantId}
 		tenantName={lease.tenantName}
 		activeLeaseCount={visibleStatus === 'Active' ? 1 : 0}
 	/>

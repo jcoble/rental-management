@@ -47,9 +47,7 @@ const _noticeTypeChoices =
 Future<void> showCreateTenantNoticeFlow(
   BuildContext context,
   WidgetRef ref, {
-  int? tenantId,
-  int? leaseId,
-  int? paymentId,
+  int? recipientTenantId,
   String? initialNoticeType,
   required String tenantName,
 }) async {
@@ -112,10 +110,8 @@ Future<void> showCreateTenantNoticeFlow(
   try {
     drafts = await ref
         .read(noticesRepositoryProvider)
-        .generateForTenant(
-          tenantId,
-          leaseId: leaseId,
-          paymentId: paymentId,
+        .generateScoped(
+          recipientTenantId,
           noticeType: choice,
         );
   } on ApiException catch (e) {

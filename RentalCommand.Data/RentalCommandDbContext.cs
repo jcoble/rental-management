@@ -800,28 +800,37 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.GenerationPrompt).HasMaxLength(8000);
             entity.Property(e => e.ApprovedChannels).HasMaxLength(100);
             entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.LeaseId);
-            entity.HasIndex(e => e.PaymentId);
-            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.LeaseManagementId);
+            entity.HasIndex(e => e.TenantAccountId);
+            entity.HasIndex(e => e.TenantLedgerEntryId);
+            entity.HasIndex(e => e.RecipientTenantId);
             entity.HasIndex(e => e.Status);
-            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.NoticeType, e.Status });
-            entity.HasIndex(e => new { e.PortfolioId, e.PaymentId, e.NoticeType, e.Status });
+            entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.NoticeType, e.Status });
+            entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId, e.NoticeType, e.Status });
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
+            entity.HasOne(e => e.LeaseManagement)
                 .WithMany()
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Payment)
+                .HasForeignKey(e => new { e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.TenantAccount)
                 .WithMany()
-                .HasForeignKey(e => e.PaymentId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Tenant)
+                .HasForeignKey(e => new { e.TenantAccountId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.TenantLedgerEntry)
                 .WithMany()
-                .HasForeignKey(e => e.TenantId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .HasForeignKey(e => new { e.TenantLedgerEntryId, e.TenantAccountId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.RecipientTenant)
+                .WithMany()
+                .HasForeignKey(e => new { e.RecipientTenantId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.Property)
                 .WithMany()
                 .HasForeignKey(e => e.PropertyId)
@@ -2221,7 +2230,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // no-match (soft-deleted) side `l."DeletedAt" IS NULL` is true, which would resurface those payments.
         modelBuilder.Entity<Payment>().HasQueryFilter(e => e.LeaseId == null || e.Lease != null);
         modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
-        modelBuilder.Entity<NoticeDraft>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<SecurityDepositHolding>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
 

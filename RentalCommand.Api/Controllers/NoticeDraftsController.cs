@@ -31,9 +31,9 @@ public class NoticeDraftsController : ManagementControllerBase
 
     /// <summary>
     /// Generates notice drafts for the caller's portfolio. With an empty/absent body this runs
-    /// portfolio-wide (every applicable lease + late payment). Supply <c>tenantId</c> to scope to one
-    /// tenant — the primary path from a tenant's page — and optionally <c>noticeType</c> to generate just
-    /// that kind. The body is optional so existing callers keep working unchanged.
+    /// portfolio-wide (every applicable relationship + open tenant charge). Scope with canonical
+    /// recipient, lease-management, tenant-account, or ledger-entry identifiers and optionally
+    /// <c>noticeType</c> to generate just that kind. An absent body requests portfolio-wide generation.
     /// </summary>
     [HttpPost("generate")]
     [ProducesResponseType(typeof(GenerateNoticeDraftsResponse), StatusCodes.Status200OK)]
