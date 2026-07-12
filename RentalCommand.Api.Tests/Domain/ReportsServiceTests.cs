@@ -367,11 +367,11 @@ public class ReportsServiceTests : IDisposable
         ledger.Entries[2].Balance.Should().Be(1000m);
 
         ledger.TotalCharged.Should().Be(2000m);
-        ledger.TotalPaid.Should().Be(1000m);
+        ledger.TotalCredits.Should().Be(1000m);
         ledger.Balance.Should().Be(1000m);
 
         report.TotalCharged.Should().Be(2000m);
-        report.TotalPaid.Should().Be(1000m);
+        report.TotalCredits.Should().Be(1000m);
         report.TotalBalance.Should().Be(1000m);
     }
 
@@ -422,10 +422,10 @@ public class ReportsServiceTests : IDisposable
         ledger.LeaseId.Should().Be(mapleLease.Id);
         ledger.Entries.Should().HaveCount(2);
         ledger.TotalCharged.Should().Be(1000m);
-        ledger.TotalPaid.Should().Be(1000m);
+        ledger.TotalCredits.Should().Be(1000m);
         ledger.Balance.Should().Be(0m);
         report.TotalCharged.Should().Be(1000m);
-        report.TotalPaid.Should().Be(1000m);
+        report.TotalCredits.Should().Be(1000m);
         report.TotalBalance.Should().Be(0m);
 
         var sql = string.Join("\n---\n", _executedSql);

@@ -516,65 +516,6 @@ namespace RentalCommand.Data.Migrations
                     b.ToView("vw_accounting_parked_transactions", (string)null);
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.AccountingTransactionView", b =>
-                {
-                    b.Property<decimal>("Amount")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("Category")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Counterparty")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("Date")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Id")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("text");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("PropertyId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("PropertyName")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Reference")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int?>("UnitId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.ToTable((string)null);
-
-                    b.ToView("vw_accounting_transactions", (string)null);
-                });
-
             modelBuilder.Entity("RentalCommand.Core.Entities.AdverseActionNotice", b =>
                 {
                     b.Property<int>("Id")

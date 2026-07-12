@@ -171,9 +171,9 @@ public class RentLedgerResponse
     public decimal TotalCharged { get; set; }
 
     /// <summary>Sum of all payments received in the range across every lease.</summary>
-    public decimal TotalPaid { get; set; }
+    public decimal TotalCredits { get; set; }
 
-    /// <summary>Closing balance across every lease (TotalCharged − TotalPaid).</summary>
+    /// <summary>Closing balance across every tenant account (TotalCharged minus TotalCredits).</summary>
     public decimal TotalBalance { get; set; }
 }
 
@@ -188,9 +188,9 @@ public class RentLedgerLease
     public string TenantName { get; set; } = string.Empty;
     public IReadOnlyList<RentLedgerEntry> Entries { get; set; } = [];
     public decimal TotalCharged { get; set; }
-    public decimal TotalPaid { get; set; }
+    public decimal TotalCredits { get; set; }
 
-    /// <summary>Closing running balance for this lease (TotalCharged − TotalPaid). Positive = owed.</summary>
+    /// <summary>Closing running balance for this tenant account. Positive means owed.</summary>
     public decimal Balance { get; set; }
 }
 
@@ -199,7 +199,7 @@ public class RentLedgerEntry
 {
     public DateTime Date { get; set; }
 
-    /// <summary>"Charge" (rent/fee due) or "Payment" (cash received).</summary>
+    /// <summary>"Charge", "Receipt", or another explicit ledger credit type.</summary>
     public string Type { get; set; } = string.Empty;
 
     public string Description { get; set; } = string.Empty;
@@ -208,7 +208,7 @@ public class RentLedgerEntry
     public decimal Charge { get; set; }
 
     /// <summary>The amount paid on this entry (0 for a charge).</summary>
-    public decimal Payment { get; set; }
+    public decimal Credit { get; set; }
 
     /// <summary>Running balance owed after this entry (Σcharges − Σpayments up to and including this row).</summary>
     public decimal Balance { get; set; }
@@ -298,7 +298,7 @@ public class CashFlowMonth
 // ── General Ledger / Account Transactions (running balance) ──────────────────────────────────────
 
 /// <summary>
-/// General ledger: every payment and expense over the range in date order with a running balance.
+/// General ledger: every recognized tenant receipt and expense over the range in date order.
 /// Income is positive, expense is negative; the running balance is the cumulative net.
 /// </summary>
 public class GeneralLedgerResponse
@@ -317,10 +317,10 @@ public class GeneralLedgerEntry
 {
     public DateTime Date { get; set; }
 
-    /// <summary>"Payment" or "Expense".</summary>
+    /// <summary>"Receipt" or "Expense".</summary>
     public string Type { get; set; } = string.Empty;
 
-    public int Id { get; set; }
+    public long Id { get; set; }
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
     public int? PropertyId { get; set; }
