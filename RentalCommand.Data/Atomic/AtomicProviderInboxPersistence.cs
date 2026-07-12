@@ -11,10 +11,17 @@ namespace RentalCommand.Data.Atomic;
 internal sealed class AtomicProviderInboxPersistence : IAtomicProviderInboxPersistence
 {
     private readonly RentalCommandDbContext _db;
+    private readonly AtomicAuditScope _auditScope;
 
-    public AtomicProviderInboxPersistence(RentalCommandDbContext db) => _db = db;
+    public AtomicProviderInboxPersistence(
+        RentalCommandDbContext db,
+        AtomicAuditScope auditScope)
+    {
+        _db = db;
+        _auditScope = auditScope;
+    }
 
-    public Task<ProviderInboxEvent?> LockOwnedAsync(
+    public async Task<ProviderInboxEvent?> LockOwnedAsync(
         long providerInboxEventId,
         string claimOwner,
         Guid claimToken,
@@ -24,7 +31,10 @@ internal sealed class AtomicProviderInboxPersistence : IAtomicProviderInboxPersi
         if (string.IsNullOrWhiteSpace(claimOwner)) throw new ArgumentException("Claim owner is required.", nameof(claimOwner));
         if (claimToken == Guid.Empty) throw new ArgumentOutOfRangeException(nameof(claimToken));
 
-        return _db.ProviderInboxEvents
+        using var guardLease = _auditScope.BeginInternalRawDml(
+            "ProviderInboxEvents",
+            AtomicRawDmlOperation.Update);
+        return await _db.ProviderInboxEvents
             .FromSqlInterpolated($$"""
                 SELECT inbox.*
                 FROM "ProviderInboxEvents" AS inbox

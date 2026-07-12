@@ -328,7 +328,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _locking = new AtomicLockingPersistence(db);
             _scanConfirmation = new AtomicScanConfirmationPersistence(db, auditScope, _locking);
             _scheduledFinance = new AtomicScheduledFinancePersistence(db, auditScope);
-            _providerInbox = new AtomicProviderInboxPersistence(db);
+            _providerInbox = new AtomicProviderInboxPersistence(db, auditScope);
             _timeProvider = timeProvider;
         }
 
