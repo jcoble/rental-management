@@ -8,6 +8,7 @@ public interface IOwnerRelationshipAccessCommand : IAtomicCommandData
     int OwnerEntityId { get; }
     int TargetAccessContextId { get; }
     long ExpectedTargetAccessRevision { get; }
+    string Reason { get; }
     int ActorUserId { get; }
     Guid ActorAuthSessionId { get; }
     int ActorAccessContextId { get; }
