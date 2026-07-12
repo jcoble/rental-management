@@ -32,8 +32,10 @@ public sealed class TenantAccountMoneyRouteContractTests
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method => method.GetCustomAttribute<HttpPostAttribute>() is not null);
 
-        methods.Should().OnlyContain(method => method.GetParameters().Any(parameter =>
-            parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "Idempotency-Key"));
+        var hasIdempotencyHeader = methods.Select(method => method.GetParameters().Any(parameter =>
+            parameter.GetCustomAttribute<FromHeaderAttribute>() is { Name: "Idempotency-Key" }));
+
+        hasIdempotencyHeader.Should().OnlyContain(required => required);
     }
 
     [Fact]
