@@ -298,11 +298,19 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         await using (var expireScope = _services!.CreateAsyncScope())
         {
             var db = expireScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+            var connection = db.Database.GetDbConnection();
+            await db.Database.OpenConnectionAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
                 UPDATE "PendingFileUploads"
                 SET "CleanupClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
-                WHERE "Id" = {{admission.Id}}
-                """);
+                WHERE "Id" = @id
+                """;
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "id";
+            parameter.Value = admission.Id;
+            command.Parameters.Add(parameter);
+            await command.ExecuteNonQueryAsync();
         }
 
         PendingFileUploadCleanupClaim replacement;
