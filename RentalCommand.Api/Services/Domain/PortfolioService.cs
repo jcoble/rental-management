@@ -109,13 +109,9 @@ public class PortfolioService : IPortfolioService
                 HasDailyBriefingEmail = settings.DailyBriefingEmailRecipientsCipherText != null
                     && settings.DailyBriefingEmailRecipientsCipherText != string.Empty,
                 HasSmsCredentialA = (settings.SmsCredentialACipherText != null
-                    && settings.SmsCredentialACipherText != string.Empty)
-                    || (settings.SignalWireProjectIdCipherText != null
-                    && settings.SignalWireProjectIdCipherText != string.Empty),
+                    && settings.SmsCredentialACipherText != string.Empty),
                 HasSmsCredentialB = (settings.SmsCredentialBCipherText != null
-                    && settings.SmsCredentialBCipherText != string.Empty)
-                    || (settings.SignalWireTokenCipherText != null
-                    && settings.SignalWireTokenCipherText != string.Empty),
+                    && settings.SmsCredentialBCipherText != string.Empty),
             })
             .FirstOrDefaultAsync(ct);
 

@@ -112,22 +112,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         var row = await GetOrCreateAsync(portfolioId, ct);
         var provider = ParseProvider(row.SmsProvider);
 
-        // Backward compat: rows saved before this migration may carry only the legacy SignalWire
-        // columns (no SmsProvider set). Treat those as a configured SignalWire provider so existing
-        // installs keep sending without a re-save.
-        if (provider == SmsProviderKey.None &&
-            !string.IsNullOrWhiteSpace(row.SignalWireProjectIdCipherText))
-        {
-            provider = SmsProviderKey.SignalWire;
-            var legacy = new SmsCredentials(
-                provider,
-                UnprotectNullable(row.SignalWireProjectIdCipherText),
-                UnprotectNullable(row.SignalWireTokenCipherText),
-                UnprotectNullable(row.SignalWireSpaceUrlCipherText),
-                UnprotectNullable(row.SignalWireFromNumberCipherText));
-            return legacy.IsComplete ? legacy : null;
-        }
-
         if (provider == SmsProviderKey.None)
             return null;
 
@@ -160,10 +144,10 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         var row = await GetOrCreateAsync(portfolioId, ct);
         var creds = new SmsCredentials(
             provider,
-            FirstNonBlank(request.SmsCredentialA, UnprotectNullable(row.SmsCredentialACipherText), UnprotectNullable(row.SignalWireProjectIdCipherText)),
-            FirstNonBlank(request.SmsCredentialB, UnprotectNullable(row.SmsCredentialBCipherText), UnprotectNullable(row.SignalWireTokenCipherText)),
-            FirstNonBlank(request.SmsCredentialC, UnprotectNullable(row.SmsCredentialCCipherText), UnprotectNullable(row.SignalWireSpaceUrlCipherText)),
-            FirstNonBlank(request.SmsFromNumber, UnprotectNullable(row.SmsFromNumberCipherText), UnprotectNullable(row.SignalWireFromNumberCipherText)));
+            FirstNonBlank(request.SmsCredentialA, UnprotectNullable(row.SmsCredentialACipherText)),
+            FirstNonBlank(request.SmsCredentialB, UnprotectNullable(row.SmsCredentialBCipherText)),
+            FirstNonBlank(request.SmsCredentialC, UnprotectNullable(row.SmsCredentialCCipherText)),
+            FirstNonBlank(request.SmsFromNumber, UnprotectNullable(row.SmsFromNumberCipherText)));
 
         if (!creds.IsComplete)
             return new TestSmsResponse { Success = false, Message = $"Missing required credentials for {provider}." };
@@ -287,16 +271,9 @@ public sealed class NotificationSettingsService : INotificationSettingsService
 
     private async Task<Dictionary<NotificationType, NotificationPreference>> GetPreferenceMapAsync(int portfolioId, CancellationToken ct)
     {
-        var rows = await _db.NotificationPreferences
+        return await _db.NotificationPreferences
             .Where(p => p.PortfolioId == portfolioId)
-            .ToListAsync(ct);
-
-        // A duplicate (PortfolioId, NotificationType) is impossible (unique index), but guard with
-        // a last-wins reduce so a malformed legacy state never throws on the dashboard.
-        var map = new Dictionary<NotificationType, NotificationPreference>();
-        foreach (var r in rows)
-            map[r.NotificationType] = r;
-        return map;
+            .ToDictionaryAsync(p => p.NotificationType, ct);
     }
 
     private async Task ApplyChannelPreferencesAsync(
@@ -310,7 +287,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
 
         var existing = await _db.NotificationPreferences
             .Where(p => p.PortfolioId == portfolioId)
-            .ToListAsync(ct);
+            .ToDictionaryAsync(p => p.NotificationType, ct);
 
         // De-dupe the incoming list (last write wins) and ignore types outside the enum.
         var byType = new Dictionary<NotificationType, NotificationChannelPreferenceDto>();
@@ -322,8 +299,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
 
         foreach (var (type, dto) in byType)
         {
-            var row = existing.FirstOrDefault(p => p.NotificationType == type);
-            if (row is null)
+            if (!existing.TryGetValue(type, out var row))
             {
                 row = new NotificationPreference
                 {
@@ -332,6 +308,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                     CreatedAt = now,
                 };
                 _db.NotificationPreferences.Add(row);
+                existing.Add(type, row);
             }
 
             row.EnableInApp = dto.EnableInApp;
@@ -376,13 +353,12 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         DailyBriefingIncludeEmpty = row.DailyBriefingIncludeEmpty,
         DailyBriefingSmsRecipients = UnprotectArray(row.DailyBriefingSmsRecipientsCipherText),
         DailyBriefingEmailRecipients = UnprotectArray(row.DailyBriefingEmailRecipientsCipherText),
-        SmsProvider = EffectiveProvider(row).ToString(),
-        SmsFromNumber = EffectiveFromNumber(row),
-        // Secrets: report only whether each slot is set, never the value. Legacy SignalWire rows map
-        // their old columns onto the generic slots so the UI shows them as configured.
-        SmsCredentialASet = HasSecret(row.SmsCredentialACipherText) || HasSecret(row.SignalWireProjectIdCipherText),
-        SmsCredentialBSet = HasSecret(row.SmsCredentialBCipherText) || HasSecret(row.SignalWireTokenCipherText),
-        SmsCredentialCSet = HasSecret(row.SmsCredentialCCipherText) || HasSecret(row.SignalWireSpaceUrlCipherText),
+        SmsProvider = ParseProvider(row.SmsProvider).ToString(),
+        SmsFromNumber = UnprotectNullable(row.SmsFromNumberCipherText),
+        // Secrets: report only whether each provider-neutral slot is set, never the value.
+        SmsCredentialASet = HasSecret(row.SmsCredentialACipherText),
+        SmsCredentialBSet = HasSecret(row.SmsCredentialBCipherText),
+        SmsCredentialCSet = HasSecret(row.SmsCredentialCCipherText),
         // Always emit every known type so the client renders the full matrix; fill gaps with defaults.
         ChannelPreferences = AllTypes.Select(type =>
         {
@@ -413,19 +389,6 @@ public sealed class NotificationSettingsService : INotificationSettingsService
     }
 
     private static bool HasSecret(string? cipherText) => !string.IsNullOrWhiteSpace(cipherText);
-
-    /// <summary>The provider as stored, with a legacy fall-through: a row that only has the old
-    /// SignalWire columns reports as SignalWire so the UI shows it configured.</summary>
-    private static SmsProviderKey EffectiveProvider(NotificationSettings row)
-    {
-        var provider = ParseProvider(row.SmsProvider);
-        if (provider == SmsProviderKey.None && HasSecret(row.SignalWireProjectIdCipherText))
-            return SmsProviderKey.SignalWire;
-        return provider;
-    }
-
-    private string? EffectiveFromNumber(NotificationSettings row) =>
-        UnprotectNullable(row.SmsFromNumberCipherText) ?? UnprotectNullable(row.SignalWireFromNumberCipherText);
 
     private string? UnprotectNullable(string? cipherText)
     {

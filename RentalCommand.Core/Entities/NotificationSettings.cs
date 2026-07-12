@@ -33,13 +33,6 @@ public class NotificationSettings
     /// <summary>The sender phone number (E.164) for the chosen provider, encrypted.</summary>
     public string? SmsFromNumberCipherText { get; set; }
 
-    // Legacy SignalWire-specific columns. Retained for backward-compatible reads of rows saved before
-    // the pluggable-provider migration; the migration backfills the generic slots above from these.
-    // New writes go to the generic slots only. Do not write these going forward.
-    public string? SignalWireProjectIdCipherText { get; set; }
-    public string? SignalWireTokenCipherText { get; set; }
-    public string? SignalWireSpaceUrlCipherText { get; set; }
-    public string? SignalWireFromNumberCipherText { get; set; }
     public bool EnableRentCharges { get; set; }
     public bool EnableLateFees { get; set; }
     public bool EnableLeaseExpiryReminders { get; set; } = true;
