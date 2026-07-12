@@ -19,7 +19,7 @@ namespace RentalCommand.Api.Tests.Scanning;
 
 /// <summary>
 /// Tests for the bulk-scan batch endpoints on <see cref="ScanController"/>. Uses SQLite in-memory
-/// (the EF InMemory provider can't run the grouped rollup queries / string-enum columns the same way).
+/// so the translated conditional-count, paging, and projection SQL is exercised by a relational provider.
 /// </summary>
 public class ScanBatchControllerTests : IDisposable
 {
@@ -151,6 +151,7 @@ public class ScanBatchControllerTests : IDisposable
 
         var controller = CreateController(new RecordingBatchScanService(_db));
 
+        _executedSql.Clear();
         var result = await controller.ListBatches(skip: 0, take: 50, CancellationToken.None);
 
         var list = result.Result.Should().BeOfType<OkObjectResult>().Subject
@@ -166,6 +167,12 @@ public class ScanBatchControllerTests : IDisposable
         summary.Counts.Rejected.Should().Be(1);
         // One draft is still Pending/Reviewing -> batch is not Completed.
         summary.Status.Should().Be(nameof(ScanBatchStatus.Reviewing));
+
+        _executedSql.Should().ContainSingle(
+            "batch paging, conditional counts, and the effective status must be one translated SQL statement");
+        _executedSql[0].Should().ContainEquivalentOf("COUNT");
+        _executedSql[0].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[0].Should().ContainEquivalentOf("LIMIT");
     }
 
     [Fact]
@@ -209,7 +216,8 @@ public class ScanBatchControllerTests : IDisposable
     {
         var batch = SeedBatch(PortfolioId, fileCount: 2);
         SeedDraft(batch.Id, "Confirmed",
-            extractedFields: """{"tenant_name":{"value":"Marcus Williams","confidence":0.9},"unit_id":{"value":"20","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9}}""");
+            extractedFields: """{"tenant_name":{"value":"Marcus Williams","confidence":0.9},"unit_id":{"value":"20","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9}}""",
+            confirmedEntityId: 731);
         SeedDraft(batch.Id, "Rejected");
 
         var controller = CreateController(new RecordingBatchScanService(_db));
@@ -230,10 +238,11 @@ public class ScanBatchControllerTests : IDisposable
         confirmed.Tenant.Should().Be("Marcus Williams");
         confirmed.Unit.Should().Be("20");
         confirmed.Term.Should().Be("2026-01-01 – 2026-12-31");
+        confirmed.CreatedEntityId.Should().Be(731);
     }
 
     [Fact]
-    public async Task GetBatch_ComputesCountsWithGroupedSql()
+    public async Task GetBatch_UsesOneSummaryQueryAndOneProjectedDraftQuery()
     {
         var batch = SeedBatch(PortfolioId, fileCount: 5);
         SeedDraft(batch.Id, "Pending");
@@ -255,11 +264,13 @@ public class ScanBatchControllerTests : IDisposable
         detail.Counts.Confirmed.Should().Be(1);
         detail.Counts.Failed.Should().Be(1);
 
-        _executedSql.Should().Contain(sql =>
-            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
-            && sql.Contains("\"Status\"", StringComparison.Ordinal)
-            && sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase),
-            "batch detail counts must be rolled up by the database, not by folding materialized draft rows");
+        _executedSql.Should().HaveCount(2,
+            "batch detail must use one SQL summary query plus one filtered, sorted draft projection");
+        _executedSql[0].Should().ContainEquivalentOf("COUNT");
+        _executedSql[1].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql.Should().NotContain(sql =>
+            sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase),
+            "confirmed entity ids come directly from ScanDraft.ConfirmedEntityId");
     }
 
     [Fact]
@@ -462,7 +473,8 @@ public class ScanBatchControllerTests : IDisposable
         string? extractedFields = null,
         int? portfolioId = null,
         string targetEntityType = "Lease",
-        string? failureReason = null)
+        string? failureReason = null,
+        int? confirmedEntityId = null)
     {
         var draft = new ScanDraft
         {
@@ -473,6 +485,7 @@ public class ScanBatchControllerTests : IDisposable
             Status = status,
             ExtractedFields = extractedFields,
             FailureReason = failureReason,
+            ConfirmedEntityId = confirmedEntityId,
             CreatedAt = DateTime.UtcNow,
         };
         _db.ScanDrafts.Add(draft);
