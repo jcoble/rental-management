@@ -64,10 +64,13 @@ public class CheckoutSessionResponse
     public string CheckoutUrl { get; set; } = string.Empty;
 }
 
-/// <summary>Request to enroll a lease in autopay (setup-mode Checkout). Lease must be the tenant's own.</summary>
+/// <summary>Request to enroll the tenant's own canonical account in autopay.</summary>
 public class AutopayEnrollRequest
 {
-    public int LeaseId { get; set; }
+    public int TenantAccountId { get; set; }
+
+    [Required, MaxLength(186)]
+    public string OperationKey { get; set; } = string.Empty;
 
     [MaxLength(2048)]
     public string? SuccessUrl { get; set; }

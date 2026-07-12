@@ -3,68 +3,98 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Core.Payments;
 
-/// <summary>
-/// Creates the durable local payment attempt before any provider call. A tenant id is supplied for
-/// tenant-initiated checkout and is verified through the payment's lease in the handler.
-/// </summary>
+/// <summary>Creates the canonical provider attempt before any remote money movement.</summary>
 public sealed record PrepareProviderPaymentCreateCommand(
     int PortfolioId,
-    int PaymentId,
+    int TenantAccountId,
+    long ChargeLedgerEntryId,
+    int ActorUserId,
     int? TenantId,
+    int? AutopayEnrollmentId,
     string Provider,
     string IdempotencyKey,
     string Currency,
     DateTime PreparedAtUtc) : IAtomicCommandData;
 
-public enum PrepareProviderPaymentCreateOutcome
-{
-    Prepared,
-    NotFound,
-}
+public enum PrepareProviderPaymentCreateOutcome { Prepared, NotFound }
 
 public sealed record PrepareProviderPaymentCreateResult(
     PrepareProviderPaymentCreateOutcome Outcome,
     int PortfolioId,
-    int PaymentId,
-    int PaymentTransactionId,
+    int TenantAccountId,
+    long ChargeLedgerEntryId,
+    long PaymentAttemptId,
     decimal Amount,
     string Currency,
     string Provider,
+    string IdempotencyKey,
+    string? ProviderCustomerId,
+    string? ProviderPaymentMethodId) : IAtomicResultData;
+
+/// <summary>Creates a durable verification attempt before opening provider setup.</summary>
+public sealed record PrepareProviderAutopaySetupCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    int TenantId,
+    int ActorUserId,
+    string Provider,
+    string IdempotencyKey,
+    string Currency,
+    DateTime PreparedAtUtc) : IAtomicCommandData;
+
+public enum PrepareProviderAutopaySetupOutcome { Prepared, NotFound }
+
+public sealed record PrepareProviderAutopaySetupResult(
+    PrepareProviderAutopaySetupOutcome Outcome,
+    int PortfolioId,
+    int TenantAccountId,
+    int AuthorizingPartyId,
+    int ActorUserId,
+    long PaymentAttemptId,
+    string Provider,
     string IdempotencyKey) : IAtomicResultData;
 
-/// <summary>
-/// Records the provider receipt returned after a payment-create request was made outside the
-/// database transaction. The local transaction attempt and its idempotency key already exist.
-/// </summary>
+/// <summary>Durably binds the provider receipt returned outside the database transaction.</summary>
 public sealed record FinalizeProviderPaymentCreateCommand(
     int PortfolioId,
-    int PaymentId,
-    int PaymentTransactionId,
+    int TenantAccountId,
+    long PaymentAttemptId,
     string Provider,
     string IdempotencyKey,
     string ProviderPaymentId,
-    PaymentTransactionStatus Status,
+    TenantPaymentAttemptState State,
     string? FailureReason,
     DateTime RecordedAtUtc) : IAtomicCommandData;
 
-public enum FinalizeProviderPaymentCreateOutcome
-{
-    Applied,
-    NotFound,
-    AlreadyFinalized,
-}
+public enum FinalizeProviderPaymentCreateOutcome { Applied, NotFound, AlreadyFinalized }
 
-/// <summary>Receipt-safe result of binding a provider create receipt to its local attempt.</summary>
 public sealed record FinalizeProviderPaymentCreateResult(
     FinalizeProviderPaymentCreateOutcome Outcome,
     int PortfolioId,
-    int PaymentId,
-    int PaymentTransactionId,
+    int TenantAccountId,
+    long PaymentAttemptId,
     string Provider,
     string ProviderPaymentId,
-    PaymentTransactionStatus Status) : IAtomicResultData;
+    TenantPaymentAttemptState State) : IAtomicResultData;
 
-/// <summary>Normalized business meaning of a verified provider payment event.</summary>
+/// <summary>Records a provider-create failure without inventing a provider receipt.</summary>
+public sealed record FailProviderPaymentCreateCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    string Provider,
+    string IdempotencyKey,
+    string? FailureCode,
+    string FailureReason,
+    DateTime RecordedAtUtc) : IAtomicCommandData;
+
+public sealed record FailProviderPaymentCreateResult(
+    bool Found,
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    TenantPaymentAttemptState State) : IAtomicResultData;
+
 public enum ProviderPaymentEventKind
 {
     Pending,
@@ -75,10 +105,7 @@ public enum ProviderPaymentEventKind
     Ignored,
 }
 
-/// <summary>
-/// Persists and reconciles one signature-verified provider payment event. Signature verification
-/// and provider retrieval happen before this command; handlers receive no SDK or remote dependency.
-/// </summary>
+/// <summary>Provider-neutral facts from one signature-verified event.</summary>
 public sealed record RecordVerifiedProviderPaymentEventCommand(
     string Provider,
     string ProviderEventId,
@@ -92,49 +119,36 @@ public sealed record RecordVerifiedProviderPaymentEventCommand(
     DateTime? OccurredAtUtc,
     DateTime ReceivedAtUtc,
     int? EnrollmentPortfolioId = null,
-    int? EnrollmentLeaseId = null,
-    int? EnrollmentTenantId = null,
+    int? EnrollmentTenantAccountId = null,
+    int? EnrollmentAuthorizingPartyId = null,
+    int? EnrollmentActorUserId = null,
+    long? EnrollmentPaymentAttemptId = null,
     string? ProviderCustomerId = null,
     string? ProviderPaymentMethodId = null) : IAtomicCommandData;
 
-public enum RecordProviderPaymentEventOutcome
-{
-    Applied,
-    Duplicate,
-    Unmatched,
-}
+public enum RecordProviderPaymentEventOutcome { Applied, Duplicate, Unmatched }
 
-/// <summary>Receipt-safe reconciliation result for a verified provider event.</summary>
 public sealed record RecordVerifiedProviderPaymentEventResult(
     RecordProviderPaymentEventOutcome Outcome,
     long ProviderInboxEventId,
     int? PortfolioId,
-    int? PaymentId,
-    int? PaymentTransactionId,
-    PaymentTransactionStatus? TransactionStatus) : IAtomicResultData;
+    int? TenantAccountId,
+    long? PaymentAttemptId,
+    TenantPaymentAttemptState? AttemptState) : IAtomicResultData;
 
-/// <summary>
-/// Reconciles one leased provider inbox row. Id, owner, and claim token fence every completion,
-/// retry, and dead-letter transition against an expired worker claim.
-/// </summary>
 public sealed record ReconcileClaimedProviderPaymentEventCommand(
     long ProviderInboxEventId,
     string ClaimOwner,
     Guid ClaimToken,
     DateTime ReconciledAtUtc) : IAtomicCommandData;
 
-public enum ReconcileProviderPaymentEventOutcome
-{
-    Applied,
-    RetryScheduled,
-    DeadLettered,
-}
+public enum ReconcileProviderPaymentEventOutcome { Applied, RetryScheduled, DeadLettered }
 
 public sealed record ReconcileClaimedProviderPaymentEventResult(
     ReconcileProviderPaymentEventOutcome Outcome,
     long ProviderInboxEventId,
     int? PortfolioId,
-    int? PaymentId,
-    int? PaymentTransactionId,
-    PaymentTransactionStatus? TransactionStatus,
+    int? TenantAccountId,
+    long? PaymentAttemptId,
+    TenantPaymentAttemptState? AttemptState,
     DateTime? NextAttemptAtUtc) : IAtomicResultData;

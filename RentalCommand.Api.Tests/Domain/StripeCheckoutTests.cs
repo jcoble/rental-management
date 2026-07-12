@@ -3,6 +3,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Payments;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Payments;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -35,7 +37,8 @@ public class StripeCheckoutTests : IDisposable
         var sut = BuildService(enabled: false);
 
         var result = await sut.CreatePaymentCheckoutSessionAsync(
-            PortfolioId, tenantId: 10, payment.Id, successUrl: null, cancelUrl: null, CancellationToken.None);
+            PortfolioId, tenantId: 10, tenantAccountId: 1, chargeLedgerEntryId: payment.Id,
+            actorUserId: 1, successUrl: null, cancelUrl: null, CancellationToken.None);
 
         // Gated: no Stripe call, no transaction created.
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
@@ -49,7 +52,9 @@ public class StripeCheckoutTests : IDisposable
         var sut = BuildService(enabled: false);
 
         var result = await sut.CreateAutopaySetupSessionAsync(
-            PortfolioId, tenantId: 10, lease.Id, successUrl: null, cancelUrl: null, CancellationToken.None);
+            PortfolioId, tenantId: 10, tenantAccountId: lease.Id, actorUserId: 1,
+            operationKey: "setup-disabled",
+            successUrl: null, cancelUrl: null, CancellationToken.None);
 
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
     }
@@ -76,7 +81,8 @@ public class StripeCheckoutTests : IDisposable
         var sut = BuildService(enabled: true);
 
         var result = await sut.CreatePaymentCheckoutSessionAsync(
-            PortfolioId, tenantId: 20, payment.Id, successUrl: null, cancelUrl: null, CancellationToken.None);
+            PortfolioId, tenantId: 20, tenantAccountId: 1, chargeLedgerEntryId: payment.Id,
+            actorUserId: 1, successUrl: null, cancelUrl: null, CancellationToken.None);
 
         result.Result.Should().Be(CheckoutResult.Outcome.NotFound);
         _ctx.Db.PaymentTransactions.Should().BeEmpty();
@@ -89,7 +95,9 @@ public class StripeCheckoutTests : IDisposable
         var sut = BuildService(enabled: true);
 
         var result = await sut.CreateAutopaySetupSessionAsync(
-            PortfolioId, tenantId: 20, lease.Id, successUrl: null, cancelUrl: null, CancellationToken.None);
+            PortfolioId, tenantId: 20, tenantAccountId: lease.Id, actorUserId: 1,
+            operationKey: "setup-foreign",
+            successUrl: null, cancelUrl: null, CancellationToken.None);
 
         result.Result.Should().Be(CheckoutResult.Outcome.NotFound);
     }
@@ -107,12 +115,11 @@ public class StripeCheckoutTests : IDisposable
         };
 
         return new StripePaymentService(
-            _ctx.Db,
             Options.Create(config),
             new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
-            new UnexpectedAtomicUnitOfWork());
+            enabled ? new CanonicalNotFoundAtomicUnitOfWork() : new UnexpectedAtomicUnitOfWork());
     }
 
     private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int tenantId, decimal amount = 1000m)
@@ -180,6 +187,30 @@ public class StripeCheckoutTests : IDisposable
         _ctx.Db.SaveChanges();
 
         return (lease, payment);
+    }
+
+    private sealed class CanonicalNotFoundAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity, TCommand command,
+            IAtomicResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData where TResult : notnull
+        {
+            object result = command switch
+            {
+                PrepareProviderPaymentCreateCommand prepare => new PrepareProviderPaymentCreateResult(
+                    PrepareProviderPaymentCreateOutcome.NotFound, prepare.PortfolioId,
+                    prepare.TenantAccountId, prepare.ChargeLedgerEntryId, 0, 0,
+                    prepare.Currency, prepare.Provider, prepare.IdempotencyKey, null, null),
+                PrepareProviderAutopaySetupCommand setup => new PrepareProviderAutopaySetupResult(
+                    PrepareProviderAutopaySetupOutcome.NotFound, setup.PortfolioId,
+                    setup.TenantAccountId, 0, setup.ActorUserId, 0, setup.Provider,
+                    setup.IdempotencyKey),
+                _ => throw new InvalidOperationException($"Unexpected command {typeof(TCommand).Name}."),
+            };
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+        }
     }
 
 }

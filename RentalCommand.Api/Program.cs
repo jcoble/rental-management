@@ -251,6 +251,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
     RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FailProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FailProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FailProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PrepareProviderAutopaySetupCommand,
+    RentalCommand.Core.Payments.PrepareProviderAutopaySetupResult,
+    RentalCommand.Data.Payments.PrepareProviderAutopaySetupHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.RecordTenantReceiptCommand,
     RentalCommand.Core.Payments.RecordTenantReceiptResult,
     RentalCommand.Data.Payments.RecordTenantReceiptHandler>();
