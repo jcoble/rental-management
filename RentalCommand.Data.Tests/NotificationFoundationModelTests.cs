@@ -19,10 +19,15 @@ public sealed class NotificationFoundationModelTests
     {
         using var db = CreateDb();
         var entity = db.Model.FindEntityType(typeof(UserAlertPreference))!;
+        var expectedProperties = new[]
+        {
+            nameof(UserAlertPreference.PortfolioId),
+            nameof(UserAlertPreference.UserId),
+        };
 
         entity.GetIndexes().Should().Contain(index => index.IsUnique &&
             index.Properties.Select(property => property.Name)
-                .SequenceEqual([nameof(UserAlertPreference.PortfolioId), nameof(UserAlertPreference.UserId)]));
+                .SequenceEqual(expectedProperties));
     }
 
     [Fact]
@@ -30,12 +35,15 @@ public sealed class NotificationFoundationModelTests
     {
         using var db = CreateDb();
         var entity = db.Model.FindEntityType(typeof(WorkspaceNoticeTemplateVersion))!;
+        var expectedProperties = new[]
+        {
+            nameof(WorkspaceNoticeTemplateVersion.PortfolioId),
+            nameof(WorkspaceNoticeTemplateVersion.SystemKey),
+            nameof(WorkspaceNoticeTemplateVersion.Version),
+        };
 
         entity.GetIndexes().Should().Contain(index => index.IsUnique &&
-            index.Properties.Select(property => property.Name).SequenceEqual([
-                nameof(WorkspaceNoticeTemplateVersion.PortfolioId),
-                nameof(WorkspaceNoticeTemplateVersion.SystemKey),
-                nameof(WorkspaceNoticeTemplateVersion.Version)]));
+            index.Properties.Select(property => property.Name).SequenceEqual(expectedProperties));
     }
 
     [Fact]
@@ -43,14 +51,17 @@ public sealed class NotificationFoundationModelTests
     {
         using var db = CreateDb();
         var entity = db.Model.FindEntityType(typeof(NoticeDeliveryEvidence))!;
+        var expectedDestinationProperties = new[]
+        {
+            nameof(NoticeDeliveryEvidence.RenderedNoticeId),
+            nameof(NoticeDeliveryEvidence.RecipientTenantId),
+            nameof(NoticeDeliveryEvidence.Channel),
+        };
 
         entity.GetIndexes().Should().Contain(index => index.IsUnique &&
             index.Properties.Single().Name == nameof(NoticeDeliveryEvidence.OutboxMessageId));
         entity.GetIndexes().Should().Contain(index => index.IsUnique &&
-            index.Properties.Select(property => property.Name).SequenceEqual([
-                nameof(NoticeDeliveryEvidence.RenderedNoticeId),
-                nameof(NoticeDeliveryEvidence.RecipientTenantId),
-                nameof(NoticeDeliveryEvidence.Channel)]));
+            index.Properties.Select(property => property.Name).SequenceEqual(expectedDestinationProperties));
     }
 
     [Fact]

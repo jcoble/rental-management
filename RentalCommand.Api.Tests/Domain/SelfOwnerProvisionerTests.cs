@@ -57,9 +57,15 @@ public class SelfOwnerProvisionerTests : IDisposable
         var owners = await _ctx.Db.OwnerEntities.Where(o => o.PortfolioId == 1).ToListAsync();
         owners.Should().ContainSingle();
 
-        // ...and the user is linked back to it.
-        var reloaded = await _ctx.Db.Users.SingleAsync(u => u.Id == user.Id);
-        reloaded.OwnerEntityId.Should().Be(owner.Id);
+        // ...and the user receives an explicit relationship-scoped owner grant.
+        var access = await _ctx.Db.OwnerUserAccesses
+            .Include(candidate => candidate.AccessContext)
+            .SingleAsync(candidate => candidate.ApplicationUserId == user.Id);
+        access.OwnerEntityId.Should().Be(owner.Id);
+        access.PortfolioId.Should().Be(1);
+        access.RevokedAtUtc.Should().BeNull();
+        access.AccessContext!.UserId.Should().Be(user.Id);
+        access.AccessContext.PortfolioId.Should().Be(1);
     }
 
     [Fact]

@@ -28,7 +28,6 @@ public class NotificationSettingsServiceTests : IDisposable
             EnableRentCharges = true,
             EnableLateFees = true,
             EnableLeaseExpiryReminders = true,
-            NotifyTenants = true,
             RentChargeLeadDays = 7,
             LateFeeGraceDays = 3,
             LeaseExpiryReminderDays = 45,
