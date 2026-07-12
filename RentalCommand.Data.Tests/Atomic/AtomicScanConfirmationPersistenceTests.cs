@@ -101,7 +101,7 @@ public sealed class AtomicScanConfirmationPersistenceTests
     private static (AtomicScanConfirmationPersistence Persistence, AtomicAuditScope AuditScope)
         CreatePersistence(RentalCommandDbContext db)
     {
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(allowUnconvertedWrites: true));
+        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(AllowUnconvertedWrites: true));
         var locking = new AtomicLockingPersistence(db);
         return (new AtomicScanConfirmationPersistence(db, auditScope, locking), auditScope);
     }

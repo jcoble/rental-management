@@ -441,9 +441,9 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         db.AddRange(user, otherUser, firstPortfolio, secondPortfolio, otherPortfolio);
         await db.SaveChangesAsync();
 
-        var first = AccessRoot(user.Id, firstPortfolio.Id, WorkspaceExperience.Management);
-        var second = AccessRoot(user.Id, secondPortfolio.Id, WorkspaceExperience.Leasing);
-        var other = AccessRoot(otherUser.Id, otherPortfolio.Id, WorkspaceExperience.Management);
+        var first = CreateAccessRoot(user.Id, firstPortfolio.Id, WorkspaceExperience.Management);
+        var second = CreateAccessRoot(user.Id, secondPortfolio.Id, WorkspaceExperience.Leasing);
+        var other = CreateAccessRoot(otherUser.Id, otherPortfolio.Id, WorkspaceExperience.Management);
         db.WorkspaceAccessContexts.AddRange(first.Context, second.Context, other.Context);
         await db.SaveChangesAsync();
 
@@ -468,7 +468,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _secondAssignmentId = second.Assignment.Id;
     }
 
-    private AccessRoot AccessRoot(int userId, int portfolioId, WorkspaceExperience experience)
+    private AccessRoot CreateAccessRoot(int userId, int portfolioId, WorkspaceExperience experience)
     {
         var context = new WorkspaceAccessContext
         {

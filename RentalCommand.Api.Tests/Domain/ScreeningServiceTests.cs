@@ -9,6 +9,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Screening;
+using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Configuration;
@@ -402,6 +403,7 @@ public class ScreeningServiceTests : IDisposable
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => Mock.Of<IAtomicSetBasedPersistence>();
         public IAtomicBankingPersistence Banking => Mock.Of<IAtomicBankingPersistence>();
+        public IAtomicAccountingPersistence Accounting => Mock.Of<IAtomicAccountingPersistence>();
         public IAtomicLockingPersistence Locking => Mock.Of<IAtomicLockingPersistence>();
         public IAtomicScanConfirmationPersistence ScanConfirmation =>
             Mock.Of<IAtomicScanConfirmationPersistence>();
