@@ -39,13 +39,14 @@ public sealed class AtomicSetBasedCommandGuardInterceptorTests
     }
 
     [Theory]
-    [InlineData("INSERT INTO widgets (id) VALUES (1)", AtomicRawDmlOperation.Insert)]
-    [InlineData("UPDATE widgets SET id = 2", AtomicRawDmlOperation.Update)]
-    [InlineData("DELETE FROM widgets WHERE id = 2", AtomicRawDmlOperation.Delete)]
+    [InlineData("INSERT INTO widgets (id) VALUES (1)", (int)AtomicRawDmlOperation.Insert)]
+    [InlineData("UPDATE widgets SET id = 2", (int)AtomicRawDmlOperation.Update)]
+    [InlineData("DELETE FROM widgets WHERE id = 2", (int)AtomicRawDmlOperation.Delete)]
     public void Actual_raw_dml_remains_classified(
         string sql,
-        AtomicRawDmlOperation expected)
+        int expected)
     {
-        AtomicSetBasedCommandGuardInterceptor.ClassifyRawDml(sql).Should().Be(expected);
+        AtomicSetBasedCommandGuardInterceptor.ClassifyRawDml(sql)
+            .Should().Be((AtomicRawDmlOperation)expected);
     }
 }
