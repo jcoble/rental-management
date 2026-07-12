@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Auth;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Tests.Auth;
 
