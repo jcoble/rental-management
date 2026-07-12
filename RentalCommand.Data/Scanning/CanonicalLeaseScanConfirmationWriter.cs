@@ -45,15 +45,17 @@ internal static class CanonicalLeaseScanConfirmationWriter
         {
             var existing = await (
                 from artifact in attempt.Persistence.Query<LegalDocumentArtifact>()
-                join agreement in attempt.Persistence.Query<LeaseAgreement>()
+                join existingAgreement in attempt.Persistence.Query<LeaseAgreement>()
                     on new { ArtifactId = artifact.Id, artifact.PortfolioId }
-                    equals new { ArtifactId = agreement.ExecutedArtifactId!.Value, agreement.PortfolioId }
+                    equals new { ArtifactId = existingAgreement.ExecutedArtifactId!.Value, existingAgreement.PortfolioId }
                 where artifact.PortfolioId == command.PortfolioId
                     && artifact.ContentSha256 == command.SourceContentSha256
-                    && agreement.LeaseManagement!.PropertyId == target.PropertyId
-                    && agreement.LeaseManagement.UnitId == target.UnitId
+                    && existingAgreement.LeaseManagement!.PropertyId == target.PropertyId
+                    && existingAgreement.LeaseManagement.UnitId == target.UnitId
                 select new ScanConfirmationTargetWriteResult(
-                    agreement.Id, agreement.LeaseManagement.UnitId, nameof(LeaseAgreement)))
+                    existingAgreement.Id,
+                    existingAgreement.LeaseManagement.UnitId,
+                    nameof(LeaseAgreement)))
                 .SingleOrDefaultAsync(ct);
             if (existing is not null)
                 return existing;
