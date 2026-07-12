@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Authorization;
 
@@ -27,6 +28,9 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
                 _db.MembershipRoleAssignments.AsNoTracking(),
                 userId,
                 utcNow);
+        var effectiveAssignments = _db.MembershipRoleAssignments
+            .AsNoTracking()
+            .WhereEffective(utcNow);
 
         return await effectiveContexts
             .OrderBy(context => context.Portfolio!.Name)
@@ -36,7 +40,26 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
                 context.PortfolioId,
                 context.Portfolio!.Name,
                 context.AccessRevision,
-                context.Membership!.DefaultExperience,
+                effectiveAssignments
+                    .Where(assignment =>
+                        assignment.WorkspaceMembershipId == context.Membership!.Id &&
+                        assignment.PortfolioId == context.PortfolioId)
+                    .Select(assignment => assignment.RoleProfile!.DefaultExperience)
+                    .Distinct()
+                    .Contains(context.Membership!.DefaultExperience)
+                    ? context.Membership.DefaultExperience
+                    : effectiveAssignments
+                        .Where(assignment =>
+                            assignment.WorkspaceMembershipId == context.Membership!.Id &&
+                            assignment.PortfolioId == context.PortfolioId)
+                        .Select(assignment => assignment.RoleProfile!.DefaultExperience)
+                        .Distinct()
+                        .OrderBy(experience =>
+                            experience == WorkspaceExperience.Management ? 1 :
+                            experience == WorkspaceExperience.Leasing ? 2 :
+                            experience == WorkspaceExperience.Maintenance ? 3 :
+                            experience == WorkspaceExperience.Owner ? 4 : 5)
+                        .First(),
                 effectiveContexts.Count()))
             .ToListAsync(cancellationToken);
     }

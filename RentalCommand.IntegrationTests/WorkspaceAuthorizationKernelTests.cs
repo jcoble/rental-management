@@ -141,6 +141,31 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task ContextSelectionFallsBackToFirstAvailableExperienceWhenMembershipDefaultIsUnavailable()
+    {
+        SkipIfNoDocker();
+        await using var db = NewContext();
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var managementAssignment = await db.MembershipRoleAssignments
+            .SingleAsync(assignment =>
+                assignment.WorkspaceMembershipId == _membershipId &&
+                assignment.RoleProfileId == 2);
+        managementAssignment.Status = MembershipRoleAssignmentStatus.Suspended;
+        managementAssignment.SuspendedAtUtc = _now;
+        managementAssignment.UpdatedAtUtc = _now;
+        await db.SaveChangesAsync();
+
+        var option = (await new EffectiveAccessContextSelectionQuery(db)
+                .ListAsync(_userId, _now.AddMinutes(1)))
+            .Single(item => item.AccessContextId == _accessContextId);
+
+        option.DefaultExperience.Should().Be(
+            WorkspaceExperience.Leasing,
+            "the envelope SQL ordering chooses Leasing before Maintenance when Management is unavailable");
+        await transaction.RollbackAsync();
+    }
+
+    [SkippableFact]
     public async Task PropertyManagerHasOperationalMoneyButNotAdministrativeAuthority()
     {
         SkipIfNoDocker();
