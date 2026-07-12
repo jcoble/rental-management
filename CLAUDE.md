@@ -72,12 +72,12 @@ Live at **https://rentalcommand.net** on a small Hetzner box (`/opt/rental-comma
 - **NEVER build images on the VPS.** It's a 2-vCPU / 3.7 GB box — compiling there starves the
   live app. The prod compose has **no `build:` blocks**; the box only `docker compose pull`s
   GHCR images. Building belongs in CI.
-- **Deploys are CI-driven** via `.github/workflows/deploy.yml`: GitHub Actions builds
+- **Deploys are CI-driven** via `.github/workflows/deploy.yml`: GitHub-hosted Actions runners build
   `api`/`engine`/`web`, pushes them to `ghcr.io/jcoble/rentalcommand-*`, then SSHes in to pull +
   `up -d`. The web image bakes **`VITE_API_URL=/api/v1`** (the API mounts under `/api/v1/*`; the
   client appends bare paths — a bare `/api` 404s every browser call).
-- **Triggering a deploy** (it does NOT run on a plain push — that's CI/`ci.yml` only):
-  - Push a version tag → deploys that exact commit: `git tag vX.Y.Z && git push --tags`
+- **Triggering a deploy** (ordinary branch pushes and merges do not run this workflow):
+  - Push a version tag → deploys that exact commit: `git tag vX.Y.Z && git push origin vX.Y.Z`
   - Or **Actions ▸ Deploy ▸ Run workflow** (optionally paste a SHA/ref).
 - Deploy needs repo secrets `DEPLOY_SSH_KEY` (dedicated `rc-deploy` key, **not** the personal
   multi-machine key), `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`. Migrations self-apply

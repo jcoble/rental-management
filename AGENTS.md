@@ -18,6 +18,16 @@ Every user action that writes an aggregate or workflow must be all-or-nothing in
 - Every intentionally separate commit requires a unique idempotency/business key plus a documented recovery and reconciliation path.
 - When changing a write path, inspect every `SaveChanges`, transaction, audit, ledger, inbox, outbox, signature, and document boundary in that operation and add failure-injection proof for all-or-nothing behavior.
 
+## TypeScript 7 native compiler and Svelte compatibility
+
+The web app intentionally installs the Go-based TypeScript 7 compiler side-by-side with the TypeScript 6 compatibility package:
+
+- `@typescript/native` aliases TypeScript 7 and provides the native `tsc` binary used by `pnpm --dir web check:native`.
+- `typescript` aliases `@typescript/typescript6` because SvelteKit and `svelte-check` still require the JavaScript compiler API that TypeScript 7.0 does not expose.
+- Never replace the `typescript` compatibility alias with TypeScript 7 until Svelte officially supports the new API; doing so makes `svelte-check` crash before diagnostics run.
+- The native check supplements rather than replaces `pnpm --dir web check`: native `tsc` checks the generated TypeScript/JavaScript graph, while `svelte-check` also validates `.svelte` templates.
+- For web TypeScript changes, run both `pnpm --dir web check:native` and `pnpm --dir web check`.
+
 ## Worktrees (read before creating any worktree)
 
 Create git worktrees under a **single shared root**, one subfolder per repo, one

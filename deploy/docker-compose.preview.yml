@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: preview
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rentalcommand
+    volumes:
+      # The host path lives outside the disposable stack source/state directory.
+      # Container replacement, stop, and TTL cleanup therefore preserve preview data.
+      - ${PREVIEW_POSTGRES_DATA}:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U preview -d rentalcommand"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+    cpus: 1.0
+
+  api:
+    image: ${API_IMAGE}
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      Jwt__SecretKey: ${JWT_SECRET_KEY}
+      Jwt__Issuer: RentalCommandPreview
+      Jwt__Audience: RentalCommandWeb
+      Cors__AllowedOrigins__0: ${WEB_ORIGIN}
+      App__WebBaseUrl: ${WEB_ORIGIN}
+      Upload__BasePath: /var/lib/rentalcommand/uploads
+      DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
+      Assistant__ApiKey: ""
+      GooglePlaces__ApiKey: ""
+      Stripe__SecretKey: ""
+      Authentication__Google__ClientId: ""
+      Authentication__Google__ClientSecret: ""
+      Notifications__NotifyTenants: "false"
+    volumes:
+      - uploads:/var/lib/rentalcommand/uploads
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [edge, internal]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1g
+    cpus: 1.0
+
+  engine:
+    image: ${ENGINE_IMAGE}
+    restart: unless-stopped
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      Upload__BasePath: /var/lib/rentalcommand/uploads
+      DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
+      Assistant__ApiKey: ""
+      Stripe__SecretKey: ""
+      Notifications__NotifyTenants: "false"
+      Notifications__EnableRentCharges: "false"
+      Notifications__EnableLateFees: "false"
+      Notifications__EnableRecurringMaintenance: "false"
+      Notifications__SendGrid__ApiKey: ""
+      Notifications__Twilio__AuthToken: ""
+    volumes:
+      - uploads:/var/lib/rentalcommand/uploads
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [edge, internal]
+    mem_limit: 1g
+    cpus: 1.0
+
+  web:
+    image: ${WEB_IMAGE}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      ORIGIN: ${WEB_ORIGIN}
+      API_URL: http://api:8080
+      PUBLIC_GOOGLE_CLIENT_ID: ""
+    depends_on: [api]
+    networks: [edge]
+    mem_limit: 512m
+    cpus: 0.75
+
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # Bind only to the Tailscale interface; the preview is never public or
+      # reachable through the Azure VNet address.
+      - "${TAILSCALE_IP}:${PREVIEW_WEB_PORT}:8080"
+    volumes:
+      - ./preview-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_started }
+    networks: [edge]
+    mem_limit: 128m
+    cpus: 0.25
+
+networks:
+  edge:
+  internal:
+    internal: true
+
+volumes:
+  uploads:
+  dataprotection_keys:
