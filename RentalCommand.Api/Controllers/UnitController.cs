@@ -16,9 +16,9 @@ public class UnitController : ManagementControllerBase
 {
     private readonly IUnitService _service;
     private readonly IUnitDashboardService _dashboard;
-    private readonly IUnitListingService _listings;
+    private readonly IListingWorkspaceService _listings;
 
-    public UnitController(IUnitService service, IUnitDashboardService dashboard, IUnitListingService listings)
+    public UnitController(IUnitService service, IUnitDashboardService dashboard, IListingWorkspaceService listings)
     {
         _service = service;
         _dashboard = dashboard;
@@ -80,35 +80,53 @@ public class UnitController : ManagementControllerBase
         return dashboard == null ? NotFound(new { error = "Unit not found" }) : Ok(dashboard);
     }
 
-    [HttpGet("{id:int}/listing")]
-    [ProducesResponseType(typeof(UnitListingResponse), StatusCodes.Status200OK)]
+    [HttpGet("{id:int}/listing-workspace")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UnitListingResponse?>> GetListing(int id, CancellationToken ct)
+    public async Task<ActionResult<ListingWorkspaceResponse?>> GetListingWorkspace(int id, CancellationToken ct)
     {
         if (!await _listings.UnitExistsInPortfolioAsync(GetPortfolioId(), id, ct))
             return NotFound(new { error = "Unit not found" });
 
-        var listing = await _listings.GetForUnitAsync(GetPortfolioId(), id, ct);
+        var listing = await _listings.GetAsync(GetPortfolioId(), id, ct);
         return Ok(listing);
     }
 
-    [HttpPost("{id:int}/listing/generate")]
-    [ProducesResponseType(typeof(UnitListingResponse), StatusCodes.Status200OK)]
+    [HttpPost("{id:int}/listing-workspace/generate")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UnitListingResponse>> GenerateListing(int id, CancellationToken ct)
+    public async Task<ActionResult<ListingWorkspaceResponse>> GenerateListingWorkspace(int id, CancellationToken ct)
     {
-        var listing = await _listings.GenerateForUnitAsync(GetPortfolioId(), id, GetUserId(), ct);
+        var listing = await _listings.GenerateAsync(GetPortfolioId(), id, GetUserId(), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
 
-    [HttpPut("{id:int}/listing")]
-    [ProducesResponseType(typeof(UnitListingResponse), StatusCodes.Status200OK)]
+    [HttpPut("{id:int}/listing-workspace")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UnitListingResponse>> SaveListing(
-        int id, [FromBody] SaveUnitListingRequest request, CancellationToken ct)
+    public async Task<ActionResult<ListingWorkspaceResponse>> SaveListingWorkspace(
+        int id, [FromBody] SaveListingWorkspaceRequest request, CancellationToken ct)
     {
         var listing = await _listings.SaveAsync(GetPortfolioId(), id, request, GetUserId(), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
+    }
+
+    [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/signals")]
+    [ProducesResponseType(typeof(ExternalListingSignalResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ExternalListingSignalResponse>> IngestListingSignal(
+        int id, int publicationId, [FromBody] IngestExternalListingSignalRequest request, CancellationToken ct)
+    {
+        var signal = await _listings.IngestSignalAsync(GetPortfolioId(), id, publicationId, request, ct);
+        return signal is null ? NotFound(new { error = "Listing publication not found" }) : Ok(signal);
+    }
+
+    [HttpPost("{id:int}/listing-workspace/signals/{signalId:int}/confirm")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListingWorkspaceResponse>> ConfirmListingSignal(
+        int id, int signalId, [FromQuery] bool accept = true, CancellationToken ct = default)
+    {
+        var workspace = await _listings.ConfirmSignalAsync(GetPortfolioId(), id, signalId, accept, GetUserId(), ct);
+        return workspace is null ? NotFound(new { error = "Listing signal not found" }) : Ok(workspace);
     }
 
     /// <summary>

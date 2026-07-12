@@ -46,7 +46,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<OwnerDistribution> OwnerDistributions => Set<OwnerDistribution>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
-    public DbSet<UnitListing> UnitListings => Set<UnitListing>();
+    public DbSet<RentalListing> RentalListings => Set<RentalListing>();
+    public DbSet<ListingPhoto> ListingPhotos => Set<ListingPhoto>();
+    public DbSet<ListingPublication> ListingPublications => Set<ListingPublication>();
+    public DbSet<ExternalListingSignal> ExternalListingSignals => Set<ExternalListingSignal>();
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Lease> Leases => Set<Lease>();
     public DbSet<LeaseTenant> LeaseTenants => Set<LeaseTenant>();
@@ -989,10 +992,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
-        modelBuilder.Entity<UnitListing>(entity =>
+        modelBuilder.Entity<RentalListing>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Channel).HasConversion<string>().HasMaxLength(40);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.Headline).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Description).IsRequired().HasMaxLength(4000);
@@ -1005,27 +1008,82 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Utilities).HasMaxLength(1000);
             entity.Property(e => e.Parking).HasMaxLength(1000);
             entity.Property(e => e.Amenities).HasMaxLength(2000);
-            entity.Property(e => e.PhotoNotes).HasMaxLength(2000);
-            entity.Property(e => e.ZillowListingUrl).HasMaxLength(1000);
-            entity.Property(e => e.ZillowApplicationUrl).HasMaxLength(1000);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
-            entity.HasIndex(e => new { e.PortfolioId, e.UnitId, e.Channel })
+            entity.HasIndex(e => new { e.PortfolioId, e.UnitId })
                 .IsUnique()
                 .HasFilter("\"DeletedAt\" IS NULL");
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Property)
-                .WithMany()
-                .HasForeignKey(e => e.PropertyId)
-                .OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Unit)
-                .WithMany(u => u.UnitListings)
-                .HasForeignKey(e => e.UnitId)
+                .WithMany(u => u.RentalListings)
+                .HasForeignKey(e => new { e.UnitId, e.PropertyId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PropertyId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ListingPhoto>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Category).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Caption).HasMaxLength(300);
+            entity.Property(e => e.FileName).HasMaxLength(260);
+            entity.Property(e => e.Sha256).HasMaxLength(64);
+            entity.HasIndex(e => new { e.RentalListingId, e.Position }).IsUnique();
+            entity.HasOne(e => e.RentalListing)
+                .WithMany(e => e.Photos)
+                .HasForeignKey(e => new { e.RentalListingId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.StoredFile)
+                .WithMany()
+                .HasForeignKey(e => new { Id = e.StoredFileId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ListingPublication>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.ProviderKey).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Mode).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.ExternalListingId).HasMaxLength(200);
+            entity.Property(e => e.ListingUrl).HasMaxLength(1000);
+            entity.Property(e => e.ApplicationUrl).HasMaxLength(1000);
+            entity.Property(e => e.ManagementUrl).HasMaxLength(1000);
+            entity.Property(e => e.LastConfirmedExternalStatus).HasMaxLength(120);
+            entity.Property(e => e.LastDeliveryKey).HasMaxLength(200);
+            entity.Property(e => e.LastDeliveryStatus).HasMaxLength(80);
+            entity.Property(e => e.LastDeliveryError).HasMaxLength(2000);
+            entity.HasIndex(e => new { e.RentalListingId, e.ProviderKey, e.Mode }).IsUnique();
+            entity.HasOne(e => e.RentalListing)
+                .WithMany(e => e.Publications)
+                .HasForeignKey(e => new { e.RentalListingId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ExternalListingSignal>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ProviderMessageKey).IsRequired().HasMaxLength(300);
+            entity.Property(e => e.SignalType).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.SuggestedExternalListingId).HasMaxLength(200);
+            entity.Property(e => e.SuggestedListingUrl).HasMaxLength(1000);
+            entity.Property(e => e.SuggestedExternalStatus).HasMaxLength(120);
+            entity.Property(e => e.Disposition).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => new { e.PortfolioId, e.ProviderMessageKey }).IsUnique();
+            entity.HasIndex(e => new { e.ListingPublicationId, e.Disposition, e.ReceivedAtUtc });
+            entity.HasOne(e => e.ListingPublication)
+                .WithMany(e => e.ExternalSignals)
+                .HasForeignKey(e => new { e.ListingPublicationId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

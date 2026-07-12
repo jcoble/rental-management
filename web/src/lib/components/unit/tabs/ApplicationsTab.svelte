@@ -8,7 +8,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import {
 		buildApplicationLinkUrl,
-		type UnitListingLinkContext,
+		type RentalListingLinkContext,
 	} from '$lib/applications/application-link';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
@@ -74,7 +74,7 @@
 	let copied = $state(false);
 
 	const linkMutation = createMutation(() => ({
-		mutationFn: async (context: UnitListingLinkContext) => ({
+		mutationFn: async (context: RentalListingLinkContext) => ({
 			result: await applications.createLink(),
 			context,
 		}),
