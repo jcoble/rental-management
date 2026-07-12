@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
@@ -293,6 +294,19 @@ public class ApplicationsController : ManagementControllerBase
         {
             return Forbid();
         }
+    }
+
+    private bool TryReadAccessClaims(
+        out Guid sessionId,
+        out int accessContextId,
+        out long accessRevision)
+    {
+        sessionId = default;
+        accessContextId = default;
+        accessRevision = default;
+        return Guid.TryParse(User.FindFirstValue("sid"), out sessionId)
+            && int.TryParse(User.FindFirstValue("ctx"), out accessContextId)
+            && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
     }
 
     /// <summary>
