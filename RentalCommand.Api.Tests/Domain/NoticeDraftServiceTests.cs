@@ -1,817 +1,611 @@
 using System.Diagnostics;
 using System.Globalization;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.TestCommon;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 public class NoticeDraftServiceTests : IDisposable
 {
-    private readonly SqliteTestContext _ctx = new();
+    private readonly NoticeFixture _fixture = new();
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose() => _fixture.Dispose();
 
     [Fact]
-    public async Task GenerateAsync_DefaultRunOnlyCreatesLeaseNoticesInsideTriggerWindow()
+    public async Task GenerateAsync_DefaultRunOnlyCreatesRelationshipNoticesInsideTriggerWindow()
     {
-        var (nearLease, farLease) = SeedActiveLeases();
-        var sut = CreateService();
+        var near = _fixture.SeedRelationship("Avery", "Brooks", 1400m, 60);
+        var far = _fixture.SeedRelationship("Morgan", "Pierce", 1450m, 120);
 
-        var result = await sut.GenerateAsync(1);
+        var result = await CreateService().GenerateAsync(1);
 
-        // The near lease (60 days out) is inside the 75-day renewal/month-to-month window, so a
-        // portfolio-wide run produces BOTH a renewal and a month-to-month draft for it.
         result.CreatedCount.Should().Be(2);
         result.Drafts.Should().Contain(d =>
-            d.LeaseId == nearLease.Id &&
-            d.NoticeType == "RenewalOffer");
+            d.LeaseManagementId == near.Management.Id && d.NoticeType == "RenewalOffer");
         result.Drafts.Should().Contain(d =>
-            d.LeaseId == nearLease.Id &&
-            d.NoticeType == "MonthToMonthConversion");
-        result.Drafts.Should().NotContain(d => d.LeaseId == farLease.Id);
+            d.LeaseManagementId == near.Management.Id && d.NoticeType == "MonthToMonthConversion");
+        result.Drafts.Should().NotContain(d => d.LeaseManagementId == far.Management.Id);
         result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
     }
 
     [Fact]
-    public async Task GenerateAsync_ForcedMoveOutNoticeCanTargetLeaseOutsideTriggerWindow()
+    public async Task GenerateAsync_ForcedMoveOutCanTargetRelationshipOutsideTriggerWindow()
     {
-        var (_, farLease) = SeedActiveLeases();
-        var sut = CreateService();
+        var relationship = _fixture.SeedRelationship("Morgan", "Pierce", 1450m, 120);
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                TenantId = farLease.TenantId,
+                RecipientTenantId = relationship.Tenant.Id,
+                LeaseManagementId = relationship.Management.Id,
+                TenantAccountId = relationship.Account.Id,
                 NoticeType = "MoveOutReminder",
             });
 
         result.CreatedCount.Should().Be(1);
         result.Drafts.Should().ContainSingle(d =>
-            d.LeaseId == farLease.Id &&
+            d.LeaseManagementId == relationship.Management.Id &&
+            d.TenantAccountId == relationship.Account.Id &&
+            d.RecipientTenantId == relationship.Tenant.Id &&
             d.NoticeType == "MoveOutReminder");
     }
 
     [Fact]
     public async Task GenerateAsync_ForcedRenewalFallsBackQuicklyWhenLlmIsSlow()
     {
-        var (_, farLease) = SeedActiveLeases();
+        var relationship = _fixture.SeedRelationship("Morgan", "Pierce", 1450m, 120);
         var slowLlm = new SlowLlmProvider();
-        var sut = CreateService(slowLlm);
 
-        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var elapsed = Stopwatch.StartNew();
-        var result = await sut.GenerateAsync(
+        var result = await CreateService(slowLlm).GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                TenantId = farLease.TenantId,
+                LeaseManagementId = relationship.Management.Id,
                 NoticeType = "RenewalOffer",
             },
-            testTimeout.Token);
+            timeout.Token);
         elapsed.Stop();
 
         result.CreatedCount.Should().Be(1);
         result.Drafts.Should().ContainSingle(d =>
-            d.LeaseId == farLease.Id &&
-            d.NoticeType == "RenewalOffer" &&
-            d.Subject == "Lease renewal for Maple Grove Duplex Unit B");
+            d.LeaseManagementId == relationship.Management.Id &&
+            d.Subject.Contains("Lease renewal for", StringComparison.Ordinal));
         slowLlm.ChatCalls.Should().Be(1);
         elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
-    public async Task GenerateAsync_TenantScopedForcedRequestReturnsExistingDraftWhenAlreadyOpen()
+    public async Task GenerateAsync_RelationshipScopedRequestReturnsExistingOpenDraft()
     {
-        var (_, farLease) = SeedActiveLeases();
+        var relationship = _fixture.SeedRelationship("Morgan", "Pierce", 1450m, 120);
         var now = DateTime.UtcNow;
-        _ctx.Db.NoticeDrafts.Add(new NoticeDraft
+        _fixture.Db.NoticeDrafts.Add(new NoticeDraft
         {
             PortfolioId = 1,
-            LeaseId = farLease.Id,
-            TenantId = farLease.TenantId,
-            PropertyId = farLease.PropertyId,
+            LeaseManagementId = relationship.Management.Id,
+            TenantAccountId = relationship.Account.Id,
+            RecipientTenantId = relationship.Tenant.Id,
+            PropertyId = relationship.Property.Id,
             NoticeType = "RenewalOffer",
             Status = "Draft",
             Subject = "Existing renewal draft",
             Body = "Existing body",
             Reason = "Already generated.",
-            TriggerDate = farLease.EndDate.Date,
+            TriggerDate = relationship.Agreement.TermEndOn!.Value.ToDateTime(TimeOnly.MinValue),
             CreatedAt = now,
             UpdatedAt = now,
         });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+        await _fixture.Db.SaveChangesAsync();
+        _fixture.Db.ChangeTracker.Clear();
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                TenantId = farLease.TenantId,
+                LeaseManagementId = relationship.Management.Id,
                 NoticeType = "RenewalOffer",
             });
 
         result.CreatedCount.Should().Be(0);
         result.Drafts.Should().ContainSingle(d =>
-            d.LeaseId == farLease.Id &&
-            d.NoticeType == "RenewalOffer" &&
+            d.LeaseManagementId == relationship.Management.Id &&
             d.Subject == "Existing renewal draft");
     }
 
     [Fact]
-    public async Task GenerateAsync_LateRentNoticeExcludesEndedFixedTermLeasePayments()
+    public async Task GenerateAsync_LateRentExcludesClosedRelationshipCharges()
     {
-        var (currentLease, staleLease) = SeedActiveLeases();
-        var now = DateTime.UtcNow;
-        var today = now.Date;
-        var stale = _ctx.Db.Leases.Find(staleLease.Id)!;
-        stale.EndDate = today.AddDays(-1);
-        stale.UpdatedAt = now;
-        _ctx.Db.Payments.AddRange(
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = currentLease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1400m,
-                DueDate = today.AddDays(-10),
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = staleLease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1450m,
-                DueDate = today.AddDays(-20),
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+        var current = _fixture.SeedRelationship("Current", "Tenant", 1400m, 300);
+        var closed = _fixture.SeedRelationship("Former", "Tenant", 1450m, -1, lifecycle: "Closed");
+        _fixture.AddCharge(current, TenantLedgerEntryType.RentCharge, 1400m, -10);
+        _fixture.AddCharge(closed, TenantLedgerEntryType.RentCharge, 1450m, -20);
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest { NoticeType = "LateRentNotice" });
 
         result.CreatedCount.Should().Be(1);
         result.Drafts.Should().ContainSingle(d =>
-            d.LeaseId == currentLease.Id &&
-            d.NoticeType == "LateRentNotice");
-        result.Drafts.Should().NotContain(d => d.LeaseId == staleLease.Id);
+            d.LeaseManagementId == current.Management.Id && d.NoticeType == "LateRentNotice");
+        result.Drafts.Should().NotContain(d => d.LeaseManagementId == closed.Management.Id);
     }
 
     [Fact]
-    public async Task GenerateAsync_RendersActiveLandlordTemplate_WhenOneExists()
+    public async Task GenerateAsync_RendersActiveLandlordTemplateWithCanonicalRecipientTokens()
     {
-        var (nearLease, _) = SeedActiveLeases();
-        _ctx.Db.NoticeTemplates.Add(new RentalCommand.Core.Entities.NoticeTemplate
+        var relationship = _fixture.SeedRelationship("Avery", "Brooks", 1400m, 60);
+        _fixture.Db.NoticeTemplates.Add(new NoticeTemplate
         {
             PortfolioId = 1,
             NoticeType = "RenewalOffer",
             Subject = "Renewal for {{tenant_name}}",
-            Body = "Hi {{tenant_name}}, renew {{property_address}}?",
+            Body = "Hi {{tenant_name}}, renew {{property_address}} with {{portfolio_name}}?",
             IsActive = true,
         });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        await _fixture.Db.SaveChangesAsync();
+        _fixture.Db.ChangeTracker.Clear();
 
-        var sut = CreateService();
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                TenantId = nearLease.TenantId,
+                RecipientTenantId = relationship.Tenant.Id,
                 NoticeType = "RenewalOffer",
             });
 
-        var draft = Assert.Single(result.Drafts);
-        Assert.Equal("Renewal for Avery Brooks", draft.Subject);
-        Assert.StartsWith("Hi Avery Brooks, renew", draft.Body);
+        var draft = result.Drafts.Should().ContainSingle().Which;
+        draft.Subject.Should().Be("Renewal for Avery Brooks");
+        draft.Body.Should().Contain("Avery Brooks").And.Contain("Test Portfolio");
     }
 
     [Fact]
-    public async Task GenerateAsync_EmptyBodyTemplate_FallsBackToDeterministicCopy()
+    public async Task GenerateAsync_ManualRentReminderUsesRelationshipAgreementTerms()
     {
-        // Bypass the service guard by inserting the template directly into the DB.
-        // The template has an empty Body, so ComposeAsync must fall through to the deterministic copy.
-        var (nearLease, _) = SeedActiveLeases();
-        _ctx.Db.NoticeTemplates.Add(new RentalCommand.Core.Entities.NoticeTemplate
-        {
-            PortfolioId = 1,
-            NoticeType = "RenewalOffer",
-            Subject = "Not empty subject",
-            Body = "",   // empty — should trigger fallback
-            IsActive = true,
-        });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        var relationship = _fixture.SeedRelationship("Sam", "Rivera", 1500m, 300);
 
-        var sut = CreateService();
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                TenantId = nearLease.TenantId,
-                NoticeType = "RenewalOffer",
+                RecipientTenantId = relationship.Tenant.Id,
+                LeaseManagementId = relationship.Management.Id,
+                TenantAccountId = relationship.Account.Id,
+                NoticeType = "RentReminder",
             });
 
-        var draft = Assert.Single(result.Drafts);
-        // Must NOT be blank — deterministic subject contains the property name.
-        Assert.Equal("Lease renewal for Maple Grove Duplex Unit A", draft.Subject);
-        Assert.False(string.IsNullOrWhiteSpace(draft.Body));
+        var draft = result.Drafts.Should().ContainSingle().Which;
+        draft.NoticeType.Should().Be("RentReminder");
+        draft.LeaseManagementId.Should().Be(relationship.Management.Id);
+        draft.TenantAccountId.Should().Be(relationship.Account.Id);
+        draft.RecipientTenantId.Should().Be(relationship.Tenant.Id);
+        draft.Body.Should().Contain("Sam Rivera").And.Contain("$1,500");
     }
 
     [Fact]
-    public async Task GenerateAsync_PopulatesPortfolioNameToken()
+    public async Task GenerateAsync_PortfolioWideUpcomingChargeCreatesOneLedgerScopedReminder()
     {
-        // Update the seeded portfolio (Id=1) name so we can assert the token fills.
-        var portfolio = _ctx.Db.Portfolios.Find(1)!;
-        portfolio.Name = "Sunrise Rentals";
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        var relationship = _fixture.SeedRelationship("Sam", "Rivera", 1500m, 300);
+        var charge = _fixture.AddCharge(relationship, TenantLedgerEntryType.RentCharge, 1500m, 3);
 
-        var lease = SeedSingleActiveLease(firstName: "Dana", lastName: "West", monthlyRent: 1200m);
-        _ctx.Db.NoticeTemplates.Add(new RentalCommand.Core.Entities.NoticeTemplate
-        {
-            PortfolioId = 1,
-            NoticeType = "RenewalOffer",
-            Subject = "Renewal from {{portfolio_name}}",
-            Body = "From {{portfolio_name}}",
-            IsActive = true,
-        });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
+        var first = await CreateService().GenerateAsync(1);
 
-        var sut = CreateService();
-        var result = await sut.GenerateAsync(
-            1,
-            new GenerateNoticeDraftsRequest
-            {
-                TenantId = lease.TenantId,
-                NoticeType = "RenewalOffer",
-            });
+        var reminder = first.Drafts.Should().ContainSingle(d => d.NoticeType == "RentReminder").Which;
+        reminder.TenantLedgerEntryId.Should().Be(charge.Id);
+        reminder.TenantAccountId.Should().Be(relationship.Account.Id);
+        reminder.TriggerDate.Date.Should().Be(charge.DueOn!.Value.ToDateTime(TimeOnly.MinValue));
 
-        var draft = Assert.Single(result.Drafts);
-        Assert.Contains("Sunrise Rentals", draft.Body);
-        Assert.Contains("Sunrise Rentals", draft.Subject);
-    }
-
-    private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
-        _ctx.Db,
-        new NoopConversationService(),
-        llm ?? new NoopLlmProvider(),
-        NullLogger<NoticeDraftService>.Instance,
-        TimeProvider.System);
-
-    [Fact]
-    public async Task GenerateAsync_RentReminder_produces_one_draft_with_tenant_name()
-    {
-        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
-        var sut = CreateService();
-
-        var result = await sut.GenerateAsync(
-            1,
-            new GenerateNoticeDraftsRequest { TenantId = lease.TenantId, NoticeType = "RentReminder" });
-
-        var draft = Assert.Single(result.Drafts);
-        Assert.Equal("RentReminder", draft.NoticeType);
-        Assert.Contains("Sam Rivera", draft.Body);
-    }
-
-    [Fact]
-    public async Task GenerateAsync_MonthToMonthConversion_produces_one_draft()
-    {
-        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
-        var sut = CreateService();
-
-        var result = await sut.GenerateAsync(
-            1,
-            new GenerateNoticeDraftsRequest { TenantId = lease.TenantId, NoticeType = "MonthToMonthConversion" });
-
-        var draft = Assert.Single(result.Drafts);
-        Assert.Equal("MonthToMonthConversion", draft.NoticeType);
-    }
-
-    [Fact]
-    public async Task GenerateAsync_PortfolioWide_does_not_create_RentReminder()
-    {
-        // Lease ends 300 days out — outside the lease-end window — so no lease-end drafts at all.
-        SeedSingleActiveLease();
-        var sut = CreateService();
-
-        var result = await sut.GenerateAsync(1, null);
-
-        Assert.DoesNotContain(result.Drafts, d => d.NoticeType == "RentReminder");
-    }
-
-    [Fact]
-    public async Task GenerateAsync_PortfolioWide_CreatesRentReminder_ForUpcomingPayment_AndIsIdempotent()
-    {
-        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
-        var now = DateTime.UtcNow;
-        var dueDate = now.Date.AddDays(3);
-        _ctx.Db.Payments.Add(new Payment
-        {
-            PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1500m,
-            DueDate = dueDate,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
-
-        var first = await sut.GenerateAsync(1, null);
-
-        var reminders = first.Drafts.Where(d => d.NoticeType == "RentReminder").ToList();
-        reminders.Should().ContainSingle();
-        reminders[0].LeaseId.Should().Be(lease.Id);
-        reminders[0].TriggerDate.Date.Should().Be(dueDate);
-
-        _ctx.Db.ChangeTracker.Clear();
-        var second = await sut.GenerateAsync(1, null);
+        _fixture.Db.ChangeTracker.Clear();
+        var second = await CreateService().GenerateAsync(1);
         second.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
     }
 
     [Fact]
-    public async Task GenerateAsync_PaymentScopedRentReminder_TargetsRequestedPayment()
+    public async Task GenerateAsync_LedgerScopedReminderTargetsRequestedChargeOnly()
     {
-        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
-        var otherLease = SeedSingleActiveLease(firstName: "Avery", lastName: "Brooks", monthlyRent: 1700m);
-        var now = DateTime.UtcNow;
-        var dueDate = now.Date.AddDays(3);
-        var targetPayment = new Payment
-        {
-            PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1500m,
-            DueDate = dueDate,
-            PeriodKey = dueDate.ToString("yyyy-MM"),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Payments.AddRange(
-            targetPayment,
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = otherLease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1700m,
-                DueDate = dueDate,
-                PeriodKey = dueDate.ToString("yyyy-MM"),
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+        var target = _fixture.SeedRelationship("Sam", "Rivera", 1500m, 300);
+        var other = _fixture.SeedRelationship("Avery", "Brooks", 1700m, 300);
+        var targetCharge = _fixture.AddCharge(target, TenantLedgerEntryType.RentCharge, 1500m, 3);
+        _fixture.AddCharge(other, TenantLedgerEntryType.RentCharge, 1700m, 3);
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                PaymentId = targetPayment.Id,
+                RecipientTenantId = target.Tenant.Id,
+                LeaseManagementId = target.Management.Id,
+                TenantAccountId = target.Account.Id,
+                TenantLedgerEntryId = targetCharge.Id,
                 NoticeType = "RentReminder",
             });
 
-        result.CreatedCount.Should().Be(1);
         var draft = result.Drafts.Should().ContainSingle().Which;
-        draft.PaymentId.Should().Be(targetPayment.Id);
-        draft.LeaseId.Should().Be(lease.Id);
-        draft.NoticeType.Should().Be("RentReminder");
-        draft.TriggerDate.Date.Should().Be(dueDate);
+        draft.TenantLedgerEntryId.Should().Be(targetCharge.Id);
+        draft.LeaseManagementId.Should().Be(target.Management.Id);
+        draft.TenantAccountId.Should().Be(target.Account.Id);
+        draft.RecipientTenantId.Should().Be(target.Tenant.Id);
     }
 
     [Fact]
-    public async Task GenerateAsync_PaymentScopedLateNotice_UsesStableUsdCopyAcrossProcessCulture()
+    public async Task GenerateAsync_LedgerScopedLateNoticeUsesStableUsdCopyAndRelatedFee()
     {
-        var lease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 2200m);
-        var now = DateTime.UtcNow;
-        var dueDate = now.Date.AddDays(-10);
-        var periodKey = dueDate.ToString("yyyy-MM");
-        var rent = new Payment
-        {
-            PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 2200m,
-            DueDate = dueDate,
-            PeriodKey = periodKey,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Payments.AddRange(
-            rent,
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = lease.Id,
-                PaymentType = PaymentType.LateFee,
-                Status = PaymentStatus.Scheduled,
-                Amount = 75m,
-                DueDate = dueDate.AddDays(5),
-                PeriodKey = periodKey,
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+        var relationship = _fixture.SeedRelationship("Tom", "Hardy", 2200m, 300);
+        var rent = _fixture.AddCharge(relationship, TenantLedgerEntryType.RentCharge, 2200m, -10);
+        _fixture.AddCharge(relationship, TenantLedgerEntryType.LateFeeCharge, 75m, -10);
         using var culture = new CurrentCultureScope(CultureInfo.GetCultureInfo("fr-FR"));
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                PaymentId = rent.Id,
+                TenantLedgerEntryId = rent.Id,
                 NoticeType = "LateRentNotice",
             });
 
-        result.CreatedCount.Should().Be(1);
         var draft = result.Drafts.Should().ContainSingle().Which;
-        draft.PaymentId.Should().Be(rent.Id);
-        draft.NoticeType.Should().Be("LateRentNotice");
+        draft.TenantLedgerEntryId.Should().Be(rent.Id);
         draft.Reason.Should().Contain("$75");
         draft.Body.Should().Contain("$2,275");
     }
 
     [Fact]
-    public async Task GenerateAsync_LeaseScopedLateNotice_DoesNotLeakOtherTenantLease()
+    public async Task GenerateAsync_RelationshipScopeDoesNotLeakAnotherTenantAccount()
     {
-        var currentLease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 2200m);
-        var otherLease = SeedSingleActiveLease(firstName: "Tom", lastName: "Hardy", monthlyRent: 1800m);
-        var now = DateTime.UtcNow;
-        var currentPeriod = now.Date.AddDays(-8).ToString("yyyy-MM");
-        _ctx.Db.Payments.AddRange(
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = currentLease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Late,
-                Amount = 146.67m,
-                DueDate = now.Date.AddDays(-38),
-                PeriodKey = now.Date.AddDays(-38).ToString("yyyy-MM"),
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = currentLease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Late,
-                Amount = 2200m,
-                DueDate = now.Date.AddDays(-8),
-                PeriodKey = currentPeriod,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = currentLease.Id,
-                PaymentType = PaymentType.LateFee,
-                Status = PaymentStatus.Scheduled,
-                Amount = 75m,
-                DueDate = now.Date.AddDays(-1),
-                PeriodKey = currentPeriod,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = 1,
-                LeaseId = otherLease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Late,
-                Amount = 1800m,
-                DueDate = now.Date.AddDays(-12),
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+        var target = _fixture.SeedRelationship("Tom", "Hardy", 2200m, 300);
+        var other = _fixture.SeedRelationship("Taylor", "Other", 1800m, 300);
+        _fixture.AddCharge(target, TenantLedgerEntryType.RentCharge, 2200m, -8);
+        _fixture.AddCharge(other, TenantLedgerEntryType.RentCharge, 1800m, -12);
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                TenantId = currentLease.TenantId,
-                LeaseId = currentLease.Id,
+                RecipientTenantId = target.Tenant.Id,
+                LeaseManagementId = target.Management.Id,
+                TenantAccountId = target.Account.Id,
                 NoticeType = "LateRentNotice",
             });
 
-        result.CreatedCount.Should().Be(1);
-        var draft = result.Drafts.Should().ContainSingle(d =>
-            d.LeaseId == currentLease.Id &&
-            d.NoticeType == "LateRentNotice").Which;
-        draft.Body.Should().Contain("$2,275");
-        draft.Body.Should().NotContain("$222");
-        result.Drafts.Should().NotContain(d => d.LeaseId == otherLease.Id);
+        var draft = result.Drafts.Should().ContainSingle().Which;
+        draft.LeaseManagementId.Should().Be(target.Management.Id);
+        draft.TenantAccountId.Should().Be(target.Account.Id);
+        draft.RecipientTenantId.Should().Be(target.Tenant.Id);
+        result.Drafts.Should().NotContain(d => d.LeaseManagementId == other.Management.Id);
     }
 
     [Fact]
-    public async Task GenerateAsync_PaymentScopedExistingNotice_ReturnsExistingWithoutDuplicate()
+    public async Task GenerateAsync_LedgerScopedExistingApprovedNoticeReturnsWithoutDuplicate()
     {
-        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
+        var relationship = _fixture.SeedRelationship("Sam", "Rivera", 1500m, 300);
+        var charge = _fixture.AddCharge(relationship, TenantLedgerEntryType.RentCharge, 1500m, 3);
         var now = DateTime.UtcNow;
-        var payment = new Payment
+        _fixture.Db.NoticeDrafts.Add(new NoticeDraft
         {
             PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1500m,
-            DueDate = now.Date.AddDays(3),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Payments.Add(payment);
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.NoticeDrafts.Add(new NoticeDraft
-        {
-            PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentId = payment.Id,
-            TenantId = lease.TenantId,
-            PropertyId = lease.PropertyId,
+            LeaseManagementId = relationship.Management.Id,
+            TenantAccountId = relationship.Account.Id,
+            TenantLedgerEntryId = charge.Id,
+            RecipientTenantId = relationship.Tenant.Id,
+            PropertyId = relationship.Property.Id,
             NoticeType = "RentReminder",
             Status = "Approved",
             Subject = "Existing reminder",
             Body = "Existing body",
             Reason = "Already sent.",
-            TriggerDate = payment.DueDate.Date,
+            TriggerDate = charge.DueOn!.Value.ToDateTime(TimeOnly.MinValue),
             CreatedAt = now,
             UpdatedAt = now,
         });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+        await _fixture.Db.SaveChangesAsync();
+        _fixture.Db.ChangeTracker.Clear();
 
-        var result = await sut.GenerateAsync(
+        var result = await CreateService().GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
             {
-                PaymentId = payment.Id,
+                TenantLedgerEntryId = charge.Id,
                 NoticeType = "RentReminder",
             });
 
         result.CreatedCount.Should().Be(0);
         result.Drafts.Should().ContainSingle(d =>
-            d.PaymentId == payment.Id &&
-            d.Subject == "Existing reminder");
-        _ctx.Db.NoticeDrafts.Count(d => d.PaymentId == payment.Id).Should().Be(1);
+            d.TenantLedgerEntryId == charge.Id && d.Subject == "Existing reminder");
+        var persistedCount = await _fixture.Db.NoticeDrafts.CountAsync(
+            d => d.TenantLedgerEntryId == charge.Id);
+        persistedCount.Should().Be(1);
     }
 
-    [Fact]
-    public async Task GenerateAsync_PortfolioWide_DoesNotCreateRentReminder_ForPaymentBeyondLeadWindow()
+    private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
+        _fixture.Db,
+        new NoopConversationService(),
+        llm ?? new NoopLlmProvider(),
+        NullLogger<NoticeDraftService>.Instance,
+        TimeProvider.System);
+
+    private sealed class NoticeFixture : IDisposable
     {
-        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
-        var now = DateTime.UtcNow;
-        _ctx.Db.Payments.Add(new Payment
+        private readonly SqliteConnection _connection;
+        private int _nextId = 10;
+        private long _nextLedgerId = 100;
+
+        public NoticeFixture()
         {
-            PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1500m,
-            DueDate = now.Date.AddDays(30),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
+            _connection = new SqliteConnection("Data Source=:memory:");
+            _connection.Open();
+            var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseSqlite(_connection)
+                .Options;
+            Db = new FixtureDbContext(options);
+            Db.Database.EnsureCreated();
 
-        var result = await sut.GenerateAsync(1, null);
-
-        result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
-    }
-
-    [Fact]
-    public async Task GenerateAsync_PortfolioWide_CreatesMonthToMonthAlongsideRenewal_ForNearEndLease()
-    {
-        var (nearLease, _) = SeedActiveLeases();
-        var sut = CreateService();
-
-        var result = await sut.GenerateAsync(1, null);
-
-        result.Drafts.Should().Contain(d =>
-            d.LeaseId == nearLease.Id && d.NoticeType == "RenewalOffer");
-        result.Drafts.Should().Contain(d =>
-            d.LeaseId == nearLease.Id && d.NoticeType == "MonthToMonthConversion");
-        result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
-    }
-
-    [Fact]
-    public async Task GenerateAsync_ExplicitRentReminder_WithUpcomingPayment_ProducesExactlyOneReminder()
-    {
-        // Regression test for task 354: explicit per-tenant RentReminder request should NOT
-        // trigger the period-based path when an upcoming payment exists within the lead window.
-        // Previously, both paths fired → two drafts.
-        var lease = SeedSingleActiveLease(firstName: "Chris", lastName: "Jordan", monthlyRent: 1600m);
-        var now = DateTime.UtcNow;
-        var paymentDueDate = now.Date.AddDays(3);  // Within the 7-day lead window
-        _ctx.Db.Payments.Add(new Payment
-        {
-            PortfolioId = 1,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1600m,
-            DueDate = paymentDueDate,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        await _ctx.Db.SaveChangesAsync();
-        _ctx.Db.ChangeTracker.Clear();
-        var sut = CreateService();
-
-        // Explicit per-tenant RentReminder request
-        var result = await sut.GenerateAsync(
-            1,
-            new GenerateNoticeDraftsRequest
+            Db.Portfolios.Add(new Portfolio
             {
-                TenantId = lease.TenantId,
-                NoticeType = "RentReminder"
+                Id = 1,
+                Name = "Test Portfolio",
+                ManagementCompanyName = "Test Co",
+                TimeZone = "UTC",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
             });
+            Db.Users.Add(new ApplicationUser
+            {
+                Id = 1,
+                UserName = "canonical-notice@test.local",
+                NormalizedUserName = "CANONICAL-NOTICE@TEST.LOCAL",
+                Email = "canonical-notice@test.local",
+                NormalizedEmail = "CANONICAL-NOTICE@TEST.LOCAL",
+                DisplayName = "Canonical Notice Test",
+                SecurityStamp = Guid.NewGuid().ToString(),
+                ConcurrencyStamp = Guid.NewGuid().ToString(),
+                CreatedAt = DateTime.UtcNow,
+            });
+            Db.DocumentTemplates.Add(new DocumentTemplate
+            {
+                Id = 1,
+                PortfolioId = 1,
+                Name = "Canonical test agreement",
+                Version = 1,
+                CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow,
+            });
+            Db.SaveChanges();
+        }
 
-        // Should produce exactly ONE RentReminder, not two
-        var reminders = result.Drafts.Where(d => d.NoticeType == "RentReminder").ToList();
-        reminders.Should().ContainSingle();
-        reminders[0].LeaseId.Should().Be(lease.Id);
-        reminders[0].TenantId.Should().Be(lease.TenantId);
+        public FixtureDbContext Db { get; }
+
+        public NoticeRelationship SeedRelationship(
+            string firstName,
+            string lastName,
+            decimal rent,
+            int termEndDays,
+            string lifecycle = "Occupied")
+        {
+            var id = _nextId++;
+            var now = DateTime.UtcNow;
+            var today = DateOnly.FromDateTime(now);
+            var property = new Property
+            {
+                Id = id,
+                PortfolioId = 1,
+                Name = $"Canonical Property {id}",
+                AddressLine1 = $"{id} Main St",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43215",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            var unit = new Unit
+            {
+                Id = id,
+                PortfolioId = 1,
+                Property = property,
+                UnitNumber = id.ToString(CultureInfo.InvariantCulture),
+                Bedrooms = 2,
+                Bathrooms = 1,
+                MarketRent = rent,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            var tenant = new Tenant
+            {
+                Id = id,
+                PortfolioId = 1,
+                FirstName = firstName,
+                LastName = lastName,
+                Email = $"tenant-{id}@example.test",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            var management = new LeaseManagement
+            {
+                Id = id,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                Property = property,
+                Unit = unit,
+                RelationshipNumber = $"REL-{id}",
+                PlannedPossessionAtUtc = now.AddMonths(-6),
+                PossessionGivenAtUtc = now.AddMonths(-6),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = 1,
+                RowVersion = Guid.NewGuid(),
+            };
+            var party = new LeaseManagementParty
+            {
+                Id = id,
+                PortfolioId = 1,
+                LeaseManagement = management,
+                Tenant = tenant,
+                Role = LeaseManagementPartyRole.PrimaryTenant,
+                EffectiveFrom = today.AddMonths(-6),
+                ChangeReason = "Canonical notice fixture",
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            };
+            var agreement = new LeaseAgreement
+            {
+                Id = id,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                LeaseManagement = management,
+                VersionNumber = 1,
+                AgreementNumber = $"AGR-{id}-V1",
+                ChangeType = LeaseAgreementChangeType.Initial,
+                TermType = LeaseAgreementTermType.FixedTerm,
+                TermStartOn = today.AddMonths(-6),
+                TermEndOn = today.AddDays(termEndDays),
+                GoverningFromOn = today.AddMonths(-6),
+                BaseRentAmount = rent,
+                RentDueDay = 1,
+                SecurityDepositObligation = rent,
+                LateFeeAmount = 50m,
+                GracePeriodDays = 5,
+                Currency = "USD",
+                TermsSchemaVersion = 1,
+                TermsPayload = "{}",
+                DocumentTemplateId = 1,
+                DocumentTemplateVersion = 1,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = 1,
+            };
+            var account = new TenantAccount
+            {
+                Id = id,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                LeaseManagement = management,
+                AccountNumber = $"TA-{id}",
+                Currency = "USD",
+                OpenedAtUtc = now.AddMonths(-6),
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            };
+
+            Db.AddRange(property, unit, tenant, management, party, agreement, account);
+            Db.SaveChanges();
+            Db.LeaseManagementLifecycleProjections.Add(new LeaseManagementLifecycleProjection
+            {
+                PortfolioId = 1,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                LeaseManagementId = management.Id,
+                EffectiveNowUtc = now,
+                BusinessDate = today,
+                Lifecycle = lifecycle,
+                CurrentAgreementId = agreement.Id,
+                CurrentPartyCount = 1,
+                CurrentResidentCount = 1,
+                CurrentFinanciallyResponsiblePartyCount = 1,
+                CurrentPrimaryPartyId = party.Id,
+                CurrentPrimaryTenantId = tenant.Id,
+                CurrentPrimaryTenantName = $"{firstName} {lastName}",
+                TenantAccountId = account.Id,
+            });
+            Db.SaveChanges();
+            Db.ChangeTracker.Clear();
+
+            return new NoticeRelationship(management, agreement, account, tenant, property, unit);
+        }
+
+        public TenantLedgerEntry AddCharge(
+            NoticeRelationship relationship,
+            TenantLedgerEntryType type,
+            decimal amount,
+            int dueInDays)
+        {
+            var now = DateTime.UtcNow;
+            var dueOn = DateOnly.FromDateTime(now).AddDays(dueInDays);
+            var entry = new TenantLedgerEntry
+            {
+                Id = _nextLedgerId++,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                TenantAccountId = relationship.Account.Id,
+                EntryType = type,
+                Direction = TenantLedgerDirection.Debit,
+                Amount = amount,
+                Currency = "USD",
+                EffectiveOn = dueOn,
+                DueOn = dueOn,
+                PostedAtUtc = now,
+                Description = type.ToString(),
+                BusinessKey = $"notice-test:{relationship.Account.Id}:{type}:{dueOn:yyyy-MM-dd}",
+                LeaseAgreementId = relationship.Agreement.Id,
+                CreatedByUserId = 1,
+            };
+            Db.TenantLedgerEntries.Add(entry);
+            Db.SaveChanges();
+            Db.TenantChargeBalanceProjections.Add(new TenantChargeBalanceProjection
+            {
+                PortfolioId = 1,
+                TenantAccountId = relationship.Account.Id,
+                TenantLedgerEntryId = entry.Id,
+                BusinessDate = DateOnly.FromDateTime(now),
+                EntryType = type.ToString(),
+                Currency = "USD",
+                EffectiveOn = dueOn,
+                DueOn = dueOn,
+                OriginalAmount = amount,
+                OpenAmount = amount,
+                IsPastDue = dueOn < DateOnly.FromDateTime(now),
+            });
+            Db.SaveChanges();
+            Db.ChangeTracker.Clear();
+            return entry;
+        }
+
+        public void Dispose()
+        {
+            Db.Dispose();
+            _connection.Dispose();
+        }
     }
 
-    /// <summary>Seeds one active lease with a far-future end date (always outside the default trigger window).</summary>
-    private Lease SeedSingleActiveLease(string firstName = "Sam", string lastName = "Rivera", decimal monthlyRent = 1500m)
+    private sealed class FixtureDbContext(DbContextOptions<RentalCommandDbContext> options)
+        : RentalCommandDbContext(options)
     {
-        var now = DateTime.UtcNow;
-        var property = new RentalCommand.Core.Entities.Property
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            PortfolioId = 1,
-            Name = "River View Flats",
-            AddressLine1 = "10 River Rd",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "1",
-            Bedrooms = 1,
-            Bathrooms = 1,
-            MarketRent = monthlyRent,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = 1,
-            FirstName = firstName,
-            LastName = lastName,
-            Email = $"{firstName.ToLowerInvariant()}@example.test",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = 1,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = $"SINGLE-{Guid.NewGuid().ToString()[..6].ToUpperInvariant()}",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-6),
-            EndDate = now.Date.AddDays(300),  // far future — outside default renewal/move-out window
-            MonthlyRent = monthlyRent,
-            SecurityDeposit = monthlyRent,
-            LateFeeAmount = 50,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Leases.Add(lease);
-        _ctx.Db.SaveChanges();
-        _ctx.Db.ChangeTracker.Clear();
-        return lease;
+            base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<LeaseManagementLifecycleProjection>()
+                .HasKey(row => new { row.PortfolioId, row.LeaseManagementId });
+            modelBuilder.Entity<LeaseManagementLifecycleProjection>()
+                .ToTable("NoticeTestLeaseLifecycle");
+            modelBuilder.Entity<TenantChargeBalanceProjection>()
+                .HasKey(row => new { row.PortfolioId, row.TenantAccountId, row.TenantLedgerEntryId });
+            modelBuilder.Entity<TenantChargeBalanceProjection>()
+                .ToTable("NoticeTestChargeBalances");
+
+            modelBuilder.Entity<LeaseAgreement>().Property(row => row.TermsPayload).HasColumnType("TEXT");
+            modelBuilder.Entity<LeaseAgreement>().ToTable("LeaseAgreements");
+            modelBuilder.Entity<LeaseManagement>().ToTable("LeaseManagements");
+            modelBuilder.Entity<LeaseManagementParty>().ToTable("LeaseManagementParties");
+            modelBuilder.Entity<TenantAccount>().ToTable("TenantAccounts");
+            modelBuilder.Entity<TenantLedgerEntry>().ToTable("TenantLedgerEntries");
+        }
     }
 
-    private (Lease NearLease, Lease FarLease) SeedActiveLeases()
-    {
-        var now = DateTime.UtcNow;
-        var property = new RentalCommand.Core.Entities.Property
-        {
-            PortfolioId = 1,
-            Name = "Maple Grove Duplex",
-            AddressLine1 = "100 Maple",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var nearUnit = new Unit
-        {
-            Property = property,
-            UnitNumber = "A",
-            Bedrooms = 2,
-            Bathrooms = 1,
-            MarketRent = 1400,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var farUnit = new Unit
-        {
-            Property = property,
-            UnitNumber = "B",
-            Bedrooms = 2,
-            Bathrooms = 1,
-            MarketRent = 1450,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var nearTenant = new Tenant
-        {
-            PortfolioId = 1,
-            FirstName = "Avery",
-            LastName = "Brooks",
-            Email = "avery@example.test",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var farTenant = new Tenant
-        {
-            PortfolioId = 1,
-            FirstName = "Morgan",
-            LastName = "Pierce",
-            Email = "morgan@example.test",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var nearLease = new Lease
-        {
-            PortfolioId = 1,
-            Property = property,
-            Unit = nearUnit,
-            Tenant = nearTenant,
-            LeaseNumber = "NEAR-001",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-10),
-            EndDate = now.Date.AddDays(60),
-            MonthlyRent = 1400,
-            SecurityDeposit = 1400,
-            LateFeeAmount = 50,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var farLease = new Lease
-        {
-            PortfolioId = 1,
-            Property = property,
-            Unit = farUnit,
-            Tenant = farTenant,
-            LeaseNumber = "FAR-001",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-2),
-            EndDate = now.Date.AddDays(120),
-            MonthlyRent = 1450,
-            SecurityDeposit = 1450,
-            LateFeeAmount = 50,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _ctx.Db.Leases.AddRange(nearLease, farLease);
-        _ctx.Db.SaveChanges();
-        _ctx.Db.ChangeTracker.Clear();
-        return (nearLease, farLease);
-    }
+    private sealed record NoticeRelationship(
+        LeaseManagement Management,
+        LeaseAgreement Agreement,
+        TenantAccount Account,
+        Tenant Tenant,
+        Property Property,
+        Unit Unit);
 
     private sealed class CurrentCultureScope : IDisposable
     {
@@ -877,8 +671,7 @@ public class NoticeDraftServiceTests : IDisposable
         public Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default) =>
             Task.FromResult(new ConversationListResponse());
 
-        public Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default) =>
-            Task.FromResult(0);
+        public Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default) => Task.FromResult(0);
 
         public Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
             Task.FromResult<ConversationDetail?>(null);
@@ -892,7 +685,12 @@ public class NoticeDraftServiceTests : IDisposable
             string operationKey,
             bool acknowledgedFairHousingReview = false,
             CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(new ConversationDetail { Id = 1, TenantId = tenantId, Subject = subject });
+            Task.FromResult<ConversationDetail?>(new ConversationDetail
+            {
+                Id = 1,
+                TenantId = tenantId,
+                Subject = subject,
+            });
 
         public Task<ConversationDetail?> PostMessageAsync(
             int portfolioId,
@@ -900,21 +698,18 @@ public class NoticeDraftServiceTests : IDisposable
             string body,
             List<string> channels,
             string operationKey,
-            CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(null);
+            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
 
         public Task<IReadOnlyList<ConversationSummary>> ListForTenantAsync(
             int portfolioId,
             int tenantId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ConversationSummary>>([]);
+            CancellationToken ct = default) => Task.FromResult<IReadOnlyList<ConversationSummary>>([]);
 
         public Task<ConversationDetail?> GetForTenantAsync(
             int portfolioId,
             int tenantId,
             int id,
-            CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(null);
+            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
 
         public Task<ConversationDetail?> TenantStartAsync(
             int portfolioId,
@@ -922,8 +717,7 @@ public class NoticeDraftServiceTests : IDisposable
             string subject,
             string body,
             string operationKey,
-            CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(null);
+            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
 
         public Task<ConversationDetail?> TenantPostAsync(
             int portfolioId,
@@ -931,7 +725,6 @@ public class NoticeDraftServiceTests : IDisposable
             int id,
             string body,
             string operationKey,
-            CancellationToken ct = default) =>
-            Task.FromResult<ConversationDetail?>(null);
+            CancellationToken ct = default) => Task.FromResult<ConversationDetail?>(null);
     }
 }

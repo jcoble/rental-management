@@ -3041,7 +3041,7 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(8000)
                         .HasColumnType("character varying(8000)");
 
-                    b.Property<int>("LeaseManagementId")
+                    b.Property<int>("LeaseId")
                         .HasColumnType("integer");
 
                     b.Property<string>("NoticeType")
@@ -3049,14 +3049,8 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(80)
                         .HasColumnType("character varying(80)");
 
-                    b.Property<int>("RecipientTenantId")
+                    b.Property<int?>("PaymentId")
                         .HasColumnType("integer");
-
-                    b.Property<int>("TenantAccountId")
-                        .HasColumnType("integer");
-
-                    b.Property<long?>("TenantLedgerEntryId")
-                        .HasColumnType("bigint");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
@@ -3079,6 +3073,9 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<int>("TenantId")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("TriggerDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -3089,9 +3086,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("ConversationId");
 
-                    b.HasIndex("LeaseManagementId");
+                    b.HasIndex("LeaseId");
 
-                    b.HasIndex("LeaseManagementId", "PortfolioId");
+                    b.HasIndex("PaymentId");
 
                     b.HasIndex("PortfolioId");
 
@@ -3099,21 +3096,11 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("Status");
 
-                    b.HasIndex("RecipientTenantId");
+                    b.HasIndex("TenantId");
 
-                    b.HasIndex("RecipientTenantId", "PortfolioId");
+                    b.HasIndex("PortfolioId", "LeaseId", "NoticeType", "Status");
 
-                    b.HasIndex("TenantAccountId");
-
-                    b.HasIndex("TenantAccountId", "PortfolioId");
-
-                    b.HasIndex("TenantLedgerEntryId");
-
-                    b.HasIndex("TenantLedgerEntryId", "TenantAccountId", "PortfolioId");
-
-                    b.HasIndex("PortfolioId", "LeaseManagementId", "NoticeType", "Status");
-
-                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "NoticeType", "Status");
+                    b.HasIndex("PortfolioId", "PaymentId", "NoticeType", "Status");
 
                     b.ToTable("NoticeDrafts");
                 });
@@ -7379,25 +7366,16 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("ConversationId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("RentalCommand.Core.Entities.LeaseManagement", "LeaseManagement")
+                    b.HasOne("RentalCommand.Core.Entities.Lease", "Lease")
                         .WithMany()
-                        .HasForeignKey("LeaseManagementId", "PortfolioId")
-                        .HasPrincipalKey("Id", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasForeignKey("LeaseId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("RentalCommand.Core.Entities.TenantAccount", "TenantAccount")
+                    b.HasOne("RentalCommand.Core.Entities.Payment", "Payment")
                         .WithMany()
-                        .HasForeignKey("TenantAccountId", "PortfolioId")
-                        .HasPrincipalKey("Id", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("RentalCommand.Core.Entities.TenantLedgerEntry", "TenantLedgerEntry")
-                        .WithMany()
-                        .HasForeignKey("TenantLedgerEntryId", "TenantAccountId", "PortfolioId")
-                        .HasPrincipalKey("Id", "TenantAccountId", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .HasForeignKey("PaymentId")
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()
@@ -7410,26 +7388,23 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("PropertyId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("RentalCommand.Core.Entities.Tenant", "RecipientTenant")
+                    b.HasOne("RentalCommand.Core.Entities.Tenant", "Tenant")
                         .WithMany()
-                        .HasForeignKey("RecipientTenantId", "PortfolioId")
-                        .HasPrincipalKey("Id", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("Conversation");
 
-                    b.Navigation("LeaseManagement");
+                    b.Navigation("Lease");
 
-                    b.Navigation("TenantAccount");
-
-                    b.Navigation("TenantLedgerEntry");
+                    b.Navigation("Payment");
 
                     b.Navigation("Portfolio");
 
                     b.Navigation("Property");
 
-                    b.Navigation("RecipientTenant");
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.NoticeTemplate", b =>
