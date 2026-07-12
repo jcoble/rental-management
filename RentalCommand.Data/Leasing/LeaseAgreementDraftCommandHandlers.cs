@@ -55,8 +55,11 @@ public sealed class EditLeaseAgreementDraftHandler
                 "DraftRevision is stale; reload the Agreement draft before editing.");
         }
 
+        var signerInputs = LeaseAgreementDraftCommandSupport.ToAtomicSignerInputs(command.Signers);
         var draftReferencesValid = await LeaseAgreementDraftCommandSupport.ValidateDraftReferencesAsync(
-            command, attempt.Persistence, ct);
+                command, attempt.Persistence, ct)
+            && await attempt.Leasing.ValidateAgreementDraftSignerScopeAsync(
+                command.PortfolioId, command.LeaseManagementId, signerInputs, ct);
         if (!draftReferencesValid)
         {
             return LeaseAgreementDraftCommandSupport.Error(
@@ -94,14 +97,7 @@ public sealed class EditLeaseAgreementDraftHandler
             command.LeaseManagementId,
             agreement.Id,
             agreement.DraftRevision,
-            command.Signers.Select(signer => new AtomicAgreementDraftSignerInput(
-                signer.LeaseManagementPartyId,
-                signer.TenantId,
-                (int)signer.SignerRole,
-                signer.NameSnapshot.Trim(),
-                signer.EmailSnapshot.Trim().ToLowerInvariant(),
-                signer.SigningOrder,
-                signer.IsRequired)).ToArray(),
+            signerInputs,
             ct);
         foreach (var signerId in signerMutation.DeletedSignerIds)
         {
@@ -128,6 +124,7 @@ public sealed class EditLeaseAgreementDraftHandler
             agreement.DraftRevision,
             null,
             signerMutation.CreatedSignerIds,
+            Array.Empty<int>(),
             Array.Empty<int>(),
             null);
     }
@@ -264,28 +261,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             UpdatedAtUtc = times.WallClockUtc,
             DraftRevision = 1,
         };
-        var decisions = command.AddendumDecisions.Select(decision =>
-            new LeaseRenewalAddendumDecision
-            {
-                PortfolioId = command.PortfolioId,
-                LeaseManagementId = command.LeaseManagementId,
-                RenewalAgreement = successor,
-                SourceAddendumSeriesPublicId = decision.SourceAddendumSeriesPublicId,
-                Decision = decision.Decision,
-                ReplacementAddendumId = decision.ReplacementAddendumId,
-                CreatedAtUtc = times.WallClockUtc,
-                CreatedByUserId = command.ActorUserId,
-            }).ToArray();
-
         attempt.Persistence.Add(successor);
-        attempt.Persistence.AddRange(decisions);
-        foreach (var decision in decisions)
-        {
-            attempt.BindSemanticAudit(decision, new AtomicSemanticAudit(
-                command.PortfolioId, nameof(LeaseRenewalAddendumDecision), 0,
-                AuditLogOperation.Created, UserId: command.ActorUserId,
-                ChangeReason: "Recorded explicit effective Addendum disposition for successor Agreement."));
-        }
         attempt.BindSemanticAudit(successor, LeaseAgreementDraftCommandSupport.Created(
             command, "Created a successor Agreement draft without changing the governing Agreement."));
         await attempt.FlushBusinessAsync(ct);
@@ -303,8 +279,59 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
                 ChangeReason: "Copied signer snapshot into successor Agreement draft."),
                 times.WallClockUtc);
         }
+        var addendumResult = isRenewal
+            ? await attempt.Leasing.CreateRenewalAddendumDraftsAsync(
+                command.PortfolioId,
+                command.LeaseManagementId,
+                source.Id,
+                successor.Id,
+                successor.GoverningFromOn,
+                command.AddendumDecisions.Select(decision => new AtomicRenewalAddendumDecisionInput(
+                    decision.SourceAddendumSeriesPublicId, (int)decision.Decision)).ToArray(),
+                command.ActorUserId,
+                times.WallClockUtc,
+                ct)
+            : new AtomicRenewalAddendumDraftResult(true, [], [], [], []);
+        if (!addendumResult.InputValid)
+        {
+            throw new InvalidOperationException(
+                "Effective Addendum state changed after validation while the lease relationship lock was held.");
+        }
+        foreach (var decisionId in addendumResult.DecisionIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId, nameof(LeaseRenewalAddendumDecision), decisionId,
+                AuditLogOperation.Created, UserId: command.ActorUserId,
+                ChangeReason: "Recorded explicit effective Addendum disposition for successor Agreement."),
+                times.WallClockUtc);
+        }
+        foreach (var addendumId in addendumResult.ReplacementAddendumIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId, nameof(LeaseAddendum), addendumId,
+                AuditLogOperation.Created, UserId: command.ActorUserId,
+                ChangeReason: "Created editable successor-bound replacement Addendum draft."),
+                times.WallClockUtc);
+        }
+        foreach (var signerId in addendumResult.ReplacementSignerIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId, nameof(LeaseAddendumSigner), signerId,
+                AuditLogOperation.Created, UserId: command.ActorUserId,
+                ChangeReason: "Copied signer snapshot into replacement Addendum draft."),
+                times.WallClockUtc);
+        }
+        foreach (var effectId in addendumResult.ReplacementFinancialEffectIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId, nameof(LeaseAddendumFinancialEffect), effectId,
+                AuditLogOperation.Created, UserId: command.ActorUserId,
+                ChangeReason: "Copied financial effect into replacement Addendum draft."),
+                times.WallClockUtc);
+        }
         LeaseAgreementDraftCommandSupport.StageOutbox(
-            attempt, command, times.WallClockUtc, successor.Id, "agreement-successor-draft-created");
+            attempt, command, times.WallClockUtc, successor.Id,
+            "agreement-successor-draft-created", addendumResult.ReplacementAddendumIds);
 
         return new(
             LeaseAgreementDraftMutationOutcome.Applied,
@@ -314,7 +341,8 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             successor.DraftRevision,
             source.Id,
             signerIds,
-            decisions.Select(decision => decision.Id).ToArray(),
+            addendumResult.DecisionIds,
+            addendumResult.ReplacementAddendumIds,
             null);
     }
 
@@ -433,16 +461,13 @@ internal static class LeaseAgreementDraftCommandSupport
         if (command.AddendumDecisions.Any(decision =>
                 !Enum.IsDefined(decision.Decision)
                 || decision.SourceAddendumSeriesPublicId == Guid.Empty
-                || (decision.Decision == LeaseRenewalAddendumDecisionType.ReissueAsAddendum)
-                    != decision.ReplacementAddendumId.HasValue)
+                )
             || command.AddendumDecisions.Select(d => d.SourceAddendumSeriesPublicId).Distinct().Count()
                 != command.AddendumDecisions.Count)
         {
             return false;
         }
         var series = command.AddendumDecisions.Select(d => d.SourceAddendumSeriesPublicId).ToArray();
-        var replacementIds = command.AddendumDecisions.Where(d => d.ReplacementAddendumId.HasValue)
-            .Select(d => d.ReplacementAddendumId!.Value).Distinct().ToArray();
         var facts = await persistence.Query<LeaseManagement>()
             .Where(relationship => relationship.Id == command.LeaseManagementId
                 && relationship.PortfolioId == command.PortfolioId)
@@ -453,20 +478,24 @@ internal static class LeaseAgreementDraftCommandSupport
                     && addendum.EffectiveFromOn <= businessDate
                     && (addendum.EffectiveThroughOn == null || addendum.EffectiveThroughOn >= businessDate)
                     && (addendum.SupersededEffectiveOn == null
-                        || addendum.SupersededEffectiveOn > businessDate)),
+                        || addendum.SupersededEffectiveOn > businessDate)
+                    && !relationship.Addenda.Any(newer =>
+                        newer.SeriesPublicId == addendum.SeriesPublicId
+                        && newer.VersionNumber > addendum.VersionNumber)),
                 MatchedCount = relationship.Addenda.Count(addendum =>
                     series.Contains(addendum.SeriesPublicId)
                     && addendum.FullyExecutedAtUtc != null && addendum.VoidedAtUtc == null
                     && addendum.EffectiveFromOn <= businessDate
                     && (addendum.EffectiveThroughOn == null || addendum.EffectiveThroughOn >= businessDate)
                     && (addendum.SupersededEffectiveOn == null
-                        || addendum.SupersededEffectiveOn > businessDate)),
-                ReplacementCount = relationship.Addenda.Count(addendum => replacementIds.Contains(addendum.Id)),
+                        || addendum.SupersededEffectiveOn > businessDate)
+                    && !relationship.Addenda.Any(newer =>
+                        newer.SeriesPublicId == addendum.SeriesPublicId
+                        && newer.VersionNumber > addendum.VersionNumber)),
             })
             .SingleAsync(ct);
         return facts.EffectiveCount == command.AddendumDecisions.Count
-            && facts.MatchedCount == command.AddendumDecisions.Count
-            && facts.ReplacementCount == replacementIds.Length;
+            && facts.MatchedCount == command.AddendumDecisions.Count;
     }
 
     internal static void ValidateAuthorizationShape(ILeaseAgreementDraftCommand command)
@@ -527,7 +556,7 @@ internal static class LeaseAgreementDraftCommandSupport
             && !string.IsNullOrWhiteSpace(signer.NameSnapshot) && signer.NameSnapshot.Trim().Length <= 200
             && !string.IsNullOrWhiteSpace(signer.EmailSnapshot) && signer.EmailSnapshot.Trim().Length <= 320
             && signer.SigningOrder > 0
-            && (signer.LeaseManagementPartyId.HasValue || !signer.TenantId.HasValue))
+            && signer.LeaseManagementPartyId.HasValue == signer.TenantId.HasValue)
         && signers.Select(signer => signer.SigningOrder).Distinct().Count() == signers.Count
         && signers.Select(signer => signer.EmailSnapshot.Trim().ToLowerInvariant()).Distinct().Count() == signers.Count
         && signers.Any(signer => signer.IsRequired && signer.SignerRole is
@@ -547,6 +576,17 @@ internal static class LeaseAgreementDraftCommandSupport
         }
     }
 
+    internal static AtomicAgreementDraftSignerInput[] ToAtomicSignerInputs(
+        IReadOnlyList<LeaseAgreementDraftSignerInput> signers) => signers.Select(signer =>
+        new AtomicAgreementDraftSignerInput(
+            signer.LeaseManagementPartyId,
+            signer.TenantId,
+            (int)signer.SignerRole,
+            signer.NameSnapshot.Trim(),
+            signer.EmailSnapshot.Trim().ToLowerInvariant(),
+            signer.SigningOrder,
+            signer.IsRequired)).ToArray();
+
     internal static AtomicSemanticAudit Updated(
         ILeaseAgreementDraftCommand command, int agreementId, string reason) => new(
         command.PortfolioId, nameof(LeaseAgreement), agreementId, AuditLogOperation.Updated,
@@ -558,7 +598,8 @@ internal static class LeaseAgreementDraftCommandSupport
         UserId: command.ActorUserId, ChangeReason: reason);
 
     internal static void StageOutbox(IAtomicWriteAttempt attempt, ILeaseAgreementDraftCommand command,
-        DateTime nowUtc, int agreementId, string mutation) => attempt.StageOutbox(new OutboxMessage
+        DateTime nowUtc, int agreementId, string mutation,
+        IReadOnlyList<int>? replacementAddendumIds = null) => attempt.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -566,7 +607,12 @@ internal static class LeaseAgreementDraftCommandSupport
             {
                 entityType = nameof(LeaseAgreement),
                 entityId = agreementId,
-                data = new { mutation, command.LeaseManagementId },
+                data = new
+                {
+                    mutation,
+                    command.LeaseManagementId,
+                    replacementAddendumIds = replacementAddendumIds ?? Array.Empty<int>(),
+                },
             }),
             IdempotencyKey = command.DeliveryIdempotencyKey,
             CreatedAtUtc = nowUtc,
@@ -578,7 +624,7 @@ internal static class LeaseAgreementDraftCommandSupport
         int agreementId, int version, int revision, string error) => new(
         outcome, command.LeaseManagementId, agreementId, version, revision,
         command is CreateLeaseAgreementSuccessorDraftCommand successor ? successor.SourceAgreementId : null,
-        Array.Empty<int>(), Array.Empty<int>(), error);
+        Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>(), error);
 
     internal static UnauthorizedAccessException Unauthorized() => new(
         "The Agreement is not authorized in the current access context and property scope.");

@@ -51,8 +51,7 @@ public sealed record EditLeaseAgreementDraftCommand(
 
 public sealed record LeaseRenewalAddendumDecisionInput(
     Guid SourceAddendumSeriesPublicId,
-    LeaseRenewalAddendumDecisionType Decision,
-    int? ReplacementAddendumId) : IAtomicCommandData;
+    LeaseRenewalAddendumDecisionType Decision) : IAtomicCommandData;
 
 public sealed record CreateLeaseAgreementSuccessorDraftCommand(
     int PortfolioId,
@@ -90,4 +89,5 @@ public sealed record LeaseAgreementDraftMutationResult(
     int? SourceAgreementId,
     IReadOnlyList<int> LeaseAgreementSignerIds,
     IReadOnlyList<int> AddendumDecisionIds,
+    IReadOnlyList<int> ReplacementAddendumIds,
     string? Error) : IAtomicResultData;

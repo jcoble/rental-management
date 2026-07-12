@@ -80,8 +80,8 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             envelope.PortfolioId, leaseManagementId, sourceAgreementId, request.ChangeType.Value,
             request.TermStartOn, request.TermEndOn, request.GoverningFromOn,
             request.AddendumDecisions.Select(item => new LeaseRenewalAddendumDecisionInput(
-                item.SourceAddendumSeriesPublicId, item.Decision!.Value,
-                item.ReplacementAddendumId)).ToArray(), envelope.UserId, envelope.SessionId,
+                item.SourceAddendumSeriesPublicId, item.Decision!.Value)).ToArray(),
+            envelope.UserId, envelope.SessionId,
             envelope.AccessContextId, envelope.AccessRevision,
             $"agreement-successor:{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}");
         return await Execute("lease-agreement.successor-draft.create",
