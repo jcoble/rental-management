@@ -64,7 +64,10 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
             return Snapshot(AtomicScanDraftClaimOutcome.Rejected, draft);
         }
 
-        if (!string.Equals(draft.TargetEntityType, expectedTargetEntityType, StringComparison.Ordinal))
+        if (!string.Equals(
+                draft.TargetEntityType,
+                expectedTargetEntityType,
+                StringComparison.OrdinalIgnoreCase))
         {
             return Snapshot(AtomicScanDraftClaimOutcome.TargetMismatch, draft);
         }

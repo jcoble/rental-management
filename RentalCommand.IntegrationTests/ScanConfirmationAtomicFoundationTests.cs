@@ -363,7 +363,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 
     private AtomicCommandIdentity Identity(int draftId, string? suffix = null) =>
         suffix is null
-            ? ScanConfirmationCommandIdentity.Create(_portfolioId, draftId)
+            ? ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, "foundation-default")
             : new AtomicCommandIdentity("scan.confirm", $"{_portfolioId}:{draftId}:{suffix}");
 
     private async Task<int> SeedReviewingDraftAsync(string marker)

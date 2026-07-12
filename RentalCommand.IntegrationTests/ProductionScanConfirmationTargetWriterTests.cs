@@ -159,7 +159,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         var draftId = await SeedDraftAsync(kind);
 
         var result = await UnitOfWork.ExecuteAsync(
-            ScanConfirmationCommandIdentity.Create(_portfolioId, draftId),
+            ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, $"writer-{kind}"),
             Command(draftId, kind),
             Codec);
 
@@ -186,7 +186,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     {
         SkipIfDockerUnavailable();
         var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
-        var identity = ScanConfirmationCommandIdentity.Create(_portfolioId, draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, "duplicate-receipt");
         var uniqueVendor = $"Replay Vendor {draftId}";
         var command = Command(draftId, ScanConfirmationTargetKind.Expense) with
         {
@@ -239,7 +239,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             foreignPropertyId = property.Id;
         }
         var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
-        var identity = ScanConfirmationCommandIdentity.Create(_portfolioId, draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, "foreign-property");
         int loanCountBefore;
         await using (var before = Scope())
         {

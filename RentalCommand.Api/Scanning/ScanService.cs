@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -16,21 +17,12 @@ namespace RentalCommand.Api.Scanning;
 
 /// <summary>
 /// Implements <see cref="IScanService"/>: stores upload, creates a <see cref="ScanDraft"/>,
-/// and handles confirm (→Expense) and reject lifecycle transitions.
+/// prepares typed atomic confirmation commands and handles reject lifecycle transitions.
 /// </summary>
 public sealed class ScanService : IScanService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IScanFileService _files;
-    private readonly IExpenseService _expenses;
-    private readonly IPaymentService _payments;
-    private readonly IWorkOrderService _workOrders;
-    private readonly ILeaseService _leases;
-    private readonly ITenantService _tenants;
-    private readonly IPropertyService _properties;
-    private readonly IUnitService _units;
-    private readonly IApplicationService _applications;
-    private readonly ILoanService _loans;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -46,30 +38,12 @@ public sealed class ScanService : IScanService
     public ScanService(
         RentalCommandDbContext db,
         IScanFileService files,
-        IExpenseService expenses,
-        IPaymentService payments,
-        IWorkOrderService workOrders,
-        ILeaseService leases,
-        ITenantService tenants,
-        IPropertyService properties,
-        IUnitService units,
-        IApplicationService applications,
-        ILoanService loans,
         IAuditTrailService audit,
         ILogger<ScanService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _files = files;
-        _expenses = expenses;
-        _payments = payments;
-        _workOrders = workOrders;
-        _leases = leases;
-        _tenants = tenants;
-        _properties = properties;
-        _units = units;
-        _applications = applications;
-        _loans = loans;
         _audit = audit;
         _logger = logger;
         _timeProvider = timeProvider;
@@ -153,10 +127,10 @@ public sealed class ScanService : IScanService
     }
 
     // -------------------------------------------------------------------------
-    // ConfirmAndCreateAsync
+    // PrepareConfirmationAsync
     // -------------------------------------------------------------------------
 
-    public async Task<ScanConfirmResult> ConfirmAndCreateAsync(
+    public async Task<ScanConfirmationPreparation> PrepareConfirmationAsync(
         int portfolioId,
         int draftId,
         int userId,
@@ -168,71 +142,133 @@ public sealed class ScanService : IScanService
             .FirstOrDefaultAsync(d => d.Id == draftId && d.PortfolioId == portfolioId, ct);
 
         if (draft is null)
-            return new ScanConfirmResult(false, null, "Draft not found");
+            return new(ScanConfirmationPreparationOutcome.DraftNotFound, Error: "Scan draft not found.");
 
-        if (draft.Status is "Confirmed" or "Rejected")
-            return new ScanConfirmResult(false, null, $"Draft is already {draft.Status.ToLowerInvariant()}");
-
-        // Confirm is only valid once extraction has finished and the draft is awaiting review.
-        // Pending/Processing/Failed (and any other state) must be rejected even if a target was
-        // chosen at upload time — confirming a not-yet-reviewed draft would create a record from
-        // unreviewed (or absent) extraction data.
-        if (draft.Status != "Reviewing")
-            return new ScanConfirmResult(false, null, "Draft is not ready to confirm; it must be reviewed first.");
-
-        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder" or "Lease" or "Application" or "Loan"))
-            return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
-
-        // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
-        var dto = BuildReceiptDto(draft.ExtractedFields);
-        ApplyOverrides(dto, overridesJson);
-
-        // Wrap the WHOLE confirm-and-create operation in a single transaction so it is all-or-nothing:
-        //   1. claim the draft (Reviewing → Confirming)
-        //   2. create the Expense/Payment
-        //   3. re-key the StoredFile and mark the draft Confirmed
-        // Any failure (exception, cancellation, or a service returning null) rolls the transaction back,
-        // leaving NO orphaned entity and the draft restored to its prior "Reviewing" status — never stuck
-        // in "Confirming". The conditional claim still prevents concurrent double-confirms: PostgreSQL row-
-        // locks the claimed draft for the transaction's lifetime, so a second confirm blocks then sees the
-        // committed "Confirmed" (or rolled-back "Reviewing") status.
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        // Atomically claim the draft so two concurrent confirms can't both create an entity.
-        // The conditional UPDATE only matches a not-yet-finalized, not-in-flight draft; the DB
-        // serializes concurrent callers so exactly one wins (affected == 1).
-        var claimed = await _db.ScanDrafts
-            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId
-                && d.Status != "Confirmed" && d.Status != "Rejected" && d.Status != "Confirming")
-            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Confirming"), ct);
-
-        if (claimed == 0)
+        if (!Enum.TryParse<ScanConfirmationTargetKind>(
+                draft.TargetEntityType, ignoreCase: true, out var kind))
         {
-            await tx.RollbackAsync(ct);
-            return new ScanConfirmResult(false, null, "Draft is already being confirmed or finalized");
+            return new(
+                ScanConfirmationPreparationOutcome.UnsupportedTarget,
+                Error: $"Unsupported scan confirmation target '{draft.TargetEntityType}'.");
+        }
+        if (kind == ScanConfirmationTargetKind.Lease)
+        {
+            return new(
+                ScanConfirmationPreparationOutcome.TemporarilyUnavailable,
+                Error: "Lease scan confirmation is temporarily unavailable while the lease aggregate writer is completed.");
         }
 
-        // ---- ROUTER ----
-        var result = draft.TargetEntityType switch
+        var normalizedOverrides = string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson;
+        JsonElement overrideRoot;
+        try
         {
-            "Payment" => await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
-            "WorkOrder" => await ConfirmAsWorkOrderAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
-            "Lease" => await ConfirmAsLeaseAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
-            "Application" => await ConfirmAsApplicationAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
-            "Loan" => await ConfirmAsLoanAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
-            _ => await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
-        };
-
-        if (!result.Success)
+            using var overrideDocument = JsonDocument.Parse(normalizedOverrides);
+            if (overrideDocument.RootElement.ValueKind != JsonValueKind.Object)
+                throw new JsonException("Scan confirmation overrides must be a JSON object.");
+            overrideRoot = overrideDocument.RootElement.Clone();
+        }
+        catch (JsonException ex)
         {
-            // The entity work (or a guard) failed — discard the claim and everything else atomically.
-            await tx.RollbackAsync(ct);
-            return result;
+            throw new ScanConfirmationValidationException($"Invalid scan confirmation overrides: {ex.Message}");
         }
 
-        await tx.CommitAsync(ct);
-        return result;
+        ScanConfirmationTargetData target;
+        if (kind is ScanConfirmationTargetKind.Expense or ScanConfirmationTargetKind.Payment)
+        {
+            var receipt = BuildReceiptDto(draft.ExtractedFields);
+            ApplyOverrides(receipt, normalizedOverrides);
+            var receiptData = ToAtomicReceipt(receipt);
+            if (kind == ScanConfirmationTargetKind.Payment)
+            {
+                var leaseId = TryGetOverrideInt(overrideRoot, out var selectedLeaseId, "leaseId", "lease_id")
+                    ? selectedLeaseId
+                    : 0;
+                target = new(kind, Payment: new ScanPaymentTargetData(receiptData, leaseId));
+            }
+            else
+            {
+                var isPaid = TryGetOverrideBool(overrideRoot, out var paid, "is_paid", "isPaid")
+                    ? paid
+                    : receipt.DocumentKind is not ("Bill" or "Invoice" or "UtilityBill" or "PropertyTax");
+                var propertyId = PositiveOverride(overrideRoot, "propertyId", "property_id");
+                var unitId = PositiveOverride(overrideRoot, "unitId", "unit_id");
+                var workOrderId = PositiveOverride(overrideRoot, "workOrderId", "work_order_id");
+                if (unitId is null && propertyId is int selectedPropertyId)
+                    unitId = await TryResolveExpenseUnitFromNotesAsync(
+                        portfolioId, selectedPropertyId, receipt.Notes, ct);
+                target = new(
+                    kind,
+                    Expense: new ScanExpenseTargetData(receiptData, isPaid, propertyId, unitId, workOrderId));
+            }
+        }
+        else if (kind == ScanConfirmationTargetKind.WorkOrder)
+        {
+            var fields = BuildWorkOrderFields(draft.ExtractedFields);
+            await ValidateWorkOrderIdsInPortfolioAsync(portfolioId, fields, ct);
+            ApplyWorkOrderOverrides(fields, normalizedOverrides);
+            if (fields.UnitId is null && fields.PropertyId > 0)
+                fields.UnitId = await TryResolveWorkOrderUnitFromTextAsync(
+                    portfolioId, fields.PropertyId, fields, ct);
+            target = new(kind, WorkOrder: new ScanWorkOrderTargetData(
+                fields.PropertyId, fields.UnitId, fields.TenantId, fields.LeaseId, fields.VendorId,
+                fields.Title, fields.Description, fields.Category, fields.Priority, fields.EstimatedCost));
+        }
+        else if (kind == ScanConfirmationTargetKind.Application)
+        {
+            var fields = BuildApplicationFields(draft.ExtractedFields);
+            await ValidateApplicationIdsInPortfolioAsync(portfolioId, fields, ct);
+            ApplyApplicationOverrides(fields, normalizedOverrides);
+            int? propertyId = fields.PropertyId is > 0
+                && await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId.Value, ct)
+                ? fields.PropertyId
+                : null;
+            int? unitId = fields.UnitId is > 0
+                && await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, propertyId, ct)
+                ? fields.UnitId
+                : null;
+            if (propertyId is null || unitId is null)
+            {
+                var requestedHome = await TryResolveApplicationRequestedHomeAsync(
+                    portfolioId, fields.ApplyingFor, propertyId, ct);
+                propertyId ??= requestedHome?.PropertyId;
+                unitId ??= requestedHome?.UnitId;
+            }
+            target = new(kind, Application: new ScanApplicationTargetData(
+                fields.FirstName, fields.LastName, fields.Email, fields.Phone, fields.DateOfBirth,
+                fields.CurrentAddress, fields.Employer, fields.MonthlyIncome, fields.DesiredMoveInDate,
+                fields.ApplyingFor, fields.IdLast4, fields.CoSignerName, fields.Notes, propertyId, unitId));
+        }
+        else
+        {
+            var fields = BuildLoanFields(draft.ExtractedFields);
+            await ValidateLoanIdsInPortfolioAsync(portfolioId, fields, ct);
+            ApplyLoanOverrides(fields, normalizedOverrides);
+            target = new(kind, Loan: new ScanLoanTargetData(
+                fields.PropertyId, fields.Lender, fields.OriginalAmount, fields.CurrentBalance,
+                fields.AnnualInterestRatePct, fields.TermMonths, fields.StartDate, fields.DayOfMonthDue,
+                fields.MonthlyPrincipalInterest, fields.MonthlyEscrow, fields.EscrowCoversTaxes,
+                fields.EscrowCoversInsurance, fields.Notes));
+        }
+
+        return new(
+            ScanConfirmationPreparationOutcome.Ready,
+            new ConfirmScanDraftCommand(
+                portfolioId, draftId, userId, _timeProvider.UtcNow(), target));
     }
+
+    private static int? PositiveOverride(JsonElement root, params string[] names) =>
+        TryGetOverrideInt(root, out var value, names) && value > 0 ? value : null;
+
+    private static ScanReceiptData ToAtomicReceipt(ExtractedReceiptDto receipt) => new(
+        receipt.VendorName, receipt.VendorAddress, receipt.VendorPhone, receipt.VendorWebsite,
+        receipt.VendorTaxId, receipt.ReceiptNumber, receipt.TransactionDate, receipt.Subtotal,
+        receipt.Tax, receipt.TaxRate, receipt.Tip, receipt.Discount, receipt.Shipping, receipt.Total,
+        receipt.PaymentMethod, receipt.CardLast4, receipt.Category, receipt.DocumentKind, receipt.Notes,
+        receipt.DueDate,
+        receipt.LineItems.Select(line => new ScanReceiptLineData(
+            line.Description, line.Quantity, line.UnitPrice, line.Amount)).ToArray(),
+        receipt.PayerName, receipt.CheckNumber, receipt.BankName,
+        receipt.Extra.Select(pair => new ScanExtraFieldData(pair.Key, pair.Value)).ToArray());
 
     // -------------------------------------------------------------------------
     // BuildLeaseProposalAsync  — read-only "what confirm will do" for the review UI
@@ -328,934 +364,6 @@ public sealed class ScanService : IScanService
         return new LeaseImportProposal(propertyProposal, unitProposal);
     }
 
-    // -------------------------------------------------------------------------
-    // ConfirmAsExpenseAsync  (called by the router)
-    // -------------------------------------------------------------------------
-
-    private async Task<ScanConfirmResult> ConfirmAsExpenseAsync(
-        int portfolioId,
-        int draftId,
-        int userId,
-        ScanDraft draft,
-        ExtractedReceiptDto dto,
-        string overridesJson,
-        CancellationToken ct)
-    {
-        // Determine paid vs unpaid, and pick up an optional property selection.
-        // The review UI may send is_paid explicitly; if absent, derive from document_kind.
-        // It may also send propertyId so the expense is filed under a property; when absent
-        // the expense is left unlinked (we never fabricate a property).
-        bool isPaid;
-        int? propertyId = null;
-        int? unitId = null;
-        int? workOrderId = null;
-        try
-        {
-            using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
-            var overrideRoot = overrideDoc.RootElement;
-            if (overrideRoot.TryGetProperty("is_paid", out var isPaidEl) &&
-                (isPaidEl.ValueKind == JsonValueKind.True || isPaidEl.ValueKind == JsonValueKind.False))
-            {
-                isPaid = isPaidEl.GetBoolean();
-            }
-            else
-            {
-                isPaid = dto.DocumentKind is null or "Receipt" or "Other"
-                    ? true
-                    : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
-                        ? false
-                        : true; // fallback to paid for unknown kinds
-            }
-
-            if (TryGetOverrideInt(overrideRoot, out var pid, "propertyId", "property_id") && pid > 0)
-                propertyId = pid;
-            if (TryGetOverrideInt(overrideRoot, out var uid, "unitId", "unit_id") && uid > 0)
-                unitId = uid;
-            if (TryGetOverrideInt(overrideRoot, out var wid, "workOrderId", "work_order_id") && wid > 0)
-                workOrderId = wid;
-        }
-        catch
-        {
-            isPaid = dto.DocumentKind is null or "Receipt" or "Other"
-                ? true
-                : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
-                    ? false
-                    : true;
-        }
-
-        if (unitId is null && propertyId is int selectedPropertyId)
-        {
-            unitId = await TryResolveExpenseUnitFromNotesAsync(portfolioId, selectedPropertyId, dto.Notes, ct);
-        }
-
-        // Build ReceiptData JSON for the non-promoted details.
-        var receiptDataJson = BuildReceiptDataJson(dto);
-        var matchedVendorId = await FindOrCreateVendorForScannedExpenseAsync(portfolioId, dto, ct);
-
-        var expenseAmount = dto.Total ?? dto.Subtotal ?? 0m;
-        if (expenseAmount <= 0m)
-        {
-            // Transaction rollback in the caller releases the "Confirming" claim.
-            return new ScanConfirmResult(false, null, "Confirmed amount must be greater than zero.");
-        }
-
-        var request = new CreateExpenseRequest
-        {
-            PropertyId  = propertyId, // null when no property context; ExpenseService validates in-portfolio.
-            UnitId      = unitId,
-            WorkOrderId = workOrderId,
-            VendorId    = matchedVendorId,
-            Category    = dto.Category ?? ScheduleECategory.Other,
-            Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
-            Amount      = expenseAmount,
-            Subtotal    = dto.Subtotal,
-            TaxAmount   = dto.Tax,
-            IncurredAt  = dto.TransactionDate ?? _timeProvider.UtcNow(),
-            BillableToOwner = false,
-            Notes       = dto.Notes,
-            ReceiptData = receiptDataJson,
-            // Promote high-value scalars to typed columns (the ReceiptData jsonb keeps the full superset).
-            PaymentMethod = dto.PaymentMethod,
-            CardLast4     = dto.CardLast4,
-            DocumentKind  = dto.DocumentKind,
-            // Promote line items to queryable child rows; 1-based LineNumber preserves the printed order.
-            LineItems = dto.LineItems
-                .Select((li, i) => new CreateExpenseLineItem
-                {
-                    Description = li.Description ?? string.Empty,
-                    Quantity    = li.Quantity,
-                    UnitPrice   = li.UnitPrice,
-                    Amount      = li.Amount,
-                    LineNumber  = i + 1,
-                })
-                .ToList(),
-        };
-
-        if (isPaid)
-        {
-            request.Status  = ExpenseStatus.Paid;
-            request.PaidAt  = dto.TransactionDate ?? _timeProvider.UtcNow();
-            request.DueDate = null;
-        }
-        else
-        {
-            request.Status  = ExpenseStatus.Pending;
-            request.DueDate = dto.DueDate;
-            request.PaidAt  = null;
-        }
-
-        ExpenseResponse? expense;
-        try
-        {
-            expense = await _expenses.CreateAsync(portfolioId, request, ct);
-        }
-        catch (DomainValidationException ex)
-        {
-            _logger.LogInformation(ex, "Expense creation was rejected while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Expense creation threw while confirming scan draft {DraftId}", draftId);
-            expense = null;
-        }
-
-        if (expense is null)
-        {
-            // Null means the entity service rejected the request (e.g. a property not in this
-            // portfolio) or failed; the caller's transaction rollback releases the claim.
-            return new ScanConfirmResult(false, null, "Expense creation failed");
-        }
-
-        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Expense", expense.Id, ct);
-
-        var appliedJson = JsonSerializer.Serialize(new
-        {
-            vendorName      = dto.VendorName,
-            total           = dto.Total,
-            subtotal        = dto.Subtotal,
-            tax             = dto.Tax,
-            transactionDate = dto.TransactionDate,
-            category        = dto.Category?.ToString(),
-            notes           = dto.Notes,
-            lineItemCount   = dto.LineItems.Count,
-        });
-
-        await _audit.LogAsync(
-            portfolioId,
-            "Expense",
-            expense.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            oldValues: draft.ExtractedFields,
-            newValues: appliedJson,
-            changeReason: "Created from scan draft #" + draftId,
-            ct: ct);
-
-        return new ScanConfirmResult(true, expense.Id, null, "Expense", expense.UnitId);
-    }
-
-    private async Task<int?> FindOrCreateVendorForScannedExpenseAsync(
-        int portfolioId,
-        ExtractedReceiptDto dto,
-        CancellationToken ct)
-    {
-        var name = dto.VendorName?.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-            return null;
-
-        var normalizedName = name.ToLowerInvariant();
-        var matches = await _db.Vendors
-            .Where(v => v.PortfolioId == portfolioId
-                && v.DeletedAt == null
-                && v.Name.Trim().ToLower() == normalizedName)
-            .OrderBy(v => v.Id)
-            .Select(v => v.Id)
-            .Take(2)
-            .ToListAsync(ct);
-
-        if (matches.Count == 1)
-            return matches[0];
-
-        if (matches.Count > 1)
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var vendor = new Vendor
-        {
-            PortfolioId = portfolioId,
-            Name = TruncateRequired(name, 200),
-            ServiceType = "General",
-            Phone = Truncate(dto.VendorPhone?.Trim(), 50),
-            Website = Truncate(dto.VendorWebsite?.Trim(), 500),
-            TaxId = Truncate(dto.VendorTaxId?.Trim(), 50),
-            Notes = "Created from scanned receipt.",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.Vendors.Add(vendor);
-        await _db.SaveChangesAsync(ct);
-
-        return vendor.Id;
-    }
-
-    private static string TruncateRequired(string value, int maxLength)
-        => value.Length <= maxLength ? value : value[..maxLength];
-
-    private static string? Truncate(string? value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        return value.Length <= maxLength ? value : value[..maxLength];
-    }
-
-    // -------------------------------------------------------------------------
-    // ConfirmAsPaymentAsync  (called by the router)
-    // -------------------------------------------------------------------------
-
-    private async Task<ScanConfirmResult> ConfirmAsPaymentAsync(
-        int portfolioId,
-        int draftId,
-        int userId,
-        ScanDraft draft,
-        ExtractedReceiptDto dto,
-        string overridesJson,
-        CancellationToken ct)
-    {
-        // The review UI must supply a leaseId for payment routing.
-        int leaseId = 0;
-        try
-        {
-            using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
-            var overrideRoot = overrideDoc.RootElement;
-            if (TryGetOverrideInt(overrideRoot, out var lid, "leaseId", "lease_id"))
-                leaseId = lid;
-        }
-        catch { /* leave leaseId == 0 */ }
-
-        if (leaseId <= 0)
-        {
-            // Transaction rollback in the caller releases the "Confirming" claim.
-            return new ScanConfirmResult(false, null, "Select a lease for this payment");
-        }
-
-        var paymentAmount = dto.Total ?? dto.Subtotal ?? 0m;
-        if (paymentAmount <= 0m)
-        {
-            // Transaction rollback in the caller releases the "Confirming" claim.
-            return new ScanConfirmResult(false, null, "Confirmed amount must be greater than zero.");
-        }
-
-        // Build notes from payer name + any free-text notes on the document.
-        var notes = string.Join(" — ",
-            new[] { dto.PayerName, dto.Notes }
-                .Where(s => !string.IsNullOrWhiteSpace(s)));
-
-        var paymentDate = dto.TransactionDate ?? _timeProvider.UtcNow();
-
-        var paymentRequest = new CreatePaymentRequest
-        {
-            LeaseId           = leaseId,
-            PaymentType       = PaymentType.Rent,
-            Status            = PaymentStatus.Paid,
-            Amount            = paymentAmount,
-            DueDate           = paymentDate,
-            PaidDate          = paymentDate,
-            Method            = "Check",
-            ExternalReference = dto.CheckNumber,
-            Notes             = string.IsNullOrWhiteSpace(notes) ? null : notes,
-            // Promote scanned check fields to typed columns; keep the full extraction as the jsonb extras.
-            PayerName         = dto.PayerName,
-            CheckNumber       = dto.CheckNumber,
-            BankName          = dto.BankName,
-            ExtractedData     = NormalizeExtractedData(draft.ExtractedFields),
-        };
-
-        PaymentResponse? payment;
-        try
-        {
-            payment = await _payments.CreateAsync(portfolioId, paymentRequest, ct);
-        }
-        catch (DomainValidationException ex)
-        {
-            _logger.LogInformation(ex, "Payment creation was rejected while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Payment creation threw while confirming scan draft {DraftId}", draftId);
-            payment = null;
-        }
-
-        if (payment is null)
-        {
-            // Null means the entity service rejected the request (e.g. a lease not in this
-            // portfolio) or failed; the caller's transaction rollback releases the claim.
-            return new ScanConfirmResult(false, null, "Payment creation failed");
-        }
-
-        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Payment", payment.Id, ct);
-
-        var appliedJson = JsonSerializer.Serialize(new
-        {
-            payerName         = dto.PayerName,
-            checkNumber       = dto.CheckNumber,
-            bankName          = dto.BankName,
-            amount            = dto.Total ?? dto.Subtotal,
-            transactionDate   = dto.TransactionDate,
-            leaseId,
-        });
-
-        await _audit.LogAsync(
-            portfolioId,
-            "Payment",
-            payment.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            oldValues: draft.ExtractedFields,
-            newValues: appliedJson,
-            changeReason: "Created from scan draft #" + draftId,
-            ct: ct);
-
-        return new ScanConfirmResult(true, payment.Id, null, "Payment", payment.UnitId);
-    }
-
-    // -------------------------------------------------------------------------
-    // ConfirmAsWorkOrderAsync  (called by the router)
-    // -------------------------------------------------------------------------
-
-    private async Task<ScanConfirmResult> ConfirmAsWorkOrderAsync(
-        int portfolioId,
-        int draftId,
-        int userId,
-        ScanDraft draft,
-        string overridesJson,
-        CancellationToken ct)
-    {
-        var fields = BuildWorkOrderFields(draft.ExtractedFields);
-
-        // The id fields above came straight from the LLM. Before we trust them for auto-fill, drop any
-        // that aren't actually in THIS portfolio: a hallucinated or foreign id must never pre-select
-        // another portfolio's row (IDOR), and a bogus id would otherwise make WorkOrderService.CreateAsync
-        // reject the whole confirm. Foreign/unknown ids fall back to 0/null so the landlord picks manually.
-        await ValidateWorkOrderIdsInPortfolioAsync(portfolioId, fields, ct);
-
-        // Trusted user selections from the review UI win and are re-validated in-portfolio by CreateAsync.
-        ApplyWorkOrderOverrides(fields, overridesJson);
-
-        if (fields.PropertyId <= 0)
-            return new ScanConfirmResult(false, null, "Select a property for this work order");
-
-        if (string.IsNullOrWhiteSpace(fields.Title))
-            return new ScanConfirmResult(false, null, "Work order title is required");
-
-        if (string.IsNullOrWhiteSpace(fields.Description))
-            return new ScanConfirmResult(false, null, "Work order description is required");
-
-        if (fields.UnitId is null && fields.PropertyId > 0)
-        {
-            fields.UnitId = await TryResolveWorkOrderUnitFromTextAsync(portfolioId, fields.PropertyId, fields, ct);
-        }
-
-        var request = new CreateWorkOrderRequest
-        {
-            PropertyId = fields.PropertyId,
-            UnitId = fields.UnitId,
-            TenantId = fields.TenantId,
-            LeaseId = fields.LeaseId,
-            VendorId = fields.VendorId,
-            Title = fields.Title!,
-            Description = fields.Description!,
-            Category = string.IsNullOrWhiteSpace(fields.Category) ? "General" : fields.Category!,
-            Priority = fields.Priority,
-            Status = WorkOrderStatus.New,
-            RequestedAt = _timeProvider.UtcNow(),
-            EstimatedCost = fields.EstimatedCost,
-            CreatedBy = userId.ToString(),
-            // Keep the full scan extraction superset as jsonb extras.
-            ExtractedData = NormalizeExtractedData(draft.ExtractedFields),
-        };
-
-        WorkOrderResponse? workOrder;
-        try
-        {
-            workOrder = await _workOrders.CreateAsync(portfolioId, request, userId, "Staff", ct);
-        }
-        catch (DomainValidationException ex)
-        {
-            _logger.LogInformation(ex, "Work order creation was rejected while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Work order creation threw while confirming scan draft {DraftId}", draftId);
-            workOrder = null;
-        }
-
-        if (workOrder is null)
-            return new ScanConfirmResult(false, null, "Work order creation failed");
-
-        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "WorkOrder", workOrder.Id, ct);
-
-        var appliedJson = JsonSerializer.Serialize(new
-        {
-            request.PropertyId,
-            request.UnitId,
-            request.TenantId,
-            request.Title,
-            request.Description,
-            request.Category,
-            Priority = request.Priority.ToString(),
-            request.EstimatedCost,
-        });
-
-        await _audit.LogAsync(
-            portfolioId,
-            "WorkOrder",
-            workOrder.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            oldValues: draft.ExtractedFields,
-            newValues: appliedJson,
-            changeReason: "Created from scan draft #" + draftId,
-            ct: ct);
-
-        return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder", workOrder.UnitId);
-    }
-
-    // -------------------------------------------------------------------------
-    // ConfirmAsLeaseAsync  (called by the router) — the "import your PDF leases" path
-    // -------------------------------------------------------------------------
-
-    private async Task<ScanConfirmResult> ConfirmAsLeaseAsync(
-        int portfolioId,
-        int draftId,
-        int userId,
-        ScanDraft draft,
-        string overridesJson,
-        CancellationToken ct)
-    {
-        var fields = BuildLeaseFields(draft.ExtractedFields);
-
-        // The property/unit/tenant ids above came straight from the LLM. Drop any that aren't actually
-        // in THIS portfolio before we trust them: a hallucinated or foreign id must never link another
-        // portfolio's row (IDOR). Foreign/unknown ids fall back to 0/null so the reviewer picks manually.
-        await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
-
-        // Trusted user selections from the review UI win and are re-validated in-portfolio below.
-        ApplyLeaseOverrides(fields, overridesJson);
-
-        // Resolve the property: a validated grounded/override id wins; otherwise match the extracted
-        // leased-premises address to an existing in-portfolio property, and if none matches, CREATE
-        // it. This is the empty-portfolio bootstrap — a brand-new landlord scans a stack of leases and
-        // the properties are created from the documents (no "the property must already exist" wall).
-        int propertyId;
-        if (fields.PropertyId > 0)
-        {
-            // Re-validate the (possibly override-supplied) id — never trust a raw override id either.
-            if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
-                return new ScanConfirmResult(false, null, "Selected property is not in this portfolio");
-            propertyId = fields.PropertyId;
-        }
-        else
-        {
-            var resolvedProperty = await ResolveOrCreatePropertyAsync(portfolioId, fields, ct);
-            if (resolvedProperty is null)
-                return new ScanConfirmResult(false, null,
-                    "Select a property for this lease, or provide the property address so it can be created");
-            propertyId = resolvedProperty.Value;
-        }
-
-        // Resolve the unit UNDER the resolved property: a validated grounded/override id wins (and must
-        // belong to that property); otherwise match the extracted unit number under the property, and if
-        // none matches, CREATE it. A single-family lease with no unit designation still gets a unit row
-        // (a sensible default unit number) so every lease has the property→unit→lease spine.
-        int unitId;
-        if (fields.UnitId is > 0)
-        {
-            if (!await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, propertyId, ct))
-                return new ScanConfirmResult(false, null, "Selected unit is not in this portfolio");
-            unitId = fields.UnitId.Value;
-        }
-        else
-        {
-            var resolvedUnit = await ResolveOrCreateUnitAsync(portfolioId, propertyId, fields, ct);
-            if (resolvedUnit is null)
-                return new ScanConfirmResult(false, null, "Unit creation failed for this lease");
-            unitId = resolvedUnit.Value;
-        }
-
-        // Resolve the tenant: an override-supplied tenantId wins (validated in-portfolio); otherwise, if
-        // the extracted tenant_name doesn't match an existing tenant, chain a new in-portfolio Tenant from
-        // the name. An imported lease's tenant is frequently not yet on file, so creating one keeps the
-        // "the computer does the typing" promise instead of dead-ending the import.
-        int tenantId;
-        if (fields.TenantId is > 0)
-        {
-            if (!await _db.EnsureTenantInPortfolioAsync(portfolioId, fields.TenantId.Value, ct))
-                return new ScanConfirmResult(false, null, "Selected tenant is not in this portfolio");
-            tenantId = fields.TenantId.Value;
-        }
-        else
-        {
-            var resolved = await ResolveOrCreateTenantAsync(portfolioId, fields, ct);
-            if (resolved is null)
-                return new ScanConfirmResult(false, null, "Select a tenant for this lease");
-            tenantId = resolved.Value;
-        }
-
-        if (fields.StartDate is null || fields.EndDate is null)
-            return new ScanConfirmResult(false, null, "Lease start and end dates are required");
-
-        if (fields.MonthlyRent is not > 0m)
-            return new ScanConfirmResult(false, null, "Monthly rent must be greater than zero");
-
-        var leaseNumber = string.IsNullOrWhiteSpace(fields.LeaseNumber)
-            ? $"SCAN-{_timeProvider.UtcNow():yyyyMMddHHmmss}"
-            : fields.LeaseNumber!;
-
-        var request = new CreateLeaseRequest
-        {
-            PropertyId      = propertyId,
-            UnitId          = unitId,
-            TenantId        = tenantId,
-            LeaseNumber     = leaseNumber,
-            Status          = LeaseStatus.Active,
-            StartDate       = fields.StartDate.Value,
-            EndDate         = fields.EndDate.Value,
-            MonthlyRent     = fields.MonthlyRent.Value,
-            SecurityDeposit = fields.SecurityDeposit ?? 0m,
-            LateFeeAmount   = fields.LateFee ?? 0m,
-            RentDueDay      = fields.RentDueDay is >= 1 and <= 31 ? fields.RentDueDay.Value : 1,
-            RentTrackingStartMode = fields.RentTrackingStartMode ?? RentTrackingStartMode.ForwardOnly,
-            RentTrackingStartDate = fields.RentTrackingStartDate,
-            OpeningBalanceAmount = fields.OpeningBalanceAmount,
-            OpeningBalanceAsOfDate = fields.OpeningBalanceAsOfDate,
-            OpeningBalanceNote = fields.OpeningBalanceNote,
-            Notes           = "Imported from scanned lease document.",
-            // Keep the full scan extraction superset as jsonb extras.
-            ExtractedData   = NormalizeExtractedData(draft.ExtractedFields),
-        };
-
-        LeaseResponse? lease;
-        try
-        {
-            lease = await _leases.CreateAsync(portfolioId, request, ct);
-        }
-        catch (DomainValidationException ex)
-        {
-            _logger.LogInformation(ex, "Lease creation was rejected while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lease creation threw while confirming scan draft {DraftId}", draftId);
-            lease = null;
-        }
-
-        if (lease is null)
-            return new ScanConfirmResult(false, null, "Lease creation failed");
-
-        // Re-attach the source document to the created lease (FinalizeDraft re-keys the StoredFile + marks Confirmed).
-        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Lease", lease.Id, ct);
-
-        var appliedJson = JsonSerializer.Serialize(new
-        {
-            request.PropertyId,
-            request.UnitId,
-            request.TenantId,
-            request.LeaseNumber,
-            Status = request.Status.ToString(),
-            request.StartDate,
-            request.EndDate,
-            request.MonthlyRent,
-            request.SecurityDeposit,
-            request.LateFeeAmount,
-            request.RentDueDay,
-        });
-
-        await _audit.LogAsync(
-            portfolioId,
-            "Lease",
-            lease.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            oldValues: draft.ExtractedFields,
-            newValues: appliedJson,
-            changeReason: "Created from scan draft #" + draftId,
-            ct: ct);
-
-        return new ScanConfirmResult(true, lease.Id, null, "Lease", lease.UnitId);
-    }
-
-    // -------------------------------------------------------------------------
-    // ConfirmAsApplicationAsync  (called by the router) — the "scan a completed paper application" path
-    // -------------------------------------------------------------------------
-
-    private async Task<ScanConfirmResult> ConfirmAsApplicationAsync(
-        int portfolioId,
-        int draftId,
-        int userId,
-        ScanDraft draft,
-        string overridesJson,
-        CancellationToken ct)
-    {
-        var fields = BuildApplicationFields(draft.ExtractedFields);
-
-        // The property/unit ids came straight from the LLM. Drop any that aren't actually in THIS portfolio
-        // before we trust them (IDOR) — same pattern as the lease/work-order paths. Trusted reviewer
-        // selections from the review UI then win and are re-validated below.
-        await ValidateApplicationIdsInPortfolioAsync(portfolioId, fields, ct);
-        ApplyApplicationOverrides(fields, overridesJson);
-
-        // First + last name anchor the applicant record (both are [Required] on the create request).
-        if (string.IsNullOrWhiteSpace(fields.FirstName) || string.IsNullOrWhiteSpace(fields.LastName))
-            return new ScanConfirmResult(false, null, "Applicant first and last name are required");
-
-        // Re-validate any reviewer-supplied property/unit id in-portfolio (never trust a raw override id).
-        int? propertyId = null;
-        if (fields.PropertyId is > 0)
-        {
-            if (await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId.Value, ct))
-                propertyId = fields.PropertyId;
-        }
-        int? unitId = null;
-        if (fields.UnitId is > 0)
-        {
-            if (await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, propertyId, ct))
-                unitId = fields.UnitId;
-        }
-
-        if (propertyId is null || unitId is null)
-        {
-            var requestedHome = await TryResolveApplicationRequestedHomeAsync(
-                portfolioId, fields.ApplyingFor, propertyId, ct);
-            if (requestedHome is not null)
-            {
-                propertyId ??= requestedHome.PropertyId;
-                unitId ??= requestedHome.UnitId;
-            }
-        }
-
-        // Fold the application-only details that have no dedicated RentalApplication column (the applied-for
-        // property/unit text, the ID last-4 hint, and any co-signer) into the Notes so they aren't lost. The
-        // structured property/unit selection (above) is the queryable link; this is the human-readable record.
-        var notes = BuildApplicationNotes(fields);
-
-        var request = new CreateApplicationRequest
-        {
-            PropertyId = propertyId,
-            UnitId = unitId,
-            FirstName = fields.FirstName!.Trim(),
-            LastName = fields.LastName!.Trim(),
-            Email = fields.Email,
-            Phone = fields.Phone,
-            DateOfBirth = fields.DateOfBirth,
-            CurrentAddress = fields.CurrentAddress,
-            Employer = fields.Employer,
-            MonthlyIncome = fields.MonthlyIncome,
-            DesiredMoveInDate = fields.DesiredMoveInDate,
-            Notes = notes,
-            // Keep the full scan extraction superset as the provenance JSON.
-            IdExtractedFields = NormalizeExtractedData(draft.ExtractedFields),
-        };
-
-        ApplicationResponse application;
-        try
-        {
-            application = await _applications.CreateFromScanAsync(portfolioId, request, userId, ct);
-        }
-        catch (DomainValidationException ex)
-        {
-            _logger.LogInformation(ex, "Application creation was rejected while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Application creation threw while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, "Application creation failed");
-        }
-
-        // Re-attach the source document to the created application (re-key the StoredFile + mark Confirmed).
-        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Application", application.Id, ct);
-
-        var appliedJson = JsonSerializer.Serialize(new
-        {
-            request.FirstName,
-            request.LastName,
-            request.Email,
-            request.Phone,
-            request.DateOfBirth,
-            request.Employer,
-            request.MonthlyIncome,
-            request.PropertyId,
-            request.UnitId,
-        });
-
-        await _audit.LogAsync(
-            portfolioId,
-            "RentalApplication",
-            application.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            oldValues: draft.ExtractedFields,
-            newValues: appliedJson,
-            changeReason: "Created from scan draft #" + draftId,
-            ct: ct);
-
-        return new ScanConfirmResult(true, application.Id, null, "Application", application.UnitId);
-    }
-
-    // -------------------------------------------------------------------------
-    // ConfirmAsLoanAsync  (called by the router) — the "scan your mortgage statement" path
-    // -------------------------------------------------------------------------
-
-    private async Task<ScanConfirmResult> ConfirmAsLoanAsync(
-        int portfolioId,
-        int draftId,
-        int userId,
-        ScanDraft draft,
-        string overridesJson,
-        CancellationToken ct)
-    {
-        var fields = BuildLoanFields(draft.ExtractedFields);
-
-        // The property id came straight from the LLM. Drop it if it isn't actually in THIS portfolio
-        // before we trust it (IDOR) — same pattern as the lease/application paths. The reviewer's
-        // selection (the scan-context deep-link sends the property they launched the scan from) then
-        // wins and is re-validated in-portfolio below.
-        await ValidateLoanIdsInPortfolioAsync(portfolioId, fields, ct);
-        ApplyLoanOverrides(fields, overridesJson);
-
-        if (fields.PropertyId <= 0)
-            return new ScanConfirmResult(false, null, "Select a property for this loan");
-
-        // Re-validate the (possibly override-supplied) id — never trust a raw override id either.
-        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
-            return new ScanConfirmResult(false, null, "Selected property is not in this portfolio");
-
-        if (string.IsNullOrWhiteSpace(fields.Lender))
-            return new ScanConfirmResult(false, null, "Lender is required");
-
-        if (!ValidateAndNormalizeLoanFinancialFields(fields, out var financialError))
-            return new ScanConfirmResult(false, null, financialError);
-
-        var request = new CreateLoanRequest
-        {
-            PropertyId = fields.PropertyId,
-            Lender = fields.Lender!.Trim(),
-            OriginalAmount = fields.OriginalAmount ?? 0m,
-            // null lets LoanService default the balance to the original amount (closing disclosures
-            // show only the original; monthly statements show the live balance).
-            CurrentBalance = fields.CurrentBalance,
-            AnnualInterestRatePct = fields.AnnualInterestRatePct ?? 0m,
-            // Clamp to the column's [1,1200] range; default a 30-year term when unreadable.
-            TermMonths = fields.TermMonths is >= 1 and <= 1200 ? fields.TermMonths.Value : 360,
-            StartDate = fields.StartDate ?? _timeProvider.UtcNow(),
-            DayOfMonthDue = fields.DayOfMonthDue is >= 1 and <= 31 ? fields.DayOfMonthDue.Value : 1,
-            MonthlyPrincipalInterest = fields.MonthlyPrincipalInterest ?? 0m,
-            MonthlyEscrow = fields.MonthlyEscrow ?? 0m,
-            EscrowCoversTaxes = fields.EscrowCoversTaxes ?? false,
-            EscrowCoversInsurance = fields.EscrowCoversInsurance ?? false,
-            // Active so the Engine's DebtServiceWorker picks it up and generates the amortization schedule.
-            Status = LoanStatus.Active,
-            Notes = BuildLoanNotes(fields.Notes),
-        };
-
-        LoanResponse? loan;
-        try
-        {
-            loan = await _loans.CreateAsync(portfolioId, request, ct);
-        }
-        catch (DomainValidationException ex)
-        {
-            _logger.LogInformation(ex, "Loan creation was rejected while confirming scan draft {DraftId}", draftId);
-            return new ScanConfirmResult(false, null, ex.Message);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Loan creation threw while confirming scan draft {DraftId}", draftId);
-            loan = null;
-        }
-
-        if (loan is null)
-            // Null means the entity service rejected the request (e.g. a property not in this
-            // portfolio) or failed; the caller's transaction rollback releases the claim.
-            return new ScanConfirmResult(false, null, "Loan creation failed");
-
-        // Re-attach the source document to the created loan (re-key the StoredFile + mark Confirmed).
-        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Loan", loan.Id, ct);
-
-        var appliedJson = JsonSerializer.Serialize(new
-        {
-            request.PropertyId,
-            request.Lender,
-            request.OriginalAmount,
-            request.CurrentBalance,
-            request.AnnualInterestRatePct,
-            request.TermMonths,
-            request.StartDate,
-            request.DayOfMonthDue,
-            request.MonthlyPrincipalInterest,
-            request.MonthlyEscrow,
-            request.EscrowCoversTaxes,
-            request.EscrowCoversInsurance,
-            Status = request.Status.ToString(),
-        });
-
-        await _audit.LogAsync(
-            portfolioId,
-            "Loan",
-            loan.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            oldValues: draft.ExtractedFields,
-            newValues: appliedJson,
-            changeReason: "Created from scan draft #" + draftId,
-            ct: ct);
-
-        return new ScanConfirmResult(true, loan.Id, null, "Loan");
-    }
-
-    /// <summary>
-    /// Builds the loan Notes: the reviewer/extracted free-text note (if any) plus a provenance suffix,
-    /// capped to the column's 2000-char bound. Always records that the loan came from a scanned document.
-    /// </summary>
-    private static string BuildLoanNotes(string? extractedNotes)
-    {
-        const string provenance = "Imported from scanned mortgage document.";
-        var note = string.IsNullOrWhiteSpace(extractedNotes)
-            ? provenance
-            : $"{extractedNotes!.Trim()} ({provenance})";
-        return note.Length > 2000 ? note[..2000] : note;
-    }
-
-    private static bool ValidateAndNormalizeLoanFinancialFields(LoanDraftFields fields, out string? error)
-    {
-        if (!TryNormalizeLoanDecimal(fields.OriginalAmount, "Original loan amount", 0m, 999_999_999m, 2, out var originalAmount, out error))
-            return false;
-        fields.OriginalAmount = originalAmount;
-
-        if (!TryNormalizeLoanDecimal(fields.CurrentBalance, "Current loan balance", 0m, 999_999_999m, 2, out var currentBalance, out error))
-            return false;
-        fields.CurrentBalance = currentBalance;
-
-        // Scan-confirm is for mortgages/closing disclosures. A rate like 65 usually means 6.5 was
-        // misread; reject it for human review instead of generating a bad amortization schedule.
-        if (!TryNormalizeLoanDecimal(fields.AnnualInterestRatePct, "Annual interest rate", 0m, 30m, 4, out var rate, out error))
-            return false;
-        fields.AnnualInterestRatePct = rate;
-
-        if (!TryNormalizeLoanDecimal(fields.MonthlyPrincipalInterest, "Monthly principal and interest", 0m, 9_999_999m, 2, out var monthlyPi, out error))
-            return false;
-        fields.MonthlyPrincipalInterest = monthlyPi;
-
-        if (!TryNormalizeLoanDecimal(fields.MonthlyEscrow, "Monthly escrow", 0m, 9_999_999m, 2, out var monthlyEscrow, out error))
-            return false;
-        fields.MonthlyEscrow = monthlyEscrow;
-
-        error = null;
-        return true;
-    }
-
-    private static bool TryNormalizeLoanDecimal(
-        decimal? raw,
-        string label,
-        decimal min,
-        decimal max,
-        int scale,
-        out decimal? normalized,
-        out string? error)
-    {
-        if (!raw.HasValue)
-        {
-            normalized = null;
-            error = null;
-            return true;
-        }
-
-        var value = raw.Value;
-        if (value < min || value > max)
-        {
-            normalized = null;
-            error = $"{label} must be between {FormatLoanDecimal(min)} and {FormatLoanDecimal(max)}.";
-            return false;
-        }
-
-        normalized = decimal.Round(value, scale, MidpointRounding.AwayFromZero);
-        error = null;
-        return true;
-    }
-
-    private static string FormatLoanDecimal(decimal value)
-        => value.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
-
-    /// <summary>
-    /// Folds the scanned-application details that have no dedicated <see cref="Core.Entities.RentalApplication"/>
-    /// column — the applied-for property/unit free text, the government-ID last-4 hint, and any co-signer name —
-    /// into the application Notes, after any free-text notes the reviewer entered, so nothing the scan captured
-    /// is silently dropped. Returns null when there is nothing to record.
-    /// </summary>
-    private static string? BuildApplicationNotes(ApplicationDraftFields fields)
-    {
-        var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(fields.Notes))
-            parts.Add(fields.Notes!.Trim());
-        if (!string.IsNullOrWhiteSpace(fields.ApplyingFor))
-            parts.Add($"Applying for: {fields.ApplyingFor!.Trim()}.");
-        if (!string.IsNullOrWhiteSpace(fields.IdLast4))
-            parts.Add($"ID last-4: {fields.IdLast4!.Trim()}.");
-        if (!string.IsNullOrWhiteSpace(fields.CoSignerName))
-            parts.Add($"Co-signer: {fields.CoSignerName!.Trim()}.");
-
-        if (parts.Count == 0)
-            return null;
-        var note = string.Join(" ", parts);
-        return note.Length > 2000 ? note[..2000] : note;
-    }
-
     /// <summary>
     /// Best-effort requested-home matcher for scanned paper applications. It only links existing rows:
     /// "Summit Row Unit 4D" resolves by exact property-name + unit-number match, and "Unit 4D" resolves
@@ -1305,17 +413,23 @@ public sealed class ScanService : IScanService
                 .FirstOrDefaultAsync(ct);
         }
 
-        var unitOnlyMatches = await _db.Units
+        var unitOnlyMatch = await _db.Units
             .AsNoTracking()
             .Where(u => u.DeletedAt == null)
             .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId && u.Property.DeletedAt == null)
             .Where(u => (u.UnitNumber ?? "").Trim().ToLower() == unitKey)
-            .OrderBy(u => u.Id)
-            .Select(u => new ApplicationHomeMatch(u.PropertyId, u.Id))
-            .Take(2)
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Count = group.Count(),
+                PropertyId = group.Min(unit => unit.PropertyId),
+                UnitId = group.Min(unit => unit.Id),
+            })
+            .SingleOrDefaultAsync(ct);
 
-        return unitOnlyMatches.Count == 1 ? unitOnlyMatches[0] : null;
+        return unitOnlyMatch?.Count == 1
+            ? new ApplicationHomeMatch(unitOnlyMatch.PropertyId, unitOnlyMatch.UnitId)
+            : null;
     }
 
     private static string? ExtractApplicationPropertyHint(string applyingFor, Match unitMatch)
@@ -1346,136 +460,6 @@ public sealed class ScanService : IScanService
         return string.IsNullOrWhiteSpace(hint) ? null : hint;
     }
 
-    /// <summary>
-    /// Resolves the tenant for an imported lease from the extracted name: returns an existing tenant's id
-    /// when the name matches (case-insensitive on the combined first+last), otherwise creates a new
-    /// in-portfolio Tenant from the name ("chained Tenant") and returns its id. Returns null only when
-    /// there is no usable name to create from.
-    /// </summary>
-    private async Task<int?> ResolveOrCreateTenantAsync(int portfolioId, LeaseDraftFields fields, CancellationToken ct)
-    {
-        var name = fields.TenantName?.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-            return null;
-
-        // Match against existing in-portfolio tenants by full name in SQL; do not materialize every tenant
-        // just to compare names in memory.
-        var normalized = CollapseWhitespace(name).ToLowerInvariant();
-        var matchId = await _db.Tenants
-            .Where(t => t.PortfolioId == portfolioId && t.DeletedAt == null)
-            .Where(t => (t.FirstName + " " + t.LastName).Trim().ToLower() == normalized)
-            .Select(t => (int?)t.Id)
-            .FirstOrDefaultAsync(ct);
-
-        if (matchId is not null)
-            return matchId.Value;
-
-        // No match — chain a new Tenant. Split the name into first/last on the last space.
-        var (firstName, lastName) = SplitName(name);
-        var created = await _tenants.CreateAsync(
-            portfolioId,
-            new CreateTenantRequest
-            {
-                FirstName = firstName,
-                LastName = lastName,
-                Email = BlankToNull(fields.TenantEmail),
-                Phone = BlankToNull(fields.TenantPhone),
-                EmergencyContact = BlankToNull(fields.TenantEmergencyContact),
-                Notes = "Created from scanned lease document.",
-            },
-            ct);
-
-        return created.Id;
-    }
-
-    /// <summary>
-    /// Resolves the property for an imported lease from the extracted leased-premises address: returns
-    /// an existing in-portfolio property's id when its address matches (normalized AddressLine1 + City,
-    /// or property name as a fallback), otherwise CREATES a new property from the extracted address and
-    /// returns its id. This is the empty-portfolio bootstrap — properties are created from the documents.
-    /// Returns null only when there is no usable address or name to match/create from (so the reviewer
-    /// must supply one). Matching is the dedupe guard: re-scanning a lease for an existing property links
-    /// rather than duplicates.
-    /// </summary>
-    private async Task<int?> ResolveOrCreatePropertyAsync(
-        int portfolioId, LeaseDraftFields fields, CancellationToken ct)
-    {
-        var address = fields.PropertyAddress?.Trim();
-        var name = fields.PropertyName?.Trim();
-
-        // Nothing to anchor on — neither a street address nor a building name. The reviewer must pick.
-        if (string.IsNullOrWhiteSpace(address) && string.IsNullOrWhiteSpace(name))
-            return null;
-
-        // Reuse the same match key the proposal preview uses, so "what confirm will do" never drifts
-        // from what confirm actually does.
-        var match = await FindMatchingPropertyAsync(portfolioId, fields, ct);
-        if (match is not null)
-            return match.Id;
-
-        // No match — create the property from the extracted premises. Required-ish address parts that the
-        // lease omitted get a clear placeholder so the row is obviously "needs review" rather than blank.
-        var created = await _properties.CreateAsync(
-            portfolioId,
-            new CreatePropertyRequest
-            {
-                Name = !string.IsNullOrWhiteSpace(name)
-                    ? name!
-                    : !string.IsNullOrWhiteSpace(address) ? address! : "Imported Property",
-                // Honor the reviewer's chosen property type; fall back to the request default
-                // (MultiFamily) when absent or an unrecognized value, rather than crashing.
-                PropertyType = Enum.TryParse<PropertyType>(fields.PropertyType, ignoreCase: true, out var parsedType)
-                    ? parsedType
-                    : PropertyType.MultiFamily,
-                AddressLine1 = !string.IsNullOrWhiteSpace(address) ? address! : "Unknown",
-                City = !string.IsNullOrWhiteSpace(fields.PropertyCity) ? fields.PropertyCity!.Trim() : "Unknown",
-                State = !string.IsNullOrWhiteSpace(fields.PropertyState) ? fields.PropertyState!.Trim() : "Unknown",
-                PostalCode = !string.IsNullOrWhiteSpace(fields.PropertyPostalCode) ? fields.PropertyPostalCode!.Trim() : "Unknown",
-                Notes = "Created from scanned lease document.",
-            },
-            ct);
-
-        // CreateAsync only returns null on a cross-tenant owner reference, which this path never sets.
-        return created?.Id;
-    }
-
-    /// <summary>
-    /// Resolves the unit for an imported lease UNDER the already-resolved property: returns an existing
-    /// unit's id when its unit number matches (case-insensitive) within that property, otherwise CREATES
-    /// a new unit and returns its id. A lease with no unit designation (single-family home) uses a default
-    /// unit number so every lease still has a property→unit→lease spine, and re-scanning that lease matches
-    /// the same default unit rather than duplicating it. Returns null only if unit creation fails.
-    /// </summary>
-    private async Task<int?> ResolveOrCreateUnitAsync(
-        int portfolioId, int propertyId, LeaseDraftFields fields, CancellationToken ct)
-    {
-        // Default a missing unit number so a single-family lease still produces a unit (and re-scans dedupe).
-        var unitNumber = DefaultUnitNumber(fields.UnitNumber);
-
-        var match = await FindMatchingUnitAsync(propertyId, unitNumber, ct);
-        if (match is not null)
-            return match.Id;
-
-        var created = await _units.CreateAsync(
-            portfolioId,
-            new CreateUnitRequest
-            {
-                PropertyId = propertyId,
-                UnitNumber = unitNumber,
-                Bedrooms = fields.UnitBedrooms is >= 0 and <= 99 ? fields.UnitBedrooms.Value : 0m,
-                Bathrooms = fields.UnitBathrooms is >= 0 and <= 99 ? fields.UnitBathrooms.Value : 0m,
-                SquareFeet = fields.UnitSquareFeet is > 0 ? fields.UnitSquareFeet : null,
-                MarketRent = fields.MonthlyRent is > 0m ? fields.MonthlyRent.Value : 0m,
-                Status = UnitStatus.Occupied, // an imported lease means the unit is currently leased
-                Notes = "Created from scanned lease document.",
-            },
-            ct);
-
-        // CreateAsync returns null only when the property is missing/out of scope — we just resolved it
-        // in-portfolio above, so this is a real failure (don't silently swallow it into a foreign link).
-        return created?.Id;
-    }
-
     /// <summary>A property the lease's extracted address/name matched in this portfolio, or null.</summary>
     private sealed record PropertyMatch(int Id, string Label, string? Detail);
 
@@ -1501,32 +485,36 @@ public sealed class ScanService : IScanService
         if (string.IsNullOrWhiteSpace(addressKey) && nameKey.Length == 0)
             return null;
 
-        // Pull the portfolio's active properties and match in memory: address normalization (suffix
-        // abbreviations, punctuation, case) isn't expressible in a translatable EF query.
-        var candidates = await _db.Properties
-            .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
-            .Select(p => new { p.Id, p.Name, p.AddressLine1, p.City })
-            .ToListAsync(ct);
-
         if (!string.IsNullOrWhiteSpace(addressKey))
         {
-            var byAddress = candidates.FirstOrDefault(p =>
-            {
-                var pAddr = NormalizeAddress(p.AddressLine1);
-                if (string.IsNullOrWhiteSpace(pAddr) || pAddr != addressKey)
-                    return false;
-                var pCity = CollapseWhitespace(p.City ?? string.Empty).ToLowerInvariant();
-                // Only require city agreement when BOTH sides actually specify one.
-                return string.IsNullOrWhiteSpace(cityKey) || string.IsNullOrWhiteSpace(pCity) || pCity == cityKey;
-            });
+            var aliases = AddressAliases(addressKey);
+            var byAddress = await _db.Properties
+                .AsNoTracking()
+                .Where(property => property.PortfolioId == portfolioId && property.DeletedAt == null)
+                .Where(property => aliases.Contains(
+                    (property.AddressLine1 ?? string.Empty).Trim().ToLower()
+                        .Replace(".", string.Empty).Replace(",", string.Empty)
+                        .Replace("  ", " ").Replace("  ", " ")))
+                .Where(property => cityKey.Length == 0
+                    || property.City == null
+                    || property.City.Trim() == string.Empty
+                    || property.City.Trim().ToLower() == cityKey)
+                .OrderBy(property => property.Id)
+                .Select(property => new { property.Id, property.Name, property.AddressLine1, property.City })
+                .FirstOrDefaultAsync(ct);
             if (byAddress is not null)
                 return new PropertyMatch(byAddress.Id, byAddress.Name, FormatAddress(byAddress.AddressLine1, byAddress.City));
         }
         else
         {
-            var byName = candidates.FirstOrDefault(p =>
-                !string.IsNullOrWhiteSpace(p.Name) &&
-                CollapseWhitespace(p.Name).ToLowerInvariant() == nameKey);
+            var byName = await _db.Properties
+                .AsNoTracking()
+                .Where(property => property.PortfolioId == portfolioId && property.DeletedAt == null)
+                .Where(property => (property.Name ?? string.Empty).Trim().ToLower()
+                    .Replace("  ", " ").Replace("  ", " ") == nameKey)
+                .OrderBy(property => property.Id)
+                .Select(property => new { property.Id, property.Name, property.AddressLine1, property.City })
+                .FirstOrDefaultAsync(ct);
             if (byName is not null)
                 return new PropertyMatch(byName.Id, byName.Name, FormatAddress(byName.AddressLine1, byName.City));
         }
@@ -1635,6 +623,26 @@ public sealed class ScanService : IScanService
         return string.Join(' ', tokens);
     }
 
+    private static string[] AddressAliases(string normalizedAddress)
+    {
+        var aliases = new HashSet<string>(StringComparer.Ordinal) { normalizedAddress };
+        var tokens = normalizedAddress.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        for (var index = 0; index < tokens.Length; index++)
+        {
+            foreach (var alternative in StreetSuffixAbbreviations
+                         .Where(pair => pair.Value == tokens[index])
+                         .Select(pair => pair.Key)
+                         .Distinct(StringComparer.Ordinal))
+            {
+                var variant = (string[])tokens.Clone();
+                variant[index] = alternative;
+                aliases.Add(string.Join(' ', variant));
+            }
+        }
+
+        return aliases.ToArray();
+    }
+
     // Common US street-suffix variants → a single canonical token, so address dedupe doesn't break on
     // "St" vs "Street". Bounded, well-known set; not an attempt at a full USPS suffix table.
     private static readonly Dictionary<string, string> StreetSuffixAbbreviations =
@@ -1659,55 +667,6 @@ public sealed class ScanService : IScanService
 
     private static string CollapseWhitespace(string value) =>
         string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-
-    private static (string FirstName, string LastName) SplitName(string fullName)
-    {
-        var parts = fullName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
-            return ("Tenant", "(scanned)");
-        if (parts.Length == 1)
-            return (parts[0], "(scanned)"); // LastName is [Required] on the create request — never empty.
-        return (string.Join(' ', parts[..^1]), parts[^1]);
-    }
-
-    // -------------------------------------------------------------------------
-    // Shared finalize helpers
-    // -------------------------------------------------------------------------
-
-    // NOTE: there is no longer a ReleaseClaim helper. The whole confirm-and-create runs inside
-    // a single transaction (see ConfirmAndCreateAsync); any failure path returns a non-Success
-    // result and the caller rolls the transaction back, which atomically restores the draft's
-    // prior "Reviewing" status. Writing "Reviewing" by hand here would be redundant — and risky
-    // if it ever ran outside the transaction.
-
-    /// <summary>
-    /// Re-keys the StoredFile to the newly created entity, then marks the draft Confirmed.
-    /// Called by both Expense and Payment branches after successful entity creation,
-    /// inside the confirm transaction so the file re-key and the status flip commit together.
-    /// </summary>
-    private async Task FinalizeDraft(
-        int portfolioId,
-        int draftId,
-        int userId,
-        string filePath,
-        string entityType,
-        int entityId,
-        CancellationToken ct)
-    {
-        await _db.StoredFiles
-            .Where(f => f.PortfolioId == portfolioId && f.FilePath == filePath)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(f => f.EntityType, entityType)
-                .SetProperty(f => f.EntityId, (int?)entityId), ct);
-
-        var now = _timeProvider.UtcNow();
-        await _db.ScanDrafts
-            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(d => d.Status, "Confirmed")
-                .SetProperty(d => d.ConfirmedAt, (DateTime?)now)
-                .SetProperty(d => d.ReviewedBy, userId.ToString()), ct);
-    }
 
     // -------------------------------------------------------------------------
     // RejectDraftAsync
@@ -1748,6 +707,11 @@ public sealed class ScanService : IScanService
 
         return true;
     }
+
+    private static string? Truncate(string? value, int maxLength) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Length <= maxLength ? value : value[..maxLength];
 
     // -------------------------------------------------------------------------
     // Private helpers
@@ -1927,71 +891,6 @@ public sealed class ScanService : IScanService
             decimal.TryParse(el.GetString(), System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var vs)) return vs;
         return null;
-    }
-
-    /// <summary>
-    /// Builds the ReceiptData JSON string that captures non-promoted details from the extraction DTO.
-    /// </summary>
-    private static string BuildReceiptDataJson(ExtractedReceiptDto dto)
-    {
-        try
-        {
-            var lineItems = dto.LineItems.Select(li => new
-            {
-                description = li.Description,
-                quantity    = li.Quantity,
-                unitPrice   = li.UnitPrice,
-                amount      = li.Amount,
-            }).ToArray();
-
-            var obj = new
-            {
-                documentKind  = dto.DocumentKind,
-                dueDate       = dto.DueDate,
-                vendor = new
-                {
-                    address = dto.VendorAddress,
-                    phone   = dto.VendorPhone,
-                    website = dto.VendorWebsite,
-                    taxId   = dto.VendorTaxId,
-                },
-                receiptNumber = dto.ReceiptNumber,
-                paymentMethod = dto.PaymentMethod,
-                cardLast4     = dto.CardLast4,
-                taxRate       = dto.TaxRate,
-                tip           = dto.Tip,
-                discount      = dto.Discount,
-                shipping      = dto.Shipping,
-                lineItems,
-                extra         = dto.Extra,
-            };
-
-            return JsonSerializer.Serialize(obj);
-        }
-        catch
-        {
-            return "{}";
-        }
-    }
-
-    /// <summary>
-    /// Returns the raw worker-written extraction JSON as the jsonb "extras" superset for
-    /// Payment/Lease/WorkOrder, but only when it parses as valid JSON — a jsonb column rejects
-    /// malformed text, so anything unparseable (or empty) becomes null rather than failing the save.
-    /// </summary>
-    private static string? NormalizeExtractedData(string? extractedFieldsJson)
-    {
-        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
-            return null;
-        try
-        {
-            using var _ = JsonDocument.Parse(extractedFieldsJson);
-            return extractedFieldsJson;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     /// <summary>
@@ -2671,12 +1570,6 @@ public sealed class ScanService : IScanService
             "false" or "no" or "n" or "0" => false,
             _ => null,
         };
-    }
-
-    private static string? BlankToNull(string? value)
-    {
-        var trimmed = value?.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 
     /// <summary>First present key wins. Accepts JSON string or number (number returned as text).</summary>

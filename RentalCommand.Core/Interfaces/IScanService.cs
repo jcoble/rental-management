@@ -1,4 +1,5 @@
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Core.Interfaces;
 
@@ -33,8 +34,11 @@ public interface IScanService
         string targetEntityType,
         CancellationToken ct = default);
 
-    /// <summary>Confirm a reviewed draft, creating the real record (Receipt→Expense in Phase 2).</summary>
-    Task<ScanConfirmResult> ConfirmAndCreateAsync(
+    /// <summary>
+    /// Reads the reviewed draft and applies API overrides into the sealed command accepted by the
+    /// atomic confirmation boundary. This method prepares immutable facts only; it never writes.
+    /// </summary>
+    Task<ScanConfirmationPreparation> PrepareConfirmationAsync(
         int portfolioId, int draftId, int userId,
         string overridesJson, CancellationToken ct = default);
 
@@ -53,17 +57,18 @@ public interface IScanService
         int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default);
 }
 
-/// <summary>Result returned from <see cref="IScanService.ConfirmAndCreateAsync"/>.</summary>
-/// <param name="Success">Whether the confirm succeeded.</param>
-/// <param name="CreatedEntityId">The id of the created entity, or null on failure.</param>
-/// <param name="Error">Human-readable error message, or null on success.</param>
-/// <param name="EntityType">The type of the created entity ("Expense", "Payment", "WorkOrder", or "Lease"), or null on failure.</param>
-public sealed record ScanConfirmResult(
-    bool Success,
-    int? CreatedEntityId,
-    string? Error,
-    string? EntityType = null,
-    int? UnitId = null);
+public enum ScanConfirmationPreparationOutcome
+{
+    Ready,
+    DraftNotFound,
+    UnsupportedTarget,
+    TemporarilyUnavailable,
+}
+
+public sealed record ScanConfirmationPreparation(
+    ScanConfirmationPreparationOutcome Outcome,
+    ConfirmScanDraftCommand? Command = null,
+    string? Error = null);
 
 /// <summary>
 /// What confirming a scanned lease would do with the property/unit, surfaced to the review UI so a

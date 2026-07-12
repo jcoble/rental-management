@@ -85,7 +85,7 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// <summary>
     /// Serves the original scanned document a record was created from: the latest <c>StoredFile</c>
     /// re-keyed to (<paramref name="entityType"/>, <paramref name="entityId"/>) by
-    /// <c>ScanService.FinalizeDraft</c>. When <paramref name="thumb"/> is set and the file is an image,
+    /// the atomic scan-confirm finalizer. When <paramref name="thumb"/> is set and the file is an image,
     /// returns a resized JPEG preview. Inline for known-safe types, attachment otherwise. The lookup is
     /// portfolio-scoped (from the JWT claim), so it can't reach another tenant's file (IDOR-safe).
     /// </summary>

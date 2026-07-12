@@ -1,5 +1,7 @@
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace RentalCommand.Core.Scanning;
 
@@ -182,17 +184,26 @@ public sealed record ConfirmScanDraftCommand(
     DateTime ConfirmedAtUtc,
     ScanConfirmationTargetData Target) : IAtomicCommandData;
 
-/// <summary>One canonical receipt identity per portfolio-owned draft, independent of HTTP retries.</summary>
+/// <summary>One receipt identity per caller operation, scoped to its portfolio-owned draft.</summary>
 public static class ScanConfirmationCommandIdentity
 {
-    public static AtomicCommandIdentity Create(int portfolioId, int draftId)
+    public static AtomicCommandIdentity Create(int portfolioId, int draftId, string clientOperationId)
     {
         if (portfolioId <= 0 || draftId <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(draftId), "A persisted portfolio and scan draft are required.");
         }
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOperationId);
+        var normalized = clientOperationId.Trim();
+        if (normalized.Length > 160)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(clientOperationId),
+                "Client operation id cannot exceed 160 characters.");
+        }
 
-        return new AtomicCommandIdentity("scan.confirm", $"{portfolioId}:{draftId}");
+        var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        return new AtomicCommandIdentity("scan.confirm", $"{portfolioId}:{draftId}:{digest}");
     }
 }
 

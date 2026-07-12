@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
@@ -22,6 +23,7 @@ class ScanRepository {
   ScanRepository({required Dio dio}) : _dio = dio;
 
   final Dio _dio;
+  final Map<int, String> _confirmOperationIds = {};
 
   /// Lists scan drafts for the caller's portfolio, newest first.
   Future<List<ScanDraft>> listDrafts({String? status}) async {
@@ -184,7 +186,13 @@ class ScanRepository {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/scans/$id/confirm',
-        data: {'overridesJson': jsonEncode(overrides)},
+        data: {
+          'overridesJson': jsonEncode(overrides),
+          'clientOperationId': _confirmOperationIds.putIfAbsent(
+            id,
+            () => const Uuid().v4(),
+          ),
+        },
       );
       return response.data;
     } on DioException catch (e) {

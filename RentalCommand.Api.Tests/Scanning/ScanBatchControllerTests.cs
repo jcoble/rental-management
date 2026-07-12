@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -404,7 +405,7 @@ public class ScanBatchControllerTests : IDisposable
     private ScanController CreateController(IScanService scan)
     {
         var files = Mock.Of<IFileStorage>();
-        return new ScanController(scan, _db, files, TimeProvider.System)
+        return new ScanController(scan, Mock.Of<IAtomicUnitOfWork>(), _db, files, TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {
@@ -510,7 +511,7 @@ public class ScanBatchControllerTests : IDisposable
         public Task<ScanDraft> CreateDraftAsync(int portfolioId, byte[] fileBytes, string contentType, string targetEntityType, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
 
-        public Task<ScanConfirmResult> ConfirmAndCreateAsync(int portfolioId, int draftId, int userId, string overridesJson, CancellationToken ct = default)
+        public Task<ScanConfirmationPreparation> PrepareConfirmationAsync(int portfolioId, int draftId, int userId, string overridesJson, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
 
         public Task<LeaseImportProposal?> BuildLeaseProposalAsync(int portfolioId, int draftId, string overridesJson, CancellationToken ct = default)
@@ -558,7 +559,7 @@ public class ScanBatchControllerTests : IDisposable
         public Task<ScanDraft> CreateDraftAsync(int portfolioId, byte[] fileBytes, string contentType, string targetEntityType, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
 
-        public Task<ScanConfirmResult> ConfirmAndCreateAsync(int portfolioId, int draftId, int userId, string overridesJson, CancellationToken ct = default)
+        public Task<ScanConfirmationPreparation> PrepareConfirmationAsync(int portfolioId, int draftId, int userId, string overridesJson, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
 
         public Task<LeaseImportProposal?> BuildLeaseProposalAsync(int portfolioId, int draftId, string overridesJson, CancellationToken ct = default)

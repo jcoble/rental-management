@@ -75,10 +75,16 @@ export interface ScanConfirmResponse {
 	workOrderId?: number | null;
 	leaseId?: number | null;
 	applicationId?: number | null;
+	loanId?: number | null;
 	unitId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;
+	status: 'confirmed' | 'alreadyConfirmed';
+	replayed: boolean;
+	atomicDisposition: 'Executed' | 'Replayed' | 'Joined';
 }
+
+const scanConfirmOperationIds = new Map<number, string>();
 
 export interface ScanDraftListResponse {
 	items: ScanDraftResponse[];
@@ -166,7 +172,16 @@ export const scan = {
 	},
 
 	confirm: (id: number, overridesJson: string): Promise<ScanConfirmResponse> =>
-		api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, { overridesJson }),
+		api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, {
+			overridesJson,
+			clientOperationId:
+				scanConfirmOperationIds.get(id) ??
+				(() => {
+					const operationId = crypto.randomUUID();
+					scanConfirmOperationIds.set(id, operationId);
+					return operationId;
+				})()
+		}),
 
 	retry: (id: number): Promise<unknown> =>
 		api.post(`/scans/${id}/retry`, {}),
