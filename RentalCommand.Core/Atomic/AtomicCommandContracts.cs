@@ -75,6 +75,7 @@ public interface IAtomicWriteAttempt
     IAtomicScanConfirmationPersistence ScanConfirmation { get; }
     IAtomicScheduledFinancePersistence ScheduledFinance { get; }
     IAtomicProviderInboxPersistence ProviderInbox { get; }
+    IAtomicPendingFileUploadPersistence PendingFileUploads { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -130,6 +131,31 @@ public interface IAtomicProviderInboxPersistence
         long providerInboxEventId,
         string claimOwner,
         Guid claimToken,
+        CancellationToken ct = default);
+}
+
+/// <summary>One exact pending-blob admission expected by an atomic finalizer.</summary>
+public sealed record AtomicPendingFileUploadExpectation(
+    Guid Id,
+    string Purpose,
+    string OperationKeyHash,
+    string RequestFingerprint,
+    string StoragePath,
+    string FileName,
+    string ContentType,
+    long SizeBytes);
+
+/// <summary>
+/// Locks and returns only a complete, exact prepared upload-admission set. Implementations must
+/// validate the full expectation in one database statement and acquire row locks in deterministic
+/// order so cleanup cannot claim or abandon an admission during finalization.
+/// </summary>
+public interface IAtomicPendingFileUploadPersistence
+{
+    Task<IReadOnlyList<PendingFileUpload>> LockPreparedSetAsync(
+        int portfolioId,
+        int actorScopeId,
+        IReadOnlyList<AtomicPendingFileUploadExpectation> expectations,
         CancellationToken ct = default);
 }
 

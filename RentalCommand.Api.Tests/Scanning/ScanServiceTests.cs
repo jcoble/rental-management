@@ -27,7 +27,6 @@ public class ScanServiceTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly Mock<IScanFileService> _filesMock;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -56,12 +55,10 @@ public class ScanServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _filesMock    = new Mock<IScanFileService>(MockBehavior.Strict);
         _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
             _db,
-            _filesMock.Object,
             _audit,
             NullLogger<ScanService>.Instance,
             TimeProvider.System);

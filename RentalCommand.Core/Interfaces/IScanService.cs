@@ -1,39 +1,13 @@
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
-/// Orchestrates the flagship scan-&gt;LLM intake flow: store the upload, run extraction, and
-/// produce a reviewable <see cref="ScanDraft"/>. Phase 0 defines the contract only;
-/// the implementation is Phase 2.
+/// Prepares confirmation facts and handles review lifecycle transitions after an upload has been
+/// durably admitted by <see cref="IScanUploadService"/>.
 /// </summary>
 public interface IScanService
 {
-    /// <summary>
-    /// Create a draft from an uploaded document for the given portfolio and target entity type
-    /// (e.g. "Lease", "Expense"). Runs extraction and returns the persisted draft for review.
-    /// </summary>
-    Task<ScanDraft> CreateDraftAsync(
-        int portfolioId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Create a draft for one file inside a bulk-scan batch: stores the file, generates the preview,
-    /// and persists a Pending <see cref="ScanDraft"/> linked to <paramref name="batchId"/>. The Engine
-    /// worker then extracts it the same way it processes any Pending draft (no batch awareness needed).
-    /// </summary>
-    Task<ScanDraft> CreateBatchDraftAsync(
-        int portfolioId,
-        int batchId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct = default);
-
     /// <summary>
     /// Reads the reviewed draft and applies API overrides into the sealed command accepted by the
     /// atomic confirmation boundary. This method prepares immutable facts only; it never writes.

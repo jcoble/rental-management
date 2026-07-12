@@ -2,6 +2,23 @@ import { api } from '$lib/api/client';
 import { buildListQuery, type ListParams } from '$lib/api/list-params';
 import { voiceUploadFileName } from '$lib/scan/voice-capture';
 
+const scanUploadOperationIds = new WeakMap<File, Map<string, string>>();
+const scanBatchUploadOperationIds = new WeakMap<File[], string>();
+
+function singleUploadOperationId(file: File, targetEntityType: string): string {
+	let byTarget = scanUploadOperationIds.get(file);
+	if (!byTarget) {
+		byTarget = new Map();
+		scanUploadOperationIds.set(file, byTarget);
+	}
+	let operationId = byTarget.get(targetEntityType);
+	if (!operationId) {
+		operationId = crypto.randomUUID();
+		byTarget.set(targetEntityType, operationId);
+	}
+	return operationId;
+}
+
 // ---- TypeScript types mirroring ScanDtos.cs ----
 
 export interface ScanFieldDto {
@@ -164,11 +181,15 @@ export const scan = {
 
 	get: (id: number): Promise<ScanDraftResponse> => api.get<ScanDraftResponse>(`/scans/${id}`),
 
-	upload: (file: File, targetEntityType: string): Promise<ScanCreatedResponse> => {
+	upload: async (file: File, targetEntityType: string): Promise<ScanCreatedResponse> => {
+		const operationId = singleUploadOperationId(file, targetEntityType);
 		const fd = new FormData();
 		fd.append('file', file);
 		fd.append('targetEntityType', targetEntityType);
-		return api.upload<ScanCreatedResponse>('/scans', fd);
+		fd.append('clientOperationId', operationId);
+		const response = await api.upload<ScanCreatedResponse>('/scans', fd);
+		scanUploadOperationIds.get(file)?.delete(targetEntityType);
+		return response;
 	},
 
 	confirm: async (id: number, overridesJson: string): Promise<ScanConfirmResponse> => {
@@ -208,13 +229,19 @@ export const scan = {
 		files: File[],
 		options: UploadBatchOptions = {}
 	): Promise<ScanBatchCreatedResponse> => {
+		const operationId = scanBatchUploadOperationIds.get(files) ?? crypto.randomUUID();
+		scanBatchUploadOperationIds.set(files, operationId);
 		const fd = new FormData();
 		for (const file of files) {
 			fd.append('files', file);
 		}
 		fd.append('targetEntityType', options.targetEntityType ?? 'Lease');
 		if (options.name) fd.append('name', options.name);
-		return api.upload<ScanBatchCreatedResponse>('/scans/batch', fd);
+		fd.append('clientOperationId', operationId);
+		return api.upload<ScanBatchCreatedResponse>('/scans/batch', fd).then((response) => {
+			scanBatchUploadOperationIds.delete(files);
+			return response;
+		});
 	},
 
 	listBatches: (): Promise<ScanBatchSummary[]> =>

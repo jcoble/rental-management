@@ -48,36 +48,37 @@ public class ScanControllerTests : IDisposable
     public async Task Upload_WithWorkOrderTarget_CreatesDraft()
     {
         var scan = new Mock<IScanService>(MockBehavior.Strict);
-        scan.Setup(s => s.CreateDraftAsync(
+        var uploads = new Mock<IScanUploadService>(MockBehavior.Strict);
+        uploads.Setup(s => s.UploadAsync(
                 42,
-                It.Is<byte[]>(b => b.SequenceEqual(new byte[] { 1, 2, 3 })),
-                "image/jpeg",
+                7,
+                "scan-op",
                 "WorkOrder",
+                false,
+                null,
+                It.Is<IReadOnlyList<ScanUploadFilePayload>>(payloads =>
+                    payloads.Count == 1
+                    && payloads[0].Bytes.SequenceEqual(new byte[] { 1, 2, 3 })
+                    && payloads[0].ContentType == "image/jpeg"
+                    && payloads[0].FileName == "work-order.jpg"),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ScanDraft
-            {
-                Id = 17,
-                PortfolioId = 42,
-                TargetEntityType = "WorkOrder",
-                Status = "Pending",
-                FilePath = "uploads/work-order.jpg",
-                CreatedAt = DateTime.UtcNow,
-            });
+            .ReturnsAsync(new FinalizeScanUploadResult(
+                null, null, "WorkOrder", [new FinalizedScanDraft(17, "Pending", "uploads/work-order.jpg")]));
 
-        var controller = CreateController(scan.Object);
+        var controller = CreateController(scan.Object, uploads: uploads.Object);
         var file = new FormFile(new MemoryStream([1, 2, 3]), 0, 3, "file", "work-order.jpg")
         {
             Headers = new HeaderDictionary(),
             ContentType = "image/jpeg",
         };
 
-        var result = await controller.Upload(file, "WorkOrder", CancellationToken.None);
+        var result = await controller.Upload(file, "WorkOrder", "scan-op", CancellationToken.None);
 
         var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
         var body = created.Value.Should().BeOfType<ScanCreatedResponse>().Subject;
         body.DraftId.Should().Be(17);
         body.Status.Should().Be("Pending");
-        scan.VerifyAll();
+        uploads.VerifyAll();
     }
 
     [Theory]
@@ -417,14 +418,15 @@ public class ScanControllerTests : IDisposable
     private ScanController CreateController(
         IScanService scan,
         IFileStorage? files = null,
-        IAtomicUnitOfWork? atomic = null)
+        IAtomicUnitOfWork? atomic = null,
+        IScanUploadService? uploads = null)
     {
         var controller = new ScanController(
             scan,
+            uploads ?? Mock.Of<IScanUploadService>(),
             atomic ?? Mock.Of<IAtomicUnitOfWork>(),
             _db,
-            files ?? Mock.Of<IFileStorage>(),
-            TimeProvider.System)
+            files ?? Mock.Of<IFileStorage>())
         {
             ControllerContext = new ControllerContext
             {
