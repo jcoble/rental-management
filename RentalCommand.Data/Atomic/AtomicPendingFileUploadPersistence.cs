@@ -16,8 +16,15 @@ namespace RentalCommand.Data.Atomic;
 internal sealed class AtomicPendingFileUploadPersistence : IAtomicPendingFileUploadPersistence
 {
     private readonly RentalCommandDbContext _db;
+    private readonly AtomicAuditScope _auditScope;
 
-    public AtomicPendingFileUploadPersistence(RentalCommandDbContext db) => _db = db;
+    public AtomicPendingFileUploadPersistence(
+        RentalCommandDbContext db,
+        AtomicAuditScope auditScope)
+    {
+        _db = db;
+        _auditScope = auditScope;
+    }
 
     public async Task<IReadOnlyList<PendingFileUpload>> LockPreparedSetAsync(
         int portfolioId,
@@ -49,6 +56,9 @@ internal sealed class AtomicPendingFileUploadPersistence : IAtomicPendingFileUpl
             new("prepared", NpgsqlDbType.Integer) { Value = (int)PendingFileUploadState.Prepared },
         };
 
+        using var lockLease = _auditScope.BeginInternalRawDml(
+            "PendingFileUploads",
+            AtomicRawDmlOperation.Update);
         return await _db.PendingFileUploads
             .FromSqlRaw(Sql, parameters)
             .AsTracking()

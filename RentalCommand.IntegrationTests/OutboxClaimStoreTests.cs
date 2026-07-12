@@ -231,6 +231,37 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Worker_dispatches_durable_data_update_and_records_acceptance()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var now = DateTime.UtcNow;
+        await SeedAsync(new OutboxMessage
+        {
+            PortfolioId = 17,
+            MessageType = "data-update",
+            Payload = """{"entityType":"ScanDraft","entityId":42,"data":{"status":"Pending"}}""",
+            IdempotencyKey = "data-update:scan-draft:42",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        var updates = new CapturingDataUpdateService();
+
+        await RunWorkerAsync(
+            new CapturingChannel(),
+            new CapturingPushSender(),
+            dataUpdateService: updates);
+
+        updates.Updates.Should().ContainSingle().Which.Should().Be((17, "ScanDraft", 42));
+        await using var verify = NewContext();
+        var row = await verify.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey == "data-update:scan-draft:42");
+        row.AcceptedAtUtc.Should().NotBeNull();
+        row.Provider.Should().Be("postgres-notify");
+        row.ProviderMessageId.Should().Be($"outbox-{row.Id}");
+    }
+
+    [SkippableFact]
     public async Task Worker_retries_durable_blob_cleanup_until_storage_accepts_it()
     {
         SkipIfDockerUnavailable();
@@ -284,7 +315,8 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     private async Task RunWorkerAsync(
         INotificationChannel channel,
         IPushSender pushSender,
-        IFileStorage? fileStorage = null)
+        IFileStorage? fileStorage = null,
+        IDataUpdateService? dataUpdateService = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -295,6 +327,8 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         services.AddSingleton(pushSender);
         services.AddSingleton<IPushSender>(pushSender);
         services.AddSingleton<IFileStorage>(fileStorage ?? new CapturingFileStorage());
+        services.AddSingleton<IDataUpdateService>(
+            dataUpdateService ?? new CapturingDataUpdateService());
         await using var provider = services.BuildServiceProvider();
         await using var scope = provider.CreateAsyncScope();
         var worker = new TestableOutboxWorker(provider);
@@ -410,6 +444,28 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
             Tokens.Add(deviceToken);
             return Task.FromResult(PushSendResult.Ok("push-provider-id"));
         }
+    }
+
+    private sealed class CapturingDataUpdateService : IDataUpdateService
+    {
+        public List<(int PortfolioId, string EntityType, int EntityId)> Updates { get; } = [];
+
+        public Task BroadcastEntityUpdateAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            object data,
+            CancellationToken ct = default)
+        {
+            Updates.Add((portfolioId, entityType, entityId));
+            return Task.CompletedTask;
+        }
+
+        public Task BroadcastEntityDeleteAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class CapturingFileStorage : IFileStorage
