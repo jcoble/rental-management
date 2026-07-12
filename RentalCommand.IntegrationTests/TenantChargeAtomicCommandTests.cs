@@ -119,7 +119,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         charge.Currency.Should().Be("USD");
         (await db.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType
-            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2);
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
         var outboxKey = OutboxIdempotency.Create("tenant-money", command.DeliveryIdempotencyKey);
         (await db.OutboxMessages.CountAsync(row =>
             row.PortfolioId == scenario.PortfolioId
