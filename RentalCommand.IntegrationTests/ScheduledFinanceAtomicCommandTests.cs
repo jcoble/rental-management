@@ -272,7 +272,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
 
         await FluentActions.Invoking(() => Atomic.ExecuteAsync(
                 identity, ExpenseCommand(claim), ExpenseCodec))
-            .Should().ThrowAsync<InvalidOperationException>();
+            .Should().ThrowAsync<DbUpdateException>()
+            .WithInnerException<InvalidOperationException>();
         Failures.FailAtomicAudit = false;
         Failures.FailReceiptCompletion = false;
 
