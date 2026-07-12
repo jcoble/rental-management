@@ -330,7 +330,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _scanConfirmation = new AtomicScanConfirmationPersistence(db, auditScope, _locking);
             _scheduledFinance = new AtomicScheduledFinancePersistence(db, auditScope);
             _providerInbox = new AtomicProviderInboxPersistence(db, auditScope);
-            _pendingFileUploads = new AtomicPendingFileUploadPersistence(db);
+            _pendingFileUploads = new AtomicPendingFileUploadPersistence(db, auditScope);
             _timeProvider = timeProvider;
         }
 

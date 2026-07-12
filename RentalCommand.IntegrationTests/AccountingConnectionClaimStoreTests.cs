@@ -17,6 +17,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Auditing;
 using Testcontainers.PostgreSql;
 
 namespace RentalCommand.IntegrationTests;
@@ -702,6 +703,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
         services.AddAtomicCommandHandler<
             RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
