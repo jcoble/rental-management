@@ -24,13 +24,13 @@ public class UnitDashboardResponse
     /// <summary>The compact health summary rendered as chips in the page header.</summary>
     public UnitDashboardHeader Header { get; set; } = new();
 
-    /// <summary>The unit's current lease (in-force Active/NoticeGiven or pending signature), null when only historical leases remain.</summary>
+    /// <summary>The governing or upcoming immutable agreement for the Unit's current relationship.</summary>
     public UnitLeaseSummary? CurrentLease { get; set; }
 
-    /// <summary>The current lease's tenant, null when there is no current lease.</summary>
+    /// <summary>The current relationship's primary tenant, null when there is no current relationship.</summary>
     public UnitTenantSummary? CurrentTenant { get; set; }
 
-    /// <summary>All tenants tied to the current lease, primary tenant first.</summary>
+    /// <summary>All currently effective household parties, primary tenant first.</summary>
     public IReadOnlyList<UnitTenantSummary> CurrentTenants { get; set; } = [];
 
     /// <summary>Small, capped lists for the Overview tab (each ~5 rows).</summary>
@@ -119,13 +119,19 @@ public class UnitTurnoverSummary
     public int? DaysInTurnover { get; set; }
 }
 
-/// <summary>Compact current-lease projection for the header / overview.</summary>
+/// <summary>Compact canonical relationship/agreement projection for the header / overview.</summary>
 public class UnitLeaseSummary
 {
+    /// <summary>The immutable governing or upcoming LeaseAgreement id.</summary>
     public int Id { get; set; }
+
+    /// <summary>The continuous household/account relationship containing this agreement.</summary>
+    public int LeaseManagementId { get; set; }
+
+    public int? TenantAccountId { get; set; }
     public string LeaseNumber { get; set; } = string.Empty;
 
-    /// <summary>Lease status as its string name (e.g. <c>Active</c>).</summary>
+    /// <summary>Database-derived agreement status (for example Governing or Upcoming).</summary>
     public string Status { get; set; } = string.Empty;
     public DateTime StartDate { get; set; }
     public DateTime EndDate { get; set; }
@@ -153,8 +159,11 @@ public class UnitDashboardOverview
 
 public class UnitPaymentSummary
 {
-    public int Id { get; set; }
-    public int LeaseId { get; set; }
+    /// <summary>The same immutable TenantLedgerEntry id used by global account history.</summary>
+    public long Id { get; set; }
+    public int TenantAccountId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int? LeaseAgreementId { get; set; }
 
     /// <summary>Payment type as its string name (e.g. <c>Rent</c>).</summary>
     public string Type { get; set; } = string.Empty;

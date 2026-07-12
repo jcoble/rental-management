@@ -61,9 +61,14 @@ public class PropertyService : IPropertyService
 
         if (query.AvailableForLease == true)
         {
-            q = q.Where(p => p.Units.Any(u =>
-                u.Status == UnitStatus.Vacant &&
-                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)));
+            q = q.Where(property => _db.UnitOccupancyProjections.Any(occupancy =>
+                occupancy.PortfolioId == portfolioId
+                && occupancy.PropertyId == property.Id
+                && !occupancy.IsOccupied
+                && !occupancy.HasScheduledMoveIn
+                && !occupancy.IsInTurnover
+                && !occupancy.IsOutOfService
+                && !occupancy.IsOnManagementHold));
         }
 
         q = query.SortField switch
@@ -73,7 +78,11 @@ public class PropertyService : IPropertyService
             "type" => query.SortDescending ? q.OrderByDescending(p => p.PropertyType) : q.OrderBy(p => p.PropertyType),
             "status" => query.SortDescending ? q.OrderByDescending(p => p.Status) : q.OrderBy(p => p.Status),
             "unitcount" => query.SortDescending ? q.OrderByDescending(p => p.Units.Count) : q.OrderBy(p => p.Units.Count),
-            "occupiedunits" => query.SortDescending ? q.OrderByDescending(p => p.Units.Count(u => u.Status == UnitStatus.Occupied)) : q.OrderBy(p => p.Units.Count(u => u.Status == UnitStatus.Occupied)),
+            "occupiedunits" => query.SortDescending
+                ? q.OrderByDescending(p => _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied))
+                : q.OrderBy(p => _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied)),
             "updatedat" => query.SortDescending ? q.OrderByDescending(p => p.UpdatedAt) : q.OrderBy(p => p.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt),
         };
@@ -89,7 +98,8 @@ public class PropertyService : IPropertyService
                 p,
                 p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
                 p.Units.Count,
-                p.Units.Count(u => u.Status == UnitStatus.Occupied)))
+                _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied)))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -123,7 +133,8 @@ public class PropertyService : IPropertyService
                 p,
                 p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
                 p.Units.Count,
-                p.Units.Count(u => u.Status == UnitStatus.Occupied)))
+                _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied)))
             .FirstOrDefaultAsync(ct);
 
         return row == null ? null : ToResponse(row);
@@ -285,7 +296,12 @@ public class PropertyService : IPropertyService
         var counts = await _db.Properties
             .AsNoTracking()
             .Where(p => p.Id == id && p.PortfolioId == portfolioId)
-            .Select(p => new { UnitCount = p.Units.Count, Occupied = p.Units.Count(u => u.Status == UnitStatus.Occupied) })
+            .Select(p => new
+            {
+                UnitCount = p.Units.Count,
+                Occupied = _db.UnitOccupancyProjections.Count(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied),
+            })
             .FirstOrDefaultAsync(ct);
 
         var response = PropertyResponse.FromEntity(entity, counts?.UnitCount ?? 0, counts?.Occupied ?? 0);
