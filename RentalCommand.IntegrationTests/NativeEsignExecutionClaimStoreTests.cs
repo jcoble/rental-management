@@ -123,14 +123,27 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         await using var db = NewContext();
         var portfolio = new Portfolio
         {
+            Id = 1,
             Name = $"E-sign claims {Guid.NewGuid():N}",
             ManagementCompanyName = "Claims",
             CreatedAt = now,
             UpdatedAt = now,
         };
+        var user = new ApplicationUser
+        {
+            Id = 1,
+            PortfolioId = portfolio.Id,
+            UserName = "claims@example.test",
+            NormalizedUserName = "CLAIMS@EXAMPLE.TEST",
+            Email = "claims@example.test",
+            NormalizedEmail = "CLAIMS@EXAMPLE.TEST",
+            DisplayName = "Claims Manager",
+            CreatedAt = now,
+        };
         var property = new Property
         {
-            Portfolio = portfolio,
+            Id = 1,
+            PortfolioId = portfolio.Id,
             Name = "Claims property",
             AddressLine1 = "1 Main St",
             City = "Columbus",
@@ -141,70 +154,164 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         };
         var unit = new Unit
         {
-            Property = property,
+            Id = 1,
+            PortfolioId = portfolio.Id,
+            PropertyId = property.Id,
             UnitNumber = "1",
             CreatedAt = now,
             UpdatedAt = now,
         };
-        var tenant = new Tenant
+        var template = new DocumentTemplate
         {
-            Portfolio = portfolio,
-            FirstName = "Test",
-            LastName = "Signer",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            Portfolio = portfolio,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = $"CLAIM-{Guid.NewGuid():N}",
-            StartDate = now.Date,
-            EndDate = now.Date.AddYears(1),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var original = new StoredFile
-        {
-            Portfolio = portfolio,
-            FileName = "original.pdf",
-            FilePath = $"original/{Guid.NewGuid():N}.pdf",
-            ContentType = "application/pdf",
-            UploadedAt = now,
-        };
-        db.AddRange(lease, original);
-        await db.SaveChangesAsync();
-
-        var requests = Enumerable.Range(0, count).Select(index => new SignatureRequest
-        {
+            Id = 1,
             PortfolioId = portfolio.Id,
-            PublicId = Guid.NewGuid().ToString("N"),
-            LeaseId = lease.Id,
-            DocumentName = "lease.pdf",
-            OriginalStoredFileId = original.Id,
-            Status = SignatureRequestStatus.ExecutionPending,
-            CreatedAtUtc = now.AddMinutes(index),
-            Signers =
-            [
-                new SignatureSigner
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Active,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = "Claims lease",
+            Version = 1,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+
+        db.AddRange(portfolio, user, property, unit, template);
+        for (var index = 0; index < count; index++)
+        {
+            var relationshipId = 3_000 + index;
+            var agreementId = 4_000 + index;
+            var agreementSignerId = 5_000 + index;
+            var requestId = 6_000 + index;
+            var storedFileId = 1_000 + index;
+            var artifactId = 2_000 + index;
+            var preparedAtUtc = now.AddMinutes(index);
+            var storageKey = $"agreements/{Guid.NewGuid():N}.pdf";
+
+            db.AddRange(
+                new LeaseManagement
                 {
-                    Name = "Test Signer",
-                    Email = "signer@example.test",
-                    Token = Guid.NewGuid().ToString("N"),
-                    ExpiresAtUtc = now.AddDays(1),
-                    Status = SignatureSignerStatus.Signed,
-                    SignatureType = SignatureSignatureType.Typed,
-                    TypedName = "Test Signer",
-                    ConsentGiven = true,
-                    SignedAtUtc = now,
+                    Id = relationshipId,
+                    PublicId = Guid.NewGuid(),
+                    PortfolioId = portfolio.Id,
+                    PropertyId = property.Id,
+                    UnitId = unit.Id,
+                    RelationshipNumber = $"REL-{index + 1}",
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    CreatedByUserId = user.Id,
+                    RowVersion = Guid.NewGuid(),
                 },
-            ],
-        }).ToArray();
-        db.SignatureRequests.AddRange(requests);
+                new StoredFile
+                {
+                    Id = storedFileId,
+                    PortfolioId = portfolio.Id,
+                    FileName = $"agreement-{index + 1}.pdf",
+                    FilePath = storageKey,
+                    ContentType = "application/pdf",
+                    FileSize = 1,
+                    EntityType = nameof(LeaseAgreement),
+                    EntityId = agreementId,
+                    UploadedAt = now,
+                },
+                new LegalDocumentArtifact
+                {
+                    Id = artifactId,
+                    PublicId = Guid.NewGuid(),
+                    PortfolioId = portfolio.Id,
+                    StoredFileId = storedFileId,
+                    ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+                    StorageKey = storageKey,
+                    FileName = $"agreement-{index + 1}.pdf",
+                    ContentType = "application/pdf",
+                    ByteLength = 1,
+                    ContentSha256 = new string('a', 64),
+                    CreatedAtUtc = now,
+                    CreatedByUserId = user.Id,
+                },
+                new LeaseAgreement
+                {
+                    Id = agreementId,
+                    PublicId = Guid.NewGuid(),
+                    PortfolioId = portfolio.Id,
+                    LeaseManagementId = relationshipId,
+                    VersionNumber = 1,
+                    AgreementNumber = $"AGR-{index + 1}",
+                    ChangeType = LeaseAgreementChangeType.Initial,
+                    TermType = LeaseAgreementTermType.FixedTerm,
+                    TermStartOn = DateOnly.FromDateTime(now),
+                    TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+                    GoverningFromOn = DateOnly.FromDateTime(now),
+                    BaseRentAmount = 1_000,
+                    RentDueDay = 1,
+                    SecurityDepositObligation = 1_000,
+                    LateFeeAmount = 50,
+                    GracePeriodDays = 5,
+                    Currency = "USD",
+                    TermsSchemaVersion = 1,
+                    TermsPayload = "{}",
+                    DocumentTemplateId = template.Id,
+                    DocumentTemplateVersion = template.Version,
+                    IssuedArtifactId = artifactId,
+                    IssuedAtUtc = now,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    CreatedByUserId = user.Id,
+                },
+                new LeaseAgreementSigner
+                {
+                    Id = agreementSignerId,
+                    PortfolioId = portfolio.Id,
+                    LeaseAgreementId = agreementId,
+                    SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+                    NameSnapshot = "Test Signer",
+                    EmailSnapshot = $"signer-{index + 1}@example.test",
+                    SigningOrder = 1,
+                    IsRequired = true,
+                },
+                new SignatureRequest
+                {
+                    Id = requestId,
+                    PortfolioId = portfolio.Id,
+                    PublicId = Guid.NewGuid(),
+                    LeaseAgreementId = agreementId,
+                    Provider = "native",
+                    IdempotencyKey = $"claim-{index + 1}",
+                    Status = SignatureRequestStatus.ExecutionPending,
+                    Subject = $"Agreement {index + 1}",
+                    IssuedArtifactId = artifactId,
+                    PreparedAtUtc = preparedAtUtc,
+                    ProviderAcceptedAtUtc = preparedAtUtc,
+                    CreatedByUserId = user.Id,
+                    Signers =
+                    [
+                        new SignatureSigner
+                        {
+                            Id = 7_000 + index,
+                            PortfolioId = portfolio.Id,
+                            AgreementSignerId = agreementSignerId,
+                            NameSnapshot = "Test Signer",
+                            EmailSnapshot = $"signer-{index + 1}@example.test",
+                            SigningOrder = 1,
+                            IsRequired = true,
+                            TokenHash = index.ToString("x64"),
+                            TokenExpiresAtUtc = now.AddDays(1),
+                            Status = SignatureSignerStatus.Signed,
+                            SignatureType = SignatureSignatureType.Typed,
+                            TypedName = "Test Signer",
+                            ConsentGivenAtUtc = now,
+                            SignedAtUtc = now,
+                            CreatedAtUtc = now,
+                            UpdatedAtUtc = now,
+                        },
+                    ],
+                });
+        }
+
         await db.SaveChangesAsync();
-        return requests.Select(request => request.Id).ToArray();
+        return await db.SignatureRequests
+            .AsNoTracking()
+            .OrderBy(request => request.PreparedAtUtc)
+            .Select(request => request.Id)
+            .ToArrayAsync();
     }
 
     private RentalCommandDbContext NewContext()
