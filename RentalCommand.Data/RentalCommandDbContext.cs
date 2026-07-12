@@ -34,6 +34,14 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<UnitOccupancyProjection> UnitOccupancyProjections => Set<UnitOccupancyProjection>();
     public DbSet<LeaseManagementLifecycleProjection> LeaseManagementLifecycleProjections =>
         Set<LeaseManagementLifecycleProjection>();
+    public DbSet<LeaseAddendumStatusProjection> LeaseAddendumStatusProjections =>
+        Set<LeaseAddendumStatusProjection>();
+    public DbSet<TenantAccountBalanceProjection> TenantAccountBalanceProjections =>
+        Set<TenantAccountBalanceProjection>();
+    public DbSet<SecurityDepositBalanceProjection> SecurityDepositBalanceProjections =>
+        Set<SecurityDepositBalanceProjection>();
+    public DbSet<TenantChargeBalanceProjection> TenantChargeBalanceProjections =>
+        Set<TenantChargeBalanceProjection>();
     public DbSet<LegalDocumentArtifact> LegalDocumentArtifacts => Set<LegalDocumentArtifact>();
     public DbSet<LeaseAgreement> LeaseAgreements => Set<LeaseAgreement>();
     public DbSet<LeaseAgreementSigner> LeaseAgreementSigners => Set<LeaseAgreementSigner>();
@@ -168,6 +176,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.ConfigureLeaseLegalArtifacts();
         modelBuilder.ConfigureTenantAccountKernel();
         modelBuilder.ConfigureLeaseLifecycleProjections();
+        modelBuilder.ConfigureAccountStatusProjections();
 
         // Master Simulation Clock (dev/test only): one fixed row (Id = 1). Global — intentionally NOT
         // added to the tenant_isolation RLS policy set (see Migrations/*AddRls*), so a portfolio-scoped
