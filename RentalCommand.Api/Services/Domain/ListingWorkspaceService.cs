@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
@@ -9,6 +12,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Listings;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -21,12 +25,16 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly IDataUpdateService _updates;
     private readonly IAuditTrailService _audit;
     private readonly IAtomicInfrastructureWriteGate _infrastructureWrites;
+    private readonly IFileStorage _files;
+    private readonly IPendingFileUploadStore _pendingUploads;
+    private readonly ILogger<ListingWorkspaceService> _logger;
     private readonly TimeProvider _time;
 
     public ListingWorkspaceService(RentalCommandDbContext db, IDataUpdateService updates, IAuditTrailService audit,
-        IAtomicInfrastructureWriteGate infrastructureWrites, TimeProvider time)
-        => (_db, _updates, _audit, _infrastructureWrites, _time) =
-            (db, updates, audit, infrastructureWrites, time);
+        IAtomicInfrastructureWriteGate infrastructureWrites, IFileStorage files,
+        IPendingFileUploadStore pendingUploads, ILogger<ListingWorkspaceService> logger, TimeProvider time)
+        => (_db, _updates, _audit, _infrastructureWrites, _files, _pendingUploads, _logger, _time) =
+            (db, updates, audit, infrastructureWrites, files, pendingUploads, logger, time);
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
         => _db.Units.AsNoTracking().AnyAsync(unit => unit.Id == unitId && unit.PortfolioId == portfolioId, ct);
@@ -111,6 +119,194 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             response = ListingWorkspaceResponse.FromEntity(listing);
         });
 
+        if (response is not null)
+            await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response.Id, response, ct);
+        return response;
+    }
+
+    public async Task<ListingWorkspaceResponse?> AttachPhotoAsync(
+        int portfolioId, int unitId, int photoId, int userId, string clientOperationId,
+        string fileName, string contentType, byte[] bytes, CancellationToken ct = default)
+    {
+        var operationId = CleanRequired(clientOperationId, "Client operation ID");
+        if (operationId.Length > 160) throw new DomainValidationException("Client operation ID cannot exceed 160 characters.");
+        var photoExists = await _db.ListingPhotos.AsNoTracking().AnyAsync(photo =>
+            photo.Id == photoId && photo.PortfolioId == portfolioId
+            && photo.RentalListing != null && photo.RentalListing.UnitId == unitId, ct);
+        if (!photoExists) return null;
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            JsonSerializer.Serialize(new { portfolioId, unitId, photoId, fileName, contentType, bytes = bytes.LongLength, sha256 })))).ToLowerInvariant();
+        var now = _time.UtcNow();
+        var admission = await _pendingUploads.PrepareAsync(portfolioId, userId, "listing-photo",
+            operationId, fingerprint, fileName, contentType, bytes.LongLength, now, ct);
+
+        if (admission.State == PendingFileUploadState.Finalized)
+            return await GetAsync(portfolioId, unitId, ct);
+
+        await using (var content = new MemoryStream(bytes, writable: false))
+            await _files.UploadAtAsync(content, admission.StoragePath, fileName, contentType, ct);
+
+        ListingWorkspaceResponse? response = null;
+        await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
+        {
+            var listing = await LoadTrackedAsync(portfolioId, unitId, ct);
+            var photo = listing?.Photos.SingleOrDefault(item => item.Id == photoId);
+            if (listing is null || photo is null) return null;
+
+            var pending = await _db.PendingFileUploads.SingleOrDefaultAsync(upload =>
+                upload.Id == admission.Id && upload.PortfolioId == portfolioId
+                && upload.State == PendingFileUploadState.Prepared
+                && upload.RequestFingerprint == fingerprint && upload.CleanupClaimToken == null, ct)
+                ?? throw new DomainValidationException("The photo upload is no longer available to finalize.");
+
+            if (photo.StoredFileId.HasValue)
+            {
+                var old = await _db.StoredFiles.SingleAsync(file =>
+                    file.Id == photo.StoredFileId.Value && file.PortfolioId == portfolioId, ct);
+                old.DeletedAt = now;
+                _db.OutboxMessages.Add(new OutboxMessage
+                {
+                    PortfolioId = portfolioId,
+                    MessageType = "blob-delete",
+                    Payload = JsonSerializer.Serialize(new { storedFileId = old.Id, storagePath = old.FilePath }),
+                    IdempotencyKey = $"listing-photo-replace:{old.Id}",
+                    CreatedAtUtc = now,
+                    NextAttemptAtUtc = now,
+                });
+            }
+
+            var stored = new StoredFile
+            {
+                PortfolioId = portfolioId,
+                FileName = fileName,
+                FilePath = admission.StoragePath,
+                ContentType = contentType,
+                FileSize = bytes.LongLength,
+                EntityType = nameof(ListingPhoto),
+                EntityId = photo.Id,
+                UploadedAt = now,
+            };
+            _db.StoredFiles.Add(stored);
+            await _db.SaveChangesAsync(ct);
+
+            photo.StoredFileId = stored.Id;
+            photo.FileName = fileName;
+            photo.Sha256 = sha256;
+            listing.ContentVersion++;
+            listing.UpdatedAt = now;
+            pending.State = PendingFileUploadState.Finalized;
+            pending.StoredFileId = stored.Id;
+            pending.UpdatedAtUtc = now;
+            await _db.SaveChangesAsync(ct);
+            await _audit.LogAsync(portfolioId, nameof(ListingPhoto), photo.Id, AuditLogOperation.Updated,
+                userId: userId, newValues: JsonSerializer.Serialize(new { photo.Position, photo.Category, photo.Caption, fileName, sha256 }),
+                changeReason: "Attached listing photo", ct: ct);
+            await transaction.CommitAsync(ct);
+            response = ListingWorkspaceResponse.FromEntity(listing);
+        }
+
+        if (response is not null)
+            await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response.Id, response, ct);
+        return response;
+    }
+
+    public Task<ListingWorkspaceResponse?> UpdatePhotoAsync(int portfolioId, int unitId, int photoId,
+        UpdateListingPhotoRequest request, int userId, CancellationToken ct = default) =>
+        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Updated listing photo details", async (listing, now) =>
+        {
+            var photo = listing.Photos.SingleOrDefault(item => item.Id == photoId);
+            if (photo is null) return false;
+            var category = CleanRequired(request.Category, "Photo category");
+            var caption = CleanOptional(request.Caption);
+            if (photo.Category == category && photo.Caption == caption) return false;
+            photo.Category = category;
+            photo.Caption = caption;
+            await Task.CompletedTask;
+            return true;
+        }, ct);
+
+    public Task<ListingWorkspaceResponse?> RemovePhotoAsync(int portfolioId, int unitId, int photoId, int userId,
+        CancellationToken ct = default) =>
+        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Removed listing photo attachment", async (listing, now) =>
+        {
+            var photo = listing.Photos.SingleOrDefault(item => item.Id == photoId);
+            if (photo?.StoredFileId is not int storedFileId) return false;
+            var stored = await _db.StoredFiles.SingleAsync(file => file.Id == storedFileId && file.PortfolioId == portfolioId, ct);
+            stored.DeletedAt = now;
+            _db.OutboxMessages.Add(new OutboxMessage
+            {
+                PortfolioId = portfolioId, MessageType = "blob-delete",
+                Payload = JsonSerializer.Serialize(new { storedFileId = stored.Id, storagePath = stored.FilePath }),
+                IdempotencyKey = $"listing-photo-remove:{stored.Id}", CreatedAtUtc = now, NextAttemptAtUtc = now,
+            });
+            photo.StoredFileId = null;
+            photo.FileName = null;
+            photo.Sha256 = null;
+            return true;
+        }, ct);
+
+    public Task<ListingWorkspaceResponse?> ReorderPhotosAsync(int portfolioId, int unitId,
+        ReorderListingPhotosRequest request, int userId, CancellationToken ct = default) =>
+        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Reordered listing photo package", async (listing, _) =>
+        {
+            var requested = request.PhotoIds.Distinct().ToArray();
+            if (requested.Length != request.PhotoIds.Count || requested.Length != listing.Photos.Count
+                || listing.Photos.Any(photo => !requested.Contains(photo.Id)))
+                throw new DomainValidationException("Photo order must include every photo exactly once.");
+
+            var changed = listing.Photos.Any(photo => request.PhotoIds[photo.Position - 1] != photo.Id);
+            if (!changed) return false;
+            await _db.ListingPhotos.Where(photo => photo.RentalListingId == listing.Id && photo.PortfolioId == portfolioId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(photo => photo.Position, photo => photo.Position + 1000), ct);
+            for (var index = 0; index < request.PhotoIds.Count; index++)
+                listing.Photos.Single(photo => photo.Id == request.PhotoIds[index]).Position = index + 1;
+            return true;
+        }, ct);
+
+    public async Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default)
+    {
+        var file = await (from photo in _db.ListingPhotos.AsNoTracking()
+                join listing in _db.RentalListings.AsNoTracking() on photo.RentalListingId equals listing.Id
+                join stored in _db.StoredFiles.AsNoTracking() on photo.StoredFileId equals (int?)stored.Id
+                where photo.Id == photoId && photo.PortfolioId == portfolioId && listing.UnitId == unitId
+                select new { stored.FilePath, stored.ContentType, stored.FileName })
+            .SingleOrDefaultAsync(ct);
+        if (file is null) return null;
+        try
+        {
+            return new ListingPhotoFileResult(await _files.DownloadAsync(file.FilePath, ct), file.ContentType, file.FileName);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Listing photo {PhotoId} blob is unavailable", photoId);
+            return null;
+        }
+    }
+
+    private async Task<ListingWorkspaceResponse?> MutatePhotoPackageAsync(
+        int portfolioId, int unitId, int userId, string reason,
+        Func<RentalListing, DateTime, Task<bool>> mutation, CancellationToken ct)
+    {
+        ListingWorkspaceResponse? response = null;
+        var strategy = _db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+            var listing = await LoadTrackedAsync(portfolioId, unitId, ct);
+            if (listing is null) return;
+            var now = _time.UtcNow();
+            if (await mutation(listing, now))
+            {
+                listing.ContentVersion++;
+                listing.UpdatedAt = now;
+                await _db.SaveChangesAsync(ct);
+                await _audit.LogAsync(portfolioId, EntityType, listing.Id, AuditLogOperation.Updated,
+                    userId: userId, changeReason: reason, ct: ct);
+            }
+            await transaction.CommitAsync(ct);
+            response = ListingWorkspaceResponse.FromEntity(listing);
+        });
         if (response is not null)
             await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response.Id, response, ct);
         return response;

@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Configuration;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -20,19 +23,22 @@ public class UnitController : ManagementControllerBase
     private readonly IListingWorkspaceService _listings;
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
     private readonly TimeProvider _timeProvider;
+    private readonly UploadSettings _uploadSettings;
 
     public UnitController(
         IUnitService service,
         IUnitDashboardService dashboard,
         IListingWorkspaceService listings,
         IWorkspaceAuthorizationEvaluator authorization,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IOptions<UploadSettings> uploadSettings)
     {
         _service = service;
         _dashboard = dashboard;
         _listings = listings;
         _authorization = authorization;
         _timeProvider = timeProvider;
+        _uploadSettings = uploadSettings.Value;
     }
 
     [HttpGet]
@@ -122,6 +128,78 @@ public class UnitController : ManagementControllerBase
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var listing = await _listings.SaveAsync(GetPortfolioId(), id, request, GetUserId(), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
+    }
+
+    [HttpPost("{id:int}/listing-workspace/photos/{photoId:int}/content")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListingWorkspaceResponse>> AttachListingPhoto(
+        int id, int photoId, IFormFile file, [FromForm] string clientOperationId, CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
+        if (file is null || file.Length == 0) return BadRequest(new { error = "A non-empty photo is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+
+        var fileName = DiskFileStorage.SanitizeFileName(file.FileName);
+        var contentType = file.ContentType?.Trim().ToLowerInvariant() ?? string.Empty;
+        byte[] bytes;
+        await using (var stream = file.OpenReadStream())
+        await using (var buffer = new MemoryStream())
+        {
+            await stream.CopyToAsync(buffer, ct);
+            bytes = buffer.ToArray();
+        }
+        var header = bytes.Length == 0 ? null : bytes[..Math.Min(16, bytes.Length)];
+        var (valid, error) = FileUploadValidator.ValidateScanUpload(
+            fileName, contentType, bytes.LongLength, _uploadSettings, header);
+        if (!valid || !contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = valid ? "Listing photos must be image files." : error });
+
+        var workspace = await _listings.AttachPhotoAsync(GetPortfolioId(), id, photoId, GetUserId(),
+            clientOperationId, fileName, contentType, bytes, ct);
+        return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
+    }
+
+    [HttpPatch("{id:int}/listing-workspace/photos/{photoId:int}")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListingWorkspaceResponse>> UpdateListingPhoto(
+        int id, int photoId, [FromBody] UpdateListingPhotoRequest request, CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
+        var workspace = await _listings.UpdatePhotoAsync(GetPortfolioId(), id, photoId, request, GetUserId(), ct);
+        return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
+    }
+
+    [HttpDelete("{id:int}/listing-workspace/photos/{photoId:int}/content")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListingWorkspaceResponse>> RemoveListingPhoto(
+        int id, int photoId, CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
+        var workspace = await _listings.RemovePhotoAsync(GetPortfolioId(), id, photoId, GetUserId(), ct);
+        return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
+    }
+
+    [HttpPut("{id:int}/listing-workspace/photos/order")]
+    [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListingWorkspaceResponse>> ReorderListingPhotos(
+        int id, [FromBody] ReorderListingPhotosRequest request, CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
+        var workspace = await _listings.ReorderPhotosAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        return workspace is null ? NotFound(new { error = "Listing workspace was not found" }) : Ok(workspace);
+    }
+
+    [HttpGet("{id:int}/listing-workspace/photos/{photoId:int}/content")]
+    public async Task<IActionResult> GetListingPhoto(int id, int photoId, CancellationToken ct)
+    {
+        if (!await CanManageListingAsync(id, ct)) return Forbid();
+        var file = await _listings.OpenPhotoAsync(GetPortfolioId(), id, photoId, ct);
+        if (file is null) return NotFound(new { error = "Listing photo was not found" });
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Cache-Control"] = "private, max-age=3600";
+        return File(file.Content, file.ContentType, enableRangeProcessing: true);
     }
 
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/signals")]

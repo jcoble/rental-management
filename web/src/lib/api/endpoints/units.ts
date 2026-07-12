@@ -1,5 +1,5 @@
 import type { AuditEntry, ListingWorkspace, SaveListingWorkspaceRequest, Unit, UnitDashboard, UnitHealth } from '$lib/types';
-import { api } from '../client';
+import { api, downloadFile } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 import { normalizeOptionalApiResult } from '../optional-result';
 
@@ -52,6 +52,25 @@ export const units = {
 
 	saveListingWorkspace: (id: number, data: SaveListingWorkspaceRequest) =>
 		api.put<ListingWorkspace>(`/units/${id}/listing-workspace`, data),
+
+	attachListingPhoto: (id: number, photoId: number, file: File, clientOperationId: string) => {
+		const form = new FormData();
+		form.append('file', file);
+		form.append('clientOperationId', clientOperationId);
+		return api.upload<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}/content`, form);
+	},
+
+	updateListingPhoto: (id: number, photoId: number, category: string, caption?: string | null) =>
+		api.patch<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}`, { category, caption }),
+
+	removeListingPhoto: (id: number, photoId: number) =>
+		api.delete<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}/content`),
+
+	reorderListingPhotos: (id: number, photoIds: number[]) =>
+		api.put<ListingWorkspace>(`/units/${id}/listing-workspace/photos/order`, { photoIds }),
+
+	downloadListingPhoto: (id: number, photoId: number) =>
+		downloadFile(`/units/${id}/listing-workspace/photos/${photoId}/content`),
 
 	confirmListingSignal: (id: number, signalId: number, accept: boolean) =>
 		api.post<ListingWorkspace>(`/units/${id}/listing-workspace/signals/${signalId}/confirm?accept=${accept}`),
