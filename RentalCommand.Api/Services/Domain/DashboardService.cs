@@ -52,7 +52,7 @@ public class DashboardService : IDashboardService
                 Status = portfolio.Status.ToString(),
             },
             Occupancy = await BuildOccupancyAsync(portfolioId, ct),
-            Accounting = await BuildAccountingAsync(portfolioId, now, monthStart, nextMonthStart, ct),
+            Accounting = await BuildAccountingAsync(portfolioId, monthStart, nextMonthStart, ct),
             Maintenance = await BuildMaintenanceAsync(portfolioId, ct),
             Leasing = await BuildLeasingAsync(portfolioId, ct),
             RecentActivity = await BuildRecentActivityAsync(portfolioId, ct),
@@ -96,54 +96,55 @@ public class DashboardService : IDashboardService
     }
 
     private async Task<DashboardAccounting> BuildAccountingAsync(
-        int portfolioId, DateTime now, DateTime monthStart, DateTime nextMonthStart, CancellationToken ct)
+        int portfolioId, DateTime monthStart, DateTime nextMonthStart, CancellationToken ct)
     {
-        // Receivable figures are computed SQL-side and limited to current leases. A stale Active lease
-        // whose fixed term ended without an extension should not keep generating dashboard TODOs.
-        var receivables = await _db.Payments
-            .AsNoTracking()
-            .ForCurrentLeaseAttention(now)
-            .Where(p => p.PortfolioId == portfolioId)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                // Overdue: still owed (Scheduled/Partial/Late) and past its due date (Late is overdue
-                // regardless of clock skew). A Partial owes only its unpaid remainder; others owe in full.
-                Overdue = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
-                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
-                        : 0m),
-                // Billed this month (a due date in the current month that we still expect). This is the
-                // full charge that was billed, regardless of how much has been collected against it.
-                DueThisMonth = g.Sum(p =>
-                    p.DueDate >= monthStart && p.DueDate < nextMonthStart && p.Status != PaymentStatus.Waived
-                        ? p.Amount : 0m),
-            })
-            .FirstOrDefaultAsync(ct);
+        var monthStartOn = DateOnly.FromDateTime(monthStart);
+        var nextMonthStartOn = DateOnly.FromDateTime(nextMonthStart);
 
-        // Cash collected this month remains historical. If a landlord collects an old balance after
-        // move-out, it should still be counted as money in; it just should not be an active overdue TODO.
-        var collected = await _db.Payments
+        // One PostgreSQL statement derives the entire tenant-money portion of the dashboard from
+        // canonical facts. Current receivable attention is lifecycle-scoped; billed charges and
+        // allocations are immutable; partial payment is reflected by the balance views; and cash
+        // collected remains historical even after move-out. Security-deposit receipts are excluded
+        // through their typed subledger provenance because held deposits are liabilities, not income.
+        var tenantMoney = await _db.Portfolios
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
-            .GroupBy(_ => 1)
-            .Select(g => new
+            .Where(portfolio => portfolio.Id == portfolioId)
+            .Select(portfolio => new
             {
-                // Collected cash this month, based on when it was actually paid: Paid contributes the
-                // full Amount, a Partial contributes only the collected AmountPaid. Security deposits
-                // are liabilities, not income, so they are excluded to match the money snapshot's
-                // "Total Collected" definition.
-                PaidThisMonth = g.Sum(p =>
-                    (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
-                    && p.PaymentType != PaymentType.SecurityDeposit
-                    && p.PaidDate != null
-                    && p.PaidDate >= monthStart
-                    && p.PaidDate < nextMonthStart
-                        ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount)
-                        : 0m),
+                Overdue = (
+                    from balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                    join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                        on new { balance.PortfolioId, balance.LeaseManagementId }
+                        equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                    where balance.PortfolioId == portfolio.Id
+                        && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                    select (decimal?)balance.PastDueAmount).Sum() ?? 0m,
+                DueThisMonth = (
+                    from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
+                    join account in _db.TenantAccounts.AsNoTracking()
+                        on new { charge.PortfolioId, charge.TenantAccountId }
+                        equals new { account.PortfolioId, TenantAccountId = account.Id }
+                    join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                        on new { account.PortfolioId, account.LeaseManagementId }
+                        equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                    where charge.PortfolioId == portfolio.Id
+                        && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                        && charge.DueOn >= monthStartOn
+                        && charge.DueOn < nextMonthStartOn
+                    select (decimal?)(charge.OriginalAmount - charge.ReversedAmount)).Sum() ?? 0m,
+                PaidThisMonth = _db.TenantLedgerEntries
+                    .AsNoTracking()
+                    .Where(entry => entry.PortfolioId == portfolio.Id
+                        && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                        && entry.EffectiveOn >= monthStartOn
+                        && entry.EffectiveOn < nextMonthStartOn
+                        && !_db.SecurityDepositEntries.Any(deposit =>
+                            deposit.PortfolioId == portfolio.Id
+                            && deposit.TenantLedgerEntryId == entry.Id
+                            && deposit.EntryType == SecurityDepositEntryType.Receipt))
+                    .Sum(entry => (decimal?)entry.Amount) ?? 0m,
             })
-            .FirstOrDefaultAsync(ct);
+            .SingleAsync(ct);
 
         var bankCash = await _db.BankTransactions
             .AsNoTracking()
@@ -159,9 +160,9 @@ public class DashboardService : IDashboardService
             })
             .FirstOrDefaultAsync(ct);
 
-        var overdue = receivables?.Overdue ?? 0m;
-        var dueThisMonth = receivables?.DueThisMonth ?? 0m;
-        var paidThisMonth = (collected?.PaidThisMonth ?? 0m) + (bankCash?.UnmatchedDeposits ?? 0m);
+        var overdue = tenantMoney.Overdue;
+        var dueThisMonth = tenantMoney.DueThisMonth;
+        var paidThisMonth = tenantMoney.PaidThisMonth + (bankCash?.UnmatchedDeposits ?? 0m);
 
         // Expenses spent this month (paid date when present, else incurred date), matching the
         // dashboard money snapshot so the summary KPI and the detailed money card cannot diverge.
