@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -31,7 +32,12 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private int _unitId;
     private int _tenantId;
     private int _leaseId;
+    private int _tenantAccountId;
     private int _vendorId;
+    private int _actorUserId;
+    private Guid _authSessionId;
+    private int _accessContextId;
+    private long _accessRevision;
     private readonly Dictionary<int, string> _preparedFingerprints = [];
 
     public async Task InitializeAsync()
@@ -63,7 +69,21 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 
         await using var scope = Scope();
-        await scope.Db.Database.MigrateAsync();
+        await scope.Db.Database.EnsureCreatedAsync();
+        await scope.Db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
+        await scope.Db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await scope.Db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+        var actor = new ApplicationUser
+        {
+            UserName = "scan-writer@example.test",
+            NormalizedUserName = "SCAN-WRITER@EXAMPLE.TEST",
+            Email = "scan-writer@example.test",
+            NormalizedEmail = "SCAN-WRITER@EXAMPLE.TEST",
+            DisplayName = "Scan writer",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = CommandTime,
+        };
         var portfolio = new Portfolio
         {
             Name = "Production scan writers",
@@ -72,8 +92,9 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             CreatedAt = CommandTime,
             UpdatedAt = CommandTime,
         };
-        scope.Db.Portfolios.Add(portfolio);
+        scope.Db.AddRange(actor, portfolio);
         await scope.Db.SaveChangesAsync();
+        _actorUserId = actor.Id;
         _portfolioId = portfolio.Id;
 
         var property = new Property
@@ -112,6 +133,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
 
         var unit = new Unit
         {
+            PortfolioId = _portfolioId,
             PropertyId = _propertyId,
             UnitNumber = "1",
             CreatedAt = CommandTime,
@@ -120,6 +142,84 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         scope.Db.Units.Add(unit);
         await scope.Db.SaveChangesAsync();
         _unitId = unit.Id;
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = _actorUserId,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = CommandTime.AddDays(-1),
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+        };
+        scope.Db.WorkspaceMemberships.Add(membership);
+        await scope.Db.SaveChangesAsync();
+
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = membership.Id,
+            PortfolioId = _portfolioId,
+            RoleProfileId = 2,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = CommandTime.AddDays(-1),
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+        };
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            PropertyId = _propertyId,
+            PortfolioId = _portfolioId,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = _actorUserId,
+            ActiveAccessContextId = accessContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = CommandTime,
+            LastSeenAtUtc = CommandTime,
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(1),
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = _propertyId,
+            UnitId = _unitId,
+            RelationshipNumber = "LM-SCAN-BASE",
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+            CreatedByUserId = _actorUserId,
+        };
+        scope.Db.AddRange(assignment, session, relationship);
+        await scope.Db.SaveChangesAsync();
+
+        var tenantAccount = new TenantAccount
+        {
+            PortfolioId = _portfolioId,
+            LeaseManagementId = relationship.Id,
+            AccountNumber = "TA-SCAN-BASE",
+            Currency = "USD",
+            OpenedAtUtc = CommandTime,
+            CreatedAtUtc = CommandTime,
+            CreatedByUserId = _actorUserId,
+        };
+        scope.Db.TenantAccounts.Add(tenantAccount);
+        await scope.Db.SaveChangesAsync();
+        _tenantAccountId = tenantAccount.Id;
+        _authSessionId = session.Id;
+        _accessContextId = accessContext.Id;
+        _accessRevision = accessContext.AccessRevision;
 
         var lease = new Lease
         {
@@ -269,7 +369,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private ConfirmScanDraftCommand Command(int draftId, ScanConfirmationTargetKind kind) => new(
         _portfolioId,
         draftId,
-        ConfirmedByUserId: 42,
+        ConfirmedByUserId: _actorUserId,
         ConfirmedAtUtc: CommandTime,
         ExpectedDraftFingerprint: _preparedFingerprints[draftId],
         Target: kind switch
@@ -280,7 +380,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                     Receipt("Fresh Vendor"), true, _propertyId, _unitId, null)),
             ScanConfirmationTargetKind.Payment => new ScanConfirmationTargetData(
                 kind,
-                Payment: new ScanPaymentTargetData(Receipt("Rent payer"), _leaseId)),
+                Payment: new ScanPaymentTargetData(Receipt("Rent payer"), _tenantAccountId)),
             ScanConfirmationTargetKind.WorkOrder => new ScanConfirmationTargetData(
                 kind,
                 WorkOrder: new ScanWorkOrderTargetData(
@@ -298,7 +398,11 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                 kind,
                 Loan: LoanTarget(_propertyId)),
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
-        });
+        },
+        AuthSessionId: _authSessionId,
+        AccessContextId: _accessContextId,
+        ExpectedAccessRevision: _accessRevision,
+        DeliveryIdempotencyKey: $"scan-confirm:{_portfolioId}:{draftId}:{kind}");
 
     private static ScanLoanTargetData LoanTarget(int propertyId) => new(
         propertyId,
@@ -359,7 +463,9 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         int id) => kind switch
         {
             ScanConfirmationTargetKind.Expense => db.Expenses.AnyAsync(row => row.Id == id),
-            ScanConfirmationTargetKind.Payment => db.Payments.AnyAsync(row => row.Id == id),
+            ScanConfirmationTargetKind.Payment => db.TenantLedgerEntries.AnyAsync(row =>
+                row.TenantAccountId == id
+                && row.EntryType == TenantLedgerEntryType.PaymentReceipt),
             ScanConfirmationTargetKind.WorkOrder => db.WorkOrders.AnyAsync(row => row.Id == id),
             ScanConfirmationTargetKind.Application => db.RentalApplications.AnyAsync(row => row.Id == id),
             ScanConfirmationTargetKind.Loan => db.Loans.AnyAsync(row => row.Id == id),

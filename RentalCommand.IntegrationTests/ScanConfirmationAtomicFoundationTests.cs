@@ -65,7 +65,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        await db.Database.MigrateAsync();
+        await db.Database.EnsureCreatedAsync();
         var portfolio = new Portfolio
         {
             Name = "Atomic scan confirmation",
