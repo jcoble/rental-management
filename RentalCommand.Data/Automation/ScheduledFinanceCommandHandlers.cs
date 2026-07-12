@@ -10,6 +10,8 @@ namespace RentalCommand.Data.Automation;
 public sealed class ApplyClaimedDebtServiceBatchHandler
     : IAtomicCommandHandler<ApplyClaimedDebtServiceBatchCommand, ApplyScheduledFinanceBatchResult>
 {
+    private const int MaxOccurrencesPerSchedule = 36;
+
     public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
         ApplyClaimedDebtServiceBatchCommand command,
         IAtomicWriteAttempt attempt,
@@ -45,7 +47,10 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             var paidOff = false;
             var generatedForLoan = 0;
 
-            for (var period = nextPeriod; period <= lastPeriodToGenerate; period++)
+            var batchLastPeriod = Math.Min(
+                lastPeriodToGenerate,
+                checked(nextPeriod + MaxOccurrencesPerSchedule - 1));
+            for (var period = nextPeriod; period <= batchLastPeriod; period++)
             {
                 var periodMonth = startMonth.AddMonths(period - 1);
                 var split = AmortizationCalculator.Split(
@@ -163,7 +168,7 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
 public sealed class ApplyClaimedRecurringExpenseBatchHandler
     : IAtomicCommandHandler<ApplyClaimedRecurringExpenseBatchCommand, ApplyScheduledFinanceBatchResult>
 {
-    private const int MaxCatchUpPeriods = 36;
+    private const int MaxOccurrencesPerSchedule = 36;
 
     public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
         ApplyClaimedRecurringExpenseBatchCommand command,
@@ -185,7 +190,7 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
         {
             var runDate = template.NextRunDate;
             var periods = 0;
-            while (runDate <= command.BusinessDateUtc && periods < MaxCatchUpPeriods)
+            while (runDate <= command.BusinessDateUtc && periods < MaxOccurrencesPerSchedule)
             {
                 var expense = new Expense
                 {
@@ -222,9 +227,6 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
                 runDate = Advance(runDate, template.Frequency);
                 periods++;
             }
-
-            while (runDate <= command.BusinessDateUtc)
-                runDate = Advance(runDate, template.Frequency);
 
             var priorNextRunDate = template.NextRunDate;
             template.NextRunDate = runDate;

@@ -39,7 +39,6 @@ public sealed class DebtServiceService : IDebtServiceService
         var claims = await _claims.ClaimDebtServiceAsync(
             $"{Environment.MachineName}:{Environment.ProcessId}:debt-service",
             today,
-            now,
             TimeSpan.FromMinutes(3),
             25,
             ct);
