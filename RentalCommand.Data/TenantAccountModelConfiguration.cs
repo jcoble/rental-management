@@ -170,8 +170,9 @@ internal static class TenantAccountModelConfiguration
                     "\"SubmittedAtUtc\" IS NULL OR \"SubmittedAtUtc\" >= \"PreparedAtUtc\"");
                 table.HasCheckConstraint(
                     "CK_TenantPaymentAttempt_Settlement",
-                    "\"SettledAtUtc\" IS NULL OR (\"State\" = 'Succeeded' AND \"SubmittedAtUtc\" IS NOT NULL " +
-                    "AND \"SettledAtUtc\" >= \"SubmittedAtUtc\")");
+                    "(\"State\" = 'Succeeded' AND \"SettledAtUtc\" IS NOT NULL " +
+                    "AND \"SubmittedAtUtc\" IS NOT NULL AND \"SettledAtUtc\" >= \"SubmittedAtUtc\") OR " +
+                    "(\"State\" <> 'Succeeded' AND \"SettledAtUtc\" IS NULL)");
             });
 
             entity.HasOne(e => e.Portfolio)
@@ -235,11 +236,11 @@ internal static class TenantAccountModelConfiguration
                     "'DepositCharge', 'ManualCharge', 'PaymentReceipt', 'Credit', 'Adjustment', 'Refund', 'Reversal')");
                 table.HasCheckConstraint(
                     "CK_TenantLedgerEntry_Direction",
-                    "(\"EntryType\" = 'OpeningBalance') OR " +
+                    "\"Direction\" IN ('Debit','Credit') AND ((\"EntryType\" = 'OpeningBalance') OR " +
                     "(\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') " +
                     "AND \"Direction\" = 'Debit') OR " +
                     "(\"EntryType\" IN ('PaymentReceipt','Credit','Refund') AND \"Direction\" = 'Credit') OR " +
-                    "(\"EntryType\" IN ('Adjustment','Reversal') AND \"Direction\" IN ('Debit','Credit'))");
+                    "(\"EntryType\" IN ('Adjustment','Reversal') AND \"Direction\" IN ('Debit','Credit')))");
                 table.HasCheckConstraint("CK_TenantLedgerEntry_Amount", "\"Amount\" > 0");
                 table.HasCheckConstraint("CK_TenantLedgerEntry_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
                 table.HasCheckConstraint(
