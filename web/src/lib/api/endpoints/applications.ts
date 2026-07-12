@@ -98,7 +98,7 @@ export type ScreeningStatus =
 	| 'Failed'
 	| 'Cancelled';
 
-/** Screening recommendation (string enum, matches the API). */
+/** Landlord's recorded screening decision (string enum, matches the API). */
 export type ScreeningRecommendation = 'Accept' | 'Conditional' | 'Decline';
 
 /** Result of a gated tenant-screening run against an application. */
@@ -117,7 +117,13 @@ export interface ApplicantScreeningResponse {
 	failedAtUtc: string | null;
 	lastStatusAtUtc: string;
 	decision: ScreeningRecommendation | null;
+	decisionReason: string | null;
 	consumerReportUsedForDecision: boolean;
+	creditReportingAgencyName: string | null;
+	creditReportingAgencyAddress: string | null;
+	creditReportingAgencyPhone: string | null;
+	hasCompleteCreditReportingAgencyContact: boolean;
+	canGenerateAdverseAction: boolean;
 }
 
 export interface ScreeningWorkspaceResponse {
@@ -211,10 +217,33 @@ export const applications = {
 	updateExternalScreening: (
 		id: number,
 		screeningId: number,
-		body: { operationKey: string; status: ScreeningStatus; occurredAtUtc?: string }
+		body: {
+			operationKey: string;
+			status?: ScreeningStatus;
+			providerReference?: string | null;
+			providerHostedUrl?: string | null;
+			creditReportingAgencyName?: string | null;
+			creditReportingAgencyAddress?: string | null;
+			creditReportingAgencyPhone?: string | null;
+			occurredAtUtc?: string;
+		}
 	) =>
 		api.patch<ApplicantScreeningResponse>(
 			`/applications/${id}/screening/${screeningId}/external`,
+			body
+		),
+	recordScreeningDecision: (
+		id: number,
+		screeningId: number,
+		body: {
+			operationKey: string;
+			decision: ScreeningRecommendation;
+			reason?: string | null;
+			consumerReportUsed: boolean;
+		}
+	) =>
+		api.post<ApplicantScreeningResponse>(
+			`/applications/${id}/screening/${screeningId}/decision`,
 			body
 		),
 	screening: (id: number) => api.get<ScreeningWorkspaceResponse>(`/applications/${id}/screening`),

@@ -388,6 +388,37 @@ class ApplicationsRepository {
     }
   }
 
+  Future<ApplicantScreening> updateExternalScreeningAgency(
+    int applicationId,
+    int screeningId, {
+    required String operationKey,
+    required String creditReportingAgencyName,
+    required String creditReportingAgencyAddress,
+    required String creditReportingAgencyPhone,
+  }) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/applications/$applicationId/screening/$screeningId/external',
+        data: {
+          'operationKey': operationKey,
+          'creditReportingAgencyName': creditReportingAgencyName,
+          'creditReportingAgencyAddress': creditReportingAgencyAddress,
+          'creditReportingAgencyPhone': creditReportingAgencyPhone,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<ScreeningWorkspace> screening(int id) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(

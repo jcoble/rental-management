@@ -41,6 +41,7 @@ class _ApplicationDetailScreenState
   String? _externalScreeningOperationKey;
   String? _completeExternalOperationKey;
   String? _screeningDecisionOperationKey;
+  String? _updateScreeningAgencyOperationKey;
 
   int get _id => widget.applicationId;
 
@@ -351,7 +352,7 @@ class _ApplicationDetailScreenState
   Future<void> _recordScreeningDecision(ApplicantScreening screening) async {
     final input = await showDialog<_ScreeningDecisionInput>(
       context: context,
-      builder: (_) => _ScreeningDecisionDialog(initial: screening.decision),
+      builder: (_) => _ScreeningDecisionDialog(screening: screening),
     );
     if (input == null || !mounted) return;
 
@@ -371,6 +372,36 @@ class _ApplicationDetailScreenState
       _screeningDecisionOperationKey = null;
       ref.invalidate(applicationScreeningProvider(_id));
       _snack('Screening decision recorded.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _updateScreeningAgency(ApplicantScreening screening) async {
+    final input = await showDialog<_CraContactInput>(
+      context: context,
+      builder: (_) => _CraContactDialog(initial: screening),
+    );
+    if (input == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(applicationsRepositoryProvider)
+          .updateExternalScreeningAgency(
+            _id,
+            screening.id,
+            operationKey: _updateScreeningAgencyOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
+            creditReportingAgencyName: input.name,
+            creditReportingAgencyAddress: input.address,
+            creditReportingAgencyPhone: input.phone,
+          );
+      _updateScreeningAgencyOperationKey = null;
+      ref.invalidate(applicationScreeningProvider(_id));
+      _snack('Consumer reporting agency contact saved.');
     } on ApiException catch (e) {
       _snack(e.message);
     } finally {
@@ -498,6 +529,7 @@ class _ApplicationDetailScreenState
             onTrackExternalScreening: _trackExternalScreening,
             onMarkExternalComplete: _markExternalScreeningComplete,
             onRecordScreeningDecision: _recordScreeningDecision,
+            onUpdateScreeningAgency: _updateScreeningAgency,
             onOpenProvider: _openProvider,
             onGenerateAdverseAction: () => _generateAdverseAction(app),
             onViewNotice: _viewNotice,
@@ -526,6 +558,7 @@ class _DetailBody extends StatelessWidget {
     required this.onTrackExternalScreening,
     required this.onMarkExternalComplete,
     required this.onRecordScreeningDecision,
+    required this.onUpdateScreeningAgency,
     required this.onOpenProvider,
     required this.onGenerateAdverseAction,
     required this.onViewNotice,
@@ -545,6 +578,7 @@ class _DetailBody extends StatelessWidget {
   final VoidCallback onTrackExternalScreening;
   final void Function(int screeningId) onMarkExternalComplete;
   final void Function(ApplicantScreening screening) onRecordScreeningDecision;
+  final void Function(ApplicantScreening screening) onUpdateScreeningAgency;
   final void Function(String url) onOpenProvider;
   final VoidCallback onGenerateAdverseAction;
   final void Function(int storedFileId) onViewNotice;
@@ -798,6 +832,7 @@ class _DetailBody extends StatelessWidget {
           onTrackExternalScreening: onTrackExternalScreening,
           onMarkExternalComplete: onMarkExternalComplete,
           onRecordScreeningDecision: onRecordScreeningDecision,
+          onUpdateScreeningAgency: onUpdateScreeningAgency,
           onOpenProvider: onOpenProvider,
           onGenerateAdverseAction: onGenerateAdverseAction,
           onViewNotice: onViewNotice,
@@ -1323,6 +1358,7 @@ class _ScreeningSection extends StatelessWidget {
     required this.onTrackExternalScreening,
     required this.onMarkExternalComplete,
     required this.onRecordScreeningDecision,
+    required this.onUpdateScreeningAgency,
     required this.onOpenProvider,
     required this.onGenerateAdverseAction,
     required this.onViewNotice,
@@ -1336,6 +1372,7 @@ class _ScreeningSection extends StatelessWidget {
   final VoidCallback onTrackExternalScreening;
   final void Function(int screeningId) onMarkExternalComplete;
   final void Function(ApplicantScreening screening) onRecordScreeningDecision;
+  final void Function(ApplicantScreening screening) onUpdateScreeningAgency;
   final void Function(String url) onOpenProvider;
   final VoidCallback onGenerateAdverseAction;
   final void Function(int storedFileId) onViewNotice;
@@ -1348,9 +1385,10 @@ class _ScreeningSection extends StatelessWidget {
     final hasConsent = app.consentGiven;
     final applicationOpen = isApplicationOpen(app.status);
 
-    final hasCompletedScreening = screeningAsync.maybeWhen(
-      data: (workspace) => workspace.screenings.any((r) => r.isCompleted),
-      orElse: () => false,
+    final latestScreening = screeningAsync.maybeWhen<ApplicantScreening?>(
+      data: (workspace) =>
+          workspace.screenings.isEmpty ? null : workspace.screenings.first,
+      orElse: () => null,
     );
 
     return _SectionCard(
@@ -1430,6 +1468,8 @@ class _ScreeningSection extends StatelessWidget {
                       result: workspace.screenings.first,
                       busy: busy,
                       onMarkExternalComplete: onMarkExternalComplete,
+                      onRecordScreeningDecision: onRecordScreeningDecision,
+                      onUpdateScreeningAgency: onUpdateScreeningAgency,
                       onOpenProvider: onOpenProvider,
                     ),
                 ],
@@ -1438,7 +1478,7 @@ class _ScreeningSection extends StatelessWidget {
           ),
 
           // ── Adverse-action (declined + screened) ───────────────────────
-          if (app.status == 'Declined' && hasCompletedScreening) ...[
+          if (app.status == 'Declined' && latestScreening != null) ...[
             const Divider(height: 28),
             Text(
               'Adverse action',
@@ -1448,9 +1488,9 @@ class _ScreeningSection extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'When you decline based on a screening report, the FCRA requires '
-              'giving the applicant an adverse-action notice naming the credit '
-              'reporting agency and their right to dispute it.',
+              latestScreening.consumerReportUsedForDecision
+                  ? 'When a consumer report influences a decline, the FCRA requires giving the applicant an adverse-action notice naming the consumer reporting agency and their right to dispute it.'
+                  : 'No adverse-action notice is offered unless you record that a consumer report influenced the decline.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: cs.onSurfaceVariant,
               ),
@@ -1468,7 +1508,7 @@ class _ScreeningSection extends StatelessWidget {
                     label: const Text('View notice (PDF)'),
                   ),
                 ),
-            ] else
+            ] else if (latestScreening.canGenerateAdverseAction)
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -1484,14 +1524,14 @@ class _ScreeningSection extends StatelessWidget {
   }
 }
 
-/// Summary of a single screening result — status, credit band, criminal /
-/// eviction in plain language, and a recommendation chip.
+/// Content-free summary of one screening workflow and the landlord's decision.
 class _ScreeningResultView extends StatelessWidget {
   const _ScreeningResultView({
     required this.result,
     required this.busy,
     required this.onMarkExternalComplete,
     required this.onRecordScreeningDecision,
+    required this.onUpdateScreeningAgency,
     required this.onOpenProvider,
   });
 
@@ -1499,6 +1539,7 @@ class _ScreeningResultView extends StatelessWidget {
   final bool busy;
   final void Function(int screeningId) onMarkExternalComplete;
   final void Function(ApplicantScreening screening) onRecordScreeningDecision;
+  final void Function(ApplicantScreening screening) onUpdateScreeningAgency;
   final void Function(String url) onOpenProvider;
 
   @override
@@ -1546,6 +1587,22 @@ class _ScreeningResultView extends StatelessWidget {
           label: 'Updated',
           value: formatApplicationDateTime(r.lastStatusAtUtc),
         ),
+        _DetailRow(
+          label: 'Consumer report used',
+          value: r.decision == null
+              ? 'Not recorded yet'
+              : (r.consumerReportUsedForDecision ? 'Yes' : 'No'),
+        ),
+        _DetailRow(
+          label: 'Agency contact',
+          value: r.hasCompleteCreditReportingAgencyContact
+              ? 'Complete'
+              : (r.decision != null && !r.consumerReportUsedForDecision
+                    ? 'Not required for this decision'
+                    : 'Missing'),
+        ),
+        if (r.decisionReason != null)
+          _DetailRow(label: 'Decision reason', value: r.decisionReason!),
         if (r.providerHostedUrl != null) ...[
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -1562,6 +1619,18 @@ class _ScreeningResultView extends StatelessWidget {
             label: const Text('Mark outside screening complete'),
           ),
         ],
+        if (r.mode == 'External') ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => onUpdateScreeningAgency(r),
+            icon: const Icon(Icons.contact_phone_outlined, size: 18),
+            label: Text(
+              r.hasCompleteCreditReportingAgencyContact
+                  ? 'Update agency contact'
+                  : 'Add agency contact',
+            ),
+          ),
+        ],
         if (r.isCompleted) ...[
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -1576,6 +1645,15 @@ class _ScreeningResultView extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             'This screening request failed. Try running it again.',
+            style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
+          ),
+        ],
+        if (r.decision != null &&
+            r.consumerReportUsedForDecision &&
+            !r.hasCompleteCreditReportingAgencyContact) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Agency name, mailing address, and phone are required for a report-based decision.',
             style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
           ),
         ],
@@ -1664,10 +1742,127 @@ class _ScreeningDecisionInput {
   final String? reason;
 }
 
-class _ScreeningDecisionDialog extends StatefulWidget {
-  const _ScreeningDecisionDialog({this.initial});
+class _CraContactInput {
+  const _CraContactInput({
+    required this.name,
+    required this.address,
+    required this.phone,
+  });
 
-  final String? initial;
+  final String name;
+  final String address;
+  final String phone;
+}
+
+class _CraContactDialog extends StatefulWidget {
+  const _CraContactDialog({required this.initial});
+
+  final ApplicantScreening initial;
+
+  @override
+  State<_CraContactDialog> createState() => _CraContactDialogState();
+}
+
+class _CraContactDialogState extends State<_CraContactDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _address;
+  late final TextEditingController _phone;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(
+      text: widget.initial.creditReportingAgencyName,
+    );
+    _address = TextEditingController(
+      text: widget.initial.creditReportingAgencyAddress,
+    );
+    _phone = TextEditingController(
+      text: widget.initial.creditReportingAgencyPhone,
+    );
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _address.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _name.text.trim();
+    final address = _address.text.trim();
+    final phone = _phone.text.trim();
+    if (name.isEmpty || address.isEmpty || phone.isEmpty) {
+      setState(
+        () => _error =
+            'Enter the agency name, mailing address, and phone number.',
+      );
+      return;
+    }
+    Navigator.of(
+      context,
+    ).pop(_CraContactInput(name: name, address: address, phone: phone));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Consumer reporting agency contact'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Required only when a consumer report influences the decision. Saving here updates this screening; it does not create another one.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Agency name'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _address,
+              decoration: const InputDecoration(labelText: 'Mailing address'),
+              maxLines: 2,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phone,
+              decoration: const InputDecoration(labelText: 'Phone'),
+              keyboardType: TextInputType.phone,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save contact')),
+      ],
+    );
+  }
+}
+
+class _ScreeningDecisionDialog extends StatefulWidget {
+  const _ScreeningDecisionDialog({required this.screening});
+
+  final ApplicantScreening screening;
 
   @override
   State<_ScreeningDecisionDialog> createState() =>
@@ -1676,13 +1871,16 @@ class _ScreeningDecisionDialog extends StatefulWidget {
 
 class _ScreeningDecisionDialogState extends State<_ScreeningDecisionDialog> {
   late String _decision;
-  bool _consumerReportUsed = false;
+  late bool _consumerReportUsed;
   final _reason = TextEditingController();
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _decision = widget.initial ?? 'Accept';
+    _decision = widget.screening.decision ?? 'Accept';
+    _consumerReportUsed = widget.screening.consumerReportUsedForDecision;
+    _reason.text = widget.screening.decisionReason ?? '';
   }
 
   @override
@@ -1693,6 +1891,18 @@ class _ScreeningDecisionDialogState extends State<_ScreeningDecisionDialog> {
 
   void _submit() {
     final reason = _reason.text.trim();
+    if (_consumerReportUsed && reason.isEmpty) {
+      setState(() => _error = 'Enter the principal decision reason.');
+      return;
+    }
+    if (_consumerReportUsed &&
+        !widget.screening.hasCompleteCreditReportingAgencyContact) {
+      setState(
+        () => _error =
+            'Save the agency name, mailing address, and phone before recording a report-based decision.',
+      );
+      return;
+    }
     Navigator.of(context).pop(
       _ScreeningDecisionInput(
         decision: _decision,
@@ -1742,6 +1952,15 @@ class _ScreeningDecisionDialogState extends State<_ScreeningDecisionDialog> {
               value: _consumerReportUsed,
               onChanged: (value) => setState(() => _consumerReportUsed = value),
             ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1855,12 +2074,12 @@ class _ExternalScreeningDialogState extends State<_ExternalScreeningDialog> {
             ),
             const SizedBox(height: 16),
             Text(
-              'Credit reporting agency (optional)',
+              'Consumer reporting agency contact',
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 4),
             Text(
-              'Add these contact details if you may need an adverse-action notice.',
+              'Add the agency name, mailing address, and phone if its report may influence your decision. These are not required when no consumer report is used.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1902,7 +2121,7 @@ class _ExternalScreeningDialogState extends State<_ExternalScreeningDialog> {
   }
 }
 
-/// Accept / Conditional / Decline chip for a screening recommendation.
+/// Accept / Conditional / Decline chip for the landlord's recorded decision.
 class _RecommendationChip extends StatelessWidget {
   const _RecommendationChip({required this.recommendation});
 
