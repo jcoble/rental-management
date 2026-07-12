@@ -620,6 +620,7 @@ public class DemoDataSeeder
         };
         _db.DocumentTemplates.Add(demoLeaseTemplate);
 
+        var securityDepositAccountsSeeded = 0;
         foreach (var lease in activeLeasesForPayments.Where(candidate => candidate.SecurityDeposit > 0m))
         {
             var effectiveOn = DateOnly.FromDateTime(lease.StartDate);
@@ -708,6 +709,7 @@ public class DemoDataSeeder
             _db.TenantLedgerEntries.AddRange(depositCharge, depositReceipt);
             _db.TenantLedgerAllocations.Add(allocation);
             _db.SecurityDepositEntries.Add(depositEntry);
+            securityDepositAccountsSeeded++;
         }
         await _db.SaveChangesAsync(ct);
 
@@ -1128,7 +1130,7 @@ public class DemoDataSeeder
             activeLeasesForPayments.Count,
             expiredLeases.Count,
             payments.Count,
-            holdings.Count,
+            securityDepositAccountsSeeded,
             expenses.Count,
             woList.Count,
             appts.Count,
