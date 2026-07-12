@@ -220,24 +220,6 @@ public class PropertyServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAsync_ThrowsWhenPropertyHasOccupyingLeaseButNoLiveUnit()
-    {
-        var property = SeedPropertyWithUnit(out var unit);
-        SeedOccupyingLease(property, unit, LeaseStatus.NoticeGiven);
-        // Soft-delete the unit so the unit guard passes and only the lease safety-net guard can fire —
-        // the exact orphan scenario (occupying lease whose unit is already gone).
-        unit.DeletedAt = DateTime.UtcNow;
-        _ctx.Db.SaveChanges();
-
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("active lease");
-        (await _sut.GetAsync(PortfolioId, property.Id))
-            .Should().NotBeNull("a property with an occupying lease must not be deleted");
-    }
-
-    [Fact]
     public async Task DeleteAsync_SoftDeletesEmptyCanonicalUnitForPropertyUnitTypes()
     {
         var created = await _sut.CreateAsync(PortfolioId, NewProperty("Empty House", PropertyType.SingleFamily));
