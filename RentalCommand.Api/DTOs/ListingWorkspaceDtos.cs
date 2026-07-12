@@ -4,7 +4,19 @@ using RentalCommand.Core.Entities;
 namespace RentalCommand.Api.DTOs;
 
 public sealed record ListingPhotoResponse(
-    int Id, int Position, string Category, string? Caption, int? StoredFileId, string? FileName, string? Sha256);
+    int Id, int Position, string Category, string? Caption, int? StoredFileId, string? FileName, string? Sha256,
+    string? ContentUrl);
+
+public sealed class UpdateListingPhotoRequest
+{
+    [Required, MaxLength(80)] public string Category { get; set; } = string.Empty;
+    [MaxLength(300)] public string? Caption { get; set; }
+}
+
+public sealed class ReorderListingPhotosRequest
+{
+    [Required, MinLength(1)] public IReadOnlyList<int> PhotoIds { get; set; } = [];
+}
 
 public sealed record ExternalListingSignalResponse(
     int Id, string SignalType, string? SuggestedExternalListingId, string? SuggestedListingUrl,
@@ -81,7 +93,10 @@ public sealed record ListingWorkspaceResponse(
             listing.Parking,
             listing.Amenities,
             listing.Photos.Select(photo => new ListingPhotoResponse(photo.Id, photo.Position, photo.Category, photo.Caption,
-                    photo.StoredFileId, photo.FileName, photo.Sha256))
+                    photo.StoredFileId, photo.FileName, photo.Sha256,
+                    photo.StoredFileId.HasValue
+                        ? $"/units/{listing.UnitId}/listing-workspace/photos/{photo.Id}/content"
+                        : null))
                 .ToArray(),
             listing.Publications.Select(publication => new ListingPublicationResponse(
                     publication.Id,

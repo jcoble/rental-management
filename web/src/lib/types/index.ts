@@ -159,6 +159,7 @@ export interface ListingPhoto {
 	storedFileId?: number | null;
 	fileName?: string | null;
 	sha256?: string | null;
+	contentUrl?: string | null;
 }
 
 export interface ExternalListingSignal {

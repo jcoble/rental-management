@@ -892,6 +892,58 @@ class UnitsRepository {
     }
   }
 
+  Future<ListingWorkspace> attachListingPhoto({
+    required int unitId,
+    required int photoId,
+    required List<int> bytes,
+    required String fileName,
+    required String contentType,
+    required String clientOperationId,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/units/$unitId/listing-workspace/photos/$photoId/content',
+        data: FormData.fromMap({
+          'file': MultipartFile.fromBytes(
+            bytes,
+            filename: fileName,
+            contentType: DioMediaType.parse(contentType),
+          ),
+          'clientOperationId': clientOperationId,
+        }),
+      );
+      return ListingWorkspace.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ListingWorkspace> removeListingPhoto(int unitId, int photoId) async {
+    try {
+      final response = await _dio.delete<Map<String, dynamic>>(
+        '/units/$unitId/listing-workspace/photos/$photoId/content',
+      );
+      return ListingWorkspace.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ListingWorkspace> reorderListingPhotos(
+    int unitId,
+    List<int> photoIds,
+  ) async {
+    try {
+      final response = await _dio.put<Map<String, dynamic>>(
+        '/units/$unitId/listing-workspace/photos/order',
+        data: {'photoIds': photoIds},
+      );
+      return ListingWorkspace.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<ListingWorkspace> confirmListingSignal(
     int unitId,
     int signalId, {

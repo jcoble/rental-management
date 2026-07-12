@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -8,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -19,7 +21,8 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
 
     public ListingWorkspaceServiceTests()
         => _service = new ListingWorkspaceService(_context.Db, Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>(), new PermissiveInfrastructureWriteGate(), TimeProvider.System);
+            Mock.Of<IAuditTrailService>(), new PermissiveInfrastructureWriteGate(), Mock.Of<IFileStorage>(),
+            Mock.Of<IPendingFileUploadStore>(), NullLogger<ListingWorkspaceService>.Instance, TimeProvider.System);
 
     public void Dispose() => _context.Dispose();
 
@@ -85,6 +88,21 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         synchronized.Bedrooms.Should().Be(3);
         synchronized.SquareFeet.Should().Be(1100);
         synchronized.ContentVersion.Should().Be(customized!.ContentVersion + 1);
+    }
+
+    [Fact]
+    public async Task UpdatePhotoAsync_ChangesMetadataAndAdvancesListingContentVersion()
+    {
+        var unit = SeedUnit();
+        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
+        var photo = generated!.PhotoManifest.First();
+
+        var updated = await _service.UpdatePhotoAsync(PortfolioId, unit.Id, photo.Id,
+            new UpdateListingPhotoRequest { Category = "Front exterior", Caption = "Street-facing view" }, 42);
+
+        updated!.ContentVersion.Should().Be(generated.ContentVersion + 1);
+        updated.PhotoManifest.First(item => item.Id == photo.Id).Should().Match<ListingPhotoResponse>(item =>
+            item.Category == "Front exterior" && item.Caption == "Street-facing view");
     }
 
     [Fact]

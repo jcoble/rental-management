@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
-	import type { ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest, UnitDashboard } from '$lib/types';
+	import type { ListingPhoto, ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest, UnitDashboard } from '$lib/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
-	import { Camera, Check, Clipboard, ExternalLink, FileDown, Link2, RefreshCw, Save, WifiOff } from '@lucide/svelte';
+	import { ArrowDown, ArrowUp, Camera, Check, Clipboard, Eye, ExternalLink, FileDown, Link2, Pencil, RefreshCw, Save, Trash2, Upload, WifiOff } from '@lucide/svelte';
 
 	type Form = {
 		headline: string; description: string; rent: string; securityDeposit: string;
@@ -54,6 +54,11 @@
 		onSuccess: acceptWorkspace,
 		onError: (error) => showError(apiErrorMessage(error)),
 	}));
+	const photoMutation = createMutation(() => ({
+		mutationFn: (work: () => Promise<ListingWorkspace>) => work(),
+		onSuccess: (value) => { acceptWorkspace(value); showSuccess('Photo package updated.'); },
+		onError: (error) => showError(apiErrorMessage(error)),
+	}));
 
 	function acceptWorkspace(value: ListingWorkspace) {
 		loadedVersion = value.contentVersion;
@@ -99,6 +104,41 @@
 		window.open(guided?.managementUrl ?? 'https://www.zillow.com/rental-manager/properties', '_blank', 'noopener,noreferrer');
 		if (workspace) units.saveListingWorkspace(unitId, { zillowGuided: { providerWorkspaceOpened: true } }).then(acceptWorkspace);
 	}
+
+	function uploadPhoto(photoId: number, event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		const operationId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${photoId}`;
+		photoMutation.mutate(() => units.attachListingPhoto(unitId, photoId, file, operationId));
+		input.value = '';
+	}
+
+	function editPhoto(photo: ListingPhoto) {
+		const category = window.prompt('Photo category', photo.category)?.trim();
+		if (!category) return;
+		const caption = window.prompt('Caption (optional)', photo.caption ?? '')?.trim() ?? '';
+		photoMutation.mutate(() => units.updateListingPhoto(unitId, photo.id, category, caption || null));
+	}
+
+	function movePhoto(photoId: number, direction: -1 | 1) {
+		if (!workspace) return;
+		const ids = workspace.photoManifest.map((photo) => photo.id);
+		const index = ids.indexOf(photoId);
+		const destination = index + direction;
+		if (index < 0 || destination < 0 || destination >= ids.length) return;
+		[ids[index], ids[destination]] = [ids[destination], ids[index]];
+		photoMutation.mutate(() => units.reorderListingPhotos(unitId, ids));
+	}
+
+	async function viewPhoto(photoId: number) {
+		try {
+			const blob = await units.downloadListingPhoto(unitId, photoId);
+			const url = URL.createObjectURL(blob);
+			window.open(url, '_blank', 'noopener,noreferrer');
+			setTimeout(() => URL.revokeObjectURL(url), 60_000);
+		} catch (error) { showError(apiErrorMessage(error)); }
+	}
 </script>
 
 <div class="space-y-4" data-testid="unit-listing-tab">
@@ -143,7 +183,22 @@
 				</DetailCard>
 
 				<DetailCard title="Ordered photo package" icon={Camera} accent="muted">
-					<div class="space-y-2">{#each workspace.photoManifest as photo}<div class="flex items-center gap-3 rounded-md border p-3"><span class="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">{photo.position}</span><div><p class="text-sm font-medium">{photo.category}</p><p class="text-xs text-muted-foreground">{photo.fileName ?? photo.caption ?? 'Photo needed'}</p></div></div>{/each}</div>
+					<div class="space-y-2">
+						{#each workspace.photoManifest as photo, index (photo.id)}
+							<div class="flex flex-wrap items-center gap-3 rounded-md border p-3">
+								<span class="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">{photo.position}</span>
+								<div class="min-w-40 flex-1"><p class="text-sm font-medium">{photo.category}</p><p class="text-xs text-muted-foreground">{photo.fileName ?? photo.caption ?? 'Photo needed'}</p></div>
+								<div class="flex flex-wrap gap-1">
+									<Button variant="outline" size="icon" aria-label="Move photo up" disabled={index === 0 || photoMutation.isPending} onclick={() => movePhoto(photo.id, -1)}><ArrowUp class="h-4 w-4" /></Button>
+									<Button variant="outline" size="icon" aria-label="Move photo down" disabled={index === workspace.photoManifest.length - 1 || photoMutation.isPending} onclick={() => movePhoto(photo.id, 1)}><ArrowDown class="h-4 w-4" /></Button>
+									<Button variant="outline" size="icon" aria-label="Edit photo details" disabled={photoMutation.isPending} onclick={() => editPhoto(photo)}><Pencil class="h-4 w-4" /></Button>
+									{#if photo.storedFileId}<Button variant="outline" size="icon" aria-label="View photo" onclick={() => viewPhoto(photo.id)}><Eye class="h-4 w-4" /></Button>{/if}
+									<label class="inline-flex h-9 cursor-pointer items-center gap-1 rounded-md border px-3 text-sm font-medium hover:bg-muted"><Upload class="h-4 w-4" /> {photo.storedFileId ? 'Replace' : 'Add'}<input class="sr-only" type="file" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" onchange={(event) => uploadPhoto(photo.id, event)} /></label>
+									{#if photo.storedFileId}<Button variant="outline" size="icon" aria-label="Remove photo" disabled={photoMutation.isPending} onclick={() => photoMutation.mutate(() => units.removeListingPhoto(unitId, photo.id))}><Trash2 class="h-4 w-4" /></Button>{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
 				</DetailCard>
 			</div>
 

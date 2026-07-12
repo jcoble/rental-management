@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/lease.dart';
@@ -657,7 +659,13 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
               ],
             ),
             const SizedBox(height: 14),
-            _ListingPhotoPackage(photos: listing.photoManifest),
+            _ListingPhotoPackage(
+              photos: listing.photoManifest,
+              busy: _isSaving,
+              onAddOrReplace: _pickListingPhoto,
+              onRemove: _removeListingPhoto,
+              onMove: _moveListingPhoto,
+            ),
             const SizedBox(height: 14),
             _Section(
               title: 'Zillow Guided',
@@ -757,6 +765,88 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
         );
       },
     );
+  }
+
+  Future<void> _pickListingPhoto(ListingPhoto photo) async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+    if (picked == null) return;
+    setState(() => _isSaving = true);
+    try {
+      final bytes = await picked.readAsBytes();
+      final extension = picked.name.toLowerCase().split('.').last;
+      final contentType = switch (extension) {
+        'png' => 'image/png',
+        'heic' || 'heif' => 'image/heic',
+        _ => 'image/jpeg',
+      };
+      final workspace = await ref
+          .read(unitsRepositoryProvider)
+          .attachListingPhoto(
+            unitId: widget.dashboard.unit.id,
+            photoId: photo.id,
+            bytes: bytes,
+            fileName: picked.name,
+            contentType: contentType,
+            clientOperationId: const Uuid().v4(),
+          );
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _loadedContentVersion = null;
+      _syncFromListing(workspace);
+    } on ApiException catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _removeListingPhoto(ListingPhoto photo) async {
+    setState(() => _isSaving = true);
+    try {
+      await ref
+          .read(unitsRepositoryProvider)
+          .removeListingPhoto(widget.dashboard.unit.id, photo.id);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+    } on ApiException catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _moveListingPhoto(ListingPhoto photo, int direction) async {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    if (listing == null) return;
+    final ids = listing.photoManifest.map((item) => item.id).toList();
+    final index = ids.indexOf(photo.id);
+    final destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= ids.length) return;
+    final moved = ids.removeAt(index);
+    ids.insert(destination, moved);
+    setState(() => _isSaving = true);
+    try {
+      await ref
+          .read(unitsRepositoryProvider)
+          .reorderListingPhotos(widget.dashboard.unit.id, ids);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+    } on ApiException catch (error) {
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   bool get _canSave =>
@@ -1230,9 +1320,19 @@ class _ListingWarning extends StatelessWidget {
 }
 
 class _ListingPhotoPackage extends StatelessWidget {
-  const _ListingPhotoPackage({required this.photos});
+  const _ListingPhotoPackage({
+    required this.photos,
+    required this.busy,
+    required this.onAddOrReplace,
+    required this.onRemove,
+    required this.onMove,
+  });
 
   final List<ListingPhoto> photos;
+  final bool busy;
+  final ValueChanged<ListingPhoto> onAddOrReplace;
+  final ValueChanged<ListingPhoto> onRemove;
+  final void Function(ListingPhoto, int) onMove;
 
   @override
   Widget build(BuildContext context) {
@@ -1241,16 +1341,44 @@ class _ListingPhotoPackage extends StatelessWidget {
       empty: 'No photo checklist was prepared',
       children: [
         // The API returns this manifest ordered DB-side by Position.
-        for (final photo in photos)
-          _CompactRow(
-            icon: photo.storedFileId == null
-                ? Symbols.add_a_photo_rounded
-                : Symbols.check_circle_rounded,
-            title: '${photo.position}. ${photo.category}',
-            subtitle:
-                photo.fileName ??
-                photo.caption ??
-                'Photo needed in this position',
+        for (var index = 0; index < photos.length; index++)
+          ListTile(
+            leading: Icon(
+              photos[index].storedFileId == null
+                  ? Symbols.add_a_photo_rounded
+                  : Symbols.check_circle_rounded,
+            ),
+            title: Text('${photos[index].position}. ${photos[index].category}'),
+            subtitle: Text(
+              photos[index].fileName ??
+                  photos[index].caption ??
+                  'Photo needed in this position',
+            ),
+            trailing: Wrap(
+              children: [
+                IconButton(
+                  onPressed: busy || index == 0
+                      ? null
+                      : () => onMove(photos[index], -1),
+                  icon: const Icon(Symbols.arrow_upward_rounded),
+                ),
+                IconButton(
+                  onPressed: busy || index == photos.length - 1
+                      ? null
+                      : () => onMove(photos[index], 1),
+                  icon: const Icon(Symbols.arrow_downward_rounded),
+                ),
+                IconButton(
+                  onPressed: busy ? null : () => onAddOrReplace(photos[index]),
+                  icon: const Icon(Symbols.add_a_photo_rounded),
+                ),
+                if (photos[index].storedFileId != null)
+                  IconButton(
+                    onPressed: busy ? null : () => onRemove(photos[index]),
+                    icon: const Icon(Symbols.delete_outline_rounded),
+                  ),
+              ],
+            ),
           ),
       ],
     );
