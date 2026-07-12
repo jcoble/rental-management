@@ -1,8 +1,7 @@
-using System.Globalization;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -18,40 +17,17 @@ public class PaymentService : IPaymentService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAuditTrailService _audit;
-    private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
 
     public PaymentService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IAuditTrailService audit,
-        IFileStorage files,
         TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _audit = audit;
-        _files = files;
         _timeProvider = timeProvider;
     }
-
-    // Money movement is high-stakes: status changes (reversals / refunds / waivers), collection, and
-    // deletion get an explicit audit row with a full before→after snapshot + human reason. The explicit
-    // log enriches the generic twin in place (see AuditTrailService), so writing it after SaveChanges wins.
-    private static string Snapshot(Payment p) => JsonSerializer.Serialize(new
-    {
-        paymentType = p.PaymentType.ToString(),
-        status = p.Status.ToString(),
-        amount = p.Amount,
-        amountPaid = p.AmountPaid,
-        dueDate = p.DueDate,
-        paidDate = p.PaidDate,
-        method = p.Method,
-        externalReference = p.ExternalReference,
-        notes = p.Notes,
-        leaseId = p.LeaseId,
-    });
 
     /// <summary>
     /// Normalizes <see cref="Payment.AmountPaid"/> for the payment's final <paramref name="status"/> +
@@ -91,72 +67,21 @@ public class PaymentService : IPaymentService
         return null;
     }
 
-    private async Task EnsureGeneratedPeriodPaymentKeyAvailableAsync(
-        int portfolioId,
-        int paymentId,
-        int targetLeaseId,
-        PaymentType targetPaymentType,
-        string? periodKey,
-        CancellationToken ct)
+    public async Task<IReadOnlyList<PaymentReceiptResponse>> ListAsync(
+        PaymentReceiptReadContext access,
+        PaymentListQuery query,
+        CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(periodKey))
-        {
-            return;
-        }
-
-        var alreadyExists = await _db.Payments
-            .AsNoTracking()
-            .AnyAsync(p =>
-                p.PortfolioId == portfolioId &&
-                p.Id != paymentId &&
-                p.LeaseId == targetLeaseId &&
-                p.PaymentType == targetPaymentType &&
-                p.PeriodKey == periodKey, ct);
-
-        if (!alreadyExists)
-        {
-            return;
-        }
-
-        throw new DomainValidationException(
-            $"The selected lease already has a generated {FormatPaymentType(targetPaymentType)} payment for {FormatPeriodKey(periodKey)}. Open the existing payment instead, or choose a different lease.",
-            statusCode: StatusCodes.Status409Conflict);
-    }
-
-    private static string FormatPaymentType(PaymentType paymentType) =>
-        paymentType switch
-        {
-            PaymentType.Rent => "rent",
-            PaymentType.SecurityDeposit => "security deposit",
-            PaymentType.LateFee => "late fee",
-            PaymentType.Utility => "utility",
-            _ => "ledger",
-        };
-
-    private static string FormatPeriodKey(string periodKey)
-    {
-        if (DateTime.TryParseExact(
-                periodKey,
-                "yyyy-MM",
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.None,
-                out var period))
-        {
-            return period.ToString("MMMM yyyy", CultureInfo.InvariantCulture);
-        }
-
-        return periodKey;
-    }
-
-    public async Task<IReadOnlyList<PaymentReceiptResponse>> ListAsync(int portfolioId, PaymentListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListPageAsync(portfolioId, query, ct);
+        var page = await ListPageAsync(access, query, ct);
         return page.Items;
     }
 
-    public async Task<PaymentListResponse> ListPageAsync(int portfolioId, PaymentListQuery query, CancellationToken ct = default)
+    public async Task<PaymentListResponse> ListPageAsync(
+        PaymentReceiptReadContext access,
+        PaymentListQuery query,
+        CancellationToken ct = default)
     {
-        var filtered = BuildReceiptQuery(portfolioId, query);
+        var filtered = BuildReceiptQuery(access, query);
         var totalCount = await filtered.CountAsync(ct);
 
         var items = await ApplyReceiptSort(filtered, query)
@@ -173,9 +98,18 @@ public class PaymentService : IPaymentService
         };
     }
 
-    internal IQueryable<PaymentReceiptResponse> BuildReceiptQuery(int portfolioId, PaymentListQuery query)
+    /// <summary>
+    /// Builds the complete receipt read as one composable database query. Authorization is a correlated
+    /// EXISTS on the current session/context/membership/assignment and the receipt's property, so an
+    /// assignment cannot lend its capability to another assignment's scope and no allowed-ID collection
+    /// is materialized before filtering, count, sort, paging, or projection.
+    /// </summary>
+    internal IQueryable<PaymentReceiptResponse> BuildReceiptQuery(
+        PaymentReceiptReadContext access,
+        PaymentListQuery query)
     {
-        var q =
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var authorizedRows =
             from entry in _db.TenantLedgerEntries.AsNoTracking()
             join account in _db.TenantAccounts.AsNoTracking()
                 on new { entry.PortfolioId, Id = entry.TenantAccountId }
@@ -186,66 +120,116 @@ public class PaymentService : IPaymentService
             join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            where entry.PortfolioId == portfolioId
+            where entry.PortfolioId == access.PortfolioId
                 && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
-            select new PaymentReceiptResponse
-            {
-                Id = entry.Id,
-                PublicId = entry.PublicId,
-                PortfolioId = entry.PortfolioId,
-                TenantAccountId = account.Id,
-                LeaseManagementId = management.Id,
-                PropertyId = management.PropertyId,
-                UnitId = management.UnitId,
-                AccountNumber = account.AccountNumber,
-                RelationshipNumber = management.RelationshipNumber,
-                TenantName = lifecycle.CurrentPrimaryTenantName,
-                PropertyName = management.Property!.Name,
-                UnitNumber = management.Unit!.UnitNumber,
-                Amount = entry.Amount,
-                Currency = entry.Currency,
-                ReceivedOn = entry.EffectiveOn,
-                PostedAtUtc = entry.PostedAtUtc,
-                Description = entry.Description,
-                Provider = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.Provider,
-                ProviderReference = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.ProviderObjectId,
-                ProviderState = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.State,
-                PaymentMethodSummary = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.PaymentMethodSummary,
-                PayerName = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.PayerName,
-                CheckNumber = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.CheckNumber,
-                BankName = entry.ProviderPaymentAttempt == null ? null : entry.ProviderPaymentAttempt.BankName,
-                SourceStoredFileId = entry.SourceStoredFileId,
-            };
+                && _db.AuthSessions.AsNoTracking().Any(session =>
+                    session.Id == access.SessionId
+                    && session.UserId == access.UserId
+                    && session.ActiveAccessContextId == access.AccessContextId
+                    && session.Status == AuthSessionStatus.Active
+                    && session.RevokedAtUtc == null
+                    && session.ExpiresAtUtc > utcNow
+                    && session.ActiveAccessContext != null
+                    && session.ActiveAccessContext.UserId == access.UserId
+                    && session.ActiveAccessContext.PortfolioId == access.PortfolioId
+                    && session.ActiveAccessContext.AccessRevision == access.AccessRevision
+                    && session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active
+                    && session.ActiveAccessContext.SuspendedAtUtc == null
+                    && session.ActiveAccessContext.RevokedAtUtc == null
+                    && session.ActiveAccessContext.Membership != null
+                    && session.ActiveAccessContext.Membership.PortfolioId == access.PortfolioId
+                    && session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active
+                    && session.ActiveAccessContext.Membership.SuspendedAtUtc == null
+                    && session.ActiveAccessContext.Membership.RevokedAtUtc == null
+                    && session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow
+                    && (session.ActiveAccessContext.Membership.EffectiveToUtc == null
+                        || session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow)
+                    && session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
+                        assignment.PortfolioId == access.PortfolioId
+                        && assignment.Status == MembershipRoleAssignmentStatus.Active
+                        && assignment.SuspendedAtUtc == null
+                        && assignment.RevokedAtUtc == null
+                        && assignment.EffectiveFromUtc <= utcNow
+                        && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow)
+                        && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                            profileCapability.CapabilityDefinition!.Key == CapabilityKeys.MoneyBalancesRead
+                            && profileCapability.CapabilityDefinition.AuthorizationTargetKind
+                                == CapabilityAuthorizationTargetKind.Property)
+                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                                && assignment.SelectedProperties.Any(scope =>
+                                    scope.PortfolioId == access.PortfolioId
+                                    && scope.PropertyId == management.PropertyId)))))
+            select new { entry, account, management, lifecycle };
 
         if (query.TenantAccountId is int tenantAccountId)
-            q = q.Where(row => row.TenantAccountId == tenantAccountId);
+            authorizedRows = authorizedRows.Where(row => row.account.Id == tenantAccountId);
         if (query.LeaseManagementId is int leaseManagementId)
-            q = q.Where(row => row.LeaseManagementId == leaseManagementId);
+            authorizedRows = authorizedRows.Where(row => row.management.Id == leaseManagementId);
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
-            q = q.Where(row =>
-                EF.Functions.ILike(row.Description, $"%{term}%") ||
-                EF.Functions.ILike(row.AccountNumber, $"%{term}%") ||
-                EF.Functions.ILike(row.RelationshipNumber, $"%{term}%") ||
-                (row.ProviderReference != null && EF.Functions.ILike(row.ProviderReference, $"%{term}%")) ||
-                (row.PayerName != null && EF.Functions.ILike(row.PayerName, $"%{term}%")) ||
-                (row.CheckNumber != null && EF.Functions.ILike(row.CheckNumber, $"%{term}%")));
+            authorizedRows = authorizedRows.Where(row =>
+                EF.Functions.ILike(row.entry.Description, $"%{term}%") ||
+                EF.Functions.ILike(row.account.AccountNumber, $"%{term}%") ||
+                EF.Functions.ILike(row.management.RelationshipNumber, $"%{term}%") ||
+                (row.entry.ProviderPaymentAttempt != null
+                    && EF.Functions.ILike(row.entry.ProviderPaymentAttempt.ProviderObjectId, $"%{term}%")) ||
+                (row.entry.ProviderPaymentAttempt != null
+                    && row.entry.ProviderPaymentAttempt.PayerName != null
+                    && EF.Functions.ILike(row.entry.ProviderPaymentAttempt.PayerName, $"%{term}%")) ||
+                (row.entry.ProviderPaymentAttempt != null
+                    && row.entry.ProviderPaymentAttempt.CheckNumber != null
+                    && EF.Functions.ILike(row.entry.ProviderPaymentAttempt.CheckNumber, $"%{term}%")));
         }
 
         if (query.PaidFrom.HasValue)
         {
             var paidFrom = DateOnly.FromDateTime(query.PaidFrom.Value.ToUtc());
-            q = q.Where(row => row.ReceivedOn >= paidFrom);
+            authorizedRows = authorizedRows.Where(row => row.entry.EffectiveOn >= paidFrom);
         }
         if (query.PaidTo.HasValue)
         {
             var paidToExclusive = DateOnly.FromDateTime(ToExclusiveUpperBound(query.PaidTo.Value));
-            q = q.Where(row => row.ReceivedOn < paidToExclusive);
+            authorizedRows = authorizedRows.Where(row => row.entry.EffectiveOn < paidToExclusive);
         }
 
-        return q;
+        return authorizedRows.Select(row => new PaymentReceiptResponse
+        {
+            Id = row.entry.Id,
+            PublicId = row.entry.PublicId,
+            PortfolioId = row.entry.PortfolioId,
+            TenantAccountId = row.account.Id,
+            LeaseManagementId = row.management.Id,
+            PropertyId = row.management.PropertyId,
+            UnitId = row.management.UnitId,
+            AccountNumber = row.account.AccountNumber,
+            RelationshipNumber = row.management.RelationshipNumber,
+            TenantName = row.lifecycle.CurrentPrimaryTenantName,
+            PropertyName = row.management.Property!.Name,
+            UnitNumber = row.management.Unit!.UnitNumber,
+            Amount = row.entry.Amount,
+            Currency = row.entry.Currency,
+            ReceivedOn = row.entry.EffectiveOn,
+            PostedAtUtc = row.entry.PostedAtUtc,
+            Description = row.entry.Description,
+            Provider = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.Provider,
+            ProviderReference = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.ProviderObjectId,
+            ProviderState = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.State,
+            PaymentMethodSummary = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.PaymentMethodSummary,
+            PayerName = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.PayerName,
+            CheckNumber = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.CheckNumber,
+            BankName = row.entry.ProviderPaymentAttempt == null
+                ? null : row.entry.ProviderPaymentAttempt.BankName,
+            SourceStoredFileId = row.entry.SourceStoredFileId,
+        });
     }
 
     private static DateTime ToExclusiveUpperBound(DateTime value)
@@ -267,9 +251,12 @@ public class PaymentService : IPaymentService
                 : q.OrderBy(row => row.PostedAtUtc).ThenBy(row => row.Id),
         };
 
-    public Task<PaymentReceiptResponse?> GetAsync(int portfolioId, long id, CancellationToken ct = default)
+    public Task<PaymentReceiptResponse?> GetAsync(
+        PaymentReceiptReadContext access,
+        long id,
+        CancellationToken ct = default)
     {
-        return BuildReceiptQuery(portfolioId, new PaymentListQuery())
+        return BuildReceiptQuery(access, new PaymentListQuery())
             .SingleOrDefaultAsync(row => row.Id == id, ct);
     }
 
@@ -322,214 +309,4 @@ public class PaymentService : IPaymentService
         return response;
     }
 
-    public async Task<PaymentResponse?> UpdateAsync(int portfolioId, int id, UpdatePaymentRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.Payments
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        var before = Snapshot(entity);
-        var prevStatus = entity.Status;
-        var prevAmount = entity.Amount;
-        var prevLeaseId = entity.LeaseId;
-        var prevNotes = entity.Notes;
-
-        var targetLeaseId = request.LeaseId ?? entity.LeaseId;
-        var targetPaymentType = request.PaymentType ?? entity.PaymentType;
-
-        if (targetLeaseId != entity.LeaseId)
-        {
-            // Reassigning a payment to a different lease moves it onto that lease's ledger — the target
-            // lease must belong to the caller's portfolio (cross-tenant IDOR guard, mirroring CreateAsync).
-            // A reassignment always targets a real lease (request.LeaseId was supplied and differs).
-            if (targetLeaseId is not { } newLeaseId ||
-                !await _db.EnsureLeaseInPortfolioAsync(portfolioId, newLeaseId, ct))
-            {
-                return null;
-            }
-        }
-
-        // The (lease, type, period) uniqueness only constrains lease-tied auto-generated rows
-        // (PeriodKey != null ⇒ a lease); a lease-less payment (application fee) has no PeriodKey to guard.
-        if (targetLeaseId is { } periodLeaseId &&
-            (targetLeaseId != entity.LeaseId || targetPaymentType != entity.PaymentType))
-        {
-            await EnsureGeneratedPeriodPaymentKeyAvailableAsync(
-                portfolioId,
-                id,
-                periodLeaseId,
-                targetPaymentType,
-                entity.PeriodKey,
-                ct);
-        }
-
-        if (targetLeaseId != entity.LeaseId) entity.LeaseId = targetLeaseId;
-        if (request.PaymentType.HasValue) entity.PaymentType = request.PaymentType.Value;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (request.Amount.HasValue) entity.Amount = request.Amount.Value;
-        if (request.DueDate.HasValue) entity.DueDate = request.DueDate.Value.ToUtc();
-        if (request.PaidDate.HasValue) entity.PaidDate = request.PaidDate.ToUtc();
-        if (request.Method != null) entity.Method = request.Method;
-        if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
-        if (request.Notes != null) entity.Notes = request.Notes;
-
-        // Partial-aware split, validated against the payment's resulting status + amount. A supplied
-        // AmountPaid wins; otherwise the existing value is re-normalized (so changing the status away from
-        // Partial clears a stale collected-so-far, and changing it TO Partial requires a value).
-        entity.AmountPaid = NormalizeAmountPaid(
-            entity.Status, entity.Amount,
-            request.AmountPaid ?? entity.AmountPaid);
-
-        // A payment that ends up Paid without a PaidDate is invisible to income/collected reports.
-        // Default it (preferring DueDate so income lands in the right period) — covers transitions TO Paid.
-        if (entity.Status == PaymentStatus.Paid && entity.PaidDate is null)
-        {
-            entity.PaidDate = request.PaidDate.ToUtc() ?? entity.DueDate;
-        }
-
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        // A status, amount, lease, or note change is detail-history material: notes often carry the
-        // human explanation for a money event, and losing them makes the audit diff misleading.
-        if (entity.Status != prevStatus || entity.Amount != prevAmount || entity.LeaseId != prevLeaseId || entity.Notes != prevNotes)
-        {
-            var changes = new List<string>();
-            if (entity.Status != prevStatus) changes.Add($"status {prevStatus}→{entity.Status}");
-            if (entity.Amount != prevAmount) changes.Add($"amount {prevAmount:0.##}→{entity.Amount:0.##}");
-            if (entity.LeaseId != prevLeaseId) changes.Add($"lease {prevLeaseId}→{entity.LeaseId}");
-            if (entity.Notes != prevNotes) changes.Add("notes updated");
-            await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
-                oldValues: before, newValues: Snapshot(entity),
-                changeReason: $"Payment #{entity.Id}: {string.Join("; ", changes)}", ct: ct);
-        }
-
-        var response = PaymentResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<PaymentResponse?> MarkPaidAsync(int portfolioId, int id, MarkPaidRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.Payments
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        var before = Snapshot(entity);
-
-        entity.Status = PaymentStatus.Paid;
-        // Marking paid means fully collected: clear any partial split so the whole Amount counts as collected.
-        entity.AmountPaid = null;
-        entity.PaidDate = request.PaidDate?.ToUtc() ?? _timeProvider.UtcNow();
-        if (request.Method != null) entity.Method = request.Method;
-        if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
-        if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
-            oldValues: before, newValues: Snapshot(entity),
-            changeReason: $"Payment #{entity.Id} marked paid (${entity.Amount:0.##})", ct: ct);
-
-        var response = PaymentResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<MarkLeasePastDuePaidResponse?> MarkLeasePastDuePaidAsync(
-        int portfolioId,
-        int leaseId,
-        MarkPaidRequest request,
-        CancellationToken ct = default)
-    {
-        var leaseExists = await _db.Leases
-            .AsNoTracking()
-            .AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
-        if (!leaseExists)
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var paidDate = request.PaidDate?.ToUtc() ?? now;
-
-        var entities = await _db.Payments
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.LeaseId == leaseId &&
-                (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
-                (p.Status == PaymentStatus.Late || p.DueDate < now))
-            .OrderBy(p => p.DueDate)
-            .ThenBy(p => p.Id)
-            .ToListAsync(ct);
-
-        if (entities.Count == 0)
-        {
-            return new MarkLeasePastDuePaidResponse
-            {
-                LeaseId = leaseId,
-                MarkedPaidCount = 0,
-                PaymentIds = [],
-            };
-        }
-
-        var before = entities.ToDictionary(p => p.Id, Snapshot);
-
-        foreach (var entity in entities)
-        {
-            entity.Status = PaymentStatus.Paid;
-            entity.AmountPaid = null;
-            entity.PaidDate = paidDate;
-            if (request.Method != null) entity.Method = request.Method;
-            if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
-            if (request.Notes != null) entity.Notes = request.Notes;
-            entity.UpdatedAt = now;
-        }
-
-        await _db.SaveChangesAsync(ct);
-
-        foreach (var entity in entities)
-        {
-            await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
-                oldValues: before[entity.Id], newValues: Snapshot(entity),
-                changeReason: $"Payment #{entity.Id} marked paid from past-due lease action (${entity.Amount:0.##})", ct: ct);
-
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, PaymentResponse.FromEntity(entity), ct);
-        }
-
-        return new MarkLeasePastDuePaidResponse
-        {
-            LeaseId = leaseId,
-            MarkedPaidCount = entities.Count,
-            PaymentIds = entities.Select(p => p.Id).ToList(),
-        };
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        // Payment has no soft-delete column, so this is a hard delete.
-        var entity = await _db.Payments
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        var before = Snapshot(entity);
-
-        _db.Payments.Remove(entity);
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(portfolioId, EntityType, id, AuditLogOperation.Deleted,
-            oldValues: before, changeReason: $"Payment #{id} deleted (${entity.Amount:0.##} {entity.PaymentType})", ct: ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
-    }
 }

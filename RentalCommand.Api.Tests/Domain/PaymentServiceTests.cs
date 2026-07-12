@@ -21,7 +21,6 @@ public class PaymentServiceTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly FakeFileStorage _files = new();
     private readonly PaymentService _sut;
     private readonly List<string> _commands = [];
 
@@ -40,9 +39,7 @@ public class PaymentServiceTests : IDisposable
 
         SeedPortfolioAndLease();
 
-        _sut = new PaymentService(_db, new NoopDataUpdateService(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            _files, TimeProvider.System);
+        _sut = new PaymentService(_db, new NoopDataUpdateService(), TimeProvider.System);
     }
 
     public void Dispose()
@@ -177,81 +174,6 @@ public class PaymentServiceTests : IDisposable
         fromDb.ExtractedData.Should().Contain("RentCheck");
     }
 
-    [Fact]
-    public async Task UpdateAsync_ReassignsLease_PersistsNewLeaseId()
-    {
-        // Regression for TSK-197: editing a payment used to drop the lease because UpdatePaymentRequest
-        // carried no LeaseId, so the model binder discarded it and UpdateAsync never reassigned it.
-        var now = DateTime.UtcNow;
-        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
-        {
-            LeaseId = LeaseId,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200.00m,
-            DueDate = now,
-        });
-        created.Should().NotBeNull();
-
-        var updated = await _sut.UpdateAsync(PortfolioId, created!.Id, new UpdatePaymentRequest
-        {
-            LeaseId = OtherLeaseId,
-        });
-
-        updated.Should().NotBeNull();
-        updated!.LeaseId.Should().Be(OtherLeaseId);
-
-        var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
-        fromDb.LeaseId.Should().Be(OtherLeaseId);
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ReassignsGeneratedPeriodPayment_ToLeaseWithSamePeriodPayment_ReturnsDomainConflict()
-    {
-        var now = DateTime.UtcNow;
-        var source = new Payment
-        {
-            PortfolioId = PortfolioId,
-            LeaseId = LeaseId,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
-            PaidDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
-            PeriodKey = "2026-03",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Payments.AddRange(
-            source,
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                LeaseId = OtherLeaseId,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1300m,
-                DueDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
-                PeriodKey = "2026-03",
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        await _db.SaveChangesAsync();
-
-        var act = async () => await _sut.UpdateAsync(PortfolioId, source.Id, new UpdatePaymentRequest
-        {
-            LeaseId = OtherLeaseId,
-        });
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.StatusCode.Should().Be(409);
-        ex.Which.Message.Should().Contain("already has");
-        ex.Which.Message.Should().Contain("March 2026");
-
-        var unchanged = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == source.Id);
-        unchanged.LeaseId.Should().Be(LeaseId);
-    }
-
 #if LEGACY_PAYMENT_READER_TESTS
     [Fact]
     public async Task GetAsync_ProjectsLeaseHomeContext_SoViewModeCanShowPropertyAndUnit()
@@ -375,133 +297,6 @@ public class PaymentServiceTests : IDisposable
     }
 
 #endif
-
-    [Fact]
-    public async Task MarkPaidAsync_PersistsNotes()
-    {
-        // Regression: the mobile Mark Paid sheet captures + sends a Notes value, but MarkPaidRequest had
-        // no Notes property and MarkPaidAsync never wrote entity.Notes — the note was silently dropped.
-        var now = DateTime.UtcNow;
-        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
-        {
-            LeaseId = LeaseId,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200.00m,
-            DueDate = now,
-        });
-        created.Should().NotBeNull();
-
-        var marked = await _sut.MarkPaidAsync(PortfolioId, created!.Id, new MarkPaidRequest
-        {
-            PaidDate = now,
-            Method = "Check",
-            ExternalReference = "1487",
-            Notes = "Dropped in the night box, slightly torn",
-        });
-
-        marked.Should().NotBeNull();
-        marked!.Status.Should().Be(PaymentStatus.Paid);
-        marked.Notes.Should().Be("Dropped in the night box, slightly torn");
-
-        var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
-        fromDb.Notes.Should().Be("Dropped in the night box, slightly torn");
-    }
-
-    [Fact]
-    public async Task MarkPaidAsync_NullNotes_LeavesExistingNoteUnchanged()
-    {
-        // Mark-paid with no Notes must not wipe a note set at create time (nullable-means-untouched).
-        var now = DateTime.UtcNow;
-        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
-        {
-            LeaseId = LeaseId,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200.00m,
-            DueDate = now,
-            Notes = "Original note",
-        });
-        created.Should().NotBeNull();
-
-        await _sut.MarkPaidAsync(PortfolioId, created!.Id, new MarkPaidRequest { PaidDate = now });
-
-        var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
-        fromDb.Notes.Should().Be("Original note");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_NotesOnlyChange_IsCapturedInAuditSnapshot()
-    {
-        var now = DateTime.UtcNow;
-        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
-        {
-            LeaseId = LeaseId,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200.00m,
-            DueDate = now,
-            Notes = "Original note",
-        });
-        created.Should().NotBeNull();
-
-        var updated = await _sut.UpdateAsync(PortfolioId, created!.Id, new UpdatePaymentRequest
-        {
-            Notes = "Updated note from detail view",
-        });
-
-        updated.Should().NotBeNull();
-        updated!.Notes.Should().Be("Updated note from detail view");
-
-        var log = await _db.AuditLogs.AsNoTracking().SingleOrDefaultAsync(a =>
-            a.EntityType == "Payment" &&
-            a.EntityId == created.Id &&
-            a.Operation == AuditLogOperation.Updated);
-        log.Should().NotBeNull("payment detail history must show notes edits, not just money/status changes");
-        log!.OldValues.Should().Contain("\"notes\":\"Original note\"");
-        log.NewValues.Should().Contain("\"notes\":\"Updated note from detail view\"");
-        log.ChangeReason.Should().Contain("notes updated");
-    }
-
-    [Fact]
-    public async Task MarkLeasePastDuePaidAsync_MarksOnlyPastDueRowsForThatLease()
-    {
-        var now = DateTime.UtcNow;
-        var paidDate = now.Date.AddHours(14);
-        var eligibleScheduled = SeedPayment(LeaseId, PaymentStatus.Scheduled, now.AddDays(-10), 1200m);
-        var eligiblePartial = SeedPayment(LeaseId, PaymentStatus.Partial, now.AddDays(-3), 1200m, amountPaid: 300m);
-        var eligibleLate = SeedPayment(LeaseId, PaymentStatus.Late, now.AddDays(5), 1200m);
-        var alreadyPaid = SeedPayment(LeaseId, PaymentStatus.Paid, now.AddDays(-8), 1200m);
-        var futureScheduled = SeedPayment(LeaseId, PaymentStatus.Scheduled, now.AddDays(5), 1200m);
-        var otherLeaseLate = SeedPayment(OtherLeaseId, PaymentStatus.Late, now.AddDays(-10), 1300m);
-        await _db.SaveChangesAsync();
-
-        var result = await _sut.MarkLeasePastDuePaidAsync(PortfolioId, LeaseId, new MarkPaidRequest
-        {
-            PaidDate = paidDate,
-            Method = "ACH",
-            Notes = "Settled from past-due action",
-        });
-
-        result.Should().NotBeNull();
-        result!.LeaseId.Should().Be(LeaseId);
-        result.MarkedPaidCount.Should().Be(3);
-        result.PaymentIds.Should().BeEquivalentTo([eligibleScheduled.Id, eligiblePartial.Id, eligibleLate.Id]);
-
-        var payments = await _db.Payments.AsNoTracking().ToDictionaryAsync(p => p.Id);
-        foreach (var id in result.PaymentIds)
-        {
-            payments[id].Status.Should().Be(PaymentStatus.Paid);
-            payments[id].PaidDate.Should().Be(paidDate);
-            payments[id].AmountPaid.Should().BeNull();
-            payments[id].Method.Should().Be("ACH");
-            payments[id].Notes.Should().Be("Settled from past-due action");
-        }
-
-        payments[alreadyPaid.Id].Status.Should().Be(PaymentStatus.Paid);
-        payments[futureScheduled.Id].Status.Should().Be(PaymentStatus.Scheduled);
-        payments[otherLeaseLate.Id].Status.Should().Be(PaymentStatus.Late);
-    }
 
     private void SeedPortfolioAndLease()
     {
