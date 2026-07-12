@@ -185,41 +185,49 @@ class ApplicationFinanceMutation {
   }
 }
 
-/// A tenant-screening result for an application.
+/// Provider-neutral applicant screening tracked by Rental Command.
 ///
-/// Mirrors the API `ScreeningResultResponse` (camelCase, enums as strings).
-class ScreeningResult {
-  const ScreeningResult({
+/// Sensitive identity answers and report contents stay on the provider's site.
+class ApplicantScreening {
+  const ApplicantScreening({
     required this.id,
     required this.applicationId,
+    required this.mode,
     required this.status,
-    this.creditScoreBand,
-    this.hasCriminalRecord,
-    this.hasEvictionRecord,
-    this.recommendation,
+    required this.providerDisplayName,
+    required this.consentConfirmed,
+    required this.lastStatusAtUtc,
     this.providerReference,
-    this.requestedAtUtc,
+    this.providerHostedUrl,
+    this.invitedAtUtc,
+    this.applicantSubmittedAtUtc,
     this.completedAtUtc,
+    this.failedAtUtc,
+    this.decision,
+    this.consumerReportUsedForDecision = false,
   });
 
   final int id;
   final int applicationId;
-
-  /// One of: Requested, Completed, Failed.
+  final String mode;
   final String status;
-  final String? creditScoreBand;
-  final bool? hasCriminalRecord;
-  final bool? hasEvictionRecord;
-
-  /// One of: Accept, Conditional, Decline.
-  final String? recommendation;
+  final String providerDisplayName;
   final String? providerReference;
-  final DateTime? requestedAtUtc;
+  final String? providerHostedUrl;
+  final bool consentConfirmed;
+  final DateTime? invitedAtUtc;
+  final DateTime? applicantSubmittedAtUtc;
   final DateTime? completedAtUtc;
+  final DateTime? failedAtUtc;
+  final DateTime lastStatusAtUtc;
+  final String? decision;
+  final bool consumerReportUsedForDecision;
 
   bool get isCompleted => status == 'Completed';
+  bool get canMarkExternalComplete =>
+      mode == 'External' && status != 'Completed' && status != 'Cancelled';
 
-  factory ScreeningResult.fromJson(Map<String, dynamic> json) {
+  factory ApplicantScreening.fromJson(Map<String, dynamic> json) {
     DateTime? parseDate(String key) {
       final raw = json[key];
       if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
@@ -232,17 +240,87 @@ class ScreeningResult {
       return null;
     }
 
-    return ScreeningResult(
+    return ApplicantScreening(
       id: (json['id'] as num?)?.toInt() ?? 0,
       applicationId: (json['applicationId'] as num?)?.toInt() ?? 0,
-      status: json['status'] as String? ?? 'Requested',
-      creditScoreBand: asString('creditScoreBand'),
-      hasCriminalRecord: json['hasCriminalRecord'] as bool?,
-      hasEvictionRecord: json['hasEvictionRecord'] as bool?,
-      recommendation: asString('recommendation'),
+      mode: json['mode'] as String? ?? 'External',
+      status: json['status'] as String? ?? 'Created',
+      providerDisplayName:
+          json['providerDisplayName'] as String? ?? 'Screening provider',
       providerReference: asString('providerReference'),
-      requestedAtUtc: parseDate('requestedAtUtc'),
+      providerHostedUrl: asString('providerHostedUrl'),
+      consentConfirmed: json['consentConfirmed'] as bool? ?? false,
+      invitedAtUtc: parseDate('invitedAtUtc'),
+      applicantSubmittedAtUtc: parseDate('applicantSubmittedAtUtc'),
       completedAtUtc: parseDate('completedAtUtc'),
+      failedAtUtc: parseDate('failedAtUtc'),
+      lastStatusAtUtc: parseDate('lastStatusAtUtc') ?? DateTime(0),
+      decision: asString('decision'),
+      consumerReportUsedForDecision:
+          json['consumerReportUsedForDecision'] as bool? ?? false,
+    );
+  }
+}
+
+class ScreeningProviderCapabilities {
+  const ScreeningProviderCapabilities({
+    this.key,
+    this.displayName,
+    required this.isConfigured,
+    required this.createsHostedInvitation,
+    required this.supportsStatusWebhooks,
+    required this.suppliesAdverseActionAgency,
+    required this.supportsApplicantPaidOrders,
+    required this.supportsLandlordPaidOrders,
+  });
+
+  final String? key;
+  final String? displayName;
+  final bool isConfigured;
+  final bool createsHostedInvitation;
+  final bool supportsStatusWebhooks;
+  final bool suppliesAdverseActionAgency;
+  final bool supportsApplicantPaidOrders;
+  final bool supportsLandlordPaidOrders;
+
+  factory ScreeningProviderCapabilities.fromJson(
+    Map<String, dynamic> json,
+  ) => ScreeningProviderCapabilities(
+    key: json['key'] as String?,
+    displayName: json['displayName'] as String?,
+    isConfigured: json['isConfigured'] as bool? ?? false,
+    createsHostedInvitation: json['createsHostedInvitation'] as bool? ?? false,
+    supportsStatusWebhooks: json['supportsStatusWebhooks'] as bool? ?? false,
+    suppliesAdverseActionAgency:
+        json['suppliesAdverseActionAgency'] as bool? ?? false,
+    supportsApplicantPaidOrders:
+        json['supportsApplicantPaidOrders'] as bool? ?? false,
+    supportsLandlordPaidOrders:
+        json['supportsLandlordPaidOrders'] as bool? ?? false,
+  );
+}
+
+class ScreeningWorkspace {
+  const ScreeningWorkspace({
+    required this.integratedProvider,
+    required this.screenings,
+  });
+
+  final ScreeningProviderCapabilities integratedProvider;
+  final List<ApplicantScreening> screenings;
+
+  factory ScreeningWorkspace.fromJson(Map<String, dynamic> json) {
+    final raw = json['screenings'];
+    return ScreeningWorkspace(
+      integratedProvider: ScreeningProviderCapabilities.fromJson(
+        json['integratedProvider'] as Map<String, dynamic>? ?? const {},
+      ),
+      screenings: raw is List
+          ? raw
+                .whereType<Map<String, dynamic>>()
+                .map(ApplicantScreening.fromJson)
+                .toList()
+          : const [],
     );
   }
 }
@@ -250,12 +328,20 @@ class ScreeningResult {
 /// Human-friendly label for a screening status string.
 String friendlyScreeningStatus(String status) {
   switch (status) {
-    case 'Requested':
-      return 'Requested';
+    case 'Created':
+      return 'Created';
+    case 'AwaitingProvider':
+      return 'Connecting';
+    case 'AwaitingApplicant':
+      return 'Waiting for applicant';
+    case 'InProgress':
+      return 'In progress';
     case 'Completed':
       return 'Completed';
     case 'Failed':
       return 'Failed';
+    case 'Cancelled':
+      return 'Cancelled';
     default:
       return status;
   }

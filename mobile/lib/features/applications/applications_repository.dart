@@ -298,16 +298,14 @@ class ApplicationsRepository {
     }
   }
 
-  /// Runs a tenant-screening request — returns the new result.
-  ///
-  /// Throws [ApiException] with `statusCode == 400` when FCRA consent is
-  /// missing, and `statusCode == 503` when screening is not configured (the
-  /// provider is dormant).
-  Future<ScreeningResult> screen(int id) async {
+  Future<ApplicantScreening> startIntegratedScreening(
+    int id, {
+    required String operationKey,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/screen',
-        data: {},
+        '/applications/$id/screening/integrated',
+        data: {'operationKey': operationKey},
       );
       final data = response.data;
       if (data == null) {
@@ -316,22 +314,124 @@ class ApplicationsRepository {
           message: 'Empty response from server.',
         );
       }
-      return ScreeningResult.fromJson(data);
+      return ApplicantScreening.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// Lists all screening results for an application (newest typically first).
-  Future<List<ScreeningResult>> screening(int id) async {
+  Future<ApplicantScreening> trackExternalScreening(
+    int id, {
+    required String operationKey,
+    required String providerDisplayName,
+    String? providerReference,
+    String? providerHostedUrl,
+    String? creditReportingAgencyName,
+    String? creditReportingAgencyAddress,
+    String? creditReportingAgencyPhone,
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>(
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/applications/$id/screening/external',
+        data: {
+          'operationKey': operationKey,
+          'providerDisplayName': providerDisplayName,
+          if (providerReference != null && providerReference.isNotEmpty)
+            'providerReference': providerReference,
+          if (providerHostedUrl != null && providerHostedUrl.isNotEmpty)
+            'providerHostedUrl': providerHostedUrl,
+          if (creditReportingAgencyName != null &&
+              creditReportingAgencyName.isNotEmpty)
+            'creditReportingAgencyName': creditReportingAgencyName,
+          if (creditReportingAgencyAddress != null &&
+              creditReportingAgencyAddress.isNotEmpty)
+            'creditReportingAgencyAddress': creditReportingAgencyAddress,
+          if (creditReportingAgencyPhone != null &&
+              creditReportingAgencyPhone.isNotEmpty)
+            'creditReportingAgencyPhone': creditReportingAgencyPhone,
+          'status': 'InProgress',
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ApplicantScreening> markExternalScreeningComplete(
+    int applicationId,
+    int screeningId, {
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/applications/$applicationId/screening/$screeningId/external',
+        data: {'operationKey': operationKey, 'status': 'Completed'},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ScreeningWorkspace> screening(int id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
         '/applications/$id/screening',
       );
-      return (response.data ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(ScreeningResult.fromJson)
-          .toList();
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScreeningWorkspace.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ApplicantScreening> recordScreeningDecision(
+    int applicationId,
+    int screeningId, {
+    required String operationKey,
+    required String decision,
+    required bool consumerReportUsed,
+    String? reason,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/applications/$applicationId/screening/$screeningId/decision',
+        data: {
+          'operationKey': operationKey,
+          'decision': decision,
+          'consumerReportUsed': consumerReportUsed,
+          if (reason != null && reason.isNotEmpty) 'reason': reason,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -461,6 +561,6 @@ final applicationDetailProvider = FutureProvider.autoDispose
 
 /// Screening results for an application (auto-disposes so it re-fetches on open).
 final applicationScreeningProvider = FutureProvider.autoDispose
-    .family<List<ScreeningResult>, int>((ref, id) {
+    .family<ScreeningWorkspace, int>((ref, id) {
       return ref.watch(applicationsRepositoryProvider).screening(id);
     });
