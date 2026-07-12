@@ -7,8 +7,46 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
-import '../../core/models/lease.dart';
 import 'scan_models.dart';
+
+class TenantAccountOption {
+  const TenantAccountOption({
+    required this.tenantAccountId,
+    required this.relationshipNumber,
+    required this.propertyName,
+    required this.unitNumber,
+    this.primaryTenantName,
+  });
+
+  final int tenantAccountId;
+  final String relationshipNumber;
+  final String propertyName;
+  final String unitNumber;
+  final String? primaryTenantName;
+
+  factory TenantAccountOption.fromJson(Map<String, dynamic> json) =>
+      TenantAccountOption(
+        tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+        relationshipNumber: json['relationshipNumber'] as String? ?? '',
+        propertyName: json['propertyName'] as String? ?? '',
+        unitNumber: json['unitNumber'] as String? ?? '',
+        primaryTenantName: json['primaryTenantName'] as String?,
+      );
+}
+
+class TenantAccountOptionPage {
+  const TenantAccountOptionPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<TenantAccountOption> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+}
 
 /// Repository for all scan-draft API calls.
 ///
@@ -175,7 +213,7 @@ class ScanRepository {
   ///   — scalar fields: snake_case names as-is (vendor_name, total, etc.)
   ///   — legacy camelCase mappings: vendorName, amount, transactionDate, etc.
   ///   — Expense toggle: is_paid (bool)
-  ///   — Payment lease: leaseId (int)
+  ///   — Payment account: tenantAccountId (int)
   ///   — Lease: propertyId + unitId (required), tenantId? (optional), plus the
   ///     edited lease terms (lease_number, start_date, monthly_rent, …).
   ///
@@ -215,18 +253,33 @@ class ScanRepository {
     }
   }
 
-  /// Fetches the active leases list for the caller's portfolio.
-  ///
-  /// Used by the review screen when [targetEntityType] == 'Payment'. Returns
-  /// typed [Lease]s so pickers can show tenant/unit/property names directly.
-  Future<List<Lease>> listLeases() async {
+  /// Fetches one server-paged set of canonical tenant accounts the caller may
+  /// manage. The API applies current session, capability, and property scope.
+  Future<TenantAccountOptionPage> listTenantAccountOptions({
+    String? search,
+    int skip = 0,
+    int take = 25,
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>('/leases');
-      final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(Lease.fromJson)
-          .toList();
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/payments/account-options',
+        queryParameters: {
+          'skip': skip,
+          'take': take,
+          if (search != null && search.trim().isNotEmpty)
+            'search': search.trim(),
+        },
+      );
+      final items = response.data?['items'] as List<dynamic>? ?? const [];
+      return TenantAccountOptionPage(
+        items: items
+            .whereType<Map<String, dynamic>>()
+            .map(TenantAccountOption.fromJson)
+            .toList(),
+        totalCount: (response.data?['totalCount'] as num?)?.toInt() ?? 0,
+        skip: (response.data?['skip'] as num?)?.toInt() ?? skip,
+        take: (response.data?['take'] as num?)?.toInt() ?? take,
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

@@ -15,9 +15,22 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public class PaymentController : AuthenticatedPortfolioControllerBase
 {
-    private readonly IPaymentService _service;
+    private readonly IPaymentReceiptQueryService _service;
 
-    public PaymentController(IPaymentService service) => _service = service;
+    public PaymentController(IPaymentReceiptQueryService service) => _service = service;
+
+    [HttpGet("account-options")]
+    [ProducesResponseType(typeof(TenantAccountOptionListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<TenantAccountOptionListResponse>> ListAccountOptions(
+        [FromQuery] TenantAccountOptionQuery query, CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        return Ok(await _service.ListAccountOptionsAsync(access, query, ct));
+    }
 
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<PaymentReceiptResponse>), StatusCodes.Status200OK)]

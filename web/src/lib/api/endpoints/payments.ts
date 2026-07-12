@@ -13,6 +13,25 @@ export interface PaymentReceiptListResponse {
 	take: number;
 }
 
+export interface TenantAccountOption {
+	tenantAccountId: number;
+	leaseManagementId: number;
+	propertyId: number;
+	unitId: number;
+	accountNumber: string;
+	relationshipNumber: string;
+	propertyName: string;
+	unitNumber: string;
+	primaryTenantName?: string | null;
+}
+
+export interface TenantAccountOptionListResponse {
+	items: TenantAccountOption[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export interface RecordTenantReceiptRequest {
 	amount: number;
 	effectiveOn: string;
@@ -74,6 +93,14 @@ function append<T>(path: string, operationKey: string, body: unknown) {
 }
 
 export const payments = {
+	accountOptions: (params?: { skip?: number; take?: number; search?: string }) => {
+		const query = new URLSearchParams();
+		if (params?.skip != null) query.set('skip', String(params.skip));
+		if (params?.take != null) query.set('take', String(params.take));
+		if (params?.search) query.set('search', params.search);
+		const suffix = query.size ? `?${query}` : '';
+		return api.get<TenantAccountOptionListResponse>(`/payments/account-options${suffix}`);
+	},
 	list: (portfolioId: number, params?: PaymentListParams) =>
 		api.get<PaymentReceipt[]>(buildPaymentListPath(portfolioId, params)),
 	listPage: (portfolioId: number, params?: PaymentListParams) =>

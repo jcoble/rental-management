@@ -20,9 +20,20 @@ public sealed class RecordTenantReceiptHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.TenantAccount, command.TenantAccountId, ct);
         var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
         var account = await TenantMoneyCommandSupport.AuthorizedAccounts(command, attempt.Persistence, times.WallClockUtc)
-            .Select(row => new { row.Id, row.Currency })
+            .Select(row => new
+            {
+                row.Id,
+                row.Currency,
+                SourceAllowed = command.SourceStoredFileId == null
+                    || attempt.Persistence.Query<StoredFile>().Any(file =>
+                        file.Id == command.SourceStoredFileId.Value
+                        && file.PortfolioId == command.PortfolioId
+                        && file.DeletedAt == null),
+            })
             .SingleOrDefaultAsync(ct);
         if (account is null) throw TenantMoneyCommandSupport.Unauthorized();
+        if (!account.SourceAllowed)
+            throw new ArgumentException("Receipt source provenance must belong to the current portfolio.");
 
         var paymentAttempt = TenantMoneyCommandSupport.ManualAttempt(
             command, account.Currency, command.Amount, command.PaymentMethodSummary,

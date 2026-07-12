@@ -45,6 +45,8 @@ export interface ImportResult {
 	rows: ImportRowResult[];
 }
 
+const paymentImportOperationIds = new WeakMap<File, string>();
+
 /**
  * Upload a CSV for preview (dryRun=true) or commit (dryRun=false).
  * Returns the per-row breakdown.
@@ -56,9 +58,19 @@ export function importCsv(
 ): Promise<ImportResult> {
 	const fd = new FormData();
 	fd.append('file', file);
+	const headers: Record<string, string> = {};
+	if (!dryRun && entityType === 'payment') {
+		let operationId = paymentImportOperationIds.get(file);
+		if (!operationId) {
+			operationId = crypto.randomUUID();
+			paymentImportOperationIds.set(file, operationId);
+		}
+		headers['Idempotency-Key'] = operationId;
+	}
 	return fetchApi<ImportResult>(`/import/${entityType}?dryRun=${dryRun}`, {
 		method: 'POST',
-		body: fd
+		body: fd,
+		headers
 	});
 }
 

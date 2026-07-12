@@ -3,20 +3,22 @@ using RentalCommand.Api.DTOs;
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
-/// Canonical receipt reads plus the remaining legacy import mutation surface. Receipt reads receive the
-/// signed access-envelope claims as an opaque authorization input; <see cref="PaymentService"/> validates
+/// Canonical receipt reads. Receipt reads receive the signed access-envelope claims as an opaque
+/// authorization input; <see cref="PaymentReceiptQueryService"/> validates
 /// the current session, revision, capability, and assigned property inside the same database query that
 /// filters, sorts, pages, and projects the receipt rows.
 /// </summary>
-public interface IPaymentService
+public interface IPaymentReceiptQueryService
 {
+    Task<TenantAccountOptionListResponse> ListAccountOptionsAsync(
+        PaymentReceiptReadContext access, TenantAccountOptionQuery query,
+        CancellationToken ct = default);
     Task<IReadOnlyList<PaymentReceiptResponse>> ListAsync(
         PaymentReceiptReadContext access, PaymentListQuery query, CancellationToken ct = default);
     Task<PaymentListResponse> ListPageAsync(
         PaymentReceiptReadContext access, PaymentListQuery query, CancellationToken ct = default);
     Task<PaymentReceiptResponse?> GetAsync(
         PaymentReceiptReadContext access, long id, CancellationToken ct = default);
-    Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default);
 }
 
 /// <summary>

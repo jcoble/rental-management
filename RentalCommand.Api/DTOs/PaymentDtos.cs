@@ -5,6 +5,31 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
+public sealed class TenantAccountOptionQuery : ListQuery
+{
+}
+
+public sealed class TenantAccountOptionResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public int PropertyId { get; init; }
+    public int UnitId { get; init; }
+    public string AccountNumber { get; init; } = string.Empty;
+    public string RelationshipNumber { get; init; } = string.Empty;
+    public string PropertyName { get; init; } = string.Empty;
+    public string UnitNumber { get; init; } = string.Empty;
+    public string? PrimaryTenantName { get; init; }
+}
+
+public sealed class TenantAccountOptionListResponse
+{
+    public IReadOnlyList<TenantAccountOptionResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
 /// <summary>Wire shape returned for a <see cref="Payment"/>.</summary>
 public class PaymentResponse
 {
@@ -168,122 +193,4 @@ public class PaymentListQuery : ListQuery
 
     [FromQuery(Name = "paidTo")]
     public DateTime? PaidTo { get; set; }
-}
-
-public class CreatePaymentRequest
-{
-    /// <summary>The legacy lease to charge. Application fees use ApplicationFinancialAccount.</summary>
-    [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
-
-    [EnumDataType(typeof(PaymentType))]
-    public PaymentType PaymentType { get; set; } = PaymentType.Rent;
-
-    [EnumDataType(typeof(PaymentStatus))]
-    public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
-
-    [Range(0.01, 99999999)]
-    public decimal Amount { get; set; }
-
-    /// <summary>
-    /// For a <see cref="PaymentStatus.Partial"/> payment, the cash collected so far. Must be strictly
-    /// between 0 and <see cref="Amount"/> (validated in the service). Ignored/cleared for other statuses.
-    /// </summary>
-    [Range(0, 99999999)]
-    public decimal? AmountPaid { get; set; }
-
-    [Required]
-    public DateTime DueDate { get; set; }
-
-    public DateTime? PaidDate { get; set; }
-
-    [MaxLength(100)]
-    public string? Method { get; set; }
-
-    [MaxLength(200)]
-    public string? ExternalReference { get; set; }
-
-    [MaxLength(2000)]
-    public string? Notes { get; set; }
-
-    /// <summary>Name on the check / of the payer; promoted from a scanned rent check.</summary>
-    [MaxLength(200)]
-    public string? PayerName { get; set; }
-
-    /// <summary>Check number; promoted from a scanned rent check.</summary>
-    [MaxLength(100)]
-    public string? CheckNumber { get; set; }
-
-    /// <summary>Issuing bank name; promoted from a scanned rent check.</summary>
-    [MaxLength(200)]
-    public string? BankName { get; set; }
-
-    /// <summary>Full scan-extraction superset JSON (jsonb); populated when creating from a scan draft.</summary>
-    public string? ExtractedData { get; set; }
-}
-
-public class UpdatePaymentRequest
-{
-    /// <summary>
-    /// Reassign the payment to a different lease. Omitted (null) leaves the existing lease untouched;
-    /// when supplied the lease is validated to be in the caller's portfolio before it is applied.
-    /// </summary>
-    [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
-
-    [EnumDataType(typeof(PaymentType))]
-    public PaymentType? PaymentType { get; set; }
-
-    [EnumDataType(typeof(PaymentStatus))]
-    public PaymentStatus? Status { get; set; }
-
-    [Range(0.01, 99999999)]
-    public decimal? Amount { get; set; }
-
-    /// <summary>
-    /// For a <see cref="PaymentStatus.Partial"/> payment, the cash collected so far (strictly between 0
-    /// and the payment's Amount; validated in the service). Set to 0 to clear it back to "nothing collected".
-    /// </summary>
-    [Range(0, 99999999)]
-    public decimal? AmountPaid { get; set; }
-
-    public DateTime? DueDate { get; set; }
-    public DateTime? PaidDate { get; set; }
-
-    [MaxLength(100)]
-    public string? Method { get; set; }
-
-    [MaxLength(200)]
-    public string? ExternalReference { get; set; }
-
-    [MaxLength(2000)]
-    public string? Notes { get; set; }
-}
-
-/// <summary>
-/// Marks a scheduled payment as paid. Optional fields default the paid date to now and capture how the
-/// money arrived for the record.
-/// </summary>
-public class MarkPaidRequest
-{
-    /// <summary>When the payment was received; defaults to UtcNow when omitted.</summary>
-    public DateTime? PaidDate { get; set; }
-
-    [MaxLength(100)]
-    public string? Method { get; set; }
-
-    [MaxLength(200)]
-    public string? ExternalReference { get; set; }
-
-    /// <summary>Optional free-text note captured when marking the payment paid (persisted to <see cref="Payment.Notes"/>).</summary>
-    [MaxLength(2000)]
-    public string? Notes { get; set; }
-}
-
-/// <summary>Result of settling every still-owed past-due payment on one lease in one server action.</summary>
-public class MarkLeasePastDuePaidResponse
-{
-    public int LeaseId { get; set; }
-    public int MarkedPaidCount { get; set; }
-    public IReadOnlyList<int> PaymentIds { get; set; } = [];
 }

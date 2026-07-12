@@ -5,7 +5,6 @@ import {
 	buildScanReviewFieldGroups,
 	buildScanReviewInitialEditedFields,
 	fieldDisplayLabel,
-	resolveScanReviewLeaseIdFromFields,
 	resolveScanReviewPropertyId,
 	scanCategoryLabel,
 	scanCategoryValue,
@@ -110,56 +109,6 @@ describe('scan review field grouping', () => {
 
 		assert.equal(resolveScanReviewPropertyId({ fields: [field('property_name', 'Cedar Point')], properties }), null);
 		assert.equal(resolveScanReviewPropertyId({ fields: [field('notes', 'Property: Cedar Point, Unit 1A')], properties }), null);
-	});
-
-	it('resolves payment lease selection from extracted ids or exact lease-number notes', () => {
-		const leases = [
-			{ id: 48, propertyId: 24, unitId: 49, leaseNumber: 'QA-2025-099-1A', status: 'Expired' },
-			{ id: 49, propertyId: 24, unitId: 50, leaseNumber: 'QA-2026-001-1A', status: 'Active' },
-			{ id: 50, propertyId: 31, unitId: 51, leaseNumber: 'QA-2026-002-2B', status: 'Active' }
-		];
-
-		assert.equal(
-			resolveScanReviewLeaseIdFromFields({
-				fields: [
-					field('property_id', '24'),
-					field('unit_id', '50'),
-					field('notes', 'rent for lease QA-2026-001-1A')
-				],
-				leases
-			}),
-			'49'
-		);
-		assert.equal(
-			resolveScanReviewLeaseIdFromFields({
-				fields: [field('notes', 'rent for lease QA-2026-001-1A')],
-				leases
-			}),
-			'49'
-		);
-		assert.equal(resolveScanReviewLeaseIdFromFields({ contextLeaseId: 50, fields: [], leases }), '50');
-	});
-
-	it('does not resolve payment lease selection when extracted ids are ambiguous', () => {
-		const leases = [
-			{ id: 49, propertyId: 24, unitId: 50, leaseNumber: 'QA-2026-001-1A', status: 'Active' },
-			{ id: 51, propertyId: 24, unitId: 50, leaseNumber: 'QA-2026-ALT-1A', status: 'Active' }
-		];
-
-		assert.equal(
-			resolveScanReviewLeaseIdFromFields({
-				fields: [field('property_id', '24'), field('unit_id', '50')],
-				leases
-			}),
-			null
-		);
-		assert.equal(
-			resolveScanReviewLeaseIdFromFields({
-				fields: [field('notes', 'rent for lease QA-2026')],
-				leases
-			}),
-			null
-		);
 	});
 
 	it('keeps linkage ids out of generic payment and expense review groups too', () => {

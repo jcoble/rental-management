@@ -28,7 +28,7 @@ void main() {
         isApplication: false,
         isLoan: true,
         isPaid: true,
-        selectedLeaseId: null,
+        selectedTenantAccountId: null,
         applicationPropertyId: null,
         applicationUnitId: null,
         createNewProperty: false,
