@@ -836,11 +836,11 @@ public sealed class NativeEsignTests : IDisposable
         : INativeEsignExecutionClaimStore
     {
         public Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
-            string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+            string claimOwner, TimeSpan leaseDuration, int batchSize,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public async Task<NativeEsignExecutionClaim?> TryClaimAsync(
-            int signatureRequestId, string claimOwner, DateTime nowUtc, TimeSpan leaseDuration,
+            int signatureRequestId, string claimOwner, TimeSpan leaseDuration,
             CancellationToken ct = default)
         {
             var request = await db.SignatureRequests
@@ -851,9 +851,9 @@ public sealed class NativeEsignTests : IDisposable
             var token = Guid.NewGuid();
             request.ExecutionClaimOwner = claimOwner;
             request.ExecutionClaimToken = token;
-            request.ExecutionClaimExpiresAtUtc = nowUtc.Add(leaseDuration);
+            request.ExecutionClaimExpiresAtUtc = DateTime.UtcNow.Add(leaseDuration);
             request.ExecutionAttemptCount++;
-            request.ExecutionLastAttemptAtUtc = nowUtc;
+            request.ExecutionLastAttemptAtUtc = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
             return new NativeEsignExecutionClaim(request.Id, request.PublicId, token);
         }

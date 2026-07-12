@@ -69,13 +69,14 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using var dbB = NewContext();
         var claimed = await Task.WhenAll(
             new AccountingConnectionClaimStore(dbA).ClaimPullAsync(
-                "pull-a", now, TimeSpan.FromMinutes(12), 2),
+                "pull-a", TimeSpan.FromMinutes(12), 2),
             new AccountingConnectionClaimStore(dbB).ClaimPullAsync(
-                "pull-b", now, TimeSpan.FromMinutes(12), 2));
+                "pull-b", TimeSpan.FromMinutes(12), 2));
 
         var all = claimed.SelectMany(rows => rows).ToArray();
         all.Should().HaveCount(4);
         all.Select(row => row.Connection.Id).Should().OnlyHaveUniqueItems();
+        all.Select(row => row.Fence.ClaimToken).Should().OnlyHaveUniqueItems();
         all.Should().OnlyContain(row => row.Connection.PullAttemptCount == 1);
         dbA.Database.CurrentTransaction.Should().BeNull();
         dbB.Database.CurrentTransaction.Should().BeNull();
@@ -83,7 +84,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using (var activePullDb = NewContext())
         {
             (await new AccountingConnectionClaimStore(activePullDb)
-                    .ClaimPullAsync("cannot-steal", now, TimeSpan.FromMinutes(12), 10))
+                    .ClaimPullAsync("cannot-steal", TimeSpan.FromMinutes(12), 10))
                 .Should().BeEmpty("active pull leases cannot be stolen");
         }
 
@@ -91,7 +92,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using (var activeRefreshDb = NewContext())
         {
             (await new AccountingConnectionClaimStore(activeRefreshDb).ClaimTokenRefreshAsync(
-                    "refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 10))
+                    "refresh", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(3), 10))
                 .Should().HaveCount(4, "pull work and token rotation have separate ownership lanes");
         }
 
@@ -105,7 +106,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
 
         await using var reclaimDb = NewContext();
         var replacement = (await new AccountingConnectionClaimStore(reclaimDb)
-                .ClaimPullAsync("replacement", now, TimeSpan.FromMinutes(12), 1))
+                .ClaimPullAsync("replacement", TimeSpan.FromMinutes(12), 1))
             .Single();
         replacement.Connection.Id.Should().Be(first.Connection.Id);
         replacement.Fence.ClaimToken.Should().NotBe(first.Fence.ClaimToken);
@@ -113,10 +114,10 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using var completeDb = NewContext();
         var completion = new AccountingConnectionClaimStore(completeDb);
         (await completion.MarkPullFailedAsync(
-                first.Connection.Id, first.Fence.ClaimToken, now, now.AddMinutes(15), "stale"))
+                first.Connection.Id, first.Fence.ClaimToken, TimeSpan.FromMinutes(15), "stale"))
             .Should().Be(0);
         (await completion.MarkPullFailedAsync(
-                replacement.Connection.Id, replacement.Fence.ClaimToken, now, now.AddMinutes(15), "current"))
+                replacement.Connection.Id, replacement.Fence.ClaimToken, TimeSpan.FromMinutes(15), "current"))
             .Should().Be(1);
     }
 
@@ -141,18 +142,18 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using (var pullDb = NewContext())
         {
             var pull = await new AccountingConnectionClaimStore(pullDb)
-                .ClaimPullAsync("pull", now, TimeSpan.FromMinutes(12), 10);
+                .ClaimPullAsync("pull", TimeSpan.FromMinutes(12), 10);
             pull.Should().ContainSingle();
             pull.Single().Connection.PortfolioId.Should().Be(enabledPortfolioId);
             await new AccountingConnectionClaimStore(pullDb).MarkPullFailedAsync(
                 pull.Single().Connection.Id, pull.Single().Fence.ClaimToken,
-                now, now.AddHours(1), "test release");
+                TimeSpan.FromHours(1), "test release");
         }
 
         await using (var refreshDb = NewContext())
         {
             var refresh = await new AccountingConnectionClaimStore(refreshDb)
-                .ClaimTokenRefreshAsync("refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 10);
+                .ClaimTokenRefreshAsync("refresh", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(3), 10);
             refresh.Should().ContainSingle();
             refresh.Single().Connection.PortfolioId.Should().Be(enabledPortfolioId);
         }
@@ -173,14 +174,14 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim stale;
         await using (var firstDb = NewContext())
             stale = (await new AccountingConnectionClaimStore(firstDb)
-                .ClaimPullAsync("stale", now, TimeSpan.FromMinutes(1), 1)).Single();
+                .ClaimPullAsync("stale", TimeSpan.FromMinutes(1), 1)).Single();
         await using (var expire = NewContext())
             await expire.AccountingConnections.Where(row => row.Id == stale.Connection.Id)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(row => row.PullClaimExpiresAtUtc, now.AddMinutes(-1)));
         await using (var reclaim = NewContext())
             _ = (await new AccountingConnectionClaimStore(reclaim)
-                .ClaimPullAsync("current", now, TimeSpan.FromMinutes(10), 1)).Single();
+                .ClaimPullAsync("current", TimeSpan.FromMinutes(10), 1)).Single();
 
         RentalCommandDbContext? providerCallDb = null;
         var providerCallSawTransaction = true;
@@ -257,7 +258,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim claim;
         await using (var claimDb = NewContext())
             claim = (await new AccountingConnectionClaimStore(claimDb)
-                .ClaimPullAsync("atomic", now, TimeSpan.FromMinutes(5), 1)).Single();
+                .ClaimPullAsync("atomic", TimeSpan.FromMinutes(5), 1)).Single();
 
         var provider = new Mock<IAccountingProvider>();
         provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
@@ -310,7 +311,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim claim;
         await using (var claimDb = NewContext())
             claim = (await new AccountingConnectionClaimStore(claimDb)
-                .ClaimPullAsync("rollback", now, TimeSpan.FromMinutes(5), 1)).Single();
+                .ClaimPullAsync("rollback", TimeSpan.FromMinutes(5), 1)).Single();
 
         await using (var control = NewContext())
             await control.Database.ExecuteSqlRawAsync("""
@@ -368,7 +369,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim claim;
         await using (var claimDb = NewContext())
             claim = (await new AccountingConnectionClaimStore(claimDb)
-                .ClaimPullAsync("pull", now, TimeSpan.FromMinutes(5), 1)).Single();
+                .ClaimPullAsync("pull", TimeSpan.FromMinutes(5), 1)).Single();
 
         var provider = new Mock<IAccountingProvider>();
         provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
@@ -414,7 +415,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim claim;
         await using (var claimDb = NewContext())
             claim = (await new AccountingConnectionClaimStore(claimDb).ClaimTokenRefreshAsync(
-                "refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
+                "refresh", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
 
         var provider = new Mock<IAccountingProvider>();
         provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
@@ -460,14 +461,14 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim pull;
         await using (var pullDb = NewContext())
             pull = (await new AccountingConnectionClaimStore(pullDb)
-                .ClaimPullAsync("pull", now, TimeSpan.FromMinutes(5), 1)).Single();
+                .ClaimPullAsync("pull", TimeSpan.FromMinutes(5), 1)).Single();
 
         await using var scheduledDb = NewContext();
         await using var inlineDb = NewContext();
         var scheduledTask = new AccountingConnectionClaimStore(scheduledDb).ClaimTokenRefreshAsync(
-            "scheduled", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1);
+            "scheduled", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(3), 1);
         var inlineTask = new AccountingConnectionClaimStore(inlineDb).ClaimInlineTokenRotationAsync(
-            pull.Connection.Id, pull.Fence.ClaimToken, "inline", now, TimeSpan.FromMinutes(3));
+            pull.Connection.Id, pull.Fence.ClaimToken, "inline", TimeSpan.FromMinutes(3));
         await Task.WhenAll(scheduledTask, inlineTask);
 
         var winners = scheduledTask.Result.Count + (inlineTask.Result is null ? 0 : 1);
@@ -494,14 +495,29 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         AccountingConnectionClaim stale;
         await using (var firstDb = NewContext())
             stale = (await new AccountingConnectionClaimStore(firstDb).ClaimTokenRefreshAsync(
-                "stale", now, now.AddMinutes(10), TimeSpan.FromMinutes(1), 1)).Single();
+                "stale", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(1), 1)).Single();
         await using (var expire = NewContext())
             await expire.AccountingConnections.Where(row => row.Id == stale.Connection.Id)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(row => row.TokenRotationClaimExpiresAtUtc, now.AddMinutes(-1)));
+        await using (var staleCompletion = NewContext())
+        {
+            var store = new AccountingConnectionClaimStore(staleCompletion);
+            (await store.CompleteTokenRotationAsync(
+                    stale.Connection.Id,
+                    stale.Fence.ClaimToken,
+                    null,
+                    "forged-access",
+                    "forged-refresh",
+                    now.AddHours(1)))
+                .Should().Be(0, "an expired rotation lease cannot persist provider credentials");
+            (await store.MarkTokenRotationRecoveryRequiredAsync(
+                    stale.Connection.Id, stale.Fence.ClaimToken, "stale recovery"))
+                .Should().Be(0, "an expired worker cannot overwrite the reconciliation owner");
+        }
         await using (var retry = NewContext())
             (await new AccountingConnectionClaimStore(retry).ClaimTokenRefreshAsync(
-                "must-not-retry", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1))
+                "must-not-retry", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(3), 1))
                 .Should().BeEmpty();
 
         await using var verify = NewContext();
@@ -526,7 +542,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using var db = NewContext();
         var durable = new AccountingConnectionClaimStore(db);
         var claim = (await durable.ClaimTokenRefreshAsync(
-            "refresh", now, now.AddMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
+            "refresh", TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(3), 1)).Single();
 
         var provider = new Mock<IAccountingProvider>();
         provider.SetupGet(x => x.Provider).Returns(AccountingProvider.QuickBooks);
@@ -642,26 +658,26 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         : IAccountingConnectionClaimStore
     {
         public Task<IReadOnlyList<AccountingConnectionClaim>> ClaimPullAsync(
-            string owner, DateTime now, TimeSpan duration, int size, CancellationToken ct = default) =>
-            inner.ClaimPullAsync(owner, now, duration, size, ct);
+            string owner, TimeSpan duration, int size, CancellationToken ct = default) =>
+            inner.ClaimPullAsync(owner, duration, size, ct);
         public Task<IReadOnlyList<AccountingConnectionClaim>> ClaimTokenRefreshAsync(
-            string owner, DateTime now, DateTime before, TimeSpan duration, int size, CancellationToken ct = default) =>
-            inner.ClaimTokenRefreshAsync(owner, now, before, duration, size, ct);
+            string owner, TimeSpan horizon, TimeSpan duration, int size, CancellationToken ct = default) =>
+            inner.ClaimTokenRefreshAsync(owner, horizon, duration, size, ct);
         public Task<AccountingConnectionClaim?> ClaimInlineTokenRotationAsync(
-            int id, Guid? pullToken, string owner, DateTime now, TimeSpan duration, CancellationToken ct = default) =>
-            inner.ClaimInlineTokenRotationAsync(id, pullToken, owner, now, duration, ct);
+            int id, Guid? pullToken, string owner, TimeSpan duration, CancellationToken ct = default) =>
+            inner.ClaimInlineTokenRotationAsync(id, pullToken, owner, duration, ct);
         public Task<int> MarkPullFailedAsync(
-            int id, Guid token, DateTime failed, DateTime next, string error, CancellationToken ct = default) =>
-            inner.MarkPullFailedAsync(id, token, failed, next, error, ct);
+            int id, Guid token, TimeSpan retryDelay, string error, CancellationToken ct = default) =>
+            inner.MarkPullFailedAsync(id, token, retryDelay, error, ct);
         public Task<int> MarkTokenRotationRecoveryRequiredAsync(
-            int id, Guid token, DateTime failed, string error, CancellationToken ct = default) =>
-            inner.MarkTokenRotationRecoveryRequiredAsync(id, token, failed, error, ct);
+            int id, Guid token, string error, CancellationToken ct = default) =>
+            inner.MarkTokenRotationRecoveryRequiredAsync(id, token, error, ct);
         public Task<int> CompleteTokenRotationAsync(
             int id, Guid token, Guid? parentPullToken, string access, string refresh,
-            DateTime expires, DateTime completed,
+            DateTime expires,
             CancellationToken ct = default) => throw new DbUpdateException("Injected local persistence loss.");
-        public Task<int> ReconcileAbandonedTokenRotationsAsync(DateTime now, CancellationToken ct = default) =>
-            inner.ReconcileAbandonedTokenRotationsAsync(now, ct);
+        public Task<int> ReconcileAbandonedTokenRotationsAsync(CancellationToken ct = default) =>
+            inner.ReconcileAbandonedTokenRotationsAsync(ct);
     }
 
     private static (AccountingProviderResolver Provider, AccountingAppSettingsResolver Settings) CreateResolvers(

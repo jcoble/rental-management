@@ -108,6 +108,11 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         sql.Should().Contain("pg_try_advisory_xact_lock");
         sql.Should().Contain("UPDATE \"SignatureRequests\"");
         sql.Should().Contain("RETURNING");
+        sql.Should().Contain("clock AS MATERIALIZED");
+        sql.Should().Contain("clock_timestamp()");
+        sql.Should().Contain("gen_random_uuid()");
+        sql.Should().Contain("@leaseDuration");
+        sql.Should().NotContain("@now");
     }
 
     [Fact]
@@ -253,7 +258,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         public TimeSpan LastLeaseDuration { get; private set; }
 
         public Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
-            string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+            string claimOwner, TimeSpan leaseDuration, int batchSize,
             CancellationToken ct = default)
         {
             LastBatchSize = batchSize;
@@ -262,7 +267,7 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         }
 
         public Task<NativeEsignExecutionClaim?> TryClaimAsync(
-            int signatureRequestId, string claimOwner, DateTime nowUtc, TimeSpan leaseDuration,
+            int signatureRequestId, string claimOwner, TimeSpan leaseDuration,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<int> ReleaseForRetryAsync(

@@ -13,7 +13,6 @@ public sealed record FinalizeNativeEsignRequestCommand(
     string FileName,
     long FileSize,
     string ContentSha256,
-    DateTime FinalizeAttemptedAtUtc,
     DateTime CompletedAtUtc) : IAtomicCommandData;
 
 /// <summary>

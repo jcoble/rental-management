@@ -10,11 +10,11 @@ public sealed record NativeEsignExecutionClaim(int Id, string PublicId, Guid Cla
 public interface INativeEsignExecutionClaimStore
 {
     Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
-        string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string claimOwner, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
 
     Task<NativeEsignExecutionClaim?> TryClaimAsync(
-        int signatureRequestId, string claimOwner, DateTime nowUtc, TimeSpan leaseDuration,
+        int signatureRequestId, string claimOwner, TimeSpan leaseDuration,
         CancellationToken ct = default);
 
     Task<int> ReleaseForRetryAsync(
@@ -32,14 +32,17 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
     private const int SignatureRequestLockNamespace = 1380142405;
 
     internal const string BatchClaimSql = """
-        WITH candidates AS (
+        WITH clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_utc
+        ), candidates AS (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
             INNER JOIN "Leases" AS lease ON lease."Id" = request."LeaseId"
+            CROSS JOIN clock
             WHERE request."Status" = 'ExecutionPending'
               AND lease."DeletedAt" IS NULL
               AND (request."ExecutionClaimToken" IS NULL
-                   OR request."ExecutionClaimExpiresAtUtc" <= @now)
+                   OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
               AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")
               AND NOT EXISTS (
                   SELECT 1
@@ -52,26 +55,29 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         )
         UPDATE "SignatureRequests" AS request
         SET "ExecutionClaimOwner" = @claimOwner,
-            "ExecutionClaimToken" = @claimToken,
-            "ExecutionClaimExpiresAtUtc" = @claimExpiresAtUtc,
+            "ExecutionClaimToken" = gen_random_uuid(),
+            "ExecutionClaimExpiresAtUtc" = clock.now_utc + @leaseDuration,
             "ExecutionAttemptCount" = request."ExecutionAttemptCount" + 1,
-            "ExecutionLastAttemptAtUtc" = @now,
+            "ExecutionLastAttemptAtUtc" = clock.now_utc,
             "ExecutionLastError" = NULL
-        FROM candidates
+        FROM candidates, clock
         WHERE request."Id" = candidates."Id"
         RETURNING request."Id", request."PublicId", request."ExecutionClaimToken";
         """;
 
     internal const string SingleClaimSql = """
-        WITH candidate AS (
+        WITH clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_utc
+        ), candidate AS (
             SELECT request."Id"
             FROM "SignatureRequests" AS request
             INNER JOIN "Leases" AS lease ON lease."Id" = request."LeaseId"
+            CROSS JOIN clock
             WHERE request."Id" = @signatureRequestId
               AND request."Status" = 'ExecutionPending'
               AND lease."DeletedAt" IS NULL
               AND (request."ExecutionClaimToken" IS NULL
-                   OR request."ExecutionClaimExpiresAtUtc" <= @now)
+                   OR request."ExecutionClaimExpiresAtUtc" <= clock.now_utc)
               AND pg_try_advisory_xact_lock(@lockNamespace, request."Id")
               AND NOT EXISTS (
                   SELECT 1
@@ -82,14 +88,28 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         )
         UPDATE "SignatureRequests" AS request
         SET "ExecutionClaimOwner" = @claimOwner,
-            "ExecutionClaimToken" = @claimToken,
-            "ExecutionClaimExpiresAtUtc" = @claimExpiresAtUtc,
+            "ExecutionClaimToken" = gen_random_uuid(),
+            "ExecutionClaimExpiresAtUtc" = clock.now_utc + @leaseDuration,
             "ExecutionAttemptCount" = request."ExecutionAttemptCount" + 1,
-            "ExecutionLastAttemptAtUtc" = @now,
+            "ExecutionLastAttemptAtUtc" = clock.now_utc,
             "ExecutionLastError" = NULL
-        FROM candidate
+        FROM candidate, clock
         WHERE request."Id" = candidate."Id"
         RETURNING request."Id", request."PublicId", request."ExecutionClaimToken";
+        """;
+
+    private const string ReleaseForRetrySql = """
+        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        UPDATE "SignatureRequests" AS request
+        SET "ExecutionLastError" = @error,
+            "ExecutionClaimOwner" = NULL,
+            "ExecutionClaimToken" = NULL,
+            "ExecutionClaimExpiresAtUtc" = NULL
+        FROM clock
+        WHERE request."Id" = @signatureRequestId
+          AND request."Status" = 'ExecutionPending'
+          AND request."ExecutionClaimToken" = @claimToken
+          AND request."ExecutionClaimExpiresAtUtc" > clock.now_utc;
         """;
 
     private readonly RentalCommandDbContext _db;
@@ -97,40 +117,50 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
     public NativeEsignExecutionClaimStore(RentalCommandDbContext db) => _db = db;
 
     public Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
-        string claimOwner, DateTime nowUtc, TimeSpan leaseDuration, int batchSize,
+        string claimOwner, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default)
     {
         if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
-        return ClaimAsync(BatchClaimSql, null, claimOwner, nowUtc, leaseDuration, batchSize, ct);
+        return ClaimAsync(BatchClaimSql, null, claimOwner, leaseDuration, batchSize, ct);
     }
 
     public async Task<NativeEsignExecutionClaim?> TryClaimAsync(
-        int signatureRequestId, string claimOwner, DateTime nowUtc, TimeSpan leaseDuration,
+        int signatureRequestId, string claimOwner, TimeSpan leaseDuration,
         CancellationToken ct = default)
     {
         if (signatureRequestId <= 0) throw new ArgumentOutOfRangeException(nameof(signatureRequestId));
         var claims = await ClaimAsync(
-            SingleClaimSql, signatureRequestId, claimOwner, nowUtc, leaseDuration, 1, ct);
+            SingleClaimSql, signatureRequestId, claimOwner, leaseDuration, 1, ct);
         return claims.Count == 0 ? null : claims[0];
     }
 
-    public Task<int> ReleaseForRetryAsync(
-        int signatureRequestId, Guid claimToken, string? error, CancellationToken ct = default) =>
-        _db.SignatureRequests
-            .Where(request => request.Id == signatureRequestId
-                && request.Status == Core.Enums.SignatureRequestStatus.ExecutionPending
-                && request.ExecutionClaimToken == claimToken)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(request => request.ExecutionLastError, LimitError(error))
-                .SetProperty(request => request.ExecutionClaimOwner, (string?)null)
-                .SetProperty(request => request.ExecutionClaimToken, (Guid?)null)
-                .SetProperty(request => request.ExecutionClaimExpiresAtUtc, (DateTime?)null), ct);
+    public async Task<int> ReleaseForRetryAsync(
+        int signatureRequestId, Guid claimToken, string? error, CancellationToken ct = default)
+    {
+        var connection = _db.Database.GetDbConnection();
+        var closeWhenDone = connection.State != ConnectionState.Open;
+        if (closeWhenDone) await _db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ReleaseForRetrySql;
+            command.Parameters.Add(new NpgsqlParameter("signatureRequestId", NpgsqlDbType.Integer)
+                { Value = signatureRequestId });
+            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken });
+            command.Parameters.Add(new NpgsqlParameter("error", NpgsqlDbType.Text)
+                { Value = (object?)LimitError(error) ?? DBNull.Value });
+            return await command.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (closeWhenDone) await _db.Database.CloseConnectionAsync();
+        }
+    }
 
     private async Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimAsync(
         string sql,
         int? signatureRequestId,
         string claimOwner,
-        DateTime nowUtc,
         TimeSpan leaseDuration,
         int batchSize,
         CancellationToken ct)
@@ -139,7 +169,6 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         if (claimOwner.Length > 200) throw new ArgumentOutOfRangeException(nameof(claimOwner));
         if (leaseDuration <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(leaseDuration));
 
-        var now = AsUtc(nowUtc);
         var connection = _db.Database.GetDbConnection();
         var closeWhenDone = connection.State != ConnectionState.Open;
         if (closeWhenDone)
@@ -152,17 +181,13 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         {
             await using var command = connection.CreateCommand();
             command.CommandText = sql;
-            command.Parameters.Add(new NpgsqlParameter("now", NpgsqlDbType.TimestampTz) { Value = now });
             command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
-            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = Guid.NewGuid() });
             command.Parameters.Add(new NpgsqlParameter("lockNamespace", NpgsqlDbType.Integer)
             {
                 Value = SignatureRequestLockNamespace,
             });
-            command.Parameters.Add(new NpgsqlParameter("claimExpiresAtUtc", NpgsqlDbType.TimestampTz)
-            {
-                Value = now.Add(leaseDuration),
-            });
+            command.Parameters.Add(new NpgsqlParameter("leaseDuration", NpgsqlDbType.Interval)
+                { Value = leaseDuration });
             if (signatureRequestId.HasValue)
             {
                 command.Parameters.Add(new NpgsqlParameter("signatureRequestId", NpgsqlDbType.Integer)
@@ -195,10 +220,4 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
         ? null
         : error.Length <= 2000 ? error : error[..2000];
 
-    private static DateTime AsUtc(DateTime value) => value.Kind switch
-    {
-        DateTimeKind.Utc => value,
-        DateTimeKind.Local => value.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
-    };
 }

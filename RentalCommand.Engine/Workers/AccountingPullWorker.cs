@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 
@@ -31,9 +30,7 @@ public sealed class AccountingPullWorker : EngineWorkerBase
         var import = scoped.GetRequiredService<AccountingImportService>();
         var claims = scoped.GetRequiredService<IAccountingConnectionClaimStore>();
         var logger = scoped.GetRequiredService<ILogger<AccountingPullWorker>>();
-        var now = scoped.GetRequiredService<TimeProvider>().UtcNow();
-
-        var batch = await claims.ClaimPullAsync(_claimOwner, now, ClaimLease, BatchSize, ct);
+        var batch = await claims.ClaimPullAsync(_claimOwner, ClaimLease, BatchSize, ct);
         var processed = 0;
         foreach (var claim in batch)
         {
@@ -56,9 +53,8 @@ public sealed class AccountingPullWorker : EngineWorkerBase
             {
                 logger.LogError(ex, "Accounting pull failed for connection {ConnectionId}", claim.Connection.Id);
                 db.ChangeTracker.Clear();
-                var failedAt = scoped.GetRequiredService<TimeProvider>().UtcNow();
                 await claims.MarkPullFailedAsync(
-                    claim.Connection.Id, claim.Fence.ClaimToken, failedAt, failedAt.AddMinutes(15), ex.Message, ct);
+                    claim.Connection.Id, claim.Fence.ClaimToken, TimeSpan.FromMinutes(15), ex.Message, ct);
             }
         }
 

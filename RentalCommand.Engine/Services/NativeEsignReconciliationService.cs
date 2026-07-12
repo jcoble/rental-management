@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Esign;
-using RentalCommand.Core.Time;
 using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Engine.Services;
@@ -37,9 +36,8 @@ public sealed class NativeEsignReconciliationService
         await using (var queryScope = _scopeFactory.CreateAsyncScope())
         {
             var store = queryScope.ServiceProvider.GetRequiredService<INativeEsignExecutionClaimStore>();
-            var timeProvider = queryScope.ServiceProvider.GetRequiredService<TimeProvider>();
             claims = await store.ClaimBatchAsync(
-                _claimOwner, timeProvider.UtcNow(), ClaimLease, BatchSize, ct);
+                _claimOwner, ClaimLease, BatchSize, ct);
         }
 
         var completed = 0;

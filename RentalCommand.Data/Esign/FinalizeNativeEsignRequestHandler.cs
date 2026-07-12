@@ -31,9 +31,11 @@ public sealed class FinalizeNativeEsignRequestHandler
         {
             throw new InvalidOperationException("The native e-sign request is not ready for execution.");
         }
-        if (request.ExecutionClaimToken != command.ClaimToken
-            || request.ExecutionClaimExpiresAtUtc is null
-            || request.ExecutionClaimExpiresAtUtc <= command.FinalizeAttemptedAtUtc)
+        var claimOwned = await attempt.Persistence.Query<SignatureRequest>()
+            .AnyAsync(candidate => candidate.Id == command.SignatureRequestId
+                && candidate.ExecutionClaimToken == command.ClaimToken
+                && candidate.ExecutionClaimExpiresAtUtc > DateTime.UtcNow, ct);
+        if (!claimOwned)
         {
             throw new NativeEsignExecutionClaimLostException(command.SignatureRequestId);
         }
