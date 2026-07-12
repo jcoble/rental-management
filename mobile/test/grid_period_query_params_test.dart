@@ -30,40 +30,61 @@ void main() {
     );
   });
 
-  test('payments page sends due-period query params', () async {
+  test('receipts page sends canonical tenant relationship filters', () async {
     final adapter = _RecordingPageAdapter(_paymentPageJson());
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
       ..httpClientAdapter = adapter;
     final repo = PaymentsRepository(dio);
 
     final page = await repo.listPaymentsPage(
-      const PaymentListQuery(dueFrom: '2026-07-01', dueTo: '2026-07-31'),
+      const PaymentListQuery(tenantAccountId: 42, leaseManagementId: 7),
     );
 
     expect(adapter.path, '/payments/page');
-    expect(adapter.queryParameters, containsPair('dueFrom', '2026-07-01'));
-    expect(adapter.queryParameters, containsPair('dueTo', '2026-07-31'));
+    expect(adapter.queryParameters, containsPair('tenantAccountId', 42));
+    expect(adapter.queryParameters, containsPair('leaseManagementId', 7));
     expect(page.items.single.id, 12);
   });
 
-  test('lease past-due mark-paid uses the server action endpoint', () async {
-    final adapter = _RecordingWriteAdapter({
-      'leaseId': 42,
-      'markedPaidCount': 2,
-      'paymentIds': [101, 102],
-    });
-    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
-      ..httpClientAdapter = adapter;
-    final repo = PaymentsRepository(dio);
+  test(
+    'record receipt uses the tenant-account command and idempotency key',
+    () async {
+      final adapter = _RecordingWriteAdapter({
+        'value': {
+          'tenantAccountId': 42,
+          'ledgerEntryId': 101,
+          'paymentAttemptId': 102,
+          'amount': 1200,
+          'allocatedAmount': 1200,
+          'allocationCount': 1,
+        },
+        'replayed': false,
+      });
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = PaymentsRepository(dio);
 
-    final result = await repo.markLeasePastDuePaid(42, paidDate: '2026-07-08');
+      final result = await repo.recordReceipt(
+        42,
+        RecordTenantReceiptInput(
+          amount: 1200,
+          effectiveOn: DateTime(2026, 7, 8),
+          description: 'July rent',
+          paymentMethodSummary: 'Check',
+        ),
+        operationKey: 'receipt-key-42',
+      );
 
-    expect(adapter.method, 'POST');
-    expect(adapter.path, '/payments/leases/42/past-due/mark-paid');
-    expect(adapter.data, containsPair('paidDate', '2026-07-08'));
-    expect(result.markedPaidCount, 2);
-    expect(result.paymentIds, [101, 102]);
-  });
+      expect(adapter.method, 'POST');
+      expect(adapter.path, '/tenant-accounts/42/receipts');
+      expect(adapter.data, containsPair('effectiveOn', '2026-07-08'));
+      expect(
+        adapter.headers,
+        containsPair('Idempotency-Key', 'receipt-key-42'),
+      );
+      expect(result.ledgerEntryId, 101);
+    },
+  );
 
   test('expenses page sends incurred-period query params', () async {
     final adapter = _RecordingPageAdapter(_expensePageJson());
@@ -143,6 +164,7 @@ class _RecordingWriteAdapter implements HttpClientAdapter {
   String? method;
   String? path;
   Object? data;
+  Map<String, dynamic>? headers;
 
   @override
   Future<ResponseBody> fetch(
@@ -153,6 +175,7 @@ class _RecordingWriteAdapter implements HttpClientAdapter {
     method = options.method;
     path = options.path;
     data = options.data;
+    headers = Map<String, dynamic>.from(options.headers);
 
     return ResponseBody.fromString(
       jsonEncode(body),
@@ -171,14 +194,19 @@ Map<String, dynamic> _paymentPageJson() => {
   'items': [
     {
       'id': 12,
+      'publicId': '7b5b31ec-a3ea-4d87-b515-01b76f42a34c',
       'portfolioId': 1,
-      'leaseId': 7,
-      'paymentType': 'Rent',
-      'status': 'Scheduled',
+      'tenantAccountId': 42,
+      'leaseManagementId': 7,
+      'propertyId': 2,
+      'unitId': 3,
+      'accountNumber': 'TA-42',
+      'relationshipNumber': 'LM-7',
       'amount': 1200,
-      'dueDate': '2026-07-01',
-      'createdAt': '2026-07-01T00:00:00Z',
-      'updatedAt': '2026-07-01T00:00:00Z',
+      'currency': 'USD',
+      'receivedOn': '2026-07-01',
+      'postedAtUtc': '2026-07-01T00:00:00Z',
+      'description': 'July rent',
     },
   ],
   'totalCount': 1,

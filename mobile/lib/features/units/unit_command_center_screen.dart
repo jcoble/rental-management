@@ -21,6 +21,7 @@ import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../payments/payments_screen.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'unit_command_center_tabs.dart';
@@ -264,6 +265,16 @@ class _UnitWorkOrderQuickActionFabState
       );
     }
 
+    final lease = widget.dashboard.currentLease;
+    if (index == UnitCommandCenterTab.ledger.index &&
+        lease?.tenantAccountId != null) {
+      return MobileQuickAction(
+        label: 'Record receipt',
+        icon: Icons.add_card_outlined,
+        onPressed: _showReceiptSheet,
+      );
+    }
+
     return null;
   }
 
@@ -278,6 +289,24 @@ class _UnitWorkOrderQuickActionFabState
       initialPropertyLabel: _propertyLabel,
       initialUnitLabel: _unitLabel(widget.dashboard.unit.unitNumber),
     );
+  }
+
+  Future<void> _showReceiptSheet() async {
+    final lease = widget.dashboard.currentLease;
+    final tenantAccountId = lease?.tenantAccountId;
+    if (lease == null || tenantAccountId == null) return;
+    final result = await showRecordTenantReceiptSheet(
+      context,
+      ref,
+      tenantAccountId: tenantAccountId,
+      leaseManagementId: lease.leaseManagementId,
+      tenantName: widget.dashboard.header.currentTenantName,
+      rentalLabel:
+          '${_propertyLabel} · ${_unitLabel(widget.dashboard.unit.unitNumber)}',
+    );
+    if (result != null) {
+      ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));
+    }
   }
 
   @override

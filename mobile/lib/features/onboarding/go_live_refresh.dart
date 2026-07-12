@@ -46,8 +46,8 @@ void refreshPortfolioDataAfterGoLive(WidgetRef ref) {
   ref.invalidate(recurringPropertiesProvider);
   ref.invalidate(recurringUnitsProvider);
   ref.invalidate(recurringVendorsProvider);
-  ref.invalidate(leasePaymentsProvider);
-  ref.invalidate(paymentReceiptProvider);
+  ref.invalidate(leaseManagementReceiptsProvider);
+  ref.invalidate(tenantAccountReceiptsProvider);
   ref.invalidate(leaseLedgerProvider);
   ref.invalidate(propertyDetailProvider);
   ref.invalidate(propertyLeasesProvider);
@@ -70,7 +70,6 @@ void refreshPortfolioDataAfterGoLive(WidgetRef ref) {
   ref.read(inboxProvider.notifier).refresh();
   ref.read(accountingSummaryProvider.notifier).refresh();
   ref.read(paymentsProvider.notifier).refresh();
-  ref.read(leasesForPaymentProvider.notifier).load();
   ref.read(recurringMaintenanceProvider.notifier).refresh();
   ref.read(ownerSummariesProvider.notifier).refresh();
   ref.read(notificationSettingsProvider.notifier).refresh();

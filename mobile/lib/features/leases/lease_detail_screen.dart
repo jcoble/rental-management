@@ -9,7 +9,6 @@ import '../home/mobile_domain_navigation.dart';
 import '../notices/create_tenant_notice.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_repository.dart';
-import '../payments/record_payment_sheet.dart';
 import '../properties/property_detail_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
@@ -595,10 +594,6 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-
-            // ── Payments ───────────────────────────────────────────────────
-            _LeasePaymentsSection(leaseId: _lease.id),
             const SizedBox(height: 12),
 
             // ── Lease agreement (PDF) ──────────────────────────────────────
@@ -1727,15 +1722,15 @@ class _StatusActions extends StatelessWidget {
 /// and an inline "Record" action on unpaid rows. Backs lease → payments
 /// drill-through (and, via the property unit tile, unit → payments).
 class _LeasePaymentsSection extends ConsumerWidget {
-  const _LeasePaymentsSection({required this.leaseId});
+  const _LeasePaymentsSection({required this.leaseManagementId});
 
-  final int leaseId;
+  final int leaseManagementId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final async = ref.watch(leasePaymentsProvider(leaseId));
+    final async = ref.watch(leaseManagementReceiptsProvider(leaseManagementId));
 
     return Card(
       child: Padding(
@@ -1774,8 +1769,7 @@ class _LeasePaymentsSection extends ConsumerWidget {
                 }
                 return Column(
                   children: [
-                    for (final p in payments)
-                      _LeasePaymentTile(payment: p, leaseId: leaseId),
+                    for (final p in payments) _LeasePaymentTile(receipt: p),
                   ],
                 );
               },
@@ -1787,31 +1781,15 @@ class _LeasePaymentsSection extends ConsumerWidget {
   }
 }
 
-class _LeasePaymentTile extends ConsumerWidget {
-  const _LeasePaymentTile({required this.payment, required this.leaseId});
+class _LeasePaymentTile extends StatelessWidget {
+  const _LeasePaymentTile({required this.receipt});
 
-  final Payment payment;
-  final int leaseId;
+  final PaymentReceipt receipt;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final isPaid = payment.status.toLowerCase() == 'paid';
-
-    Color statusBg() {
-      final lower = payment.status.toLowerCase();
-      if (lower == 'paid') return cs.primaryContainer;
-      if (lower == 'late' || lower == 'overdue') return cs.errorContainer;
-      return cs.surfaceContainerHighest;
-    }
-
-    Color statusFg() {
-      final lower = payment.status.toLowerCase();
-      if (lower == 'paid') return cs.onPrimaryContainer;
-      if (lower == 'late' || lower == 'overdue') return cs.onErrorContainer;
-      return cs.onSurfaceVariant;
-    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -1821,7 +1799,7 @@ class _LeasePaymentTile extends ConsumerWidget {
         onTap: () {
           Navigator.of(context).push<void>(
             MaterialPageRoute<void>(
-              builder: (_) => PaymentDetailScreen(paymentId: payment.id),
+              builder: (_) => PaymentDetailScreen(paymentId: receipt.id),
             ),
           );
         },
@@ -1838,7 +1816,7 @@ class _LeasePaymentTile extends ConsumerWidget {
                     Row(
                       children: [
                         Text(
-                          _formatCurrency(payment.amount),
+                          _formatCurrency(receipt.amount),
                           style: theme.textTheme.bodyMedium?.copyWith(
                             fontWeight: FontWeight.w700,
                           ),
@@ -1850,15 +1828,15 @@ class _LeasePaymentTile extends ConsumerWidget {
                             vertical: 3,
                           ),
                           decoration: BoxDecoration(
-                            color: statusBg(),
+                            color: cs.primaryContainer,
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text(
-                            payment.status,
+                            'Received',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
-                              color: statusFg(),
+                              color: cs.onPrimaryContainer,
                             ),
                           ),
                         ),
@@ -1866,8 +1844,8 @@ class _LeasePaymentTile extends ConsumerWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${payment.type.isEmpty ? 'Payment' : payment.type}  ·  '
-                      'Due ${_fmt(payment.dueDate)}',
+                      '${receipt.description}  ·  '
+                      'Received ${_fmt(receipt.receivedOn)}',
                       style: TextStyle(
                         fontSize: 12,
                         color: cs.onSurfaceVariant,
@@ -1876,32 +1854,6 @@ class _LeasePaymentTile extends ConsumerWidget {
                   ],
                 ),
               ),
-              if (!isPaid)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: FilledButton.tonal(
-                    onPressed: () async {
-                      final updated = await showRecordPaymentSheet(
-                        context,
-                        ref,
-                        payment: payment,
-                      );
-                      if (updated != null) {
-                        ref.invalidate(leasePaymentsProvider(leaseId));
-                      }
-                    },
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: const TextStyle(fontSize: 12),
-                    ),
-                    child: const Text('Record'),
-                  ),
-                ),
             ],
           ),
         ),

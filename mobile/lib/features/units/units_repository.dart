@@ -223,6 +223,8 @@ class UnitDashboardHeader {
 class UnitLeaseSummary {
   const UnitLeaseSummary({
     required this.id,
+    required this.leaseManagementId,
+    this.tenantAccountId,
     required this.leaseNumber,
     required this.status,
     required this.startDate,
@@ -232,6 +234,8 @@ class UnitLeaseSummary {
   });
 
   final int id;
+  final int leaseManagementId;
+  final int? tenantAccountId;
   final String leaseNumber;
   final String status;
   final DateTime startDate;
@@ -242,6 +246,8 @@ class UnitLeaseSummary {
   factory UnitLeaseSummary.fromJson(Map<String, dynamic> json) {
     return UnitLeaseSummary(
       id: (json['id'] as num?)?.toInt() ?? 0,
+      leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
       leaseNumber: json['leaseNumber'] as String? ?? '',
       status: json['status'] as String? ?? '',
       startDate: _parseDate(json['startDate']),

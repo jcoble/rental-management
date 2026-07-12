@@ -18,24 +18,33 @@ String _homeLabel({String? propertyName, String? unitNumber}) {
   return '';
 }
 
-String _leaseFallback({String? tenantName, String? leaseNumber}) {
+String _relationshipFallback({String? tenantName, String? relationshipNumber}) {
   final tenant = _clean(tenantName);
-  final number = _clean(leaseNumber);
+  final number = _clean(relationshipNumber);
   if (tenant.isNotEmpty) return tenant;
-  if (number.isNotEmpty) return 'Lease $number';
+  if (number.isNotEmpty) return 'Relationship $number';
   return '';
 }
 
-String formatPaymentLeaseDisplay(Payment payment) {
+String formatPaymentReceiptRentalDisplay(PaymentReceipt receipt) {
   final home = _homeLabel(
-    propertyName: payment.propertyName,
-    unitNumber: payment.unitNumber,
+    propertyName: receipt.propertyName,
+    unitNumber: receipt.unitNumber,
   );
   if (home.isNotEmpty) return home;
-  return _leaseFallback(
-    tenantName: payment.tenantName,
-    leaseNumber: payment.leaseNumber,
+  return _relationshipFallback(
+    tenantName: receipt.tenantName,
+    relationshipNumber: receipt.relationshipNumber,
   );
+}
+
+String paymentTypeLabel(String type) {
+  return switch (type) {
+    'SecurityDeposit' => 'Security deposit',
+    'LateFee' => 'Late fee',
+    '' => '',
+    _ => type,
+  };
 }
 
 String formatLeasePickerLabel(Lease lease) {

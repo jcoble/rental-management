@@ -43,6 +43,7 @@ import '../onboarding/getting_started_provider.dart';
 import '../onboarding/getting_started_screen.dart';
 import '../onboarding/getting_started_tasks.dart';
 import '../payments/payment_detail_screen.dart';
+import '../payments/payment_lease_labels.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
@@ -978,7 +979,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
 
   /// Starts hosted Checkout for one rent item and opens it in the browser.
   /// A 503 (Stripe off) shows a gentle, non-error message.
-  Future<void> _payNow(Payment payment) async {
+  Future<void> _payNow(TenantPortalPayment payment) async {
     if (_payingPaymentId != null) return;
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _payingPaymentId = payment.id);
@@ -1234,7 +1235,7 @@ class _PayItemCard extends StatelessWidget {
     required this.onPay,
   });
 
-  final Payment payment;
+  final TenantPortalPayment payment;
   final bool busy;
   final bool enabled;
   final VoidCallback onPay;

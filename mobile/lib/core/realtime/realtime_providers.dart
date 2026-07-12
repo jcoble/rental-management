@@ -79,10 +79,10 @@ void _invalidateForEntity(Ref ref, String entityType) {
 
   switch (entityType) {
     case 'Payment':
+    case 'TenantLedgerEntry':
       _refreshIfAlive(ref, paymentsProvider);
       ref.invalidate(paymentsPageProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
-      _refreshIfAlive(ref, leasesForPaymentProvider);
 
     case 'Expense':
       ref.invalidate(expensesPageProvider);
@@ -92,7 +92,6 @@ void _invalidateForEntity(Ref ref, String entityType) {
     case 'Lease':
       _refreshIfAlive(ref, leasesProvider);
       ref.invalidate(leasesPageProvider);
-      _refreshIfAlive(ref, leasesForPaymentProvider);
       ref.invalidate(gettingStartedSignalsProvider);
       // Family providers: invalidate all live instances.
       ref.invalidate(propertyLeasesProvider);
