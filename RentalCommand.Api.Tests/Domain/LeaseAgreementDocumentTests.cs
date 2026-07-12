@@ -627,20 +627,9 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         }
     }
 
-    /// <summary>SQLite-compatible context: strips Postgres-only DDL the same way other suites do.</summary>
-    private sealed class LeaseDocumentTestDbContext : RentalCommandDbContext
+    /// <summary>SQLite context using the shared test-only compatibility model.</summary>
+    private sealed class LeaseDocumentTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
     {
         public LeaseDocumentTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-            modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-            modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-            modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-            modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-            modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-            modelBuilder.Entity<Lease>().ToTable("Leases");
-        }
     }
 }

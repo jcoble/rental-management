@@ -567,33 +567,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
 /// TEXT and drops Postgres-only table configuration the worker's queries don't need, mirroring
 /// <see cref="SqliteTestContext"/>'s approach.
 /// </summary>
-internal sealed class ScanTestDbContext : RentalCommandDbContext
+internal sealed class ScanTestDbContext : SqliteCompatibleRentalCommandDbContext
 {
     public ScanTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<SecurityDepositHolding>().Property(e => e.DeductionsJson).HasColumnType("TEXT");
-
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
-
-        modelBuilder.Entity<Payment>()
-            .HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
-            .IsUnique()
-            .HasFilter(null);
-
-        modelBuilder.Entity<AutopayEnrollment>()
-            .HasIndex(e => e.LeaseId)
-            .IsUnique()
-            .HasFilter(null);
-    }
 }

@@ -524,7 +524,7 @@ public class ScanControllerTests : IDisposable
     }
 }
 
-internal sealed class ScanControllerTestDbContext : RentalCommandDbContext
+internal sealed class ScanControllerTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public ScanControllerTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }

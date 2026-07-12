@@ -234,33 +234,7 @@ public class ScanServiceTests : IDisposable
     }
 }
 
-internal sealed class RentalCommandTestDbContext : RentalCommandDbContext
+internal sealed class RentalCommandTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public RentalCommandTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        // jsonb is not understood by SQLite — remap those columns to plain text.
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-
-        // Remove Postgres-specific jsonb from AuditLog, OutboxMessage, QueuedJob.
-        modelBuilder.Entity<AuditLog>()
-            .Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>()
-            .Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>()
-            .Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>()
-            .Property(e => e.Payload).HasColumnType("TEXT");
-
-        // Remove check constraints that SQLite cannot execute (Lease StartDate < EndDate, RentDueDay).
-        // EF Core lets us replace the table builder to drop all constraints.
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-    }
 }
