@@ -19,14 +19,15 @@ public sealed class UnitTurnoverController : ManagementControllerBase
 
     public UnitTurnoverController(IAtomicUnitOfWork atomic) => _atomic = atomic;
 
-    [HttpPost("complete")]
+    [HttpPost("{periodId:int}/complete")]
     [ProducesResponseType(typeof(CompleteTurnoverResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Complete(int unitId,
+    public async Task<IActionResult> Complete(int unitId, int periodId,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
-        [FromBody] CompleteTurnoverRequest request, CancellationToken ct)
+        CancellationToken ct)
     {
         var normalizedKey = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
@@ -48,10 +49,10 @@ public sealed class UnitTurnoverController : ManagementControllerBase
         {
             var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("unit.complete-turnover",
-                    $"{portfolioId}:{unitId}:{request.TurnoverPeriodId}:{digest}"),
-                new CompleteTurnoverCommand(portfolioId, unitId, request.TurnoverPeriodId, userId,
+                    $"{portfolioId}:{unitId}:{periodId}:{digest}"),
+                new CompleteTurnoverCommand(portfolioId, unitId, periodId, userId,
                     sessionId, accessContextId, accessRevision,
-                    $"complete-turnover:{portfolioId}:{unitId}:{request.TurnoverPeriodId}:{digest}"),
+                    $"complete-turnover:{portfolioId}:{unitId}:{periodId}:{digest}"),
                 ResultCodec, ct);
             return outcome.Value.Outcome switch
             {

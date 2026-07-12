@@ -280,7 +280,7 @@ public sealed class ReturnPossessionHandler
             command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
             command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
         if (command.EffectiveOn == default || string.IsNullOrWhiteSpace(command.TurnoverReason)
-            || command.TurnoverReason.Length > 500
+            || command.TurnoverReason.Length > 1000
             || command.Parties.Count == 0
             || command.Parties.Select(item => item.LeaseManagementPartyId).Distinct().Count() != command.Parties.Count
             || command.Accesses.Select(item => item.TenantUserAccessId).Distinct().Count() != command.Accesses.Count

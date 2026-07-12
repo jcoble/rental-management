@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 
 namespace RentalCommand.Api;
 
@@ -43,6 +44,15 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         switch (exception)
         {
+            case AtomicIdempotencyConflictException idempotencyConflict:
+                problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status409Conflict,
+                    Title = "Conflict",
+                    Detail = idempotencyConflict.Message,
+                };
+                break;
+
             case FairHousingBlockedException fairHousing:
                 // A soft, overridable content gate — the copy was flagged by the Fair Housing review and
                 // not acknowledged. 422 (Unprocessable Content) with the structured concern list so the UI

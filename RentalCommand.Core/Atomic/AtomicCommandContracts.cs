@@ -377,6 +377,16 @@ public sealed class AtomicReceiptInvariantException : InvalidOperationException
     public AtomicReceiptInvariantException(string message) : base(message) { }
 }
 
+/// <summary>
+/// A caller reused a command idempotency key for a different business payload. This is a stable
+/// request conflict, not a receipt corruption or server failure.
+/// </summary>
+public sealed class AtomicIdempotencyConflictException : InvalidOperationException
+{
+    public AtomicIdempotencyConflictException()
+        : base("The Idempotency-Key has already been used for a different request payload.") { }
+}
+
 public sealed class AtomicArchitectureException : InvalidOperationException
 {
     public AtomicArchitectureException(string message) : base(message) { }

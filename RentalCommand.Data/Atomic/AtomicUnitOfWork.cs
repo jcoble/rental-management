@@ -43,6 +43,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         ValidateCodec(resultCodec);
         AtomicCommandAdmission.ValidateCommand(command);
         AtomicCommandAdmission.ValidateResultType(typeof(TResult));
+        identity = identity.BindRequest(command);
 
         if (Ambient.Value is { } owner)
         {
@@ -94,9 +95,11 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             {
                 claimed = await db.Database.ExecuteSqlInterpolatedAsync($$"""
                     INSERT INTO "AtomicCommandReceipts"
-                        ("Id", "AttemptId", "CommandType", "IdempotencyKey", "Status", "ResultContract", "StartedAt")
+                        ("Id", "AttemptId", "CommandType", "IdempotencyKey", "RequestFingerprint",
+                         "Status", "ResultContract", "StartedAt")
                     VALUES
                         ({{Guid.NewGuid()}}, {{attemptId}}, {{identity.CommandType}}, {{identity.IdempotencyKey}},
+                         {{identity.RequestFingerprint!}},
                          {{(int)AtomicCommandReceiptStatus.Pending}}, {{resultCodec.ContractName}}, {{startedAt}})
                     ON CONFLICT ("CommandType", "IdempotencyKey") DO NOTHING
                     """, ct);
@@ -112,6 +115,14 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                 if (replayAuthorizer is not null)
                 {
                     await replayAuthorizer.AuthorizeReplayAsync(command, attempt.Persistence, ct);
+                }
+
+                if (!string.Equals(
+                        receipt.RequestFingerprint,
+                        identity.RequestFingerprint,
+                        StringComparison.Ordinal))
+                {
+                    throw new AtomicIdempotencyConflictException();
                 }
 
                 var replay = DeserializeReplay(receipt, resultCodec);
