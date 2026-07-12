@@ -252,90 +252,25 @@ public sealed class ApplyPlaidSyncHandler
         }
 
         var beforeConnection = ApplyPlaidConnectionHandler.Snapshot(connection);
-        var incomingIds = command.Added.Select(row => row.ProviderTransactionId)
-            .Concat(command.Modified.Select(row => row.ProviderTransactionId))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var existingRows = incomingIds.Length == 0
-            ? new List<BankTransaction>()
-            : await attempt.Persistence.Query<BankTransaction>()
-                .Where(row => row.PortfolioId == command.PortfolioId
-                    && row.BankConnectionId == connection.Id
-                    && incomingIds.Contains(row.ProviderTransactionId))
-                .ToListAsync(ct);
-        var existing = existingRows.ToDictionary(row => row.ProviderTransactionId, StringComparer.Ordinal);
-        var created = new List<BankTransaction>();
-        var changed = new List<(BankTransaction Row, string Before, string Reason)>();
-        var modifiedIds = new List<int>();
-        var skipped = command.AddedInputCount - command.Added.Count
-            + command.ModifiedInputCount - command.Modified.Count;
-
-        foreach (var input in command.Added)
-        {
-            if (existing.ContainsKey(input.ProviderTransactionId))
-            {
-                skipped++;
-                continue;
-            }
-            var row = NewTransaction(command.PortfolioId, connection.Id, input, command.AppliedAtUtc);
-            attempt.Persistence.Add(row);
-            existing.Add(input.ProviderTransactionId, row);
-            created.Add(row);
-        }
-        foreach (var input in command.Modified)
-        {
-            if (!existing.TryGetValue(input.ProviderTransactionId, out var row))
-            {
-                skipped++;
-                continue;
-            }
-            if (created.Contains(row))
-            {
-                Apply(row, input, command.AppliedAtUtc);
-                continue;
-            }
-            var before = Snapshot(row);
-            Apply(row, input, command.AppliedAtUtc);
-            changed.Add((row, before, "Bank transaction updated from Plaid."));
-            modifiedIds.Add(row.Id);
-        }
-
-        var removedIds = command.RemovedProviderTransactionIds
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var removed = removedIds.Length == 0
-            ? new List<BankTransaction>()
-            : await attempt.Persistence.Query<BankTransaction>()
-                .Where(row => row.PortfolioId == command.PortfolioId
-                    && row.BankConnectionId == connection.Id
-                    && removedIds.Contains(row.ProviderTransactionId))
-                .ToListAsync(ct);
-        foreach (var row in removed)
-        {
-            var before = Snapshot(row);
-            row.MatchedPaymentId = null;
-            row.MatchedExpenseId = null;
-            row.MatchStatus = "Removed";
-            row.MatchConfidence = null;
-            row.Notes = "Removed by Plaid sync.";
-            row.UpdatedAt = command.AppliedAtUtc;
-            changed.Add((row, before, "Bank transaction removed by Plaid sync."));
-        }
+        var merge = await attempt.Banking.ApplyPlaidSyncAsync(
+            command.PortfolioId,
+            connection.Id,
+            command.Added,
+            command.AddedInputCount,
+            command.Modified,
+            command.ModifiedInputCount,
+            command.RemovedProviderTransactionIds,
+            command.AppliedAtUtc,
+            ct);
 
         connection.SyncCursorCipherText = command.NextCursorCipherText;
         connection.LastSyncedAt = command.AppliedAtUtc;
         connection.UpdatedAt = command.AppliedAtUtc;
         await attempt.FlushBusinessAsync(ct);
 
-        foreach (var row in created)
+        foreach (var mutation in merge.Mutations)
         {
-            attempt.StageSemanticEvent(TransactionAudit(command.PortfolioId, row, AuditLogOperation.Created,
-                null, "Bank transaction imported from Plaid."));
-        }
-        foreach (var mutation in changed)
-        {
-            attempt.StageSemanticEvent(TransactionAudit(command.PortfolioId, mutation.Row, AuditLogOperation.Updated,
-                mutation.Before, mutation.Reason));
+            attempt.StageSemanticEvent(TransactionAudit(command.PortfolioId, mutation));
         }
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
@@ -344,62 +279,19 @@ public sealed class ApplyPlaidSyncHandler
             AuditLogOperation.Updated,
             OldValues: beforeConnection,
             NewValues: ApplyPlaidConnectionHandler.Snapshot(connection),
-            ChangeReason: $"Plaid sync {command.ProviderRequestIdentity} committed: {created.Count} imported, {modifiedIds.Count} modified, {removed.Count} removed."));
-        StageNotification(attempt, command.PortfolioId, connection.Id, created.Count, changed.Count, command.AppliedAtUtc);
+            ChangeReason: $"Plaid sync {command.ProviderRequestIdentity} committed: {merge.ImportedCount} imported, {merge.ModifiedCount} modified, {merge.RemovedCount} removed."));
+        StageNotification(attempt, command.PortfolioId, connection.Id, merge.ImportedCount, merge.ChangedEventCount, command.AppliedAtUtc);
 
         return new ApplyPlaidSyncResult(
             ApplyPlaidSyncOutcome.Applied,
             connection.Id,
-            created.Count,
-            skipped,
-            created.Select(row => row.Id).Concat(modifiedIds).Distinct().ToArray());
+            merge.ImportedCount,
+            merge.SkippedCount,
+            merge.AffectedTransactionIds);
     }
 
     private static ApplyPlaidSyncResult Empty(ApplyPlaidSyncOutcome outcome, int connectionId) =>
         new(outcome, connectionId, 0, 0, []);
-
-    internal static BankTransaction NewTransaction(
-        int portfolioId,
-        int connectionId,
-        BankTransactionInput input,
-        DateTime now) => new()
-        {
-            PortfolioId = portfolioId,
-            BankConnectionId = connectionId,
-            ProviderTransactionId = input.ProviderTransactionId,
-            PostedAt = input.PostedAtUtc,
-            AuthorizedAt = input.AuthorizedAtUtc,
-            Description = input.Description,
-            MerchantName = input.MerchantName,
-            Amount = input.Amount,
-            IsoCurrencyCode = input.IsoCurrencyCode,
-            Category = input.Category,
-            RawData = input.RawData,
-            MatchStatus = "Unmatched",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-    internal static void Apply(BankTransaction row, BankTransactionInput input, DateTime now)
-    {
-        row.PostedAt = input.PostedAtUtc;
-        row.AuthorizedAt = input.AuthorizedAtUtc;
-        row.Description = input.Description;
-        row.MerchantName = input.MerchantName;
-        row.Amount = input.Amount;
-        row.IsoCurrencyCode = input.IsoCurrencyCode;
-        row.Category = input.Category;
-        row.RawData = input.RawData;
-        if (row.MatchStatus == "Matched")
-        {
-            row.MatchStatus = "Unmatched";
-            row.MatchConfidence = null;
-            row.MatchedPaymentId = null;
-            row.MatchedExpenseId = null;
-            row.Notes = "Plaid modified this transaction after it was matched; review the match again.";
-        }
-        row.UpdatedAt = now;
-    }
 
     internal static string Snapshot(BankTransaction row) => JsonSerializer.Serialize(new
     {
@@ -431,6 +323,17 @@ public sealed class ApplyPlaidSyncHandler
             OldValues: oldValues,
             NewValues: Snapshot(row),
             ChangeReason: reason);
+
+    internal static AtomicSemanticAudit TransactionAudit(
+        int portfolioId,
+        AtomicBankTransactionMutation mutation) => new(
+            portfolioId,
+            nameof(BankTransaction),
+            mutation.TransactionId,
+            mutation.Operation == "Created" ? AuditLogOperation.Created : AuditLogOperation.Updated,
+            OldValues: mutation.OldValues,
+            NewValues: mutation.NewValues,
+            ChangeReason: mutation.Reason);
 
     private static void StageNotification(
         IAtomicWriteAttempt attempt,
@@ -501,30 +404,17 @@ public sealed class ImportBankTransactionsHandler
         };
         if (createdConnection) attempt.Persistence.Add(connection);
 
-        var inputs = command.Transactions
-            .GroupBy(row => row.ProviderTransactionId, StringComparer.Ordinal)
-            .Select(group => group.First())
-            .ToArray();
-        var ids = inputs.Select(row => row.ProviderTransactionId).Distinct(StringComparer.Ordinal).ToArray();
-        var existing = createdConnection || ids.Length == 0
-            ? new List<string>()
-            : await attempt.Persistence.Query<BankTransaction>()
-                .Where(row => row.PortfolioId == command.PortfolioId
-                    && row.BankConnectionId == connection.Id
-                    && ids.Contains(row.ProviderTransactionId))
-                .Select(row => row.ProviderTransactionId)
-                .ToListAsync(ct);
-        var existingSet = existing.ToHashSet(StringComparer.Ordinal);
-        var imported = inputs
-            .Where(input => !existingSet.Contains(input.ProviderTransactionId))
-            .Select(input => ApplyPlaidSyncHandler.NewTransaction(
-                command.PortfolioId, connection.Id, input, command.ImportedAtUtc))
-            .ToList();
         if (createdConnection)
         {
-            foreach (var row in imported) row.BankConnection = connection;
+            await attempt.FlushBusinessAsync(ct);
         }
-        attempt.Persistence.AddRange(imported);
+        var merge = await attempt.Banking.ImportAsync(
+            command.PortfolioId,
+            connection.Id,
+            command.Transactions,
+            command.InputCount,
+            command.ImportedAtUtc,
+            ct);
         connection.LastSyncedAt = command.ImportedAtUtc;
         connection.UpdatedAt = command.ImportedAtUtc;
         await attempt.FlushBusinessAsync(ct);
@@ -537,19 +427,18 @@ public sealed class ImportBankTransactionsHandler
             OldValues: connectionBefore,
             NewValues: ApplyPlaidConnectionHandler.Snapshot(connection),
             ChangeReason: $"Bank import {command.RequestIdentity} committed."));
-        foreach (var row in imported)
+        foreach (var mutation in merge.Mutations)
         {
-            attempt.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
-                command.PortfolioId, row, AuditLogOperation.Created, null, "Bank transaction imported."));
+            attempt.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(command.PortfolioId, mutation));
         }
-        if (imported.Count > 0)
+        if (merge.ImportedCount > 0)
         {
             attempt.Persistence.Add(new Notification
             {
                 PortfolioId = command.PortfolioId,
                 Type = "BankImportCompleted",
                 Title = "Bank transactions imported",
-                Message = $"{imported.Count} bank transactions are ready for review.",
+                Message = $"{merge.ImportedCount} bank transactions are ready for review.",
                 Severity = "Info",
                 ActionUrl = "/banking",
                 RelatedEntityType = nameof(BankConnection),
@@ -559,9 +448,9 @@ public sealed class ImportBankTransactionsHandler
         }
         return new ImportBankTransactionsResult(
             connection.Id,
-            imported.Count,
-            command.InputCount - imported.Count,
-            imported.Select(row => row.Id).ToArray());
+            merge.ImportedCount,
+            merge.SkippedCount,
+            merge.AffectedTransactionIds);
     }
 }
 

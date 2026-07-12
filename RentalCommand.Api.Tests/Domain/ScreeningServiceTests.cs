@@ -10,6 +10,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Screening;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Banking;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -400,6 +401,7 @@ public class ScreeningServiceTests : IDisposable
         public Guid SessionId { get; } = Guid.NewGuid();
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => Mock.Of<IAtomicSetBasedPersistence>();
+        public IAtomicBankingPersistence Banking => Mock.Of<IAtomicBankingPersistence>();
         public IAtomicLockingPersistence Locking => Mock.Of<IAtomicLockingPersistence>();
         public IAtomicScanConfirmationPersistence ScanConfirmation =>
             Mock.Of<IAtomicScanConfirmationPersistence>();

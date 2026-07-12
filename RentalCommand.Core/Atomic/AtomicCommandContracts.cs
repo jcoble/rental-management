@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Linq.Expressions;
+using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -67,6 +68,7 @@ public interface IAtomicWriteAttempt
     Guid AuditScopeId { get; }
     IAtomicPersistenceSession Persistence { get; }
     IAtomicSetBasedPersistence SetBased { get; }
+    IAtomicBankingPersistence Banking { get; }
     IAtomicLockingPersistence Locking { get; }
     IAtomicScanConfirmationPersistence ScanConfirmation { get; }
 
