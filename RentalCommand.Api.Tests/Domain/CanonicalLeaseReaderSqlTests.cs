@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
@@ -43,6 +44,79 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("OFFSET");
         sql.Should().NotContain("\"Leases\"");
         sql.Should().NotContain("LeaseTenants");
+    }
+
+    [Fact]
+    public void Basic_unit_reader_derives_presentation_status_from_canonical_occupancy()
+    {
+        using var db = NewContext();
+        var service = new UnitService(
+            db,
+            Mock.Of<IDataUpdateService>(),
+            Mock.Of<IAuditTrailService>(),
+            TimeProvider.System);
+
+        var sql = service.BuildCanonicalResponseQuery(17)
+            .OrderBy(unit => unit.UnitNumber)
+            .Take(20)
+            .ToQueryString();
+
+        sql.Should().Contain("vw_unit_occupancy");
+        sql.Should().Contain("IsOccupied");
+        sql.Should().Contain("HasScheduledMoveIn");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseStatus");
+    }
+
+    [Fact]
+    public void Unit_delete_guard_is_one_canonical_database_projection()
+    {
+        using var db = NewContext();
+        var service = new UnitService(
+            db,
+            Mock.Of<IDataUpdateService>(),
+            Mock.Of<IAuditTrailService>(),
+            TimeProvider.System);
+
+        var sql = service.BuildDeletionGuardQuery(17, 42).ToQueryString();
+
+        sql.Should().Contain("vw_unit_occupancy");
+        sql.Should().Contain("vw_lease_management_lifecycle");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("EXISTS");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseStatus");
+    }
+
+    [Fact]
+    public void Property_delete_guards_are_canonical_database_projections()
+    {
+        using var db = NewContext();
+        var service = new PropertyService(db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+
+        var propertySql = service.BuildPropertyDeletionGuardQuery(17, 9).ToQueryString();
+        var canonicalUnitSql = service.BuildUnitDeletionGuardQuery(17, 42).ToQueryString();
+        var canonicalUnitResponseSql = service.BuildCanonicalUnitResponseQuery(17, 42).ToQueryString();
+
+        foreach (var sql in new[] { propertySql, canonicalUnitSql })
+        {
+            sql.Should().Contain("vw_unit_occupancy");
+            sql.Should().Contain("vw_lease_management_lifecycle");
+            sql.Should().Contain("LeaseManagements");
+            sql.Should().Contain("EXISTS");
+            sql.Should().NotContain("\"Leases\"");
+            sql.Should().NotContain("LeaseStatus");
+        }
+
+        canonicalUnitResponseSql.Should().Contain("vw_unit_occupancy");
+        canonicalUnitResponseSql.Should().NotContain("\"Leases\"");
+    }
+
+    [Fact]
+    public void Unit_mutation_contracts_do_not_accept_source_status()
+    {
+        typeof(CreateUnitRequest).GetProperty("Status").Should().BeNull();
+        typeof(UpdateUnitRequest).GetProperty("Status").Should().BeNull();
     }
 
     [Fact]

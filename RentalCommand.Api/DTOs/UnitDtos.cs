@@ -130,8 +130,6 @@ public class CreateUnitRequest
     [Range(0, 99999999)]
     public decimal MarketRent { get; set; }
 
-    public UnitStatus Status { get; set; } = UnitStatus.Vacant;
-
     [MaxLength(2000)]
     public string? Notes { get; set; }
 }
@@ -155,8 +153,6 @@ public class UpdateUnitRequest
 
     [Range(0, 99999999)]
     public decimal? MarketRent { get; set; }
-
-    public UnitStatus? Status { get; set; }
 
     [MaxLength(2000)]
     public string? Notes { get; set; }

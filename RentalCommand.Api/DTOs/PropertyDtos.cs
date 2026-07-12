@@ -54,7 +54,7 @@ public class PropertyResponse
     /// <summary>Total units on the property. Computed in SQL (correlated subquery), never loaded + counted.</summary>
     public int UnitCount { get; set; }
 
-    /// <summary>Units currently occupied. Computed in SQL (correlated subquery on unit status).</summary>
+    /// <summary>Units currently occupied. Computed in SQL from canonical possession projection.</summary>
     public int OccupiedUnits { get; set; }
 
     /// <summary>Stable selector for frontend tests, e.g. <c>property-1</c>.</summary>
