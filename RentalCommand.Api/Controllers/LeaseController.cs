@@ -64,25 +64,6 @@ public class LeaseController : ManagementControllerBase
     public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
         => ServeEntityScanAsync(_db, _files, "Lease", id, thumb, ct);
 
-    /// <summary>
-    /// Tenant-facing ledger for a lease: every charge and payment, newest first, each with a
-    /// plain-English explanation of what it is, plus a running balance. Kills "what is this charge?"
-    /// disputes. Returns 404 when the lease is not in the caller's portfolio. When the caller is a
-    /// tenant, they may only read their OWN lease's ledger (any other lease 404s) — this management
-    /// endpoint is otherwise reachable by any authenticated portfolio user.
-    /// </summary>
-    [HttpGet("{id:int}/ledger")]
-    [ProducesResponseType(typeof(LeaseLedgerResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LeaseLedgerResponse>> Ledger(
-        int id, CancellationToken ct, [FromQuery] int skip = 0, [FromQuery] int? take = null)
-    {
-        // Payment history is paged DB-side (Skip/Take) so a multi-year tenancy never materializes whole.
-        var ledger = await _service.GetLedgerAsync(GetPortfolioId(), id, GetTenantIdOrNull(), skip, take, ct);
-        return ledger == null ? NotFound(new { error = "Tenant account not found" }) : Ok(ledger);
-    }
-
-
     [HttpPost("{id:int}/ask")]
     [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

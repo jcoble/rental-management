@@ -131,7 +131,7 @@ class LeaseLedgerView extends ConsumerWidget {
 class _BalanceCard extends StatelessWidget {
   const _BalanceCard({required this.ledger});
 
-  final LeaseLedger ledger;
+  final LeaseManagementLedger ledger;
 
   @override
   Widget build(BuildContext context) {

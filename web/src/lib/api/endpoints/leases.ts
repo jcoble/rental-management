@@ -1,4 +1,4 @@
-import type { EsignStatus, Lease, LeaseLedger, LeaseQuestionResponse, LeaseStatus } from '$lib/types';
+import type { EsignStatus, Lease, LeaseManagementLedger, LeaseQuestionResponse, LeaseStatus } from '$lib/types';
 import { api, refreshToken } from '../client';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
@@ -83,12 +83,14 @@ export const leases = {
 	create: (data: Record<string, unknown>) => api.post<Lease>('/leases', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Lease>(`/leases/${id}`, data),
 	delete: (id: number) => api.delete(`/leases/${id}`),
-	ledger: (id: number, params?: { skip?: number; take?: number }) => {
+	ledger: (leaseManagementId: number, params?: { skip?: number; take?: number }) => {
 		const q = new URLSearchParams();
 		if (params?.skip != null) q.set('skip', String(params.skip));
 		if (params?.take != null) q.set('take', String(params.take));
 		const qs = q.toString();
-		return api.get<LeaseLedger>(`/leases/${id}/ledger${qs ? `?${qs}` : ''}`);
+		return api.get<LeaseManagementLedger>(
+			`/lease-managements/${leaseManagementId}/ledger${qs ? `?${qs}` : ''}`
+		);
 	},
 	ask: (id: number, question: string) =>
 		api.post<LeaseQuestionResponse>(`/leases/${id}/ask`, { question }),

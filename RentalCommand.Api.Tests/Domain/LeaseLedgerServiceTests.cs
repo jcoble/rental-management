@@ -1,4 +1,7 @@
+using System.Reflection;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
@@ -11,6 +14,21 @@ namespace RentalCommand.Api.Tests.Domain;
 /// </summary>
 public sealed class LeaseLedgerServiceTests
 {
+    [Fact]
+    public void Ledger_is_exposed_only_on_the_canonical_lease_management_route()
+    {
+        typeof(LeaseManagementController).GetCustomAttribute<RouteAttribute>()!.Template
+            .Should().Be("api/v1/lease-managements");
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.Ledger))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseManagementId:int}/ledger");
+
+        typeof(LeaseController).GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .SelectMany(method => method.GetCustomAttributes<HttpGetAttribute>())
+            .Select(attribute => attribute.Template)
+            .Should().NotContain(template => template?.Contains("ledger", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
     [Fact]
     public void Ledger_response_names_canonical_relationship_and_account_ids_only()
     {
