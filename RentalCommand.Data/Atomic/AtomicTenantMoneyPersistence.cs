@@ -310,6 +310,95 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
         return rows.Single();
     }
 
+    public async Task<AtomicLedgerAllocationSummary> AllocateImportedReceiptsAsync(
+        long[] creditEntryIds,
+        DateTime allocatedAtUtc,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(creditEntryIds);
+        if (creditEntryIds.Length == 0) return new AtomicLedgerAllocationSummary();
+        if (creditEntryIds.Length > 256)
+            throw new ArgumentOutOfRangeException(nameof(creditEntryIds), "Imported receipt batches are limited to 256 entries.");
+        if (creditEntryIds.Any(id => id <= 0) || creditEntryIds.Distinct().Count() != creditEntryIds.Length)
+            throw new ArgumentException("Imported receipt ids must be unique positive keys.", nameof(creditEntryIds));
+
+        using var lease = _scope.BeginInternalRawDml(
+            "TenantLedgerAllocations", AtomicRawDmlOperation.Insert);
+
+        var rows = await _db.Database.SqlQuery<AtomicLedgerAllocationSummary>($"""
+            WITH credits AS MATERIALIZED (
+                SELECT credit."Id", credit."PortfolioId", credit."TenantAccountId",
+                       credit."Amount", credit."BusinessKey", credit."CreatedByUserId",
+                       CASE WHEN EXISTS (
+                           SELECT 1
+                           FROM "SecurityDepositEntries" AS deposit
+                           WHERE deposit."PortfolioId" = credit."PortfolioId"
+                             AND deposit."TenantLedgerEntryId" = credit."Id"
+                             AND deposit."EntryType" = 'Receipt')
+                         THEN 'Deposit' ELSE 'Receivable' END AS allocation_kind
+                FROM "TenantLedgerEntries" AS credit
+                WHERE credit."Id" = ANY({creditEntryIds})
+                  AND credit."EntryType" = 'PaymentReceipt'
+                  AND credit."Direction" = 'Credit'
+            ), credit_intervals AS MATERIALIZED (
+                SELECT credit.*,
+                       COALESCE(SUM(credit."Amount") OVER (
+                           PARTITION BY credit."TenantAccountId", credit.allocation_kind
+                           ORDER BY credit."Id"
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS interval_start,
+                       SUM(credit."Amount") OVER (
+                           PARTITION BY credit."TenantAccountId", credit.allocation_kind
+                           ORDER BY credit."Id") AS interval_end
+                FROM credits AS credit
+            ), debit_intervals AS MATERIALIZED (
+                SELECT balance."PortfolioId", balance."TenantAccountId",
+                       balance."TenantLedgerEntryId", balance."OpenAmount",
+                       CASE WHEN balance."EntryType" = 'DepositCharge'
+                         THEN 'Deposit' ELSE 'Receivable' END AS allocation_kind,
+                       COALESCE(SUM(balance."OpenAmount") OVER (
+                           PARTITION BY balance."TenantAccountId",
+                               CASE WHEN balance."EntryType" = 'DepositCharge'
+                                 THEN 'Deposit' ELSE 'Receivable' END
+                           ORDER BY balance."DueOn" NULLS LAST, balance."TenantLedgerEntryId"
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS interval_start,
+                       SUM(balance."OpenAmount") OVER (
+                           PARTITION BY balance."TenantAccountId",
+                               CASE WHEN balance."EntryType" = 'DepositCharge'
+                                 THEN 'Deposit' ELSE 'Receivable' END
+                           ORDER BY balance."DueOn" NULLS LAST, balance."TenantLedgerEntryId") AS interval_end
+                FROM "vw_tenant_charge_balances" AS balance
+                WHERE balance."OpenAmount" > 0
+                  AND balance."TenantAccountId" IN (
+                      SELECT credit."TenantAccountId" FROM credits AS credit)
+            ), inserted AS (
+                INSERT INTO "TenantLedgerAllocations" (
+                    "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
+                    "Amount", "AllocatedAtUtc", "BusinessKey", "CreatedByUserId")
+                SELECT credit."PortfolioId", credit."TenantAccountId",
+                       debit."TenantLedgerEntryId", credit."Id",
+                       LEAST(credit.interval_end, debit.interval_end)
+                           - GREATEST(credit.interval_start, debit.interval_start),
+                       {allocatedAtUtc},
+                       credit."BusinessKey" || ':allocation:' || debit."TenantLedgerEntryId"::text,
+                       credit."CreatedByUserId"
+                FROM credit_intervals AS credit
+                JOIN debit_intervals AS debit
+                  ON debit."PortfolioId" = credit."PortfolioId"
+                 AND debit."TenantAccountId" = credit."TenantAccountId"
+                 AND debit.allocation_kind = credit.allocation_kind
+                 AND debit.interval_end > credit.interval_start
+                 AND credit.interval_end > debit.interval_start
+                ORDER BY credit."Id", debit.interval_start, debit."TenantLedgerEntryId"
+                ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
+                RETURNING "Amount"
+            )
+            SELECT COUNT(*)::integer AS "AllocationCount",
+                   COALESCE(SUM(inserted."Amount"), 0)::numeric AS "AllocatedAmount"
+            FROM inserted
+            """).ToListAsync(ct);
+        return rows.Single();
+    }
+
     public async Task<AtomicLedgerAllocationSummary> ReverseChargeAllocationsAsync(
         int portfolioId,
         int tenantAccountId,

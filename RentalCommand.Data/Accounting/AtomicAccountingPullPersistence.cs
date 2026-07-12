@@ -42,9 +42,15 @@ internal sealed class AtomicAccountingPullPersistence : IAtomicAccountingPersist
             new("appliedAt", NpgsqlDbType.TimestampTz) { Value = command.AppliedAtUtc },
         };
 
-        using var lease = _scope.BeginInternalRawDml(
-            "AccountingEntityMappings",
-            AtomicRawDmlOperation.Insert);
+        using var lease = _scope.BeginInternalRawDmlBatch(
+            new AtomicRawDmlTarget("AccountingEntityMappings", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("TenantPaymentAttempts", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("SecurityDepositEntries", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("TenantLedgerAllocations", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("AccountingSyncMaps", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("Expenses", AtomicRawDmlOperation.Insert),
+            new AtomicRawDmlTarget("AccountingConnections", AtomicRawDmlOperation.Update));
         var rows = await _db.Database.SqlQueryRaw<SummaryRow>(Sql, parameters).ToListAsync(ct);
         if (rows.Count != 1)
             throw new InvalidOperationException($"Accounting pull apply returned {rows.Count} summaries instead of one.");
@@ -311,41 +317,163 @@ internal sealed class AtomicAccountingPullPersistence : IAtomicAccountingPersist
             UNION ALL SELECT a.external_id,a.category FROM account_maps a WHERE a.category IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM "AccountingEntityMappings" m WHERE m."PortfolioId"=@portfolioId AND m."AccountingConnectionId"=@connectionId AND m."ExternalType"='Account' AND m."ExternalId"=a.external_id AND m."ConfirmedAt" IS NOT NULL)
         ),
-        live_leases AS MATERIALIZED (
-            SELECT tenant_id, lease_id FROM (
-                SELECT tenants.tenant_id, l."Id" lease_id,
-                       row_number() OVER (PARTITION BY tenants.tenant_id ORDER BY l."StartDate" DESC,l."Id" DESC) rank
-                FROM "Leases" l
-                CROSS JOIN LATERAL (SELECT l."TenantId" tenant_id UNION SELECT lt."TenantId" FROM "LeaseTenants" lt WHERE lt."LeaseId"=l."Id") tenants
-                WHERE l."PortfolioId"=@portfolioId AND l."DeletedAt" IS NULL AND l."Status" IN (1,2)
-            ) ranked WHERE rank=1
+        open_account_links AS MATERIALIZED (
+            SELECT DISTINCT party."TenantId" tenant_id, account."Id" account_id,
+                   account."Currency" currency, account."CreatedByUserId" created_by_user_id
+            FROM "LeaseManagementParties" party
+            JOIN "LeaseManagements" management
+              ON management."Id"=party."LeaseManagementId"
+             AND management."PortfolioId"=party."PortfolioId"
+            JOIN "TenantAccounts" account
+              ON account."LeaseManagementId"=management."Id"
+             AND account."PortfolioId"=management."PortfolioId"
+            WHERE party."PortfolioId"=@portfolioId
+              AND management."CanceledAtUtc" IS NULL
+              AND account."ClosedAtUtc" IS NULL
+        ),
+        unique_open_accounts AS MATERIALIZED (
+            SELECT tenant_id, min(account_id) account_id, min(currency) currency,
+                   min(created_by_user_id) created_by_user_id
+            FROM open_account_links
+            GROUP BY tenant_id
+            HAVING count(*)=1
         ),
         payment_decisions AS MATERIALIZED (
-            SELECT p.*, lease.lease_id,
+            SELECT p.*, account.account_id, account.currency, account.created_by_user_id,
+                   deposit."Id" security_deposit_account_id,
+                   coalesce(deposit_balance.open_amount,0) deposit_open_amount,
                    (EXISTS (SELECT 1 FROM "AccountingEntityMappings" a WHERE a."PortfolioId"=@portfolioId AND a."AccountingConnectionId"=@connectionId AND a."ExternalType"='Account' AND a."ExternalId"=p.deposit_account_external_id AND lower(a."ExternalDisplayName") ~ '(security deposit|deposit held|tenant deposit)')
                     OR EXISTS (SELECT 1 FROM accounts a WHERE a.external_id=p.deposit_account_external_id AND lower(a.display_name) ~ '(security deposit|deposit held|tenant deposit)')) is_deposit
             FROM payments p JOIN claim ON true
             LEFT JOIN effective_customer_maps m ON m.external_id=p.customer_external_id
-            LEFT JOIN live_leases lease ON lease.tenant_id=m.local_id
+            LEFT JOIN unique_open_accounts account ON account.tenant_id=m.local_id
+            LEFT JOIN "SecurityDepositAccounts" deposit
+              ON deposit."PortfolioId"=@portfolioId AND deposit."TenantAccountId"=account.account_id
+            LEFT JOIN LATERAL (
+                SELECT sum(balance."OpenAmount") open_amount
+                FROM "vw_tenant_charge_balances" balance
+                WHERE balance."PortfolioId"=@portfolioId
+                  AND balance."TenantAccountId"=account.account_id
+                  AND balance."EntryType"='DepositCharge'
+                  AND balance."OpenAmount">0
+            ) deposit_balance ON true
             WHERE NOT EXISTS (SELECT 1 FROM "AccountingSyncMaps" s WHERE s."PortfolioId"=@portfolioId AND s."AccountingConnectionId"=@connectionId AND s."Direction"='Import' AND s."ExternalType"='Payment' AND s."ExternalId"=p.external_id)
         ),
         payment_numbered AS MATERIALIZED (
-            SELECT d.*, nextval(pg_get_serial_sequence('"Payments"','Id'))::int generated_id
-            FROM payment_decisions d WHERE d.lease_id IS NOT NULL
+            SELECT d.*,
+                   nextval(pg_get_serial_sequence('"TenantPaymentAttempts"','Id')) generated_attempt_id,
+                   nextval(pg_get_serial_sequence('"TenantLedgerEntries"','Id')) generated_entry_id,
+                   'accounting-import:' || CAST(@connectionId AS text) || ':' || md5(d.external_id) business_key
+            FROM payment_decisions d
+            WHERE d.account_id IS NOT NULL AND d.amount>0
+              AND (NOT d.is_deposit OR (d.security_deposit_account_id IS NOT NULL
+                   AND d.deposit_open_amount>=d.amount))
             ORDER BY d.external_id
         ),
-        payment_insert AS (
-            INSERT INTO "Payments" ("Id","PortfolioId","LeaseId","PaymentType","Status","Amount","DueDate","PaidDate","Method","ExternalReference","CreatedAt","UpdatedAt")
-            SELECT generated_id,@portfolioId,lease_id,CASE WHEN is_deposit THEN 1 ELSE 0 END,1,amount,txn_at,txn_at,payment_method,coalesce(reference_number,external_id),@appliedAt,@appliedAt
+        payment_attempt_insert AS (
+            INSERT INTO "TenantPaymentAttempts" (
+                "Id","PortfolioId","TenantAccountId","Provider","ProviderObjectId",
+                "IdempotencyKey","AttemptType","State","Amount","Currency",
+                "PaymentMethodSummary","PreparedAtUtc","SubmittedAtUtc","SettledAtUtc",
+                "UpdatedAtUtc","CreatedByUserId")
+            SELECT generated_attempt_id,@portfolioId,account_id,
+                   'Accounting:'||CAST(@connectionId AS text),external_id,business_key,
+                   'Charge','Succeeded',amount,currency,payment_method,
+                   txn_at,txn_at,txn_at,@appliedAt,created_by_user_id
             FROM payment_numbered
+            RETURNING "Id"
+        ),
+        payment_receipt_insert AS (
+            INSERT INTO "TenantLedgerEntries" (
+                "Id","PortfolioId","TenantAccountId","EntryType","Direction","Amount",
+                "Currency","EffectiveOn","PostedAtUtc","Description","BusinessKey",
+                "ProviderPaymentAttemptId","CreatedByUserId")
+            SELECT generated_entry_id,@portfolioId,account_id,'PaymentReceipt','Credit',amount,
+                   currency,(txn_at AT TIME ZONE 'UTC')::date,@appliedAt,
+                   left('Imported payment '||coalesce(reference_number,external_id),500),business_key,
+                   generated_attempt_id,created_by_user_id
+            FROM payment_numbered
+            RETURNING "Id","PortfolioId","TenantAccountId","Amount","BusinessKey",
+                      "CreatedByUserId"
+        ),
+        deposit_receipt_insert AS (
+            INSERT INTO "SecurityDepositEntries" (
+                "PortfolioId","SecurityDepositAccountId","EntryType","Direction","Amount",
+                "Currency","EffectiveOn","PostedAtUtc","BusinessKey","Description",
+                "TenantLedgerEntryId","CreatedByUserId")
+            SELECT @portfolioId,numbered.security_deposit_account_id,'Receipt','Increase',
+                   numbered.amount,numbered.currency,
+                   (numbered.txn_at AT TIME ZONE 'UTC')::date,@appliedAt,
+                   numbered.business_key||':deposit',
+                   left('Imported payment '||coalesce(numbered.reference_number,numbered.external_id),500),
+                   numbered.generated_entry_id,numbered.created_by_user_id
+            FROM payment_numbered numbered
+            WHERE numbered.is_deposit
+            RETURNING "TenantLedgerEntryId"
+        ),
+        receipt_intervals AS MATERIALIZED (
+            SELECT receipt.*,
+                   CASE WHEN deposit."TenantLedgerEntryId" IS NOT NULL THEN 'Deposit' ELSE 'Receivable' END allocation_kind,
+                   coalesce(sum(receipt."Amount") OVER (
+                       PARTITION BY receipt."TenantAccountId",
+                           CASE WHEN deposit."TenantLedgerEntryId" IS NOT NULL THEN 'Deposit' ELSE 'Receivable' END
+                       ORDER BY receipt."Id"
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) interval_start,
+                   sum(receipt."Amount") OVER (
+                       PARTITION BY receipt."TenantAccountId",
+                           CASE WHEN deposit."TenantLedgerEntryId" IS NOT NULL THEN 'Deposit' ELSE 'Receivable' END
+                       ORDER BY receipt."Id") interval_end
+            FROM payment_receipt_insert receipt
+            LEFT JOIN deposit_receipt_insert deposit ON deposit."TenantLedgerEntryId"=receipt."Id"
+        ),
+        debit_intervals AS MATERIALIZED (
+            SELECT balance."PortfolioId",balance."TenantAccountId",balance."TenantLedgerEntryId",
+                   CASE WHEN balance."EntryType"='DepositCharge' THEN 'Deposit' ELSE 'Receivable' END allocation_kind,
+                   coalesce(sum(balance."OpenAmount") OVER (
+                       PARTITION BY balance."TenantAccountId",
+                           CASE WHEN balance."EntryType"='DepositCharge' THEN 'Deposit' ELSE 'Receivable' END
+                       ORDER BY balance."DueOn" NULLS LAST,balance."TenantLedgerEntryId"
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) interval_start,
+                   sum(balance."OpenAmount") OVER (
+                       PARTITION BY balance."TenantAccountId",
+                           CASE WHEN balance."EntryType"='DepositCharge' THEN 'Deposit' ELSE 'Receivable' END
+                       ORDER BY balance."DueOn" NULLS LAST,balance."TenantLedgerEntryId") interval_end
+            FROM "vw_tenant_charge_balances" balance
+            WHERE balance."OpenAmount">0
+              AND balance."TenantAccountId" IN (SELECT "TenantAccountId" FROM payment_receipt_insert)
+        ),
+        payment_allocations AS (
+            INSERT INTO "TenantLedgerAllocations" (
+                "PortfolioId","TenantAccountId","DebitEntryId","CreditEntryId","Amount",
+                "AllocatedAtUtc","BusinessKey","CreatedByUserId")
+            SELECT receipt."PortfolioId",receipt."TenantAccountId",debit."TenantLedgerEntryId",
+                   receipt."Id",least(receipt.interval_end,debit.interval_end)
+                       - greatest(receipt.interval_start,debit.interval_start),@appliedAt,
+                   receipt."BusinessKey"||':allocation:'||debit."TenantLedgerEntryId"::text,
+                   receipt."CreatedByUserId"
+            FROM receipt_intervals receipt
+            JOIN debit_intervals debit
+              ON debit."PortfolioId"=receipt."PortfolioId"
+             AND debit."TenantAccountId"=receipt."TenantAccountId"
+             AND debit.allocation_kind=receipt.allocation_kind
+             AND debit.interval_end>receipt.interval_start
+             AND receipt.interval_end>debit.interval_start
+            ORDER BY receipt."Id",debit.interval_start,debit."TenantLedgerEntryId"
+            ON CONFLICT ("TenantAccountId","BusinessKey") DO NOTHING
             RETURNING "Id"
         ),
         payment_ledger AS (
             INSERT INTO "AccountingSyncMaps" ("PortfolioId","AccountingConnectionId","Direction","ExternalType","ExternalId","LocalEntityType","LocalEntityId","Status","AttemptCount","LastError","LastAttemptAt","MetadataJson","CreatedAt","UpdatedAt")
             SELECT @portfolioId,@connectionId,'Import','Payment',d.external_id,
-                   CASE WHEN d.lease_id IS NOT NULL THEN 'Payment' END,n.generated_id,
-                   CASE WHEN d.lease_id IS NOT NULL THEN 'Imported' ELSE 'Unmatched' END,1,
-                   CASE WHEN d.lease_id IS NULL THEN 'No confirmed tenant mapping with a live lease' END,@appliedAt,d.payload,@appliedAt,@appliedAt
+                   CASE WHEN n.generated_entry_id IS NOT NULL THEN 'TenantLedgerEntry' END,n.generated_entry_id,
+                   CASE WHEN n.generated_entry_id IS NOT NULL THEN 'Imported'
+                        WHEN d.amount<=0 THEN 'NeedsReview'
+                        ELSE 'Unmatched' END,1,
+                   CASE WHEN d.account_id IS NULL THEN 'No confirmed tenant mapping with exactly one open tenant account'
+                        WHEN d.amount<=0 THEN 'Payment amount must be greater than zero'
+                        WHEN d.is_deposit AND d.security_deposit_account_id IS NULL THEN 'Tenant account has no security deposit account'
+                        WHEN d.is_deposit AND d.deposit_open_amount<d.amount THEN 'Deposit payment exceeds open deposit charges'
+                   END,@appliedAt,d.payload,@appliedAt,@appliedAt
             FROM payment_decisions d LEFT JOIN payment_numbered n ON n.external_id=d.external_id
             ON CONFLICT ("PortfolioId","AccountingConnectionId","Direction","ExternalType","ExternalId") DO NOTHING
             RETURNING "Status"

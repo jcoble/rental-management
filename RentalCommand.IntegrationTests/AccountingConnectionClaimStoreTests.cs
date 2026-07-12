@@ -217,16 +217,28 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         var portfolioId = await SeedPortfolioAsync(now, "Atomic apply");
         await using (var seed = NewContext())
         {
+            var actor = new ApplicationUser
+            {
+                PortfolioId = portfolioId,
+                UserName = $"accounting-pull-{portfolioId}@rentalcommand.local",
+                NormalizedUserName = $"ACCOUNTING-PULL-{portfolioId}@RENTALCOMMAND.LOCAL",
+                Email = $"accounting-pull-{portfolioId}@rentalcommand.local",
+                NormalizedEmail = $"ACCOUNTING-PULL-{portfolioId}@RENTALCOMMAND.LOCAL",
+                DisplayName = "Accounting pull actor",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = now,
+            };
             var property = new Property
             {
                 PortfolioId = portfolioId, Name = "Maple", AddressLine1 = "1 Main",
                 City = "Columbus", State = "OH", PostalCode = "43215", CreatedAt = now, UpdatedAt = now,
             };
-            seed.Properties.Add(property);
+            seed.AddRange(actor, property);
             await seed.SaveChangesAsync();
             var unit = new Unit
             {
-                PropertyId = property.Id, UnitNumber = "1", Bedrooms = 1, Bathrooms = 1,
+                PortfolioId = portfolioId, PropertyId = property.Id, UnitNumber = "1", Bedrooms = 1, Bathrooms = 1,
                 MarketRent = 1200, CreatedAt = now, UpdatedAt = now,
             };
             var tenant = new Tenant
@@ -238,13 +250,53 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             await seed.SaveChangesAsync();
             var connection = Connection(portfolioId, now, pullEnabled: true);
             seed.AccountingConnections.Add(connection);
-            seed.Leases.Add(new Lease
+            var management = new LeaseManagement
             {
-                PortfolioId = portfolioId, PropertyId = property.Id, UnitId = unit.Id, TenantId = tenant.Id,
-                LeaseNumber = "L-atomic", Status = LeaseStatus.Active, StartDate = now.AddMonths(-1),
-                EndDate = now.AddMonths(11), MonthlyRent = 1200, CreatedAt = now, UpdatedAt = now,
-            });
+                PortfolioId = portfolioId, PropertyId = property.Id, UnitId = unit.Id,
+                RelationshipNumber = "LM-atomic", PlannedPossessionAtUtc = now.AddMonths(-1),
+                CreatedAtUtc = now, CreatedByUserId = actor.Id, UpdatedAtUtc = now,
+                RowVersion = Guid.NewGuid(),
+            };
+            seed.LeaseManagements.Add(management);
             await seed.SaveChangesAsync();
+            seed.LeaseManagementParties.Add(new LeaseManagementParty
+            {
+                PortfolioId = portfolioId,
+                LeaseManagementId = management.Id,
+                TenantId = tenant.Id,
+                Role = LeaseManagementPartyRole.PrimaryTenant,
+                EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+                ChangeReason = "Accounting pull test",
+                CreatedAtUtc = now,
+                CreatedByUserId = actor.Id,
+            });
+            var account = new TenantAccount
+            {
+                PortfolioId = portfolioId,
+                LeaseManagementId = management.Id,
+                AccountNumber = "TA-atomic",
+                Currency = "USD",
+                OpenedAtUtc = now.AddMonths(-1),
+                CreatedAtUtc = now,
+                CreatedByUserId = actor.Id,
+            };
+            seed.TenantAccounts.Add(account);
+            await seed.SaveChangesAsync();
+            seed.TenantLedgerEntries.Add(new TenantLedgerEntry
+            {
+                PortfolioId = portfolioId,
+                TenantAccountId = account.Id,
+                EntryType = TenantLedgerEntryType.ManualCharge,
+                Direction = TenantLedgerDirection.Debit,
+                Amount = 1200m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(now.AddDays(-5)),
+                DueOn = DateOnly.FromDateTime(now.AddDays(-5)),
+                PostedAtUtc = now,
+                Description = "Test rent charge",
+                BusinessKey = "test:accounting-pull-charge",
+                CreatedByUserId = actor.Id,
+            });
             seed.AccountingEntityMappings.Add(new AccountingEntityMapping
             {
                 PortfolioId = portfolioId, AccountingConnectionId = connection.Id,
@@ -283,7 +335,12 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         first.PaymentsImported.Should().Be(1);
 
         await using var verify = NewContext();
-        (await verify.Payments.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(1);
+        (await verify.TenantLedgerEntries.CountAsync(row => row.PortfolioId == portfolioId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
+        (await verify.TenantPaymentAttempts.CountAsync(row => row.PortfolioId == portfolioId
+            && row.State == TenantPaymentAttemptState.Succeeded)).Should().Be(1);
+        (await verify.TenantLedgerAllocations.CountAsync(row => row.PortfolioId == portfolioId))
+            .Should().Be(1);
         (await verify.AccountingSyncMaps.CountAsync(row => row.AccountingConnectionId == claim.Connection.Id))
             .Should().Be(1);
         (await verify.AtomicCommandReceipts.CountAsync(row => row.CommandType == "accounting.pull.apply"))
@@ -295,7 +352,9 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         applyCommands.Count(sql => sql.Contains("payment_decisions AS MATERIALIZED", StringComparison.Ordinal))
             .Should().Be(1, "the bounded payload must be mapped, ranked, deduplicated, and written by one SQL statement");
         applyCommands.Single(sql => sql.Contains("payment_decisions AS MATERIALIZED", StringComparison.Ordinal))
-            .Should().Contain("jsonb_array_elements").And.Contain("row_number() OVER").And.Contain("ON CONFLICT");
+            .Should().Contain("jsonb_array_elements").And.Contain("TenantLedgerEntries")
+            .And.Contain("TenantLedgerAllocations").And.Contain("ON CONFLICT")
+            .And.NotContain("INSERT INTO \"Payments\"");
     }
 
     [SkippableFact]
