@@ -183,6 +183,9 @@ public enum AtomicLockResource
     StoredFile = 10,
     AuthSession = 11,
     LoginContextSelectionChallenge = 12,
+    Unit = 13,
+    LeaseManagement = 14,
+    TenantAccount = 15,
 }
 
 public enum AtomicScanDraftClaimOutcome
