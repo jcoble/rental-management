@@ -38,6 +38,19 @@ public sealed class ScanUploadService : IScanUploadService
         _timeProvider = timeProvider;
     }
 
+    public Task<FinalizeScanUploadResult> UploadAsync(
+        int portfolioId,
+        int userId,
+        string clientOperationId,
+        string targetEntityType,
+        bool createBatch,
+        string? batchName,
+        IReadOnlyList<ScanUploadFilePayload> files,
+        CancellationToken ct = default) => UploadAsync(
+            portfolioId, userId, clientOperationId, targetEntityType, createBatch, batchName,
+            new ScanCaptureContextData(null, null, null, null, null, null, null, null, null, null),
+            files, ct);
+
     public async Task<FinalizeScanUploadResult> UploadAsync(
         int portfolioId,
         int userId,
@@ -45,6 +58,7 @@ public sealed class ScanUploadService : IScanUploadService
         string targetEntityType,
         bool createBatch,
         string? batchName,
+        ScanCaptureContextData captureContext,
         IReadOnlyList<ScanUploadFilePayload> files,
         CancellationToken ct = default)
     {
@@ -79,7 +93,7 @@ public sealed class ScanUploadService : IScanUploadService
         var normalizedTarget = targetEntityType?.Trim() ?? string.Empty;
         var normalizedBatchName = string.IsNullOrWhiteSpace(batchName) ? null : batchName.Trim();
         var fingerprint = RequestFingerprint(
-            normalizedTarget, createBatch, normalizedBatchName, preparedFiles);
+            normalizedTarget, createBatch, normalizedBatchName, captureContext, preparedFiles);
         var now = _timeProvider.UtcNow();
 
         // Reserve every deterministic object key before the first external storage call. If any later
@@ -179,7 +193,8 @@ public sealed class ScanUploadService : IScanUploadService
                 createBatch,
                 normalizedBatchName,
                 now,
-                commandFiles),
+                commandFiles,
+                captureContext),
             ResultCodec,
             ct);
         return outcome.Value;
@@ -198,11 +213,13 @@ public sealed class ScanUploadService : IScanUploadService
         string targetEntityType,
         bool createBatch,
         string? batchName,
+        ScanCaptureContextData captureContext,
         IReadOnlyList<PreparedFile> files) => Digest(JsonSerializer.Serialize(new
         {
             targetEntityType,
             createBatch,
             batchName,
+            captureContext,
             files = files.Select((file, ordinal) => new
             {
                 ordinal,

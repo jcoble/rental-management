@@ -141,6 +141,8 @@ public sealed class FinalizeScanUploadHandler
                 ChangeReason: "Scan batch admitted"));
         }
 
+        var captureContext = command.CaptureContext
+            ?? new ScanCaptureContextData(null, null, null, null, null, null, null, null, null, null);
         var drafts = new List<ScanDraft>(command.Files.Count);
         for (var index = 0; index < command.Files.Count; index++)
         {
@@ -150,6 +152,17 @@ public sealed class FinalizeScanUploadHandler
                 BatchId = batch?.Id,
                 FilePath = sourceRows[index].FilePath,
                 SourceStoredFileId = sourceRows[index].Id,
+                SourceContentSha256 = command.Files[index].SourceSha256,
+                SourceLabel = captureContext.SourceLabel,
+                CaptureExperience = captureContext.Experience,
+                CaptureAccessContextId = captureContext.AccessContextId,
+                CaptureAccessRevision = captureContext.AccessRevision,
+                CapturePropertyId = captureContext.PropertyId,
+                CaptureUnitId = captureContext.UnitId,
+                CaptureLeaseManagementId = captureContext.LeaseManagementId,
+                CaptureTenantAccountId = captureContext.TenantAccountId,
+                CaptureFocusedRecordKind = captureContext.FocusedRecordKind,
+                CaptureFocusedRecordId = captureContext.FocusedRecordId,
                 ThumbnailPath = thumbnailRows[index]?.FilePath,
                 TargetEntityType = command.TargetEntityType,
                 Status = "Pending",
@@ -168,6 +181,7 @@ public sealed class FinalizeScanUploadHandler
                     command.TargetEntityType,
                     BatchId = batch?.Id,
                     SourceStoredFileId = sourceRows[index].Id,
+                    CaptureContext = captureContext,
                     command.ClientOperationId,
                 }),
                 ChangeReason: "Scan upload admitted for extraction"));

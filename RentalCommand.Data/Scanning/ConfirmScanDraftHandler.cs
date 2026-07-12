@@ -8,10 +8,11 @@ namespace RentalCommand.Data.Scanning;
 
 /// <summary>
 /// Atomic scan lifecycle owner. Target writers are supplied as a concrete sealed transaction-safe
-/// dependency, keeping production activation separate from this inert foundation.
+/// dependency so claiming, canonical writes, file linkage, audit, and receipt commit together.
 /// </summary>
 public sealed class ConfirmScanDraftHandler<TTargetWriter>
-    : IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult>
+    : IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult>,
+      IAtomicReplayAuthorizer<ConfirmScanDraftCommand>
     where TTargetWriter : class, IScanConfirmationTargetWriter
 {
     private readonly TTargetWriter _targetWriter;
@@ -121,4 +122,9 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
         ConfirmScanDraftCommand command,
         string? error = null) =>
         new(outcome, command.DraftId, command.Target.EntityType, null, Error: error);
+
+    public Task AuthorizeReplayAsync(
+        ConfirmScanDraftCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) => _targetWriter.AuthorizeReplayAsync(command, persistence, ct);
 }

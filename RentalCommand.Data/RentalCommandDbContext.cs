@@ -446,6 +446,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.FilePath).IsRequired().HasMaxLength(1024);
+            entity.Property(e => e.SourceContentSha256).HasColumnType("char(64)");
+            entity.Property(e => e.SourceLabel).HasMaxLength(100);
+            entity.Property(e => e.CaptureExperience).HasConversion<string>().HasMaxLength(30);
+            entity.Property(e => e.CaptureFocusedRecordKind).HasMaxLength(80);
             entity.Property(e => e.ThumbnailPath).HasMaxLength(1024);
             entity.Property(e => e.TargetEntityType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
@@ -459,6 +463,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => new { e.Status, e.ProcessingClaimExpiresAtUtc, e.CreatedAt, e.Id });
             entity.HasIndex(e => e.BatchId);
             entity.HasIndex(e => e.SourceStoredFileId);
+            entity.HasIndex(e => new { e.PortfolioId, e.SourceContentSha256 });
             // The owning batch is optional (single-file scans carry null). SetNull rather than Cascade
             // so a draft (and the record it created) survives if a batch row is ever removed.
             entity.HasOne(e => e.Batch)

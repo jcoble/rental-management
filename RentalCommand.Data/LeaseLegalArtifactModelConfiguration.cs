@@ -53,7 +53,7 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "\"ContentSha256\" ~ '^[0-9a-f]{64}$'");
                 table.HasCheckConstraint(
                     "CK_LegalDocumentArtifact_ContentType",
-                    "\"ContentType\" = 'application/pdf'");
+                    "\"ContentType\" IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/gif')");
             });
 
             entity.HasOne(e => e.Portfolio)
@@ -184,7 +184,9 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "\"Currency\" ~ '^[A-Z]{3}$'");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_SchemaVersions",
-                    "\"TermsSchemaVersion\" >= 1 AND \"DocumentTemplateVersion\" >= 1");
+                    "\"TermsSchemaVersion\" >= 1 AND " +
+                    "((\"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL) OR " +
+                    "(\"DocumentTemplateId\" IS NOT NULL AND \"DocumentTemplateVersion\" >= 1))");
             });
 
             entity.HasOne(e => e.Portfolio)

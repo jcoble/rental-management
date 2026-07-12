@@ -71,13 +71,6 @@ public sealed class ScanService : IScanService
                 ScanConfirmationPreparationOutcome.UnsupportedTarget,
                 Error: $"Unsupported scan confirmation target '{draft.TargetEntityType}'.");
         }
-        if (kind == ScanConfirmationTargetKind.Lease)
-        {
-            return new(
-                ScanConfirmationPreparationOutcome.TemporarilyUnavailable,
-                Error: "Lease scan confirmation is temporarily unavailable while the lease aggregate writer is completed.");
-        }
-
         var normalizedOverrides = string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson;
         JsonElement overrideRoot;
         try
@@ -140,6 +133,53 @@ public sealed class ScanService : IScanService
                 fields.PropertyId, fields.UnitId, fields.TenantId, fields.LeaseId, fields.VendorId,
                 fields.Title, fields.Description, fields.Category, fields.Priority, fields.EstimatedCost));
         }
+        else if (kind == ScanConfirmationTargetKind.Lease)
+        {
+            var fields = BuildLeaseFields(draft.ExtractedFields);
+            await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
+            ApplyLeaseOverrides(fields, normalizedOverrides);
+
+            fields.PropertyId = PositiveOverride(overrideRoot, "propertyId", "property_id")
+                ?? (fields.PropertyId > 0 ? fields.PropertyId : draft.CapturePropertyId ?? 0);
+            fields.UnitId = PositiveOverride(overrideRoot, "unitId", "unit_id")
+                ?? fields.UnitId ?? draft.CaptureUnitId;
+            var leaseManagementId = PositiveOverride(
+                overrideRoot, "leaseManagementId", "lease_management_id")
+                ?? draft.CaptureLeaseManagementId;
+            var tenantAccountId = PositiveOverride(
+                overrideRoot, "tenantAccountId", "tenant_account_id")
+                ?? draft.CaptureTenantAccountId;
+            var templateId = PositiveOverride(
+                overrideRoot, "documentTemplateId", "document_template_id");
+            var templateVersion = PositiveOverride(
+                overrideRoot, "documentTemplateVersion", "document_template_version");
+            var dispositionText = TryGetOverrideString(
+                overrideRoot, out var suppliedDisposition,
+                "reviewDisposition", "review_disposition")
+                ? suppliedDisposition
+                : null;
+            if (!Enum.TryParse<LeaseScanReviewDisposition>(
+                    dispositionText, ignoreCase: true, out var disposition))
+            {
+                throw new ScanConfirmationValidationException(
+                    "Choose whether the uploaded lease is AlreadyFullySigned or NeedsSignatures.");
+            }
+
+            target = new(kind, Lease: new ScanLeaseTargetData(
+                fields.PropertyId, fields.UnitId, fields.TenantId, fields.TenantName,
+                fields.TenantEmail, fields.TenantPhone, fields.TenantEmergencyContact,
+                fields.PropertyName, fields.PropertyType, fields.PropertyAddress, fields.PropertyCity,
+                fields.PropertyState, fields.PropertyPostalCode, fields.UnitNumber,
+                fields.UnitBedrooms, fields.UnitBathrooms, fields.UnitSquareFeet, fields.LeaseNumber,
+                fields.StartDate, fields.EndDate, fields.MonthlyRent, fields.SecurityDeposit,
+                fields.LateFee, fields.RentDueDay, fields.RentTrackingStartMode,
+                fields.RentTrackingStartDate, fields.OpeningBalanceAmount,
+                fields.OpeningBalanceAsOfDate, fields.OpeningBalanceNote,
+                disposition, leaseManagementId, tenantAccountId, templateId, templateVersion,
+                TermsSchemaVersion: 1,
+                TermsPayload: string.IsNullOrWhiteSpace(draft.ExtractedFields) ? "{}" : draft.ExtractedFields,
+                GracePeriodDays: 0));
+        }
         else if (kind == ScanConfirmationTargetKind.Application)
         {
             var fields = BuildApplicationFields(draft.ExtractedFields);
@@ -187,9 +227,19 @@ public sealed class ScanService : IScanService
                 ScanConfirmationDraftFingerprint.Create(
                     draft.TargetEntityType,
                     draft.SourceStoredFileId,
-                    draft.ExtractedFields),
+                    draft.ExtractedFields,
+                    draft.SourceContentSha256,
+                    draft.CaptureAccessContextId,
+                    draft.CaptureAccessRevision,
+                    draft.CapturePropertyId,
+                    draft.CaptureUnitId,
+                    draft.CaptureLeaseManagementId,
+                    draft.CaptureTenantAccountId,
+                    draft.CaptureFocusedRecordKind,
+                    draft.CaptureFocusedRecordId),
                 target,
-                draft.SourceStoredFileId));
+                draft.SourceStoredFileId,
+                SourceContentSha256: draft.SourceContentSha256));
     }
 
     private static int? PositiveOverride(JsonElement root, params string[] names) =>
@@ -255,11 +305,13 @@ public sealed class ScanService : IScanService
             }
             else if (!string.IsNullOrWhiteSpace(fields.PropertyAddress) || !string.IsNullOrWhiteSpace(fields.PropertyName))
             {
-                // Nothing matched but we have enough to create one.
+                // Canonical lease import never silently creates the physical inventory. Preserve
+                // the extracted suggestion while requiring the reviewer to select (or first add)
+                // the actual Property that will own the rental relationship.
                 var label = !string.IsNullOrWhiteSpace(fields.PropertyName)
                     ? fields.PropertyName!.Trim()
                     : fields.PropertyAddress!.Trim();
-                propertyProposal = new ProposedRecord("create", null, label,
+                propertyProposal = new ProposedRecord("select", null, label,
                     FormatAddress(fields.PropertyAddress, fields.PropertyCity));
             }
             else
@@ -288,13 +340,13 @@ public sealed class ScanService : IScanService
             var unitMatch = await FindMatchingUnitAsync(propId, unitNumber, ct);
             unitProposal = unitMatch is not null
                 ? new ProposedRecord("link", unitMatch.Id, $"Unit {unitMatch.Label}", null)
-                : new ProposedRecord("create", null, $"Unit {unitNumber}", null);
+                : new ProposedRecord("select", null, $"Unit {unitNumber}", null);
         }
         else
         {
-            // Property itself is unresolved, so the unit will be created under whatever property the
-            // reviewer ends up with — describe it as a create with the (defaulted) unit number.
-            unitProposal = new ProposedRecord("create", null, $"Unit {unitNumber}", null);
+            // The extracted Unit label remains a useful suggestion, but its canonical inventory row
+            // must be explicitly selected before confirmation.
+            unitProposal = new ProposedRecord("select", null, $"Unit {unitNumber}", null);
         }
 
         return new LeaseImportProposal(propertyProposal, unitProposal);
@@ -538,7 +590,7 @@ public sealed class ScanService : IScanService
     /// Normalizes a US street address for dedupe matching: lowercase, strip punctuation, collapse
     /// whitespace, and fold the most common street-suffix abbreviations so "123 Maple St" and
     /// "123 Maple Street" compare equal. Best-effort — not a full address parser; it just makes the
-    /// match-or-create dedupe forgiving of the formatting noise typical of scanned leases.
+    /// existing-inventory match forgiving of the formatting noise typical of scanned leases.
     /// </summary>
     private static string NormalizeAddress(string? value)
     {
@@ -1174,9 +1226,8 @@ public sealed class ScanService : IScanService
                 fields.TenantPhone = tenantPhone;
             if (TryGetOverrideString(root, out var tenantEmergency, "tenantEmergencyContact", "tenant_emergency_contact", "emergencyContact", "emergency_contact"))
                 fields.TenantEmergencyContact = tenantEmergency;
-            // Leased-premises corrections: the reviewer can fix the address/unit the match-or-create
-            // uses. Supplying propertyId=0 (above) forces "create new" using these fields even if the
-            // model had guessed an id.
+            // Leased-premises corrections remain review suggestions. Canonical confirmation still
+            // requires explicit existing Property/Unit ids and never creates physical inventory.
             if (TryGetOverrideString(root, out var propertyName, "propertyName", "property_name"))
                 fields.PropertyName = propertyName;
             if (TryGetOverrideString(root, out var propertyType, "propertyType", "property_type"))
@@ -1645,8 +1696,8 @@ public sealed class ScanService : IScanService
         public string? TenantPhone { get; set; }
         public string? TenantEmergencyContact { get; set; }
 
-        // Leased-premises text extracted straight off the document, used to match-or-create the
-        // Property/Unit when no in-portfolio id was matched (the empty-portfolio bootstrap path).
+        // Leased-premises text extracted straight off the document, used to suggest an existing
+        // Property/Unit when the grounded ids were absent or uncertain.
         public string? PropertyName { get; set; }
         public string? PropertyType { get; set; }
         public string? PropertyAddress { get; set; }

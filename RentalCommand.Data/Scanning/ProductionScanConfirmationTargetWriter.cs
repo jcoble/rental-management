@@ -11,10 +11,9 @@ using RentalCommand.Data.Payments;
 namespace RentalCommand.Data.Scanning;
 
 /// <summary>
-/// Persistence-only writers for the non-lease scan targets. This type deliberately has no injected
-/// services: every query and write goes through the transaction-owned persistence session supplied
-/// by the atomic kernel. Lease confirmation remains unsupported until its full aggregate writer is
-/// available, so registering this writer cannot accidentally activate a partial lease path.
+/// Persistence-only writers for scan targets. This type deliberately has no injected services:
+/// every query and write goes through the transaction-owned persistence session supplied by the
+/// atomic kernel. Lease scans delegate to the canonical relationship/account/agreement writer.
 /// </summary>
 public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTargetWriter
 {
@@ -26,6 +25,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         ScanConfirmationTargetKind.Expense or
         ScanConfirmationTargetKind.Payment or
         ScanConfirmationTargetKind.WorkOrder or
+        ScanConfirmationTargetKind.Lease or
         ScanConfirmationTargetKind.Application or
         ScanConfirmationTargetKind.Loan;
 
@@ -41,6 +41,8 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                 command, Required(command.Target.Payment), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.WorkOrder => WriteWorkOrderAsync(
                 command, Required(command.Target.WorkOrder), extractedFieldsJson, attempt, ct),
+            ScanConfirmationTargetKind.Lease => CanonicalLeaseScanConfirmationWriter.WriteAsync(
+                command, Required(command.Target.Lease), attempt, ct),
             ScanConfirmationTargetKind.Application => WriteApplicationAsync(
                 command, Required(command.Target.Application), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.Loan => WriteLoanAsync(
@@ -48,6 +50,13 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             _ => throw new InvalidOperationException(
                 $"Scan confirmation target {command.Target.Kind} is not supported by this writer."),
         };
+
+    public Task AuthorizeReplayAsync(
+        ConfirmScanDraftCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) => command.Target.Kind == ScanConfirmationTargetKind.Lease
+            ? CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(command, persistence, ct)
+            : Task.CompletedTask;
 
     private static async Task<ScanConfirmationTargetWriteResult> WriteExpenseAsync(
         ConfirmScanDraftCommand command,

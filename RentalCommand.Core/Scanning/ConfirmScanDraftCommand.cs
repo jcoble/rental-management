@@ -52,6 +52,12 @@ public sealed record ScanReceiptData(
 
 public sealed record ScanExtraFieldData(string Name, string Value) : IAtomicCommandData;
 
+public enum LeaseScanReviewDisposition
+{
+    AlreadyFullySigned = 1,
+    NeedsSignatures = 2,
+}
+
 public sealed record ScanExpenseTargetData(
     ScanReceiptData Receipt,
     bool IsPaid,
@@ -104,7 +110,15 @@ public sealed record ScanLeaseTargetData(
     DateTime? RentTrackingStartDate,
     decimal? OpeningBalanceAmount,
     DateTime? OpeningBalanceAsOfDate,
-    string? OpeningBalanceNote) : IAtomicCommandData;
+    string? OpeningBalanceNote,
+    LeaseScanReviewDisposition? ReviewDisposition = null,
+    int? LeaseManagementId = null,
+    int? TenantAccountId = null,
+    int? DocumentTemplateId = null,
+    int? DocumentTemplateVersion = null,
+    int TermsSchemaVersion = 1,
+    string? TermsPayload = null,
+    short GracePeriodDays = 0) : IAtomicCommandData;
 
 public sealed record ScanApplicationTargetData(
     string? FirstName,
@@ -189,7 +203,8 @@ public sealed record ConfirmScanDraftCommand(
     Guid AuthSessionId = default,
     int AccessContextId = 0,
     long ExpectedAccessRevision = 0,
-    string DeliveryIdempotencyKey = "") : IAtomicCommandData;
+    string DeliveryIdempotencyKey = "",
+    string? SourceContentSha256 = null) : IAtomicCommandData;
 
 /// <summary>
 /// Stable version token for the exact draft facts used to prepare a confirmation command. The
@@ -198,12 +213,21 @@ public sealed record ConfirmScanDraftCommand(
 /// </summary>
 public static class ScanConfirmationDraftFingerprint
 {
-    private const int EncodingVersion = 1;
+    private const int EncodingVersion = 2;
 
     public static string Create(
         string targetEntityType,
         int? sourceStoredFileId,
-        string? extractedFields)
+        string? extractedFields,
+        string? sourceContentSha256 = null,
+        int? captureAccessContextId = null,
+        long? captureAccessRevision = null,
+        int? capturePropertyId = null,
+        int? captureUnitId = null,
+        int? captureLeaseManagementId = null,
+        int? captureTenantAccountId = null,
+        string? captureFocusedRecordKind = null,
+        long? captureFocusedRecordId = null)
     {
         ArgumentNullException.ThrowIfNull(targetEntityType);
 
@@ -216,9 +240,30 @@ public static class ScanConfirmationDraftFingerprint
             if (sourceStoredFileId.HasValue)
                 writer.Write(sourceStoredFileId.Value);
             WriteNullableString(writer, CanonicalizeJson(extractedFields));
+            WriteNullableString(writer, sourceContentSha256);
+            WriteNullableInt32(writer, captureAccessContextId);
+            WriteNullableInt64(writer, captureAccessRevision);
+            WriteNullableInt32(writer, capturePropertyId);
+            WriteNullableInt32(writer, captureUnitId);
+            WriteNullableInt32(writer, captureLeaseManagementId);
+            WriteNullableInt32(writer, captureTenantAccountId);
+            WriteNullableString(writer, captureFocusedRecordKind);
+            WriteNullableInt64(writer, captureFocusedRecordId);
         }
 
         return Convert.ToHexStringLower(SHA256.HashData(payload.GetBuffer().AsSpan(0, checked((int)payload.Length))));
+    }
+
+    private static void WriteNullableInt32(BinaryWriter writer, int? value)
+    {
+        writer.Write(value.HasValue);
+        if (value.HasValue) writer.Write(value.Value);
+    }
+
+    private static void WriteNullableInt64(BinaryWriter writer, long? value)
+    {
+        writer.Write(value.HasValue);
+        if (value.HasValue) writer.Write(value.Value);
     }
 
     private static void WriteNullableString(BinaryWriter writer, string? value)
@@ -329,4 +374,9 @@ public interface IScanConfirmationTargetWriter : IAtomicTransactionSafeDependenc
         string? extractedFieldsJson,
         IAtomicWriteAttempt attempt,
         CancellationToken ct);
+
+    Task AuthorizeReplayAsync(
+        ConfirmScanDraftCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) => Task.CompletedTask;
 }

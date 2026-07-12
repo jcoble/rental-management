@@ -9,6 +9,18 @@ namespace RentalCommand.Api.DTOs;
 /// <summary>One extracted field surfaced to the review UI.</summary>
 public sealed record ScanFieldDto(string Name, string Value, decimal Confidence);
 
+public sealed record ScanCaptureContextDto(
+    string? Experience,
+    int? AccessContextId,
+    long? AccessRevision,
+    int? PropertyId,
+    int? UnitId,
+    int? LeaseManagementId,
+    int? TenantAccountId,
+    string? FocusedRecordKind,
+    long? FocusedRecordId,
+    string? SourceLabel);
+
 /// <summary>Draft as seen by the review page.</summary>
 public sealed record ScanDraftResponse(
     int Id, int PortfolioId, string TargetEntityType, string Status,
@@ -23,10 +35,12 @@ public sealed record ScanDraftResponse(
     string? NextPrompt = null,
     bool Complete = true,
     bool Ambiguous = false,
-    // Lease-import preview: for a lease draft, what confirm would do with the property/unit
-    // (link-existing vs create-new). Null for non-lease drafts. Populated by the controller via
+    // Lease-import preview: for a lease draft, whether the Property/Unit resolved or still needs
+    // an explicit selection. Null for non-lease drafts. Populated by the controller via
     // WithLeaseProposal() so the review UI can show + let the user correct before committing.
-    LeaseImportProposal? LeaseProposal = null)
+    LeaseImportProposal? LeaseProposal = null,
+    ScanCaptureContextDto? CaptureContext = null,
+    string? SourceContentSha256 = null)
 {
     /// <summary>Returns a copy carrying the lease-import property/unit proposal for the review UI.</summary>
     public ScanDraftResponse WithLeaseProposal(LeaseImportProposal? proposal) =>
@@ -52,8 +66,16 @@ public sealed record ScanDraftResponse(
             fileUrl, fields,
             d.ModelId, d.TokensUsed, d.CostUsd, d.FailureReason,
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
-            createdEntityType, createdEntityId, createdUnitId);
+            createdEntityType, createdEntityId, createdUnitId,
+            CaptureContext: ToCaptureContext(d),
+            SourceContentSha256: d.SourceContentSha256);
     }
+
+    internal static ScanCaptureContextDto ToCaptureContext(ScanDraft d) => new(
+        d.CaptureExperience?.ToString(), d.CaptureAccessContextId, d.CaptureAccessRevision,
+        d.CapturePropertyId, d.CaptureUnitId, d.CaptureLeaseManagementId,
+        d.CaptureTenantAccountId, d.CaptureFocusedRecordKind, d.CaptureFocusedRecordId,
+        d.SourceLabel);
 
     /// <summary>
     /// Returns a copy with the conversational-voice slot fields

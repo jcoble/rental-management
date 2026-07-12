@@ -45,19 +45,17 @@ public sealed record ScanConfirmationPreparation(
     string? Error = null);
 
 /// <summary>
-/// What confirming a scanned lease would do with the property/unit, surfaced to the review UI so a
-/// brand-new landlord scanning into an empty portfolio can SEE that a Property/Unit will be created
-/// (vs. linked to an existing one) and correct it via overrides before committing. The confirm path
-/// performs the same match-or-create; this is the read-only "what will happen" preview.
+/// How a scanned lease resolves its Property and Unit, surfaced to the review UI before committing.
+/// Canonical lease import links existing physical inventory; extracted labels remain suggestions when
+/// the reviewer still needs to select (or first add) the correct Property or Unit.
 /// </summary>
 public sealed record LeaseImportProposal(ProposedRecord Property, ProposedRecord Unit);
 
 /// <summary>
-/// One proposed entity in a <see cref="LeaseImportProposal"/>. <see cref="Action"/> is "link" when an
-/// existing in-portfolio record was matched (its <see cref="ExistingId"/> is set), "create" when one
-/// would be created from the extracted document fields (shown in <see cref="Label"/> / <see cref="Detail"/>),
-/// or "select" when there isn't enough on the document to match or create so the reviewer must choose
-/// (e.g. no property address was extracted).
+/// One resolved or proposed entity in a <see cref="LeaseImportProposal"/>. <see cref="Action"/> is
+/// "link" when an existing in-portfolio record was matched (its <see cref="ExistingId"/> is set), or
+/// "select" when the reviewer must choose an inventory row. Extracted suggestions may still appear in
+/// <see cref="Label"/> / <see cref="Detail"/> for a select action.
 /// </summary>
 public sealed record ProposedRecord(
     string Action,

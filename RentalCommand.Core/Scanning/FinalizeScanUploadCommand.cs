@@ -2,6 +2,18 @@ using RentalCommand.Core.Atomic;
 
 namespace RentalCommand.Core.Scanning;
 
+public sealed record ScanCaptureContextData(
+    RentalCommand.Core.Enums.WorkspaceExperience? Experience,
+    int? AccessContextId,
+    long? AccessRevision,
+    int? PropertyId,
+    int? UnitId,
+    int? LeaseManagementId,
+    int? TenantAccountId,
+    string? FocusedRecordKind,
+    long? FocusedRecordId,
+    string? SourceLabel) : IAtomicCommandData;
+
 public sealed record FinalizeScanUploadFile(
     Guid SourcePendingUploadId,
     string SourceStoragePath,
@@ -29,7 +41,8 @@ public sealed record FinalizeScanUploadCommand(
     bool CreateBatch,
     string? BatchName,
     DateTime UploadedAtUtc,
-    IReadOnlyList<FinalizeScanUploadFile> Files) : IAtomicCommandData;
+    IReadOnlyList<FinalizeScanUploadFile> Files,
+    ScanCaptureContextData? CaptureContext = null) : IAtomicCommandData;
 
 public sealed record FinalizedScanDraft(
     int DraftId,

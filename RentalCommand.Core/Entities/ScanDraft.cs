@@ -1,4 +1,5 @@
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Core.Entities;
 
@@ -25,6 +26,24 @@ public class ScanDraft : IAuditable, IPortfolioScoped
     /// confirmation never infers a source row from <see cref="FilePath"/>.
     /// </summary>
     public int? SourceStoredFileId { get; set; }
+
+    /// <summary>SHA-256 of the exact user-supplied source bytes, captured before blob upload.</summary>
+    public string? SourceContentSha256 { get; set; }
+
+    /// <summary>Optional human-facing provenance only (for example, "Zillow").</summary>
+    public string? SourceLabel { get; set; }
+
+    // Typed capture scope. Global capture intentionally leaves business-record ids null; capture
+    // launched from a record carries them so review does not have to rediscover its origin.
+    public WorkspaceExperience? CaptureExperience { get; set; }
+    public int? CaptureAccessContextId { get; set; }
+    public long? CaptureAccessRevision { get; set; }
+    public int? CapturePropertyId { get; set; }
+    public int? CaptureUnitId { get; set; }
+    public int? CaptureLeaseManagementId { get; set; }
+    public int? CaptureTenantAccountId { get; set; }
+    public string? CaptureFocusedRecordKind { get; set; }
+    public long? CaptureFocusedRecordId { get; set; }
 
     /// <summary>Storage key of a small downscaled JPEG preview; null until generated (or for
     /// non-image uploads like PDFs). Served to clients by default so phones never fetch the
