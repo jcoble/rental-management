@@ -552,18 +552,7 @@ export const vendorSchema = z.object({
 	preferred: z.boolean(),
 });
 
-/**
- * New security deposit holding: lease is required; amount is optional (defaults
- * to the lease's deposit amount server-side) but if provided must be > 0.
- */
-export const newDepositHoldingSchema = z.object({
-	leaseId: numericString('Lease'),
-	// amount is optional — blank means "use the lease default"
-	amount: optionalNonNegative('Amount'),
-	notes: optionalText,
-});
-
-/** Deduction to add to an existing deposit holding. */
+/** Deduction to append to an existing canonical deposit account. */
 export const depositDeductionSchema = z.object({
 	reason: required('Reason'),
 	// deduction amounts must be > 0

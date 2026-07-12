@@ -8,6 +8,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
@@ -38,6 +39,11 @@
 	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
 	let showEditUnit = $state(false);
 	let showMoveInDialog = $state(false);
+	let moveInDepositEffectiveOn = $state(new Date().toISOString().slice(0, 10));
+	let moveInDepositPaymentMethod = $state('');
+	let moveInDepositReference = $state('');
+	let moveInDepositErrors = $state<Record<string, string>>({});
+	let moveInDepositOperation = $state({ fingerprint: '', key: '' });
 	let showScanLauncher = $state(false);
 	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
@@ -83,6 +89,11 @@
 		if (handledMoveInActionKey !== actionKey) {
 			handledMoveInActionKey = actionKey;
 			activeTab = 'lease';
+			moveInDepositEffectiveOn = new Date().toISOString().slice(0, 10);
+			moveInDepositPaymentMethod = '';
+			moveInDepositReference = '';
+			moveInDepositErrors = {};
+			moveInDepositOperation = { fingerprint: '', key: '' };
 			showMoveInDialog = true;
 		}
 	});
@@ -100,26 +111,41 @@
 
 	function closeMoveInDialog() {
 		showMoveInDialog = false;
+		moveInDepositErrors = {};
 		clearMoveInActionUrl();
 	}
 
 	const moveInMutation = createMutation(() => ({
-		mutationFn: async (lease: UnitLeaseSummary) => {
-			const deposit = lease.securityDeposit > 0
-				? await securityDeposits.create({
-					leaseId: lease.id,
-					notes: 'Confirmed from Unit Command Center move-in workflow.'
-				})
-				: null;
+		mutationFn: async ({ lease, operationKey }: { lease: UnitLeaseSummary; operationKey: string }) => {
+			if (lease.securityDeposit > 0) {
+				const accounts = await securityDeposits.list(lease.leaseManagementId);
+				const account = accounts.find((candidate) =>
+					lease.tenantAccountId == null || candidate.tenantAccountId === lease.tenantAccountId
+				);
+				if (!account) {
+					throw new Error('This move-in does not have a prepared security deposit account. Prepare the approved application before recording funds.');
+				}
+				await securityDeposits.fund(account.tenantAccountId, operationKey, {
+					securityDepositAccountId: account.id,
+					amount: lease.securityDeposit,
+					effectiveOn: moveInDepositEffectiveOn,
+					description: `Security deposit received at move-in for ${lease.leaseNumber}`,
+					paymentMethodSummary: moveInDepositPaymentMethod.trim(),
+					...(moveInDepositReference.trim()
+						? { externalReference: moveInDepositReference.trim() }
+						: {}),
+				});
+			}
 
 			if (moveInAppointment) {
 				await appointments.update(moveInAppointment.id, { status: 'Completed' });
 			}
 
-			return deposit;
+			return true;
 		},
 		onSuccess: () => {
 			showSuccess('Move-in confirmed.');
+			moveInDepositOperation = { fingerprint: '', key: '' };
 			closeMoveInDialog();
 			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
 			queryClient.invalidateQueries({ queryKey: ['unit-timeline', id] });
@@ -128,6 +154,30 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	function submitMoveIn(lease: UnitLeaseSummary) {
+		const errors: Record<string, string> = {};
+		if (lease.securityDeposit > 0 && !moveInDepositEffectiveOn) {
+			errors.effectiveOn = 'Received date is required.';
+		}
+		if (lease.securityDeposit > 0 && !moveInDepositPaymentMethod.trim()) {
+			errors.paymentMethod = 'Payment method is required.';
+		}
+		moveInDepositErrors = errors;
+		if (Object.keys(errors).length > 0) return;
+
+		const fingerprint = JSON.stringify({
+			leaseManagementId: lease.leaseManagementId,
+			amount: lease.securityDeposit,
+			effectiveOn: moveInDepositEffectiveOn,
+			paymentMethod: moveInDepositPaymentMethod.trim(),
+			reference: moveInDepositReference.trim(),
+		});
+		if (moveInDepositOperation.fingerprint !== fingerprint || !moveInDepositOperation.key) {
+			moveInDepositOperation = { fingerprint, key: crypto.randomUUID() };
+		}
+		moveInMutation.mutate({ lease, operationKey: moveInDepositOperation.key });
+	}
 
 	function openEditUnit() {
 		if (!dashboard) return;
@@ -299,15 +349,34 @@
 				{/if}
 			</div>
 			<p class="text-sm text-muted-foreground">
-				Use this after keys are handed over and the deposit has been received.
+				Use this after keys are handed over. Deposit money is recorded in the account prepared
+				from the approved application; this does not create another holding.
 			</p>
+			{#if moveInDialogLease.securityDeposit > 0}
+				<div class="space-y-3 border-t pt-3">
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Deposit received date</span>
+						<Input bind:value={moveInDepositEffectiveOn} type="date" data-testid="unit-move-in-deposit-date" />
+						{#if moveInDepositErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{moveInDepositErrors.effectiveOn}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Payment method</span>
+						<Input bind:value={moveInDepositPaymentMethod} placeholder="Check, cash, ACH…" data-testid="unit-move-in-deposit-method" />
+						{#if moveInDepositErrors.paymentMethod}<p class="mt-1 text-xs text-destructive">{moveInDepositErrors.paymentMethod}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Reference (optional)</span>
+						<Input bind:value={moveInDepositReference} placeholder="Check or confirmation number" />
+					</div>
+				</div>
+			{/if}
 		{:else}
 			<p class="text-sm text-muted-foreground">This unit does not have a current lease to confirm.</p>
 		{/if}
 		<Dialog.Footer class="mt-4">
 			<Button variant="outline" onclick={closeMoveInDialog}>Cancel</Button>
 			<Button
-				onclick={() => moveInDialogLease && moveInMutation.mutate(moveInDialogLease)}
+				onclick={() => moveInDialogLease && submitMoveIn(moveInDialogLease)}
 				disabled={!moveInDialogLease || moveInMutation.isPending}
 				data-testid="unit-move-in-confirm"
 			>
