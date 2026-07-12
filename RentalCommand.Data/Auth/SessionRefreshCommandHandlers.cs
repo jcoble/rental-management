@@ -203,7 +203,6 @@ public sealed class RotateSessionRefreshCredentialHandler
             attempt,
             command.PresentedTokenHash,
             command.PresentedAtUtc,
-            command.ReplacementExpiresAtUtc,
             ct);
         if (target is null)
         {
@@ -270,7 +269,9 @@ public sealed class RotateSessionRefreshCredentialHandler
             RefreshTokenFamilyId = target.Family.Id,
             TokenHash = command.ReplacementTokenHash,
             IssuedAtUtc = command.PresentedAtUtc,
-            ExpiresAtUtc = command.ReplacementExpiresAtUtc,
+            ExpiresAtUtc = command.ReplacementExpiresAtUtc < target.Family.AbsoluteExpiresAtUtc
+                ? command.ReplacementExpiresAtUtc
+                : target.Family.AbsoluteExpiresAtUtc,
         };
 
         target.Credential.ConsumedAtUtc = command.PresentedAtUtc;
@@ -305,7 +306,6 @@ public sealed class RotateSessionRefreshCredentialHandler
         IAtomicWriteAttempt attempt,
         string tokenHash,
         DateTime presentedAtUtc,
-        DateTime replacementExpiresAtUtc,
         CancellationToken ct)
     {
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
@@ -327,7 +327,6 @@ public sealed class RotateSessionRefreshCredentialHandler
                 item.ExpiresAtUtc > presentedAtUtc &&
                 item.RefreshTokenFamily!.RevokedAtUtc == null &&
                 item.RefreshTokenFamily!.AbsoluteExpiresAtUtc > presentedAtUtc &&
-                replacementExpiresAtUtc <= item.RefreshTokenFamily!.AbsoluteExpiresAtUtc &&
                 item.RefreshTokenFamily!.AuthSession!.Status == AuthSessionStatus.Active &&
                 item.RefreshTokenFamily!.AuthSession!.RevokedAtUtc == null &&
                 item.RefreshTokenFamily!.AuthSession!.ExpiresAtUtc > presentedAtUtc,

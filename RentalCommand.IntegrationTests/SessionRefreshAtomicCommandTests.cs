@@ -186,6 +186,31 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Rotation_CapsSuccessorExpiryAtFamilyAbsoluteExpiry()
+    {
+        SkipIfNoDocker();
+        var issued = await IssueCredentialAsync();
+        var operation = Guid.NewGuid();
+        var replacementId = Guid.NewGuid();
+
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("rotate", operation),
+            Rotate(
+                operation,
+                issued.TokenHash,
+                replacementId,
+                Hash("family-bounded-replacement"),
+                _now.AddDays(40)),
+            Codec);
+
+        outcome.Value.Status.Should().Be(SessionRefreshMutationStatus.Rotated);
+        await using var db = NewPlainContext();
+        var replacement = await db.AuthSessionRefreshCredentials
+            .SingleAsync(item => item.Id == replacementId);
+        replacement.ExpiresAtUtc.Should().Be(_now.AddDays(30));
+    }
+
+    [SkippableFact]
     public async Task ReuseFailure_RollsBackCredentialFamilySessionAuditAndReceiptTogether()
     {
         SkipIfNoDocker();
@@ -320,14 +345,15 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         Guid operationId,
         string presentedHash,
         Guid replacementId,
-        string replacementHash) =>
+        string replacementHash,
+        DateTime? replacementExpiresAtUtc = null) =>
         new(
             operationId,
             presentedHash,
             replacementId,
             replacementHash,
             _now.AddMinutes(1),
-            _now.AddDays(7));
+            replacementExpiresAtUtc ?? _now.AddDays(7));
 
     private static AtomicCommandIdentity Identity(string operation, Guid operationId) =>
         operation switch
