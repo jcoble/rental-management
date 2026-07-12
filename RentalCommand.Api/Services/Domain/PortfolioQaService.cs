@@ -42,9 +42,9 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_overdue_rent",
-            "Returns all payments that are overdue: status is Scheduled, Partial, or Late " +
-            "and the due date is in the past. Each item includes the lease number, unit number, " +
-            "tenant name, amount owed, due date, and how many days overdue.",
+            "Returns open tenant charges whose due date is in the past for currently occupied " +
+            "or ending tenancies. Each item includes the agreement or account number, unit number, " +
+            "tenant name, open amount, due date, and how many days overdue.",
             """{"type":"object","properties":{},"required":[]}"""),
 
         new LlmToolSpec(
@@ -97,8 +97,8 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_recent_payments",
-            "Returns payments with PaidDate within the last N days, most recent first: " +
-            "tenant name, unit number, amount, paid date, payment type, and status. " +
+            "Returns posted tenant-ledger payment receipts from the last N days, most recent first: " +
+            "tenant name, unit number, amount, received date, payment method, and provider status. " +
             "Use for 'recent rent payments', 'did unit 4B pay this month?'.",
             """{"type":"object","properties":{"withinDays":{"type":"integer","description":"Number of days to look back. Defaults to 30."}},"required":[]}"""),
 
@@ -650,33 +650,41 @@ public class PortfolioQaService : IPortfolioQaService
 
     private async Task<string> ListOverdueRentAsync(int portfolioId, CancellationToken ct)
     {
-        var today = _timeProvider.UtcNow();
+        var today = DateOnly.FromDateTime(_timeProvider.UtcNow());
 
         // Cap the tool result like every sibling list tool; both the returned page and the truncation
         // check stay DB-side so we do not materialize an unbounded overdue set into the LLM context.
         const int maxRows = 50;
-        var overdueQuery = _db.Payments
-            .AsNoTracking()
-            .ForCurrentLeaseAttention(today)
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                (p.Status == PaymentStatus.Scheduled ||
-                 p.Status == PaymentStatus.Partial ||
-                 p.Status == PaymentStatus.Late) &&
-                p.DueDate < today)
-            .OrderBy(p => p.DueDate)
-            .ThenBy(p => p.Id)
-            .Select(p => new
+        var overdueQuery =
+            from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { charge.PortfolioId, charge.TenantAccountId }
+                equals new { account.PortfolioId, TenantAccountId = account.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { account.PortfolioId, account.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+                into agreementRows
+            from agreement in agreementRows.DefaultIfEmpty()
+            where charge.PortfolioId == portfolioId
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && charge.IsPastDue
+                && charge.OpenAmount > 0m
+                && charge.DueOn != null
+            orderby charge.DueOn, charge.TenantLedgerEntryId
+            select new
             {
-                leaseNumber  = p.Lease != null ? p.Lease.LeaseNumber : $"lease-{p.LeaseId}",
-                unitNumber   = p.Lease != null && p.Lease.Unit != null ? p.Lease.Unit.UnitNumber : "(unknown)",
-                tenantName   = p.Lease != null && p.Lease.Tenant != null
-                                   ? p.Lease.Tenant.FirstName + " " + p.Lease.Tenant.LastName
-                                   : "(unknown)",
-                amount       = p.Amount,
-                dueDate      = p.DueDate,
-                status       = p.Status,
-            });
+                leaseNumber = agreement != null ? agreement.AgreementNumber : account.AccountNumber,
+                unitNumber = unit.UnitNumber,
+                tenantName = lifecycle.CurrentPrimaryTenantName,
+                amount = charge.OpenAmount,
+                dueDate = charge.DueOn,
+            };
 
         var paymentRows = await overdueQuery
             .Take(maxRows)
@@ -692,9 +700,9 @@ public class PortfolioQaService : IPortfolioQaService
                 p.unitNumber,
                 p.tenantName,
                 p.amount,
-                dueDate = p.dueDate.ToString("yyyy-MM-dd"),
-                daysOverdue = (int)(today.Date - p.dueDate.Date).TotalDays,
-                status = p.status.ToString(),
+                dueDate = p.dueDate!.Value.ToString("yyyy-MM-dd"),
+                daysOverdue = today.DayNumber - p.dueDate.Value.DayNumber,
+                status = "PastDue",
             })
             .ToList();
 
@@ -1021,42 +1029,67 @@ public class PortfolioQaService : IPortfolioQaService
         }
 
         const int maxRows = 50;
-        var cutoff = _timeProvider.UtcNow().AddDays(-withinDays);
+        var cutoff = DateOnly.FromDateTime(_timeProvider.UtcNow().AddDays(-withinDays));
 
-        var paymentsQuery = _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.PaidDate.HasValue &&
-                p.PaidDate.Value >= cutoff);
+        var paymentsQuery =
+            from entry in _db.TenantLedgerEntries.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { entry.PortfolioId, Id = entry.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { management.PortfolioId, Id = management.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            where entry.PortfolioId == portfolioId
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                && entry.EffectiveOn >= cutoff
+            select new
+            {
+                entry,
+                tenantName = entry.ProviderPaymentAttempt != null
+                    ? entry.ProviderPaymentAttempt.PayerName
+                    : lifecycle.CurrentPrimaryTenantName,
+                unitNumber = unit.UnitNumber,
+                providerState = entry.ProviderPaymentAttempt != null
+                    ? (TenantPaymentAttemptState?)entry.ProviderPaymentAttempt.State
+                    : null,
+                paymentMethod = entry.ProviderPaymentAttempt != null
+                    ? entry.ProviderPaymentAttempt.PaymentMethodSummary
+                    : null,
+                isSecurityDeposit = _db.SecurityDepositEntries.Any(deposit =>
+                    deposit.PortfolioId == entry.PortfolioId
+                    && deposit.TenantLedgerEntryId == entry.Id
+                    && deposit.EntryType == SecurityDepositEntryType.Receipt),
+            };
 
         var total = await paymentsQuery
             .GroupBy(_ => 1)
-            .Select(g => (decimal?)g.Sum(p => p.Amount))
+            .Select(g => (decimal?)g.Sum(p => p.entry.Amount))
             .FirstOrDefaultAsync(ct) ?? 0m;
 
-        // Order by the real DateTime column in SQL, then format in memory
-        // (Npgsql can't translate DateTime.ToString(format) / enum.ToString()).
+        // Order and cap by the typed ledger date in SQL, then format DateOnly/enums in memory.
         var entities = await paymentsQuery
-            .Include(p => p.Lease)
-                .ThenInclude(l => l!.Tenant)
-            .Include(p => p.Lease)
-                .ThenInclude(l => l!.Unit)
-            .OrderByDescending(p => p.PaidDate)
+            .OrderByDescending(p => p.entry.EffectiveOn)
+            .ThenByDescending(p => p.entry.Id)
             .Take(maxRows + 1)
             .ToListAsync(ct);
 
         var truncated = entities.Count > maxRows;
         var rows = entities.Take(maxRows).Select(p => new
         {
-            tenantName   = p.Lease?.Tenant != null
-                               ? p.Lease.Tenant.FirstName + " " + p.Lease.Tenant.LastName
-                               : "(unknown)",
-            unitNumber   = p.Lease?.Unit != null ? p.Lease.Unit.UnitNumber : "(unknown)",
-            amount       = p.Amount,
-            paidDate     = p.PaidDate?.ToString("yyyy-MM-dd"),
-            paymentType  = p.PaymentType.ToString(),
-            status       = p.Status.ToString(),
+            tenantName = p.tenantName ?? "(unknown)",
+            p.unitNumber,
+            amount = p.entry.Amount,
+            paidDate = p.entry.EffectiveOn.ToString("yyyy-MM-dd"),
+            paymentType = p.isSecurityDeposit
+                ? "SecurityDeposit"
+                : p.paymentMethod ?? "PaymentReceipt",
+            status = p.providerState?.ToString() ?? "Posted",
         }).ToList();
         var result = new { withinDays, count = rows.Count, truncated, total, payments = rows };
         return JsonSerializer.Serialize(result, _json);
