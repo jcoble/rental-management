@@ -11,6 +11,19 @@ namespace RentalCommand.Api.Tests.Auth;
 public sealed class CapabilityAuthorizationPolicyTests
 {
     [Fact]
+    public void Application_fee_collection_is_narrow_and_only_seeded_for_admin_and_leasing()
+    {
+        var capability = AccessCatalog.Capabilities.Single(seed =>
+            seed.Key == CapabilityKeys.LeasingApplicationFeesCollect);
+
+        capability.AuthorizationTargetKind.Should().Be(CapabilityAuthorizationTargetKind.Property);
+        AccessCatalog.CapabilityIdsByRole[1].Should().Contain(capability.Id);
+        AccessCatalog.CapabilityIdsByRole[3].Should().Contain(capability.Id);
+        AccessCatalog.CapabilityIdsByRole[2].Should().NotContain(capability.Id);
+        AccessCatalog.CapabilityIdsByRole[4].Should().NotContain(capability.Id);
+    }
+
+    [Fact]
     public async Task DynamicPolicy_UsesStableCapabilityRequirement_NotRoleAliases()
     {
         var services = new ServiceCollection();

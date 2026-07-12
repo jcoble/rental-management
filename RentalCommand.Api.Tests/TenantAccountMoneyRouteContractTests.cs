@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data.Payments;
 
@@ -44,5 +45,16 @@ public sealed class TenantAccountMoneyRouteContractTests
             .Implement<IAtomicReplayAuthorizer<DeductSecurityDepositCommand>>();
         typeof(RefundSecurityDepositHandler).Should()
             .Implement<IAtomicReplayAuthorizer<RefundSecurityDepositCommand>>();
+    }
+
+    [Fact]
+    public void Completed_deposit_payout_has_direct_provenance_without_a_required_tenant_ledger_row()
+    {
+        typeof(SecurityDepositEntry).GetProperty(nameof(SecurityDepositEntry.PayoutExternalReference))
+            .Should().NotBeNull();
+        var ledgerResultProperty = typeof(SecurityDepositMutationResult)
+            .GetProperty(nameof(SecurityDepositMutationResult.TenantLedgerEntryId));
+
+        Nullable.GetUnderlyingType(ledgerResultProperty!.PropertyType).Should().Be(typeof(long));
     }
 }

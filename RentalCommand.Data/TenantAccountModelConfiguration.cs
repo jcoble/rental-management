@@ -483,6 +483,7 @@ internal static class TenantAccountModelConfiguration
             entity.Property(e => e.PostedAtUtc).HasDefaultValueSql("clock_timestamp()");
             entity.Property(e => e.BusinessKey).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.PayoutExternalReference).HasMaxLength(200);
 
             entity.HasIndex(e => e.PublicId).IsUnique();
             entity.HasIndex(e => new { e.SecurityDepositAccountId, e.BusinessKey }).IsUnique();
@@ -515,6 +516,9 @@ internal static class TenantAccountModelConfiguration
                 table.HasCheckConstraint(
                     "CK_SecurityDepositEntry_ReversalReference",
                     "(\"EntryType\" = 'Reversal') = (\"ReversesEntryId\" IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_SecurityDepositEntry_PayoutProvenance",
+                    "\"PayoutExternalReference\" IS NULL OR \"EntryType\" = 'Refund'");
             });
 
             entity.HasOne(e => e.Portfolio)

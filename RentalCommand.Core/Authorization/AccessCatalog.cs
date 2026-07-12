@@ -27,6 +27,7 @@ public static class CapabilityKeys
     public const string ResponsibilityAssignExistingMember = "responsibility.assign-existing-member";
     public const string LeasingListingsManage = "leasing.listings.manage";
     public const string LeasingApplicationsManage = "leasing.applications.manage";
+    public const string LeasingApplicationFeesCollect = "leasing.application-fees.collect";
     public const string LeasingShowingsManage = "leasing.showings.manage";
     public const string LeasingAgreementsPrepare = "leasing.agreements.prepare";
     public const string LeasingOnboardingManage = "leasing.onboarding.manage";
@@ -122,6 +123,7 @@ public static class AccessCatalog
         new(33, CapabilityKeys.MoneyDisbursementsManage, "Initiate transfers and owner distributions.", CapabilityAuthorizationTargetKind.Workspace),
         new(34, CapabilityKeys.MoneyReconciliationDestructive, "Perform destructive reconciliation actions.", CapabilityAuthorizationTargetKind.Workspace),
         new(35, CapabilityKeys.AccountDestructiveActions, "Perform destructive workspace or account actions.", CapabilityAuthorizationTargetKind.Workspace),
+        new(36, CapabilityKeys.LeasingApplicationFeesCollect, "Collect in-scope application fees without refund authority.", CapabilityAuthorizationTargetKind.Property),
     ];
 
     public static readonly IReadOnlyDictionary<int, IReadOnlyList<int>> CapabilityIdsByRole =
@@ -129,7 +131,7 @@ public static class AccessCatalog
         {
             [1] = Capabilities.Select(capability => capability.Id).ToArray(),
             [2] = Enumerable.Range(1, 13).ToArray(),
-            [3] = Enumerable.Range(14, 7).ToArray(),
+            [3] = Enumerable.Range(14, 7).Append(36).ToArray(),
             [4] = Enumerable.Range(21, 4).ToArray(),
         };
 }

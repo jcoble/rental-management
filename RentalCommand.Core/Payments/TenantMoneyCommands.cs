@@ -106,6 +106,6 @@ public sealed record SecurityDepositMutationResult(
     int TenantAccountId,
     int SecurityDepositAccountId,
     long SecurityDepositEntryId,
-    long TenantLedgerEntryId,
+    long? TenantLedgerEntryId,
     decimal Amount,
     string? Error) : IAtomicResultData;

@@ -662,6 +662,7 @@ public class ReportsService : IReportsService
         var fromDate = DateOnly.FromDateTime(from);
         var toDate = DateOnly.FromDateTime(to);
         var applicationIncomeQuery = _db.ApplicationFinancialEntries
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(entry =>
                 entry.PortfolioId == portfolioId &&
@@ -790,6 +791,7 @@ public class ReportsService : IReportsService
             });
 
         var applicationIncomeQuery = _db.ApplicationFinancialEntries
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(entry =>
                 entry.PortfolioId == portfolioId &&

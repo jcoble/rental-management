@@ -420,6 +420,7 @@ public class AccountingService : IAccountingService
             .AsNoTracking()
             .Where(r => r.PortfolioId == portfolioId && r.Category != KindApplicationFee)
             .Concat(_db.ApplicationFinancialEntries
+                .IgnoreQueryFilters()
                 .AsNoTracking()
                 .Where(entry => entry.PortfolioId == portfolioId)
                 .Select(entry => new AccountingTransactionView
@@ -443,8 +444,9 @@ public class AccountingService : IAccountingService
                     PropertyId = entry.PropertyId,
                     UnitId = entry.UnitId,
                     PropertyName = entry.Property == null ? null : entry.Property.Name,
-                    Counterparty = entry.ApplicationFinancialAccount!.RentalApplication!.FirstName
-                        + " " + entry.ApplicationFinancialAccount.RentalApplication.LastName,
+                    // Deleted applications remain absent from normal navigations. Preserve the
+                    // immutable financial row without re-exposing deleted applicant PII.
+                    Counterparty = "Rental application",
                     Reference = entry.ProviderReference ?? entry.SourceReference ?? entry.Method,
                     Notes = null,
                 }));
