@@ -170,6 +170,88 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().NotContain("LeaseTenants");
     }
 
+    [Fact]
+    public void Tenant_account_ledger_header_authorizes_and_aggregates_in_one_canonical_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseService(db);
+
+        var sql = service.BuildCanonicalLedgerHeaderQuery(17, 42, restrictToTenantId: 9)
+            .ToQueryString();
+
+        sql.Should().Contain("TenantAccounts");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseManagementParties");
+        sql.Should().Contain("vw_lease_management_lifecycle");
+        sql.Should().Contain("vw_tenant_account_balances");
+        sql.Should().Contain("TenantLedgerEntries");
+        sql.Should().Contain("count");
+        sql.Should().NotContain("\"Payments\"");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("OpeningBalances");
+    }
+
+    [Fact]
+    public void Tenant_account_ledger_entries_sort_and_page_in_the_database()
+    {
+        using var db = NewContext();
+        var service = NewLeaseService(db);
+
+        var sql = service.BuildCanonicalLedgerEntriesQuery(17, 81)
+            .OrderByDescending(entry => entry.EffectiveOn)
+            .ThenByDescending(entry => entry.Id)
+            .Skip(20)
+            .Take(10)
+            .ToQueryString();
+
+        sql.Should().Contain("TenantLedgerEntries");
+        sql.Should().Contain("TenantPaymentAttempts");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
+        sql.Should().NotContain("\"Payments\"");
+        sql.Should().NotContain("OpeningBalances");
+    }
+
+    [Fact]
+    public void Scan_originated_tenant_money_activity_resolves_account_label_and_unit_canonically()
+    {
+        using var db = NewContext();
+        var dashboard = new DashboardService(db, new AuditDescriber(), TimeProvider.System);
+        var audit = new AuditQueryService(
+            db,
+            new AuditDescriber(),
+            new AuditDiffBuilder(),
+            Mock.Of<RentalCommand.Core.Time.IAppTimeZoneProvider>());
+
+        var dashboardSql = dashboard.BuildTenantAccountActivityRefsQuery(17, [81, 82])
+            .ToQueryString();
+        var auditSql = audit.BuildTenantAccountUnitRefsQuery(17, [81, 82])
+            .ToQueryString();
+
+        foreach (var sql in new[] { dashboardSql, auditSql })
+        {
+            sql.Should().Contain("TenantAccounts");
+            sql.Should().Contain("LeaseManagements");
+            sql.Should().Contain("UnitId");
+            sql.Should().Contain(" IN ");
+            sql.Should().NotContain("\"Payments\"");
+            sql.Should().NotContain("\"Leases\"");
+        }
+
+        dashboardSql.Should().Contain("AccountNumber");
+    }
+
+    private static LeaseService NewLeaseService(RentalCommandDbContext db) => new(
+        db,
+        Mock.Of<IDataUpdateService>(),
+        Mock.Of<IFileStorage>(),
+        Mock.Of<ILeaseAgreementPdfGenerator>(),
+        Mock.Of<IAuditTrailService>(),
+        NullLogger<LeaseService>.Instance,
+        TimeProvider.System);
+
     private static RentalCommandDbContext NewContext() =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseNpgsql("Host=localhost;Database=translation_only;Username=translation_only;Password=translation_only")

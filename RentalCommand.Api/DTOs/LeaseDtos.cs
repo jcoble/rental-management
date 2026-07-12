@@ -159,55 +159,53 @@ public class LeaseListQuery : ListQuery
 }
 
 /// <summary>
-/// Tenant-facing ledger for a single lease: every charge and payment, newest first, each carrying a
+/// Tenant-facing ledger for one continuous tenant account: every charge and receipt, newest first, each carrying a
 /// plain-English <see cref="LedgerTransactionResponse.Explanation"/> ("why") so a tenant can see
 /// exactly what each line is. <see cref="Balance"/> is what the tenant still owes (charges minus
 /// payments); negative means a credit/overpayment.
 /// </summary>
 public class LeaseLedgerResponse
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public string AccountNumber { get; set; } = string.Empty;
     public string? TenantName { get; set; }
     public string? PropertyName { get; set; }
 
-    /// <summary>Sum of charges (rent, fees, deposits) owed on this lease.</summary>
+    /// <summary>Sum of posted debits on this tenant account.</summary>
     public decimal TotalCharged { get; set; }
 
-    /// <summary>Sum of payments received on this lease.</summary>
+    /// <summary>Sum of posted credits on this tenant account.</summary>
     public decimal TotalPaid { get; set; }
 
     /// <summary>Outstanding balance: <see cref="TotalCharged"/> minus <see cref="TotalPaid"/>. Negative = credit.</summary>
     public decimal Balance { get; set; }
 
-    /// <summary>Number of past-due charges (Scheduled/Partial/Late with a DueDate before today). Computed
-    /// DB-side over the whole payment set — it is NOT derived from the (paged) <see cref="Entries"/>.</summary>
+    /// <summary>Number of open past-due charges from the authoritative account-balance view.</summary>
     public int PastDueCount { get; set; }
 
     /// <summary>
-    /// Opening balance anchor (carried-over pre-Rental-Command balance), emitted separately from the paged
+    /// Opening balance anchor, emitted separately from the paged
     /// <see cref="Entries"/> so it stays a stable one-row anchor regardless of which page is loaded. Null
     /// when the lease has no opening balance.
     /// </summary>
     public LedgerTransactionResponse? Opening { get; set; }
 
-    /// <summary>Ledger entries (charges and payments) for the requested page, newest first. Each has a
-    /// plain-English explanation. A single payment may expand to two lines (a Partial charge + its
-    /// collected companion), so this can hold more rows than <see cref="Take"/>.</summary>
+    /// <summary>Immutable ledger entries for the requested page, newest first.</summary>
     public IReadOnlyList<LedgerTransactionResponse> Entries { get; set; } = [];
 
-    /// <summary>Total number of payments on the lease (the pageable unit). Drives "page X of N" and
+    /// <summary>Total number of non-opening ledger entries on the account. Drives "page X of N" and
     /// whether more history remains beyond the current page.</summary>
     public int TotalCount { get; set; }
 
-    /// <summary>Payments skipped before this page.</summary>
+    /// <summary>Ledger entries skipped before this page.</summary>
     public int Skip { get; set; }
 
-    /// <summary>Page size (payments) requested for this page.</summary>
+    /// <summary>Ledger-entry page size requested for this page.</summary>
     public int Take { get; set; }
 
     /// <summary>Stable selector for frontend tests.</summary>
-    public string TestId => $"lease-ledger-{LeaseId}";
+    public string TestId => $"tenant-account-ledger-{TenantAccountId}";
 }
 
 /// <summary>

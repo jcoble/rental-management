@@ -683,25 +683,25 @@ export interface LedgerTransaction {
 	explanation: string;
 }
 
-/** Tenant-facing ledger from GET /api/v1/leases/{id}/ledger (LeaseLedgerResponse). */
+/** Tenant-facing projection of one continuous TenantAccount. */
 export interface LeaseLedger {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	accountNumber: string;
 	tenantName?: string;
 	propertyName?: string;
 	totalCharged: number;
 	totalPaid: number;
 	/** Outstanding balance (charges minus payments). Negative = credit/overpayment. */
 	balance: number;
-	/** Past-due charges on the whole lease (Scheduled/Partial/Late, due before today) — computed
-	 * server-side, NOT derived from the paged entries. */
+	/** Open past-due charges from the authoritative server-side account view. */
 	pastDueCount: number;
 	/** Opening-balance anchor, returned separately from the paged entries so it stays stable across
 	 * pages. Null when the lease carries no opening balance. */
 	opening: LedgerTransaction | null;
-	/** Ledger rows for the requested page (newest first). A payment may expand to two lines. */
+	/** Immutable ledger rows for the requested page (newest first). */
 	entries: LedgerTransaction[];
-	/** Total payments on the lease (the pageable unit) — drives "load more". */
+	/** Total non-opening ledger entries on the account — drives paging. */
 	totalCount: number;
 	skip: number;
 	take: number;

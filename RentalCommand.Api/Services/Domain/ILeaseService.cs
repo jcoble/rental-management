@@ -16,10 +16,9 @@ public interface ILeaseService
     Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 
     /// <summary>
-    /// Tenant-facing ledger for one lease: all charges and payments, newest first, each with a
-    /// plain-English explanation of what it is, plus a running balance. Returns null when the lease is
-    /// not found in the portfolio.
+    /// Tenant-facing ledger for one LeaseManagement's continuous TenantAccount. The lookup, totals,
+    /// authorization, ordering, and paging are all canonical database-side projections.
     /// </summary>
     Task<LeaseLedgerResponse?> GetLedgerAsync(
-        int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default);
+        int portfolioId, int leaseManagementId, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default);
 }

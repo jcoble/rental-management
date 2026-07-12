@@ -15,8 +15,12 @@ public sealed class AuditDetailHrefTests
     public void BuildDetailHref_UsesUnitCommandCenterTabsWhenUnitContextExists()
     {
         AuditEntryResponse.BuildDetailHref("WorkOrder", 42, 5).Should().Be("/units/5?tab=maintenance&wo=42");
-        AuditEntryResponse.BuildDetailHref("Lease", 43, 5).Should().Be("/units/5?tab=lease&lease=43");
-        AuditEntryResponse.BuildDetailHref("Payment", 44, 5).Should().Be("/units/5?tab=ledger&ledger=rent&payment=44");
+        AuditEntryResponse.BuildDetailHref("LeaseManagement", 43, 5)
+            .Should().Be("/units/5?tab=lease&leaseManagement=43");
+        AuditEntryResponse.BuildDetailHref("LeaseAgreement", 44, 5)
+            .Should().Be("/units/5?tab=lease&agreement=44");
+        AuditEntryResponse.BuildDetailHref("TenantAccount", 45, 5)
+            .Should().Be("/units/5?tab=ledger&tenantAccount=45");
         AuditEntryResponse.BuildDetailHref("Expense", 45, 5).Should().Be("/units/5?tab=ledger&ledger=expenses&expense=45");
         AuditEntryResponse.BuildDetailHref("RentalApplication", 46, 5).Should().Be("/units/5?tab=applications&app=46");
     }

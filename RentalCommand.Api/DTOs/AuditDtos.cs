@@ -112,12 +112,14 @@ public class AuditEntryResponse
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
     internal static string? BuildDetailHref(string entityType, int entityId, int? unitId = null) => entityType switch
     {
-        "Payment" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=rent&payment={entityId}",
-        "Payment" => $"/accounting/payments/{entityId}",
+        "TenantAccount" when unitId is > 0 => $"/units/{unitId}?tab=ledger&tenantAccount={entityId}",
+        "TenantAccount" => $"/tenant-accounts/{entityId}",
         "Expense" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=expenses&expense={entityId}",
         "Expense" => $"/accounting/expenses/{entityId}",
-        "Lease" when unitId is > 0 => $"/units/{unitId}?tab=lease&lease={entityId}",
-        "Lease" => $"/leases/{entityId}",
+        "LeaseManagement" when unitId is > 0 => $"/units/{unitId}?tab=lease&leaseManagement={entityId}",
+        "LeaseManagement" => $"/lease-managements/{entityId}",
+        "LeaseAgreement" when unitId is > 0 => $"/units/{unitId}?tab=lease&agreement={entityId}",
+        "LeaseAgreement" => $"/lease-agreements/{entityId}",
         "Tenant" => $"/tenants/{entityId}",
         "Property" => $"/properties/{entityId}",
         "WorkOrder" when unitId is > 0 => $"/units/{unitId}?tab=maintenance&wo={entityId}",

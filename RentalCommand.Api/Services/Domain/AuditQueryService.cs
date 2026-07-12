@@ -127,20 +127,37 @@ public class AuditQueryService : IAuditQueryService
             }
         }
 
-        var leaseIds = Ids("Lease");
-        if (leaseIds.Count > 0)
+        var relationshipIds = Ids(nameof(Core.Entities.LeaseManagement));
+        if (relationshipIds.Count > 0)
         {
-            await AddAsync("Lease", _db.Leases.AsNoTracking()
-                .Where(l => leaseIds.Contains(l.Id) && l.PortfolioId == portfolioId)
-                .Select(l => new UnitRefRow { Id = l.Id, UnitId = l.UnitId }));
+            await AddAsync(nameof(Core.Entities.LeaseManagement), _db.LeaseManagements.AsNoTracking()
+                .Where(relationship => relationshipIds.Contains(relationship.Id)
+                    && relationship.PortfolioId == portfolioId)
+                .Select(relationship => new UnitRefRow
+                {
+                    Id = relationship.Id,
+                    UnitId = relationship.UnitId,
+                }));
         }
 
-        var paymentIds = Ids("Payment");
-        if (paymentIds.Count > 0)
+        var agreementIds = Ids(nameof(Core.Entities.LeaseAgreement));
+        if (agreementIds.Count > 0)
         {
-            await AddAsync("Payment", _db.Payments.AsNoTracking()
-                .Where(p => paymentIds.Contains(p.Id) && p.PortfolioId == portfolioId)
-                .Select(p => new UnitRefRow { Id = p.Id, UnitId = p.Lease != null ? p.Lease.UnitId : null }));
+            await AddAsync(nameof(Core.Entities.LeaseAgreement), _db.LeaseAgreements.AsNoTracking()
+                .Where(agreement => agreementIds.Contains(agreement.Id)
+                    && agreement.PortfolioId == portfolioId)
+                .Select(agreement => new UnitRefRow
+                {
+                    Id = agreement.Id,
+                    UnitId = agreement.LeaseManagement!.UnitId,
+                }));
+        }
+
+        var accountIds = Ids(nameof(Core.Entities.TenantAccount));
+        if (accountIds.Count > 0)
+        {
+            await AddAsync(nameof(Core.Entities.TenantAccount),
+                BuildTenantAccountUnitRefsQuery(portfolioId, accountIds));
         }
 
         var workOrderIds = Ids("WorkOrder");
@@ -173,6 +190,16 @@ public class AuditQueryService : IAuditQueryService
 
         return unitIds;
     }
+
+    internal IQueryable<UnitRefRow> BuildTenantAccountUnitRefsQuery(
+        int portfolioId, IReadOnlyList<int> accountIds) =>
+        _db.TenantAccounts.AsNoTracking()
+            .Where(account => accountIds.Contains(account.Id) && account.PortfolioId == portfolioId)
+            .Select(account => new UnitRefRow
+            {
+                Id = account.Id,
+                UnitId = account.LeaseManagement!.UnitId,
+            });
 
     public async IAsyncEnumerable<AdminAuditEntryResponse> StreamForensicAsync(
         int portfolioId,
@@ -387,7 +414,7 @@ public class AuditQueryService : IAuditQueryService
         return matched;
     }
 
-    private sealed class UnitRefRow
+    internal sealed class UnitRefRow
     {
         public int Id { get; set; }
         public int? UnitId { get; set; }

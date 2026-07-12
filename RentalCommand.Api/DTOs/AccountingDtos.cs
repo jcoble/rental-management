@@ -305,7 +305,7 @@ public class LedgerTransactionResponse
 {
     public DateTime Date { get; set; }
     public string Type { get; set; } = string.Empty;
-    public int Id { get; set; }
+    public long Id { get; set; }
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public int? PropertyId { get; set; }

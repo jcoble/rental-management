@@ -79,7 +79,7 @@ public class LeaseController : ManagementControllerBase
     {
         // Payment history is paged DB-side (Skip/Take) so a multi-year tenancy never materializes whole.
         var ledger = await _service.GetLedgerAsync(GetPortfolioId(), id, GetTenantIdOrNull(), skip, take, ct);
-        return ledger == null ? NotFound(new { error = "Lease not found" }) : Ok(ledger);
+        return ledger == null ? NotFound(new { error = "Tenant account not found" }) : Ok(ledger);
     }
 
 

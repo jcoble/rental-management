@@ -10,6 +10,54 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public static class LedgerExplanation
 {
+    /// <summary>Plain-English explanation for one immutable canonical tenant-ledger entry.</summary>
+    public static string ForTenantLedgerEntry(
+        TenantLedgerEntryType entryType,
+        TenantLedgerDirection direction,
+        decimal amount,
+        DateOnly effectiveOn,
+        DateOnly? dueOn,
+        string? paymentMethodSummary,
+        string? description)
+    {
+        var money = Money(amount);
+        var effectiveDate = effectiveOn.ToDateTime(TimeOnly.MinValue);
+        var dueDate = (dueOn ?? effectiveOn).ToDateTime(TimeOnly.MinValue);
+        var byMethod = string.IsNullOrWhiteSpace(paymentMethodSummary)
+            ? string.Empty
+            : $" by {paymentMethodSummary.Trim().ToLowerInvariant()}";
+
+        return entryType switch
+        {
+            TenantLedgerEntryType.OpeningBalance => ForOpeningBalance(
+                direction == TenantLedgerDirection.Credit ? -amount : amount, effectiveDate),
+            TenantLedgerEntryType.RentCharge =>
+                $"Rent for {MonthYear(dueDate)} — {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.AddendumCharge =>
+                $"Agreement addendum charge of {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.LateFeeCharge =>
+                $"Late fee of {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.DepositCharge =>
+                $"Security deposit charge of {money} due {ShortDate(dueDate)}.",
+            TenantLedgerEntryType.ManualCharge =>
+                $"Charge of {money} due {ShortDate(dueDate)}: {ReadableDescription(description)}.",
+            TenantLedgerEntryType.PaymentReceipt =>
+                $"Payment of {money} received{byMethod} on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.Credit =>
+                $"Credit of {money} posted on {ShortDate(effectiveDate)}: {ReadableDescription(description)}.",
+            TenantLedgerEntryType.Adjustment =>
+                $"Account adjustment of {money} posted on {ShortDate(effectiveDate)}: {ReadableDescription(description)}.",
+            TenantLedgerEntryType.Refund =>
+                $"Refund of {money} posted on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.TransferIn =>
+                $"Balance transfer of {money} received on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.TransferOut =>
+                $"Balance transfer of {money} sent on {ShortDate(effectiveDate)}.",
+            TenantLedgerEntryType.Reversal =>
+                $"Reversal of {money} posted on {ShortDate(effectiveDate)}: {ReadableDescription(description)}.",
+            _ => $"{ReadableDescription(description)} — {money} posted on {ShortDate(effectiveDate)}.",
+        };
+    }
     /// <summary>
     /// Explanation for a payment ledger entry.
     /// </summary>
@@ -178,4 +226,7 @@ public static class LedgerExplanation
     private static string LongDate(DateTime date) => date.ToString("MMM d, yyyy");
 
     private static string MonthYear(DateTime date) => date.ToString("MMMM yyyy");
+
+    private static string ReadableDescription(string? description) =>
+        string.IsNullOrWhiteSpace(description) ? "tenant account entry" : description.Trim().TrimEnd('.');
 }
