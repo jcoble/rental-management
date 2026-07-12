@@ -1,5 +1,4 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -64,6 +63,21 @@ public sealed class MoveOutStatementTests : IDisposable
             "Refund paid by ACH",
             new DateOnly(2026, 6, 5),
             postedAtUtc: new DateTime(2026, 6, 5, 14, 30, 0, DateTimeKind.Utc));
+        _ctx.Db.SecurityDepositBalanceProjections.Add(new SecurityDepositBalanceProjection
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = graph.Management.Id,
+            TenantAccountId = graph.DepositAccount.TenantAccountId,
+            SecurityDepositAccountId = graph.DepositAccount.Id,
+            EffectiveNowUtc = new DateTime(2026, 6, 5, 14, 30, 0, DateTimeKind.Utc),
+            BusinessDate = new DateOnly(2026, 6, 5),
+            Currency = "USD",
+            TotalReceived = 1_500m,
+            TotalDeductions = 500m,
+            TotalRefunded = 1_000m,
+            HeldBalance = 0m,
+            DepositStatus = "PartiallyReturned",
+        });
         var matchingKey = await _storage.UploadAsync(
             new MemoryStream(OnePixelPng),
             "matching.png",
@@ -363,19 +377,12 @@ public sealed class MoveOutStatementTests : IDisposable
 
     private sealed class MoveOutStatementTestContext : IDisposable
     {
-        private readonly SqliteConnection _connection;
-
         internal MoveOutStatementTestContext()
         {
-            _connection = new SqliteConnection($"Data Source=moveout-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
-            _connection.Open();
-
             var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-                .UseSqlite(_connection)
+                .UseInMemoryDatabase($"moveout-{Guid.NewGuid():N}")
                 .Options;
             Db = new MoveOutStatementTestDbContext(options);
-            Db.Database.EnsureCreated();
-            Db.Database.ExecuteSqlRaw(SecurityDepositBalanceViewSqlite);
             Db.Portfolios.Add(new Portfolio
             {
                 Id = PortfolioId,
@@ -393,7 +400,6 @@ public sealed class MoveOutStatementTests : IDisposable
         public void Dispose()
         {
             Db.Dispose();
-            _connection.Dispose();
         }
     }
 
@@ -403,26 +409,8 @@ public sealed class MoveOutStatementTests : IDisposable
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
-
-            foreach (var property in modelBuilder.Model.GetEntityTypes().SelectMany(entity => entity.GetProperties()))
-            {
-                if (property.GetColumnType() == "jsonb")
-                    property.SetColumnType("TEXT");
-            }
-
-            // SQLite cannot parse PostgreSQL regex check constraints. These tables are populated
-            // only with valid canonical facts in this test, so the production constraints remain
-            // covered by PostgreSQL integration tests and are removed only from this local model.
-            modelBuilder.Entity<TenantAccount>().ToTable("TenantAccounts");
-            modelBuilder.Entity<TenantPaymentAttempt>().ToTable("TenantPaymentAttempts");
-            modelBuilder.Entity<TenantLedgerEntry>().ToTable("TenantLedgerEntries");
-            modelBuilder.Entity<SecurityDepositAccount>().ToTable("SecurityDepositAccounts");
-            modelBuilder.Entity<SecurityDepositEntry>().ToTable("SecurityDepositEntries");
-            modelBuilder.Entity<LegalDocumentArtifact>().ToTable("LegalDocumentArtifacts");
-            modelBuilder.Entity<LeaseAgreement>().ToTable("LeaseAgreements");
-            modelBuilder.Entity<LeaseAddendumFinancialEffect>().ToTable("LeaseAddendumFinancialEffects");
-            modelBuilder.Entity<ApplicationFinancialAccount>().ToTable("ApplicationFinancialAccounts");
-            modelBuilder.Entity<ApplicationFinancialEntry>().ToTable("ApplicationFinancialEntries");
+            modelBuilder.Entity<SecurityDepositBalanceProjection>()
+                .HasKey(row => new { row.PortfolioId, row.SecurityDepositAccountId });
         }
     }
 
