@@ -43,7 +43,13 @@ This avoids cross-portfolio references even if an API guard is bypassed. It also
 
 - All legal, possession, party, account, ledger, deposit, signature, notice, and operational references use `RESTRICT`/`NO ACTION`.
 - There is no soft-delete column on the new lease/account domain. A durable cancel, void, supersession, return, reversal, or closure fact replaces deletion.
-- Issued legal artifacts and posted financial entries cannot be deleted, including through a portfolio delete. Development/test reset drops and recreates the database.
+- Issued legal artifacts and posted financial entries cannot be deleted through ordinary application,
+  administrator, worker, or portfolio-delete paths. The sole exception is the one-way sandbox-to-live
+  graduation transaction: the dedicated `SandboxGraduation` database reason may delete the complete
+  disposable sandbox domain graph in FK-safe order while preserving workspace identity, access, and
+  reusable user configuration. The lease is scoped to exactly the graduating portfolio in both the
+  session GUCs and delete policies/guards. That reason is unavailable to ordinary commands and never
+  permits an update of immutable rows. Development/test reset still drops and recreates the database.
 - Unissued drafts are canceled rather than deleted so attempted move-ins and corrections remain explainable.
 
 ### 2.3 RLS and view security

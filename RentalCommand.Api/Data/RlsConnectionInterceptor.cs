@@ -23,7 +23,8 @@ public interface IRlsExecutionContext
 {
     bool IsBypassActive { get; }
     RlsBypassReason? ActiveBypassReason { get; }
-    IDisposable BeginBypass(RlsBypassReason reason);
+    int? ActivePortfolioId { get; }
+    IDisposable BeginBypass(RlsBypassReason reason, int? portfolioId = null);
 }
 
 /// <summary>
@@ -36,12 +37,14 @@ public sealed class RlsExecutionContext : IRlsExecutionContext
 
     public bool IsBypassActive => _current.Value is not null;
     public RlsBypassReason? ActiveBypassReason => _current.Value?.Reason;
+    public int? ActivePortfolioId => _current.Value?.PortfolioId;
 
-    public IDisposable BeginBypass(RlsBypassReason reason)
+    public IDisposable BeginBypass(RlsBypassReason reason, int? portfolioId = null)
     {
         if (!Enum.IsDefined(reason)) throw new ArgumentOutOfRangeException(nameof(reason));
+        if (portfolioId is <= 0) throw new ArgumentOutOfRangeException(nameof(portfolioId));
         var prior = _current.Value;
-        var lease = new BypassLease(this, prior, reason);
+        var lease = new BypassLease(this, prior, reason, portfolioId);
         _current.Value = lease;
         return lease;
     }
@@ -52,14 +55,20 @@ public sealed class RlsExecutionContext : IRlsExecutionContext
         private readonly BypassLease? _prior;
         private bool _disposed;
 
-        public BypassLease(RlsExecutionContext owner, BypassLease? prior, RlsBypassReason reason)
+        public BypassLease(
+            RlsExecutionContext owner,
+            BypassLease? prior,
+            RlsBypassReason reason,
+            int? portfolioId)
         {
             _owner = owner;
             _prior = prior;
             Reason = reason;
+            PortfolioId = portfolioId;
         }
 
         public RlsBypassReason Reason { get; }
+        public int? PortfolioId { get; }
 
         public void Dispose()
         {
@@ -115,7 +124,8 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         var state = ResolveSessionState(
             _httpContextAccessor.HttpContext,
             _executionContext.IsBypassActive,
-            _executionContext.ActiveBypassReason);
+            _executionContext.ActiveBypassReason,
+            _executionContext.ActivePortfolioId);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = BuildSql(state);
         cmd.ExecuteNonQuery();
@@ -128,7 +138,8 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         var state = ResolveSessionState(
             _httpContextAccessor.HttpContext,
             _executionContext.IsBypassActive,
-            _executionContext.ActiveBypassReason);
+            _executionContext.ActiveBypassReason,
+            _executionContext.ActivePortfolioId);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = BuildSql(state);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -137,7 +148,8 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
     internal static RlsSessionState ResolveSessionState(
         HttpContext? httpContext,
         bool bypassActive,
-        RlsBypassReason? bypassReason = null)
+        RlsBypassReason? bypassReason = null,
+        int? bypassPortfolioId = null)
     {
         if (bypassActive)
         {
@@ -146,7 +158,10 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
                 throw new InvalidOperationException("An active RLS bypass must identify its reason.");
             }
 
-            return new RlsSessionState(0, true, bypassReason);
+            return new RlsSessionState(
+                bypassPortfolioId ?? 0,
+                IsAdmin: bypassPortfolioId is null,
+                bypassReason);
         }
 
         if (httpContext is not null &&

@@ -52,6 +52,12 @@ internal static class RelationshipAccessProjectionSql
           AND (access."EffectiveToUtc" IS NULL OR access."EffectiveToUtc" > CURRENT_TIMESTAMP);
 
         CREATE VIEW "vw_effective_tenant_access" WITH (security_invoker = true) AS
+        WITH effective_portfolio_dates AS MATERIALIZED (
+          SELECT portfolio."Id" AS "PortfolioId",
+                 rc_business_date(portfolio."Id") AS "BusinessDate"
+          FROM "Portfolios" AS portfolio
+          WHERE portfolio."DeletedAt" IS NULL
+        )
         SELECT c."Id" AS "AccessContextId", c."UserId", c."PortfolioId", c."AccessRevision",
                access."Id" AS "TenantUserAccessId", party."Id" AS "LeaseManagementPartyId",
                party."TenantId", party."LeaseManagementId", account."Id" AS "TenantAccountId",
@@ -66,11 +72,12 @@ internal static class RelationshipAccessProjectionSql
           ON relationship."Id" = party."LeaseManagementId" AND relationship."PortfolioId" = party."PortfolioId"
         LEFT JOIN "TenantAccounts" account
           ON account."LeaseManagementId" = relationship."Id" AND account."PortfolioId" = relationship."PortfolioId"
-        JOIN "Portfolios" portfolio ON portfolio."Id" = c."PortfolioId" AND portfolio."DeletedAt" IS NULL
+        JOIN effective_portfolio_dates effective_date
+          ON effective_date."PortfolioId" = c."PortfolioId"
         WHERE c."Status" = 'Active' AND c."SuspendedAtUtc" IS NULL AND c."RevokedAtUtc" IS NULL
           AND access."RevokedAtUtc" IS NULL
-          AND party."EffectiveFrom" <= rc_business_date(c."PortfolioId")
+          AND party."EffectiveFrom" <= effective_date."BusinessDate"
           AND (party."EffectiveThrough" IS NULL
-               OR party."EffectiveThrough" >= rc_business_date(c."PortfolioId"));
+               OR party."EffectiveThrough" >= effective_date."BusinessDate");
         """;
 }

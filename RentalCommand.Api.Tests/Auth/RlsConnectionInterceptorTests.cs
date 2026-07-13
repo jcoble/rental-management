@@ -55,6 +55,24 @@ public sealed class RlsConnectionInterceptorTests
     }
 
     [Fact]
+    public void PortfolioScopedLease_EmitsOnlyItsExplicitWorkspaceScope()
+    {
+        var execution = new RlsExecutionContext();
+
+        using (execution.BeginBypass(RlsBypassReason.SandboxGraduation, portfolioId: 17))
+        {
+            RlsConnectionInterceptor.ResolveSessionState(
+                    null,
+                    execution.IsBypassActive,
+                    execution.ActiveBypassReason,
+                    execution.ActivePortfolioId)
+                .Should().Be(new RlsSessionState(17, false, RlsBypassReason.SandboxGraduation));
+        }
+
+        execution.ActivePortfolioId.Should().BeNull();
+    }
+
+    [Fact]
     public void NarrowPreContextLease_IsExceptionSafe()
     {
         var execution = new RlsExecutionContext();

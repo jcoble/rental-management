@@ -34,6 +34,7 @@ internal static class CanonicalDemoLeaseSeeder
             RenderMode = DocumentTemplateRenderMode.Restyle,
             Name = "Demo lease template",
             Description = "Seed-only template backing canonical demo agreements.",
+            IsSandboxSeeded = true,
             DraftHtml = "<p>Demo lease agreement</p>",
             Version = 1,
             CreatedAtUtc = now,

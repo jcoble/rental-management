@@ -199,6 +199,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
         base.OnModelCreating(modelBuilder);
+        modelBuilder.HasPostgresExtension("pg_trgm");
         modelBuilder.ConfigureWorkspaceAccessKernel();
         modelBuilder.ConfigureLeaseRelationshipKernel();
         modelBuilder.ConfigureLeaseLegalArtifacts();
@@ -411,6 +412,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Description).HasMaxLength(2000);
             entity.Property(e => e.DraftHtml).HasColumnType("text");
+            entity.Property(e => e.IsSandboxSeeded).HasDefaultValue(false);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => new { e.PortfolioId, e.Kind, e.Status });
             entity.HasIndex(e => new { e.PortfolioId, e.Kind, e.DefaultForPortfolio });
@@ -660,6 +662,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.TemplateProvenance).IsRequired().HasMaxLength(1000);
             entity.Property(e => e.JurisdictionCode).HasMaxLength(80);
             entity.HasIndex(e => new { e.PortfolioId, e.NoticeDraftId }).IsUnique();
+            entity.HasOne(e => e.Portfolio).WithMany()
+                .HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<NoticeDeliveryEvidence>(entity =>
@@ -685,7 +689,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ClaimOwner).HasMaxLength(200);
             entity.HasIndex(e => e.BusinessKey).IsUnique();
             entity.HasIndex(e => new { e.Status, e.DueAtUtc, e.ClaimExpiresAtUtc, e.Id });
-            entity.HasOne<TenantNoticePolicy>().WithMany()
+            entity.HasOne(e => e.Policy).WithMany()
                 .HasForeignKey(e => new { e.TenantNoticePolicyId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Cascade);
         });
@@ -2262,5 +2266,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // principal's `DeletedAt` so the whole sub-tree disappears when an ancestor is soft-deleted.
         modelBuilder.Entity<ConversationMessage>().HasQueryFilter(e => e.Conversation!.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<InspectionItem>().HasQueryFilter(e => e.Inspection!.Portfolio!.DeletedAt == null);
+
+        // Close the required-relationship filter graph for the canonical lease/account/access,
+        // listing, notification, signature, eviction, and application-finance aggregates. Keep
+        // this last: several entities above already have soft-delete filters which this extension
+        // deliberately composes with portfolio visibility rather than replacing.
+        modelBuilder.ConfigurePortfolioVisibilityQueryFilters();
     }
 }

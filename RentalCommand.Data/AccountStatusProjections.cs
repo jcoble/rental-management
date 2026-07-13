@@ -163,6 +163,7 @@ internal static class LeaseAddendumStatusViewSql
           CROSS JOIN LATERAL (
             SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
           ) AS effective_time
+          WHERE portfolio."DeletedAt" IS NULL
         ),
         financial_effects AS (
           SELECT effect."PortfolioId",
@@ -268,6 +269,7 @@ internal static class TenantChargeBalanceViewSql
           CROSS JOIN LATERAL (
             SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
           ) AS effective_time
+          WHERE portfolio."DeletedAt" IS NULL
         ),
         entry_reversals AS (
           SELECT reversal."PortfolioId",
@@ -353,6 +355,7 @@ internal static class TenantAccountBalanceViewSql
           CROSS JOIN LATERAL (
             SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
           ) AS effective_time
+          WHERE portfolio."DeletedAt" IS NULL
         ),
         entry_reversals AS (
           SELECT reversal."PortfolioId",
@@ -551,6 +554,7 @@ internal static class SecurityDepositBalanceViewSql
           CROSS JOIN LATERAL (
             SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
           ) AS effective_time
+          WHERE portfolio."DeletedAt" IS NULL
         ),
         entry_reversals AS (
           SELECT reversal."PortfolioId",

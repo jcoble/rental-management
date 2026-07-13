@@ -343,6 +343,11 @@ internal static class LeaseLegalSchemaSql
         LANGUAGE plpgsql
         AS $function$
         BEGIN
+          IF TG_OP = 'DELETE'
+             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            RETURN OLD;
+          END IF;
+
           RAISE EXCEPTION 'LegalDocumentArtifacts are immutable';
         END;
         $function$;
@@ -357,6 +362,10 @@ internal static class LeaseLegalSchemaSql
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE' THEN
+            IF current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+              RETURN OLD;
+            END IF;
+
             RAISE EXCEPTION 'LeaseAgreements are durable and cannot be deleted';
           END IF;
 
@@ -424,6 +433,10 @@ internal static class LeaseLegalSchemaSql
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE' THEN
+            IF current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+              RETURN OLD;
+            END IF;
+
             RAISE EXCEPTION 'LeaseAddenda are durable and cannot be deleted';
           END IF;
 
@@ -498,6 +511,11 @@ internal static class LeaseLegalSchemaSql
           old_parent_issued timestamp with time zone;
           new_parent_issued timestamp with time zone;
         BEGIN
+          IF TG_OP = 'DELETE'
+             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            RETURN OLD;
+          END IF;
+
           IF TG_OP <> 'INSERT' THEN
             SELECT agreement."IssuedAtUtc" INTO old_parent_issued
             FROM "LeaseAgreements" AS agreement
@@ -540,6 +558,11 @@ internal static class LeaseLegalSchemaSql
           old_parent_issued timestamp with time zone;
           new_parent_issued timestamp with time zone;
         BEGIN
+          IF TG_OP = 'DELETE'
+             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            RETURN OLD;
+          END IF;
+
           IF TG_OP <> 'INSERT' THEN
             old_parent_id := (to_jsonb(OLD) ->> 'LeaseAddendumId')::integer;
             old_portfolio_id := (to_jsonb(OLD) ->> 'PortfolioId')::integer;
@@ -647,6 +670,11 @@ internal static class LeaseLegalSchemaSql
         LANGUAGE plpgsql
         AS $function$
         BEGIN
+          IF TG_OP = 'DELETE'
+             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            RETURN OLD;
+          END IF;
+
           RAISE EXCEPTION 'SignatureAuditEvents are append-only';
         END;
         $function$;

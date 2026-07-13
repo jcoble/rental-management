@@ -41,6 +41,11 @@ internal static class TenantAccountPostgreSqlContract
         LANGUAGE plpgsql
         AS $function$
         BEGIN
+          IF TG_OP = 'DELETE'
+             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            RETURN OLD;
+          END IF;
+
           RAISE EXCEPTION '% is append-only; % is not permitted', TG_TABLE_NAME, TG_OP
             USING ERRCODE = '23514';
         END;
@@ -183,6 +188,10 @@ internal static class TenantAccountPostgreSqlContract
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE' THEN
+            IF current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+              RETURN OLD;
+            END IF;
+
             RAISE EXCEPTION 'TenantAccountConditionPeriod % cannot be deleted', OLD."Id"
               USING ERRCODE = '23514';
           END IF;
