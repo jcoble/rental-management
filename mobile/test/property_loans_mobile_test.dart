@@ -297,7 +297,9 @@ class _FakePropertiesRepository extends PropertiesRepository {
   ];
 
   @override
-  Future<List<Lease>> listLeasesForProperty(int propertyId) async => const [];
+  Future<List<LeaseManagementSummary>> listLeaseManagementsForProperty(
+    int propertyId,
+  ) async => const [];
 
   @override
   Future<Property> getProperty(int id) async => _property();

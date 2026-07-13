@@ -14,7 +14,9 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            leasesRepositoryProvider.overrideWithValue(_FakeLeasesRepository()),
+            leaseManagementsRepositoryProvider.overrideWithValue(
+              _FakeLeaseManagementsRepository(),
+            ),
             tenantsRepositoryProvider.overrideWithValue(
               _FakeTenantsRepository(),
             ),
@@ -62,22 +64,15 @@ Tenant _tenant() {
   );
 }
 
-class _FakeLeasesRepository extends LeasesRepository {
-  _FakeLeasesRepository() : super(Dio());
+class _FakeLeaseManagementsRepository extends LeaseManagementsRepository {
+  _FakeLeaseManagementsRepository() : super(Dio());
 
   @override
-  Future<List<Lease>> listLeases({
+  Future<List<LeaseManagementSummary>> list({
     int? tenantId,
     int? propertyId,
     int? unitId,
-    String? status,
-    String? startFrom,
-    String? startTo,
-    String? endFrom,
-    String? endTo,
-    String? activeOn,
-    String? activeFrom,
-    String? activeTo,
+    String? lifecycle,
   }) async {
     return const [];
   }

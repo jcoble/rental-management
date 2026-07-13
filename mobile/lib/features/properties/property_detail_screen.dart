@@ -60,12 +60,12 @@ String _unitTitle(Unit unit, {required bool propertyIsUnit}) {
   return number.isEmpty ? 'Unit' : 'Unit $number';
 }
 
-void _openLeaseDetail(BuildContext context, Lease lease) {
+void _openLeaseDetail(BuildContext context, LeaseManagementSummary management) {
   openUnitCommandCenter(
     context,
-    unitId: lease.unitId,
+    unitId: management.unitId,
     initialTab: UnitCommandCenterTab.lease,
-    lease: lease,
+    leaseManagementId: management.id,
   );
 }
 
@@ -141,7 +141,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     }
   }
 
-  // unitsProvider and propertyLeasesProvider both self-load on first watch
+  // Both property providers self-load on first watch
   // (their notifier build() calls Future.microtask(load)), so no explicit
   // initState load is needed — adding one just double-fetches.
 
@@ -149,7 +149,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final propertyId = _property.id;
     await Future.wait<void>([
       ref.read(unitsProvider(propertyId).notifier).refresh(),
-      ref.read(propertyLeasesProvider(propertyId).notifier).refresh(),
+      ref.read(propertyLeaseManagementsProvider(propertyId).notifier).refresh(),
       ref.read(propertiesRepositoryProvider).getProperty(propertyId).then((
         property,
       ) {
@@ -163,9 +163,14 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
 
   /// The active lease for [unitId] from the property's leases, or null. Used to
   /// drill from an occupied unit to its current lease.
-  Lease? _activeLeaseForUnit(List<Lease> leases, int unitId) {
-    for (final l in leases) {
-      if (l.unitId == unitId && l.status.toLowerCase() == 'active') return l;
+  LeaseManagementSummary? _activeLeaseForUnit(
+    List<LeaseManagementSummary> relationships,
+    int unitId,
+  ) {
+    for (final relationship in relationships) {
+      if (relationship.unitId == unitId && relationship.isOpen) {
+        return relationship;
+      }
     }
     return null;
   }
@@ -452,7 +457,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       ref.read(propertyDispositionsProvider(propertyId).notifier).refresh(),
       ref.read(propertyCapitalAssetsProvider(propertyId).notifier).refresh(),
       ref.read(unitsProvider(propertyId).notifier).refresh(),
-      ref.read(propertyLeasesProvider(propertyId).notifier).refresh(),
+      ref.read(propertyLeaseManagementsProvider(propertyId).notifier).refresh(),
       ref.read(propertiesProvider.notifier).refresh(),
       ref.read(propertiesRepositoryProvider).getProperty(propertyId).then((
         property,
@@ -533,7 +538,9 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final unitsAsync = ref.watch(unitsProvider(property.id));
-    final leasesAsync = ref.watch(propertyLeasesProvider(property.id));
+    final leasesAsync = ref.watch(
+      propertyLeaseManagementsProvider(property.id),
+    );
     final loansAsync = ref.watch(propertyLoansProvider(property.id));
     final capitalAssetsAsync = ref.watch(
       propertyCapitalAssetsProvider(property.id),
@@ -616,7 +623,9 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                 }
                 // The property's leases (when loaded) let an occupied unit drill
                 // through to its active lease.
-                final leases = leasesAsync.asData?.value ?? const <Lease>[];
+                final leases =
+                    leasesAsync.asData?.value ??
+                    const <LeaseManagementSummary>[];
                 return Column(
                   children: units
                       .map(
@@ -946,9 +955,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                 message: e is ApiException ? e.message : e.toString(),
               ),
               data: (leases) {
-                final active = leases
-                    .where((l) => l.status.toLowerCase() == 'active')
-                    .toList();
+                final active = leases.where((item) => item.isOpen).toList();
                 if (active.isEmpty) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1120,7 +1127,7 @@ class _UnitTile extends StatelessWidget {
   final VoidCallback onEdit;
 
   /// The unit's active lease, when occupied — enables drill-through to it.
-  final Lease? activeLease;
+  final LeaseManagementSummary? activeLease;
 
   @override
   Widget build(BuildContext context) {
@@ -1155,9 +1162,9 @@ class _UnitTile extends StatelessWidget {
           ),
         ),
         subtitle: Text(
-          lease != null && lease.tenantName != null
+          lease != null && lease.primaryTenantName != null
               ? '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
-                    '${lease.tenantName} · tap for lease'
+                    '${lease.primaryTenantName} · tap for tenant & lease'
               : '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
                     '${_formatCurrency(unit.marketRent)}/mo',
           style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
@@ -1201,7 +1208,7 @@ class _UnitTile extends StatelessWidget {
 class _LeaseTile extends StatelessWidget {
   const _LeaseTile({required this.lease});
 
-  final Lease lease;
+  final LeaseManagementSummary lease;
 
   @override
   Widget build(BuildContext context) {
@@ -1222,14 +1229,14 @@ class _LeaseTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      lease.tenantName ?? 'Lease #${lease.leaseNumber}',
+                      lease.primaryTenantName ?? lease.relationshipNumber,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                   Text(
-                    _formatCurrency(lease.monthlyRent),
+                    _formatCurrency(lease.baseRentAmount ?? 0),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: colorScheme.primary,
@@ -1245,8 +1252,8 @@ class _LeaseTile extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
-                '${_formatDate(lease.startDate)} – ${_formatDate(lease.endDate)}',
+                'Unit ${lease.unitNumber}  ·  '
+                '${lease.termStartOn == null ? 'Agreement not issued' : '${_formatDate(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : _formatDate(lease.termEndOn!)}'}',
                 style: TextStyle(
                   fontSize: 12,
                   color: colorScheme.onSurfaceVariant,

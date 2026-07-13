@@ -5,8 +5,19 @@ import '../../core/api/api_exception.dart';
 import 'leases_repository.dart';
 
 const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String _fmtDate(DateTime d) {
@@ -34,17 +45,18 @@ String _money(double value) {
 ///
 /// Used both on the tenant portal (transparency) and the landlord lease detail.
 class LeaseLedgerView extends ConsumerWidget {
-  const LeaseLedgerView({super.key, required this.leaseId});
+  const LeaseLedgerView({super.key, required this.leaseManagementId});
 
-  final int leaseId;
+  final int leaseManagementId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final ledgerAsync = ref.watch(leaseLedgerProvider(leaseId));
+    final ledgerAsync = ref.watch(leaseLedgerProvider(leaseManagementId));
 
     return RefreshIndicator(
-      onRefresh: () async => ref.invalidate(leaseLedgerProvider(leaseId)),
+      onRefresh: () async =>
+          ref.invalidate(leaseLedgerProvider(leaseManagementId)),
       child: ledgerAsync.when(
         loading: () => ListView(
           children: const [
@@ -78,7 +90,8 @@ class LeaseLedgerView extends ConsumerWidget {
             const SizedBox(height: 16),
             Center(
               child: FilledButton.tonal(
-                onPressed: () => ref.invalidate(leaseLedgerProvider(leaseId)),
+                onPressed: () =>
+                    ref.invalidate(leaseLedgerProvider(leaseManagementId)),
                 child: const Text('Retry'),
               ),
             ),
@@ -186,10 +199,7 @@ class _BalanceCard extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: _Total(
-                    label: 'Paid',
-                    value: _money(ledger.totalPaid),
-                  ),
+                  child: _Total(label: 'Paid', value: _money(ledger.totalPaid)),
                 ),
               ],
             ),
@@ -243,8 +253,7 @@ class _LedgerEntryCard extends StatelessWidget {
     // A payment reduces what's owed; show it green and signed.
     final isPayment = entry.type.toLowerCase() == 'payment';
     final amountColor = isPayment ? Colors.green.shade700 : cs.onSurface;
-    final signedAmount =
-        '${isPayment ? '-' : ''}${_money(entry.amount.abs())}';
+    final signedAmount = '${isPayment ? '-' : ''}${_money(entry.amount.abs())}';
 
     return Card(
       child: Padding(
@@ -277,7 +286,9 @@ class _LedgerEntryCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        entry.description.isEmpty ? entry.type : entry.description,
+                        entry.description.isEmpty
+                            ? entry.type
+                            : entry.description,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),

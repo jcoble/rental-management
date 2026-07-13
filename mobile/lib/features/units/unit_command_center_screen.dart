@@ -7,17 +7,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/lease.dart';
 import '../../core/models/work_order.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
-import '../leases/lease_form_defaults.dart';
 import '../leases/lease_detail_screen.dart';
-import '../leases/leases_list_screen.dart';
-import '../leases/leases_repository.dart';
 import '../maintenance/create_work_order_sheet.dart';
 import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
@@ -37,7 +33,7 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
     super.key,
     required this.unitId,
     this.initialTab = UnitCommandCenterTab.overview,
-    this.initialLease,
+    this.initialLeaseManagementId,
     this.initialApplication,
     this.initialWorkOrder,
     this.selectedTenantId,
@@ -45,7 +41,7 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
 
   final int unitId;
   final UnitCommandCenterTab initialTab;
-  final Lease? initialLease;
+  final int? initialLeaseManagementId;
   final RentalApplication? initialApplication;
   final WorkOrder? initialWorkOrder;
   final int? selectedTenantId;
@@ -74,7 +70,7 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
         final screen = UnitCommandCenterScreen(
           dashboard: dashboard,
           initialTab: initialTab,
-          initialLease: initialLease,
+          initialLeaseManagementId: initialLeaseManagementId,
           initialApplication: initialApplication,
           initialWorkOrder: initialWorkOrder,
           selectedTenantId: selectedTenantId,
@@ -95,7 +91,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
     super.key,
     required this.dashboard,
     this.initialTab = UnitCommandCenterTab.overview,
-    this.initialLease,
+    this.initialLeaseManagementId,
     this.initialApplication,
     this.initialWorkOrder,
     this.selectedTenantId,
@@ -103,7 +99,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
 
   final UnitDashboard dashboard;
   final UnitCommandCenterTab initialTab;
-  final Lease? initialLease;
+  final int? initialLeaseManagementId;
   final RentalApplication? initialApplication;
   final WorkOrder? initialWorkOrder;
   final int? selectedTenantId;
@@ -133,7 +129,10 @@ class UnitCommandCenterScreen extends StatelessWidget {
       children: [
         _UnitOverviewTab(dashboard: dashboard),
         _UnitListingTab(dashboard: dashboard),
-        _UnitLeaseTab(dashboard: dashboard, selectedLease: initialLease),
+        _UnitLeaseTab(
+          dashboard: dashboard,
+          selectedLeaseManagementId: initialLeaseManagementId,
+        ),
         _UnitApplicationsTab(application: initialApplication),
         _UnitLedgerTab(dashboard: dashboard),
         _UnitTenantsTab(
@@ -433,10 +432,7 @@ class _UnitOverviewTab extends ConsumerWidget {
     );
   }
 
-  void _showEditUnitSheet(
-    BuildContext context,
-    WidgetRef ref,
-  ) {
+  void _showEditUnitSheet(BuildContext context, WidgetRef ref) {
     showUnitFormSheet(
       context,
       propertyId: dashboard.unit.propertyId,
@@ -1598,82 +1594,43 @@ class _ListingSignalsSection extends StatelessWidget {
 }
 
 class _UnitLeaseTab extends ConsumerWidget {
-  const _UnitLeaseTab({required this.dashboard, this.selectedLease});
+  const _UnitLeaseTab({
+    required this.dashboard,
+    this.selectedLeaseManagementId,
+  });
 
   final UnitDashboard dashboard;
-  final Lease? selectedLease;
+  final int? selectedLeaseManagementId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final lease = selectedLease;
     final summary = dashboard.currentLease;
-    final property = dashboard.propertyName.trim().isEmpty
-        ? 'Property'
-        : dashboard.propertyName.trim();
-    final leaseDefaults = buildUnitLeaseFormDefaults(
-      unit: dashboard.unit,
-      propertyName: property,
-    );
-    final hasOccupyingLease =
-        dashboard.unit.status != 'Vacant' ||
-        summary?.status == 'Active' ||
-        summary?.status == 'NoticeGiven';
-    final addLease = hasOccupyingLease
-        ? null
-        : () => _showLeaseSheet(context, ref, leaseDefaults);
+    final managementId =
+        selectedLeaseManagementId ??
+        (summary == null || summary.leaseManagementId <= 0
+            ? null
+            : summary.leaseManagementId);
 
-    if (lease != null) {
-      return LeaseDetailScreen(
-        lease: lease,
-        leadingContent: _UnitLeaseAddAction(onPressed: addLease),
-      );
-    }
-
-    if (summary == null) {
+    if (managementId == null) {
       return _EmptyTab(
         icon: Symbols.description_rounded,
-        title: 'No lease',
-        body: 'This unit has no current lease.',
-        action: _UnitLeaseAddAction(onPressed: addLease),
+        title: 'No tenant relationship',
+        body:
+            'Approve an application and prepare move-in, or scan an existing signed agreement.',
+        action: _UnitLeaseAddAction(
+          onPressed: () => openMobileScan(
+            context,
+            initialTargetEntityType: 'LeaseAgreement',
+            lockTargetEntityType: true,
+            propertyId: dashboard.unit.propertyId,
+            unitId: dashboard.unit.id,
+            sourceLabel: 'Unit · Tenant & lease',
+          ),
+        ),
       );
     }
 
-    final leaseAsync = ref.watch(leaseDetailProvider(summary.id));
-    return leaseAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _UnitErrorBody(
-        message: e is ApiException ? e.message : e.toString(),
-        onRetry: () =>
-            ref.read(leaseDetailProvider(summary.id).notifier).refresh(),
-      ),
-      data: (loadedLease) => LeaseDetailScreen(
-        lease: loadedLease,
-        leadingContent: _UnitLeaseAddAction(onPressed: addLease),
-      ),
-    );
-  }
-
-  void _showLeaseSheet(
-    BuildContext context,
-    WidgetRef ref,
-    UnitLeaseFormDefaults defaults,
-  ) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => LeaseFormSheet(
-        unitDefaults: defaults,
-        onSaved: () {
-          ref.invalidate(unitDashboardProvider(dashboard.unit.id));
-          ref.read(leasesProvider.notifier).refresh();
-        },
-      ),
-    );
+    return LeaseManagementDetailScreen(leaseManagementId: managementId);
   }
 }
 
@@ -1689,15 +1646,12 @@ class _UnitLeaseAddAction extends StatelessWidget {
       children: [
         FilledButton.icon(
           icon: const Icon(Icons.add),
-          label: const Text('Add lease'),
+          label: const Text('Scan signed lease'),
           onPressed: onPressed,
         ),
         if (onPressed == null) ...[
           const SizedBox(height: 6),
-          const Text(
-            'End or terminate the active lease before adding another.',
-            textAlign: TextAlign.right,
-          ),
+          const Text('A tenant relationship already exists.'),
         ],
       ],
     );

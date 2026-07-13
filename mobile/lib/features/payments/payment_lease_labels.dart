@@ -47,16 +47,16 @@ String paymentTypeLabel(String type) {
   };
 }
 
-String formatLeasePickerLabel(Lease lease) {
+String formatLeaseManagementPickerLabel(LeaseManagementSummary relationship) {
   final home = _homeLabel(
-    propertyName: lease.propertyName,
-    unitNumber: lease.unitNumber,
+    propertyName: relationship.propertyName,
+    unitNumber: relationship.unitNumber,
   );
-  final tenant = _clean(lease.tenantName);
-  final number = _clean(lease.leaseNumber);
+  final tenant = _clean(relationship.primaryTenantName);
+  final number = _clean(relationship.relationshipNumber);
   if (home.isNotEmpty && tenant.isNotEmpty) return '$home — $tenant';
   if (home.isNotEmpty) return home;
   if (tenant.isNotEmpty) return tenant;
-  if (number.isNotEmpty) return 'Lease $number';
-  return 'Lease';
+  if (number.isNotEmpty) return 'Relationship $number';
+  return 'Rental relationship';
 }

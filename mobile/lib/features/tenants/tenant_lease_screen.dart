@@ -23,8 +23,10 @@ class TenantLeaseScreen extends ConsumerWidget {
         error: (e, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Text('Could not load your lease.\n$e',
-                textAlign: TextAlign.center),
+            child: Text(
+              'Could not load your lease.\n$e',
+              textAlign: TextAlign.center,
+            ),
           ),
         ),
         data: (data) {
@@ -47,7 +49,7 @@ class TenantLeaseScreen extends ConsumerWidget {
 class _LeaseBody extends StatelessWidget {
   const _LeaseBody({required this.lease});
 
-  final Lease lease;
+  final PortalLeaseRelationship lease;
 
   @override
   Widget build(BuildContext context) {
@@ -57,27 +59,36 @@ class _LeaseBody extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       children: [
         Text(
-          lease.propertyName ?? 'Lease ${lease.leaseNumber}',
+          lease.propertyName,
           style: theme.textTheme.headlineSmall?.copyWith(
             fontWeight: FontWeight.w700,
           ),
         ),
-        if (lease.unitNumber != null)
-          Text('Unit ${lease.unitNumber}',
-              style: theme.textTheme.bodyMedium),
+        Text('Unit ${lease.unitNumber}', style: theme.textTheme.bodyMedium),
         const SizedBox(height: 20),
-        _Row(label: 'Status', value: lease.status),
-        _Row(label: 'Lease #', value: lease.leaseNumber),
-        _Row(label: 'Term', value: '${dateFmt(lease.startDate)} – ${dateFmt(lease.endDate)}'),
-        if (lease.moveInDate != null)
-          _Row(label: 'Moved in', value: dateFmt(lease.moveInDate!)),
-        _Row(label: 'Monthly rent', value: moneyFmt(lease.monthlyRent)),
-        _Row(label: 'Rent due day', value: 'Day ${lease.rentDueDay}'),
-        _Row(label: 'Deposit', value: moneyFmt(lease.securityDeposit)),
-        if (lease.lateFeeAmount > 0)
-          _Row(label: 'Late fee', value: moneyFmt(lease.lateFeeAmount)),
-        if (lease.notes != null && lease.notes!.isNotEmpty)
-          _Row(label: 'Notes', value: lease.notes!),
+        _Row(label: 'Relationship', value: lease.lifecycle),
+        if (lease.agreement case final agreement?) ...[
+          _Row(label: 'Status', value: agreement.status),
+          _Row(label: 'Agreement #', value: agreement.agreementNumber),
+          _Row(
+            label: 'Term',
+            value:
+                '${dateFmt(agreement.termStartOn)} – '
+                '${agreement.termEndOn == null ? 'Month-to-month' : dateFmt(agreement.termEndOn!)}',
+          ),
+          _Row(
+            label: 'Monthly rent',
+            value: moneyFmt(agreement.baseRentAmount),
+          ),
+          _Row(label: 'Rent due day', value: 'Day ${agreement.rentDueDay}'),
+          _Row(
+            label: 'Deposit',
+            value: moneyFmt(agreement.securityDepositObligation),
+          ),
+          if (agreement.lateFeeAmount > 0)
+            _Row(label: 'Late fee', value: moneyFmt(agreement.lateFeeAmount)),
+        ] else
+          const _Row(label: 'Agreement', value: 'No agreement on file'),
         const SizedBox(height: 24),
         FilledButton.tonalIcon(
           onPressed: () => Navigator.of(context).push<void>(
@@ -112,15 +123,17 @@ class _Row extends StatelessWidget {
             width: 110,
             child: Text(
               label,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],

@@ -6,7 +6,6 @@ import '../../features/appointments/appointments_repository.dart';
 import '../../features/applications/applications_repository.dart';
 import '../../features/activity/activity_repository.dart';
 import '../../features/inspections/inspections_repository.dart';
-import '../../features/leases/eviction_cases_repository.dart';
 import '../../features/leases/leases_repository.dart';
 import '../../features/maintenance/work_orders_repository.dart';
 import '../../features/messages/messages_repository.dart';
@@ -72,11 +71,12 @@ Future<void> resetAccessScopedClient(WidgetRef ref) async {
   ref.invalidate(accountingSummaryProvider);
   ref.invalidate(expensesPageProvider);
   ref.invalidate(expensesListProvider);
-  ref.invalidate(leasesProvider);
-  ref.invalidate(leasesPageProvider);
-  ref.invalidate(propertyLeasesProvider);
-  ref.invalidate(tenantLeasesProvider);
-  ref.invalidate(leaseDetailProvider);
+  ref.invalidate(leaseManagementsPageProvider);
+  ref.invalidate(propertyLeaseManagementsProvider);
+  ref.invalidate(tenantLeaseManagementsProvider);
+  ref.invalidate(leaseManagementDetailProvider);
+  ref.invalidate(leaseAgreementHistoryProvider);
+  ref.invalidate(leaseLedgerProvider);
   ref.invalidate(propertiesProvider);
   ref.invalidate(propertyDetailProvider);
   ref.invalidate(unitsProvider);
@@ -100,7 +100,6 @@ Future<void> resetAccessScopedClient(WidgetRef ref) async {
   ref.invalidate(propertyLoansProvider);
   ref.invalidate(propertyCapitalAssetsProvider);
   ref.invalidate(propertyDispositionsProvider);
-  ref.invalidate(leaseEvictionCasesProvider);
   ref.invalidate(vendorsProvider);
   ref.invalidate(vendorsPageProvider);
   ref.invalidate(appointmentsProvider);
@@ -144,14 +143,15 @@ void _invalidateForEntity(Ref ref, String entityType) {
       ref.invalidate(expensesListProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
 
-    case 'Lease':
-      _refreshIfAlive(ref, leasesProvider);
-      ref.invalidate(leasesPageProvider);
+    case 'LeaseManagement':
+    case 'LeaseAgreement':
       ref.invalidate(gettingStartedSignalsProvider);
-      // Family providers: invalidate all live instances.
-      ref.invalidate(propertyLeasesProvider);
-      ref.invalidate(tenantLeasesProvider);
-      ref.invalidate(leaseDetailProvider);
+      ref.invalidate(leaseManagementsPageProvider);
+      ref.invalidate(propertyLeaseManagementsProvider);
+      ref.invalidate(tenantLeaseManagementsProvider);
+      ref.invalidate(leaseManagementDetailProvider);
+      ref.invalidate(leaseAgreementHistoryProvider);
+      ref.invalidate(leaseLedgerProvider);
 
     case 'Property':
       _refreshIfAlive(ref, propertiesProvider);
@@ -205,20 +205,11 @@ void _invalidateForEntity(Ref ref, String entityType) {
       _refreshIfAlive(ref, propertiesProvider);
       ref.invalidate(propertyDetailProvider);
       ref.invalidate(unitsProvider);
-      ref.invalidate(propertyLeasesProvider);
-      ref.invalidate(leaseDetailProvider);
-      ref.invalidate(leasesPageProvider);
+      ref.invalidate(propertyLeaseManagementsProvider);
+      ref.invalidate(leaseManagementDetailProvider);
+      ref.invalidate(leaseManagementsPageProvider);
       ref.invalidate(propertyCapitalAssetsProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
-
-    case 'EvictionCase':
-    case 'EvictionCaseEvent':
-      ref.invalidate(leaseEvictionCasesProvider);
-      _refreshIfAlive(ref, leasesProvider);
-      ref.invalidate(leasesPageProvider);
-      ref.invalidate(leaseDetailProvider);
-      ref.invalidate(propertyLeasesProvider);
-      ref.invalidate(unitsProvider);
 
     case 'Portfolio':
       ref.invalidate(gettingStartedSignalsProvider);
