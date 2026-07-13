@@ -119,6 +119,9 @@ public interface IAtomicWriteAttempt
     /// </summary>
     void BindSemanticAudit(object entityReference, AtomicSemanticAudit audit);
 
+    /// <summary>Uses one PostgreSQL wall-clock value for every tracked audit in this attempt.</summary>
+    void UseDatabaseWallClockForAudit(DateTime occurredAtUtc);
+
     /// <summary>Enriches only the exact mutation descriptor returned by a business flush.</summary>
     void EnrichMutation(AtomicAuditMutation mutation, AtomicSemanticAudit audit);
 

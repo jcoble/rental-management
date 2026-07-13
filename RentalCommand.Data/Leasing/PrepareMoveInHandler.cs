@@ -30,8 +30,9 @@ public sealed class PrepareMoveInHandler
 
         // Query 1 is the database wall clock. Security eligibility never trusts command time or a
         // simulation clock. Query 2 combines the live access envelope and application facts.
-        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var application = await AuthorizedApplications(command, attempt.Persistence, securityNowUtc)
+        var wallClockUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        attempt.UseDatabaseWallClockForAudit(wallClockUtc);
+        var application = await AuthorizedApplications(command, attempt.Persistence, wallClockUtc)
             .Select(candidate => new ApplicationPreparationTarget(
                 candidate,
                 candidate.PropertyId!.Value,
@@ -44,7 +45,24 @@ public sealed class PrepareMoveInHandler
                     && template.Status == DocumentTemplateStatus.Active
                     && template.Version == command.DocumentTemplateVersion
                     && template.ArchivedAtUtc == null
-                    && (template.PropertyId == null || template.PropertyId == candidate.PropertyId))))
+                    && (template.PropertyId == null || template.PropertyId == candidate.PropertyId)),
+                attempt.Persistence.Query<LeaseManagement>().Any(relationship =>
+                    relationship.PortfolioId == command.PortfolioId
+                    && relationship.PropertyId == candidate.PropertyId
+                    && relationship.UnitId == command.UnitId
+                    && relationship.CanceledAtUtc == null
+                    && relationship.PossessionGivenAtUtc != null
+                    && relationship.PossessionGivenAtUtc <= wallClockUtc
+                    && (relationship.PossessionReturnedAtUtc == null
+                        || relationship.PossessionReturnedAtUtc > wallClockUtc)
+                    && (command.PlannedPossessionAtUtc == null
+                        || command.PlannedPossessionAtUtc <= wallClockUtc)),
+                attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
+                    period.PortfolioId == command.PortfolioId
+                    && period.PropertyId == candidate.PropertyId
+                    && period.UnitId == command.UnitId
+                    && period.StartedAtUtc <= wallClockUtc
+                    && (period.EndedAtUtc == null || period.EndedAtUtc > wallClockUtc))))
             .SingleOrDefaultAsync(ct);
 
         if (application is null)
@@ -92,6 +110,14 @@ public sealed class PrepareMoveInHandler
                 "Only an approved application with an approved tenant can be prepared for move-in.");
         }
 
+        if (application.HasConflictingCurrentPossession || application.HasOpenOperationalPeriod)
+        {
+            return Empty(
+                PrepareMoveInOutcome.UnitUnavailable,
+                command,
+                "The unit has conflicting current possession or an open operational period.");
+        }
+
         if (!application.TemplateIsValid)
         {
             return Empty(
@@ -101,8 +127,32 @@ public sealed class PrepareMoveInHandler
         }
 
         var requestedTenantIds = command.Parties.Select(party => party.TenantId).Distinct().ToArray();
+        var signerTenantIds = command.Parties
+            .Where(party => party.IsAgreementSigner)
+            .Select(party => party.TenantId)
+            .ToArray();
 
-        // Query 3: every chosen Tenant is resolved in one bounded translated query. No per-row reads.
+        // Existence, signer-email presence, and normalized signer-email uniqueness are evaluated
+        // by PostgreSQL in one aggregate query. The following row query supplies only the snapshot
+        // values needed to construct the new legal signer records.
+        var tenantValidation = await attempt.Persistence.Query<Tenant>()
+            .Where(candidate =>
+                candidate.PortfolioId == command.PortfolioId
+                && requestedTenantIds.Contains(candidate.Id))
+            .GroupBy(_ => 1)
+            .Select(group => new TenantSelectionValidation(
+                group.Count(),
+                group.Count(candidate => signerTenantIds.Contains(candidate.Id)),
+                group.Count(candidate => signerTenantIds.Contains(candidate.Id)
+                    && (candidate.Email == null || candidate.Email.Trim() == string.Empty)),
+                group.Where(candidate => signerTenantIds.Contains(candidate.Id)
+                        && candidate.Email != null
+                        && candidate.Email.Trim() != string.Empty)
+                    .Select(candidate => candidate.Email!.Trim().ToLower())
+                    .Distinct()
+                    .Count()))
+            .SingleOrDefaultAsync(ct);
+
         var tenants = await attempt.Persistence.Query<Tenant>()
             .Where(candidate =>
                 candidate.PortfolioId == command.PortfolioId
@@ -114,7 +164,11 @@ public sealed class PrepareMoveInHandler
                 candidate.Email))
             .ToListAsync(ct);
 
-        if (tenants.Count != requestedTenantIds.Length
+        if (tenantValidation is null
+            || tenantValidation.RequestedTenantCount != requestedTenantIds.Length
+            || tenantValidation.SignerTenantCount != signerTenantIds.Length
+            || tenantValidation.MissingSignerEmailCount != 0
+            || tenantValidation.DistinctNormalizedSignerEmailCount != signerTenantIds.Length
             || !requestedTenantIds.Contains(application.Entity.ApprovedTenantId.Value))
         {
             return Empty(
@@ -141,23 +195,6 @@ public sealed class PrepareMoveInHandler
                 Email = NormalizeSignerEmail(tenantById[party.TenantId].Email),
             })
             .ToArray();
-        if (normalizedSignerEmails.Any(signer => signer.Email is null))
-        {
-            return Empty(
-                PrepareMoveInOutcome.InvalidParties,
-                command,
-                "Every selected agreement signer must have an email address.");
-        }
-        if (normalizedSignerEmails
-            .Select(signer => signer.Email!)
-            .Distinct(StringComparer.Ordinal)
-            .Count() != normalizedSignerEmails.Length)
-        {
-            return Empty(
-                PrepareMoveInOutcome.InvalidParties,
-                command,
-                "Agreement signers must have distinct email addresses.");
-        }
         var signerEmailByTenantId = normalizedSignerEmails.ToDictionary(
             signer => signer.TenantId,
             signer => signer.Email!);
@@ -169,9 +206,9 @@ public sealed class PrepareMoveInHandler
             UnitId = application.UnitId,
             RelationshipNumber = $"LM-{application.Entity.Id:D8}",
             PlannedPossessionAtUtc = command.PlannedPossessionAtUtc,
-            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedAtUtc = wallClockUtc,
             CreatedByUserId = command.CreatedByUserId,
-            UpdatedAtUtc = command.PreparedAtUtc,
+            UpdatedAtUtc = wallClockUtc,
             RowVersion = Guid.NewGuid(),
         };
         var account = new TenantAccount
@@ -180,8 +217,8 @@ public sealed class PrepareMoveInHandler
             LeaseManagement = relationship,
             AccountNumber = $"TA-{application.Entity.Id:D8}",
             Currency = application.Currency,
-            OpenedAtUtc = command.PreparedAtUtc,
-            CreatedAtUtc = command.PreparedAtUtc,
+            OpenedAtUtc = wallClockUtc,
+            CreatedAtUtc = wallClockUtc,
             CreatedByUserId = command.CreatedByUserId,
         };
         var agreement = new LeaseAgreement
@@ -205,9 +242,9 @@ public sealed class PrepareMoveInHandler
             TermsPayload = command.TermsPayload,
             DocumentTemplateId = command.DocumentTemplateId,
             DocumentTemplateVersion = command.DocumentTemplateVersion,
-            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedAtUtc = wallClockUtc,
             CreatedByUserId = command.CreatedByUserId,
-            UpdatedAtUtc = command.PreparedAtUtc,
+            UpdatedAtUtc = wallClockUtc,
             DraftRevision = 1,
         };
 
@@ -220,7 +257,7 @@ public sealed class PrepareMoveInHandler
             EffectiveFrom = command.PartyEffectiveFrom,
             GuarantorLegalNoticeEligible = party.GuarantorLegalNoticeEligible,
             ChangeReason = party.ChangeReason.Trim(),
-            CreatedAtUtc = command.PreparedAtUtc,
+            CreatedAtUtc = wallClockUtc,
             CreatedByUserId = command.CreatedByUserId,
         }).ToArray();
         var partyByTenantId = partyRows.ToDictionary(party => party.TenantId);
@@ -259,7 +296,7 @@ public sealed class PrepareMoveInHandler
                 TenantAccount = account,
                 OriginatingAgreement = agreement,
                 Currency = application.Currency,
-                CreatedAtUtc = command.PreparedAtUtc,
+                CreatedAtUtc = wallClockUtc,
                 CreatedByUserId = command.CreatedByUserId,
             };
             attempt.Persistence.Add(depositAccount);
@@ -267,7 +304,7 @@ public sealed class PrepareMoveInHandler
 
         var trackedApplication = application.Entity;
         trackedApplication.PreparedLeaseManagement = relationship;
-        trackedApplication.UpdatedAt = command.PreparedAtUtc;
+        trackedApplication.UpdatedAt = wallClockUtc;
 
         attempt.BindSemanticAudit(relationship, CreatedAudit(
             command, nameof(LeaseManagement), "Prepared lease relationship from approved application."));
@@ -299,7 +336,7 @@ public sealed class PrepareMoveInHandler
                 Amount = Math.Abs(signedOpening),
                 Currency = account.Currency,
                 EffectiveOn = command.OpeningBalanceEffectiveOn!.Value,
-                PostedAtUtc = command.PreparedAtUtc,
+                PostedAtUtc = wallClockUtc,
                 Description = string.IsNullOrWhiteSpace(command.OpeningBalanceNote)
                     ? "Opening tenant-account balance"
                     : command.OpeningBalanceNote.Trim(),
@@ -324,7 +361,7 @@ public sealed class PrepareMoveInHandler
                     openingBalance.LeaseAgreementId,
                 }),
                 ChangeReason: "Posted opening balance while preparing the tenant account."),
-                command.PreparedAtUtc);
+                wallClockUtc);
             attempt.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
@@ -338,8 +375,8 @@ public sealed class PrepareMoveInHandler
                 IdempotencyKey = OutboxIdempotency.Create(
                     "prepare-move-in-opening-balance",
                     command.DeliveryIdempotencyKey),
-                CreatedAtUtc = command.PreparedAtUtc,
-                NextAttemptAtUtc = command.PreparedAtUtc,
+                CreatedAtUtc = wallClockUtc,
+                NextAttemptAtUtc = wallClockUtc,
             });
         }
 
@@ -362,8 +399,8 @@ public sealed class PrepareMoveInHandler
                 },
             }),
             IdempotencyKey = command.DeliveryIdempotencyKey,
-            CreatedAtUtc = command.PreparedAtUtc,
-            NextAttemptAtUtc = command.PreparedAtUtc,
+            CreatedAtUtc = wallClockUtc,
+            NextAttemptAtUtc = wallClockUtc,
         });
 
         return new PrepareMoveInResult(
@@ -473,8 +510,7 @@ public sealed class PrepareMoveInHandler
     private static void ValidateCommandShape(PrepareMoveInCommand command)
     {
         ValidateAuthorizationShape(command);
-        if (command.PreparedAtUtc == default || command.PartyEffectiveFrom == default
-            || command.TermStartOn == default)
+        if (command.PartyEffectiveFrom == default || command.TermStartOn == default)
         {
             throw new ArgumentException("Portfolio, application, unit, and actor ids are required.");
         }
@@ -578,7 +614,15 @@ public sealed class PrepareMoveInHandler
         int PropertyId,
         int UnitId,
         string Currency,
-        bool TemplateIsValid);
+        bool TemplateIsValid,
+        bool HasConflictingCurrentPossession,
+        bool HasOpenOperationalPeriod);
+
+    private sealed record TenantSelectionValidation(
+        int RequestedTenantCount,
+        int SignerTenantCount,
+        int MissingSignerEmailCount,
+        int DistinctNormalizedSignerEmailCount);
 
     private sealed record TenantFacts(int Id, string FirstName, string LastName, string? Email);
 }

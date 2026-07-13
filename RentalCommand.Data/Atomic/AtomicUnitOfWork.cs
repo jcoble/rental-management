@@ -452,6 +452,9 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _auditScope.BindSemantic(entityReference, _db.Entry(entityReference), audit);
         }
 
+        public void UseDatabaseWallClockForAudit(DateTime occurredAtUtc) =>
+            _auditScope.UseDatabaseWallClockForTrackedMutations(occurredAtUtc);
+
         public void EnrichMutation(AtomicAuditMutation mutation, AtomicSemanticAudit audit) =>
             _auditScope.Enrich(mutation, audit);
 

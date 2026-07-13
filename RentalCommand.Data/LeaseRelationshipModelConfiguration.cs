@@ -204,7 +204,7 @@ internal static class LeaseRelationshipModelConfiguration
 
             entity.HasIndex(e => e.PublicId).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.AccessContextId, e.RevokedAtUtc, e.Id });
-            entity.HasIndex(e => new { e.AccessContextId, e.LeaseManagementPartyId })
+            entity.HasIndex(e => new { e.ApplicationUserId, e.LeaseManagementPartyId })
                 .IsUnique()
                 .HasFilter("\"RevokedAtUtc\" IS NULL");
 

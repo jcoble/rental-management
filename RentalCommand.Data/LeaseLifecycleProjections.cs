@@ -63,6 +63,22 @@ public sealed class LeaseManagementLifecycleProjection
     public bool HasReconciliationException { get; set; }
 }
 
+/// <summary>One actionable contradiction derived entirely by PostgreSQL from canonical lease facts.</summary>
+public sealed class LeaseReconciliationExceptionProjection
+{
+    public int PortfolioId { get; set; }
+    public int PropertyId { get; set; }
+    public int UnitId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int? TenantAccountId { get; set; }
+    public int? LeaseAgreementId { get; set; }
+    public int? SignatureRequestId { get; set; }
+    public DateTime EffectiveNowUtc { get; set; }
+    public DateOnly BusinessDate { get; set; }
+    public string ExceptionCode { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+}
+
 internal static class LeaseLifecycleProjectionModelConfiguration
 {
     internal static void ConfigureLeaseLifecycleProjections(this ModelBuilder modelBuilder)
@@ -91,6 +107,15 @@ internal static class LeaseLifecycleProjectionModelConfiguration
             entity.Property(row => row.BusinessDate).HasColumnType("date");
             entity.Property(row => row.Lifecycle).HasMaxLength(40);
             entity.Property(row => row.CurrentPrimaryTenantName).HasMaxLength(401);
+        });
+
+        modelBuilder.Entity<LeaseReconciliationExceptionProjection>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_lease_reconciliation_exceptions");
+            entity.Property(row => row.BusinessDate).HasColumnType("date");
+            entity.Property(row => row.ExceptionCode).HasMaxLength(100);
+            entity.Property(row => row.Detail).HasMaxLength(500);
         });
     }
 }
@@ -520,5 +545,207 @@ internal static class LeaseManagementLifecycleViewSql
         LEFT JOIN "TenantAccounts" AS account
           ON account."PortfolioId" = management."PortfolioId"
          AND account."LeaseManagementId" = management."Id";
+        """;
+}
+
+internal static class LeaseReconciliationExceptionViewSql
+{
+    public const string Drop = "DROP VIEW IF EXISTS \"vw_lease_reconciliation_exceptions\";";
+    public const string Create =
+        "CREATE VIEW \"vw_lease_reconciliation_exceptions\" WITH (security_invoker = true) AS\n" + Definition;
+
+    public const string Definition = """
+        SELECT lifecycle."PortfolioId",
+               lifecycle."PropertyId",
+               lifecycle."UnitId",
+               lifecycle."LeaseManagementId",
+               lifecycle."TenantAccountId",
+               lifecycle."CurrentAgreementId" AS "LeaseAgreementId",
+               NULL::integer AS "SignatureRequestId",
+               lifecycle."EffectiveNowUtc",
+               lifecycle."BusinessDate",
+               'GoverningAgreementWithoutPossession'::text AS "ExceptionCode",
+               'A governing executed agreement exists without current possession.'::text AS "Detail"
+        FROM "vw_lease_management_lifecycle" AS lifecycle
+        WHERE lifecycle."HasGoverningAgreementWithoutPossession"
+
+        UNION ALL
+
+        SELECT lifecycle."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId",
+               lifecycle."LeaseManagementId", lifecycle."TenantAccountId",
+               lifecycle."CurrentAgreementId", NULL::integer,
+               lifecycle."EffectiveNowUtc", lifecycle."BusinessDate",
+               'PossessionWithoutGoverningAgreement'::text,
+               'Current possession exists without a governing executed agreement.'::text
+        FROM "vw_lease_management_lifecycle" AS lifecycle
+        WHERE lifecycle."HasPossessionWithoutGoverningAgreement"
+
+        UNION ALL
+
+        SELECT management."PortfolioId", management."PropertyId", management."UnitId",
+               management."Id", account."Id", NULL::integer, NULL::integer,
+               effective_time."NowUtc", effective_time."BusinessDate",
+               'ReturnedPossessionMissingTurnover'::text,
+               'Possession was returned without an open turnover period.'::text
+        FROM "LeaseManagements" AS management
+        JOIN LATERAL (
+          SELECT rc_effective_now_utc(management."PortfolioId") AS "NowUtc",
+                 rc_business_date(management."PortfolioId") AS "BusinessDate"
+        ) AS effective_time ON TRUE
+        LEFT JOIN "TenantAccounts" AS account
+          ON account."PortfolioId" = management."PortfolioId"
+         AND account."LeaseManagementId" = management."Id"
+        WHERE management."CanceledAtUtc" IS NULL
+          AND management."PossessionReturnedAtUtc" IS NOT NULL
+          AND management."PossessionReturnedAtUtc" <= effective_time."NowUtc"
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "UnitOperationalPeriods" AS period
+            WHERE period."PortfolioId" = management."PortfolioId"
+              AND period."PropertyId" = management."PropertyId"
+              AND period."UnitId" = management."UnitId"
+              AND period."Type" = 'Turnover'
+              AND period."StartedAtUtc" >= management."PossessionReturnedAtUtc"
+              AND (period."EndedAtUtc" IS NULL OR period."EndedAtUtc" > effective_time."NowUtc"))
+
+        UNION ALL
+
+        SELECT lifecycle."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId",
+               lifecycle."LeaseManagementId", balance."TenantAccountId",
+               lifecycle."CurrentAgreementId", NULL::integer,
+               lifecycle."EffectiveNowUtc", lifecycle."BusinessDate",
+               'ClosedAccountWithBalance'::text,
+               'A closed tenant account retains a receivable, credit, or deposit balance.'::text
+        FROM "vw_lease_management_lifecycle" AS lifecycle
+        JOIN "vw_tenant_account_balances" AS balance
+          ON balance."PortfolioId" = lifecycle."PortfolioId"
+         AND balance."TenantAccountId" = lifecycle."TenantAccountId"
+        LEFT JOIN "vw_security_deposit_balances" AS deposit
+          ON deposit."PortfolioId" = balance."PortfolioId"
+         AND deposit."TenantAccountId" = balance."TenantAccountId"
+        JOIN "TenantAccounts" AS account
+          ON account."PortfolioId" = balance."PortfolioId"
+         AND account."Id" = balance."TenantAccountId"
+        WHERE account."ClosedAtUtc" IS NOT NULL
+          AND (balance."ReceivableBalance" <> 0 OR balance."UnappliedCredit" <> 0
+               OR COALESCE(deposit."HeldBalance", 0) <> 0)
+
+        UNION ALL
+
+        SELECT management."PortfolioId", management."PropertyId", management."UnitId",
+               management."Id", account."Id", renewal."Id", NULL::integer,
+               effective_time."NowUtc", effective_time."BusinessDate",
+               'FutureSuccessorMissingAddendumDisposition'::text,
+               'An executed future successor is missing an explicit decision for an active addendum series.'::text
+        FROM "LeaseAgreements" AS renewal
+        JOIN "LeaseManagements" AS management
+          ON management."PortfolioId" = renewal."PortfolioId"
+         AND management."Id" = renewal."LeaseManagementId"
+        JOIN LATERAL (
+          SELECT rc_effective_now_utc(renewal."PortfolioId") AS "NowUtc",
+                 rc_business_date(renewal."PortfolioId") AS "BusinessDate"
+        ) AS effective_time ON TRUE
+        LEFT JOIN "TenantAccounts" AS account
+          ON account."PortfolioId" = management."PortfolioId"
+         AND account."LeaseManagementId" = management."Id"
+        WHERE renewal."RenewsAgreementId" IS NOT NULL
+          AND renewal."FullyExecutedAtUtc" IS NOT NULL
+          AND renewal."VoidedAtUtc" IS NULL
+          AND renewal."DraftCanceledAtUtc" IS NULL
+          AND renewal."GoverningFromOn" > effective_time."BusinessDate"
+          AND EXISTS (
+            SELECT 1
+            FROM "LeaseAddenda" AS addendum
+            WHERE addendum."PortfolioId" = renewal."PortfolioId"
+              AND addendum."BaseAgreementId" = renewal."RenewsAgreementId"
+              AND addendum."FullyExecutedAtUtc" IS NOT NULL
+              AND addendum."VoidedAtUtc" IS NULL
+              AND addendum."DraftCanceledAtUtc" IS NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM "LeaseRenewalAddendumDecisions" AS decision
+                WHERE decision."PortfolioId" = renewal."PortfolioId"
+                  AND decision."RenewalAgreementId" = renewal."Id"
+                  AND decision."SourceAddendumSeriesPublicId" = addendum."SeriesPublicId"))
+
+        UNION ALL
+
+        SELECT management."PortfolioId", management."PropertyId", management."UnitId",
+               management."Id", account."Id", request."LeaseAgreementId", request."Id",
+               effective_time."NowUtc", effective_time."BusinessDate",
+               'CompletedSignatureMissingExecutedArtifact'::text,
+               'A completed signature packet has no executed legal artifact.'::text
+        FROM "SignatureRequests" AS request
+        JOIN "LeaseManagements" AS management
+          ON management."PortfolioId" = request."PortfolioId"
+         AND management."Id" = COALESCE(
+           (SELECT agreement."LeaseManagementId" FROM "LeaseAgreements" AS agreement
+            WHERE agreement."PortfolioId" = request."PortfolioId"
+              AND agreement."Id" = request."LeaseAgreementId"),
+           (SELECT addendum."LeaseManagementId" FROM "LeaseAddenda" AS addendum
+            WHERE addendum."PortfolioId" = request."PortfolioId"
+              AND addendum."Id" = request."LeaseAddendumId"))
+        JOIN LATERAL (
+          SELECT rc_effective_now_utc(request."PortfolioId") AS "NowUtc",
+                 rc_business_date(request."PortfolioId") AS "BusinessDate"
+        ) AS effective_time ON TRUE
+        LEFT JOIN "TenantAccounts" AS account
+          ON account."PortfolioId" = management."PortfolioId"
+         AND account."LeaseManagementId" = management."Id"
+        WHERE request."Status" = 'Completed'
+          AND request."ExecutedArtifactId" IS NULL
+
+        UNION ALL
+
+        SELECT management."PortfolioId", management."PropertyId", management."UnitId",
+               management."Id", account."Id", NULL::integer, NULL::integer,
+               effective_time."NowUtc", effective_time."BusinessDate",
+               'ProviderSettlementMissingLedgerReceipt'::text,
+               'A settled provider payment attempt has no canonical tenant-ledger receipt.'::text
+        FROM "TenantPaymentAttempts" AS attempt
+        JOIN "TenantAccounts" AS account
+          ON account."PortfolioId" = attempt."PortfolioId"
+         AND account."Id" = attempt."TenantAccountId"
+        JOIN "LeaseManagements" AS management
+          ON management."PortfolioId" = account."PortfolioId"
+         AND management."Id" = account."LeaseManagementId"
+        JOIN LATERAL (
+          SELECT rc_effective_now_utc(attempt."PortfolioId") AS "NowUtc",
+                 rc_business_date(attempt."PortfolioId") AS "BusinessDate"
+        ) AS effective_time ON TRUE
+        WHERE attempt."ProviderObjectId" IS NOT NULL
+          AND (attempt."State" = 'Succeeded' OR attempt."SettledAtUtc" IS NOT NULL)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "TenantLedgerEntries" AS entry
+            WHERE entry."PortfolioId" = attempt."PortfolioId"
+              AND entry."TenantAccountId" = attempt."TenantAccountId"
+              AND entry."ProviderPaymentAttemptId" = attempt."Id")
+
+        UNION ALL
+
+        SELECT management."PortfolioId", management."PropertyId", management."UnitId",
+               management."Id", account."Id", entry."LeaseAgreementId", NULL::integer,
+               effective_time."NowUtc", effective_time."BusinessDate",
+               'LedgerReceiptMissingProviderSettlement'::text,
+               'A provider-backed tenant-ledger receipt has no settled provider attempt.'::text
+        FROM "TenantLedgerEntries" AS entry
+        JOIN "TenantPaymentAttempts" AS attempt
+          ON attempt."PortfolioId" = entry."PortfolioId"
+         AND attempt."TenantAccountId" = entry."TenantAccountId"
+         AND attempt."Id" = entry."ProviderPaymentAttemptId"
+        JOIN "TenantAccounts" AS account
+          ON account."PortfolioId" = entry."PortfolioId"
+         AND account."Id" = entry."TenantAccountId"
+        JOIN "LeaseManagements" AS management
+          ON management."PortfolioId" = account."PortfolioId"
+         AND management."Id" = account."LeaseManagementId"
+        JOIN LATERAL (
+          SELECT rc_effective_now_utc(entry."PortfolioId") AS "NowUtc",
+                 rc_business_date(entry."PortfolioId") AS "BusinessDate"
+        ) AS effective_time ON TRUE
+        WHERE attempt."ProviderObjectId" IS NOT NULL
+          AND attempt."State" <> 'Succeeded'
+          AND attempt."SettledAtUtc" IS NULL;
         """;
 }
