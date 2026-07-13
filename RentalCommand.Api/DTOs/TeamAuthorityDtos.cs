@@ -14,6 +14,7 @@ public sealed record TeamMemberSummaryDto(
     WorkspaceMembershipStatus MembershipStatus,
     long AccessRevision,
     int AssignmentCount,
+    string RoleSummary,
     DateTime CreatedAtUtc);
 
 public sealed record TeamMemberPageDto(

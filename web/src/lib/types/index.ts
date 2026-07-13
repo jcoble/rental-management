@@ -1507,32 +1507,6 @@ export interface PortalMessage {
 	updatedAt: string;
 }
 
-/** Matches the AdminUsersController TeamMemberDto. */
-export interface TeamMember {
-	id: number;
-	email: string;
-	displayName?: string;
-	role: UserRole;
-	isActive: boolean;
-	ownerId?: number;
-	tenantId?: number;
-	createdAt: string;
-}
-
-/** Page wrapper from GET /api/v1/admin/users/page. */
-export interface TeamMemberListResponse {
-	items: TeamMember[];
-	totalCount: number;
-	skip: number;
-	take: number;
-}
-
-/** Returned from POST /api/v1/admin/users — includes the one-time generated password. */
-export interface CreateTeamMemberResponse {
-	member: TeamMember;
-	generatedPassword?: string;
-}
-
 /** Matches DocumentDto from GET /api/v1/documents and POST /api/v1/documents. */
 export interface DocumentItem {
 	id: number;
