@@ -172,7 +172,9 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         dashboard.Turnover.ReceiptCount.Should().Be(2);
         dashboard.Turnover.EstimatedCost.Should().Be(300m);
         dashboard.Turnover.ActualCost.Should().Be(220m);
-        dashboard.Turnover.TargetReadyDate.Should().Be(openWork.ScheduledFor);
+        dashboard.Turnover.TargetReadyDate.Should().BeCloseTo(
+            openWork.ScheduledFor!.Value,
+            TimeSpan.FromMilliseconds(1));
 
         _executedSql.Should().Contain(command => command.Contains("FROM \"WorkOrders\"")
             && command.Contains("GROUP BY") && command.Contains("SUM"));

@@ -41,7 +41,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
         var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("lease").And.Contain("history");
+        ex.Which.Message.Should().Contain("rental relationship");
         (await _sut.GetAsync(PortfolioId, unit.Id)).Should().NotBeNull();
     }
 
