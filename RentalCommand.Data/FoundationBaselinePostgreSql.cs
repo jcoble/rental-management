@@ -1022,8 +1022,8 @@ internal static class FoundationBaselinePostgreSql
         ALTER TABLE {Quote(table)} FORCE ROW LEVEL SECURITY;
         DROP POLICY IF EXISTS tenant_isolation ON {Quote(table)};
         CREATE POLICY tenant_isolation ON {Quote(table)}
-          USING {predicate}
-          WITH CHECK {predicate};
+          USING ({predicate})
+          WITH CHECK ({predicate});
         """;
 
     private static string CreateSandboxGraduationDeletePolicySql(
@@ -1037,9 +1037,9 @@ internal static class FoundationBaselinePostgreSql
         DROP POLICY IF EXISTS tenant_insert ON {Quote(table)};
         DROP POLICY IF EXISTS tenant_update ON {Quote(table)};
         DROP POLICY IF EXISTS tenant_delete ON {Quote(table)};
-        CREATE POLICY tenant_select ON {Quote(table)} FOR SELECT USING {ordinaryPredicate};
-        CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK {ordinaryPredicate};
-        CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING {ordinaryPredicate} WITH CHECK {ordinaryPredicate};
+        CREATE POLICY tenant_select ON {Quote(table)} FOR SELECT USING ({ordinaryPredicate});
+        CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK ({ordinaryPredicate});
+        CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING ({ordinaryPredicate}) WITH CHECK ({ordinaryPredicate});
         CREATE POLICY tenant_delete ON {Quote(table)} FOR DELETE USING
           ({sandboxDeletePredicate});
         """;
@@ -1147,10 +1147,10 @@ internal static class FoundationBaselinePostgreSql
         DROP POLICY IF EXISTS tenant_insert ON "InspectionTemplates";
         DROP POLICY IF EXISTS tenant_update ON "InspectionTemplates";
         DROP POLICY IF EXISTS tenant_delete ON "InspectionTemplates";
-        CREATE POLICY tenant_select ON "InspectionTemplates" FOR SELECT USING {NullablePortfolioReadPredicate};
-        CREATE POLICY tenant_insert ON "InspectionTemplates" FOR INSERT WITH CHECK {NullablePortfolioWritePredicate};
-        CREATE POLICY tenant_update ON "InspectionTemplates" FOR UPDATE USING {NullablePortfolioWritePredicate} WITH CHECK {NullablePortfolioWritePredicate};
-        CREATE POLICY tenant_delete ON "InspectionTemplates" FOR DELETE USING {NullablePortfolioWritePredicate};
+        CREATE POLICY tenant_select ON "InspectionTemplates" FOR SELECT USING ({NullablePortfolioReadPredicate});
+        CREATE POLICY tenant_insert ON "InspectionTemplates" FOR INSERT WITH CHECK ({NullablePortfolioWritePredicate});
+        CREATE POLICY tenant_update ON "InspectionTemplates" FOR UPDATE USING ({NullablePortfolioWritePredicate}) WITH CHECK ({NullablePortfolioWritePredicate});
+        CREATE POLICY tenant_delete ON "InspectionTemplates" FOR DELETE USING ({NullablePortfolioWritePredicate});
         """;
 
     private static string BuildInspectionTemplateItemPoliciesSql() => """

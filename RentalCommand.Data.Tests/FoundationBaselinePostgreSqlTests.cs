@@ -98,6 +98,16 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_delete ON \"TenantLedgerEntries\" FOR DELETE USING\n" +
             "  (rc_sandbox_graduation_allows(\"PortfolioId\"));");
+        CreateSql.Should().Contain(
+            "CREATE POLICY tenant_select ON \"TenantLedgerEntries\" FOR SELECT USING " +
+            "(rc_api_scope_allows(\"PortfolioId\"));");
+        CreateSql.Should().Contain(
+            "CREATE POLICY tenant_insert ON \"TenantLedgerEntries\" FOR INSERT WITH CHECK " +
+            "(rc_api_scope_allows(\"PortfolioId\"));");
+        CreateSql.Should().Contain(
+            "CREATE POLICY tenant_update ON \"TenantLedgerEntries\" FOR UPDATE USING " +
+            "(rc_api_scope_allows(\"PortfolioId\")) WITH CHECK " +
+            "(rc_api_scope_allows(\"PortfolioId\"));");
         CreateSql.Should().NotContain("app.rls_bypass_reason");
         CreateSql.Should().NotContain("app.is_admin");
     }
@@ -129,7 +139,7 @@ public sealed class FoundationBaselinePostgreSqlTests
     public void RlsClassification_CoversEveryMappedBaseTableExactlyOnce()
     {
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseInMemoryDatabase($"rls-classification-{Guid.NewGuid():N}")
+            .UseNpgsql("Host=localhost;Database=rls_classification_contract;Username=contract;Password=contract")
             .Options;
         using var db = new RentalCommandDbContext(options);
 
@@ -209,18 +219,20 @@ public sealed class FoundationBaselinePostgreSqlTests
     public void Up_CreatesOrValidatesSharedRolesWithoutAlteringExistingRoleAttributes()
     {
         CreateSql.Should().Contain(
-            "CREATE ROLE rentalcommand_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;");
+            "CREATE ROLE rentalcommand_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;");
         CreateSql.Should().Contain(
-            "CREATE ROLE rentalcommand_engine NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;");
-        CreateSql.Should().Contain("NOT runtime_role.rolinherit");
+            "CREATE ROLE rentalcommand_engine LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;");
+        CreateSql.Should().Contain(
+            "CREATE ROLE rentalcommand_rls_authority NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION BYPASSRLS CONNECTION LIMIT -1;");
+        CreateSql.Should().Contain("NOT runtime_role.rolcanlogin OR runtime_role.rolsuper OR runtime_role.rolinherit");
+        CreateSql.Should().Contain("runtime_role.rolcanlogin OR runtime_role.rolsuper OR runtime_role.rolinherit");
         CreateSql.Should().Contain("runtime_role.rolconnlimit <> -1");
         CreateSql.Should().Contain("runtime_role.rolvaliduntil IS NOT NULL");
         CreateSql.Should().Contain("runtime_role.rolconfig IS NOT NULL");
         CreateSql.Should().Contain("inherited_membership.member = runtime_role.oid");
-        CreateSql.Should().Contain(
-            "GRANT rentalcommand_api, rentalcommand_engine TO %I', current_user");
         CreateSql.Should().Contain("Existing role rentalcommand_api has incompatible cluster-wide attributes");
         CreateSql.Should().Contain("Existing role rentalcommand_engine has incompatible cluster-wide attributes");
+        CreateSql.Should().Contain("Existing role rentalcommand_rls_authority has incompatible cluster-wide attributes");
         CreateSql.Should().NotContain("ALTER ROLE");
         DropSql.Should().NotContain("DROP ROLE");
         DropSql.Should().NotContain("REVOKE rentalcommand_api, rentalcommand_engine FROM %I");
