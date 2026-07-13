@@ -78,8 +78,8 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         // Seed two portfolios' data as the owner/superuser (which bypasses RLS for the inserts).
         await using (var ctx = NewContext(_ownerConnString))
         {
-            _portfolioA = await SeedPortfolioWithOverduePaymentAsync(ctx, "Portfolio A", "PO-A");
-            _portfolioB = await SeedPortfolioWithOverduePaymentAsync(ctx, "Portfolio B", "PO-B");
+            _portfolioA = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio A", "PO-A");
+            _portfolioB = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio B", "PO-B");
             ctx.PlaidTokenExchangeAttempts.AddRange(
                 PlaidAttempt(_portfolioA, "operation-a"),
                 PlaidAttempt(_portfolioB, "operation-b"));
@@ -107,7 +107,7 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Rls_PortfolioA_SeesOnlyOwnLeases_WhenQueryingWithoutWhereClause()
+    public async Task Rls_PortfolioA_SeesOnlyOwnLeaseManagements_WhenQueryingWithoutWhereClause()
     {
         SkipIfNoDocker();
 
@@ -115,30 +115,39 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await using var ctx = NewContext(conn);
 
         // CRITICAL: no WHERE clause. RLS must filter to portfolio A only.
-        var leases = await ctx.Leases.Select(l => new { l.Id, l.PortfolioId, l.LeaseNumber }).ToListAsync();
+        var relationships = await ctx.LeaseManagements
+            .Select(relationship => new
+            {
+                relationship.Id,
+                relationship.PortfolioId,
+                relationship.RelationshipNumber,
+            })
+            .ToListAsync();
 
-        leases.Should().OnlyContain(l => l.PortfolioId == _portfolioA,
-            "RLS must filter Leases to the current portfolio even with no app-layer predicate");
-        leases.Should().Contain(l => l.LeaseNumber == "PO-A");
-        leases.Should().NotContain(l => l.LeaseNumber == "PO-B",
-            "portfolio A must never see portfolio B's leases — RLS is the security boundary");
+        relationships.Should().OnlyContain(relationship => relationship.PortfolioId == _portfolioA,
+            "RLS must filter LeaseManagements to the current portfolio even with no app-layer predicate");
+        relationships.Should().Contain(relationship => relationship.RelationshipNumber == "PO-A");
+        relationships.Should().NotContain(relationship => relationship.RelationshipNumber == "PO-B",
+            "portfolio A must never see portfolio B's lease relationships — RLS is the security boundary");
     }
 
     [SkippableFact]
-    public async Task Rls_PortfolioA_SeesOnlyOwnPayments_WhenQueryingWithoutWhereClause()
+    public async Task Rls_PortfolioA_SeesOnlyOwnTenantLedgerEntries_WhenQueryingWithoutWhereClause()
     {
         SkipIfNoDocker();
 
         await using var conn = await OpenAsApiRoleAsync(_portfolioA);
         await using var ctx = NewContext(conn);
 
-        // The H-4 surface (payment aggregates) read Payments by scalar FK — prove the DB layer also
-        // isolates them by portfolio with no app-layer filter.
-        var payments = await ctx.Payments.Select(p => new { p.PortfolioId, p.Amount }).ToListAsync();
+        // Canonical tenant-money surfaces read the immutable ledger by scalar account FK. Prove the
+        // database boundary isolates those entries even when the application supplies no predicate.
+        var entries = await ctx.TenantLedgerEntries
+            .Select(entry => new { entry.PortfolioId, entry.Amount })
+            .ToListAsync();
 
-        payments.Should().NotBeEmpty();
-        payments.Should().OnlyContain(p => p.PortfolioId == _portfolioA,
-            "RLS must filter Payments to the current portfolio");
+        entries.Should().NotBeEmpty();
+        entries.Should().OnlyContain(entry => entry.PortfolioId == _portfolioA,
+            "RLS must filter TenantLedgerEntries to the current portfolio");
     }
 
     [SkippableFact]
@@ -216,9 +225,11 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await ExecAsync(conn, $"SET ROLE {ApiRole}; SET app.current_portfolio_id = '0'; SET app.is_admin = 'true';");
 
         await using var ctx = NewContext(conn);
-        var leases = await ctx.Leases.Select(l => l.LeaseNumber).ToListAsync();
+        var relationshipNumbers = await ctx.LeaseManagements
+            .Select(relationship => relationship.RelationshipNumber)
+            .ToListAsync();
 
-        leases.Should().Contain("PO-A").And.Contain("PO-B",
+        relationshipNumbers.Should().Contain("PO-A").And.Contain("PO-B",
             "an admin context bypasses RLS via app.is_admin=true; both portfolios visible");
     }
 
@@ -253,7 +264,7 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private static async Task<int> SeedPortfolioWithOverduePaymentAsync(
+    private static async Task<int> SeedPortfolioWithOverdueChargeAsync(
         RentalCommandDbContext ctx, string name, string tag)
     {
         var now = DateTime.UtcNow;
@@ -268,6 +279,19 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         ctx.Portfolios.Add(portfolio);
         await ctx.SaveChangesAsync();
 
+        var actor = new ApplicationUser
+        {
+            PortfolioId = portfolio.Id,
+            UserName = $"rls-{tag.ToLowerInvariant()}@example.test",
+            NormalizedUserName = $"RLS-{tag.ToUpperInvariant()}@EXAMPLE.TEST",
+            Email = $"rls-{tag.ToLowerInvariant()}@example.test",
+            NormalizedEmail = $"RLS-{tag.ToUpperInvariant()}@EXAMPLE.TEST",
+            DisplayName = $"RLS {tag}",
+            CreatedAt = now,
+        };
+        ctx.Users.Add(actor);
+        await ctx.SaveChangesAsync();
+
         var property = new Property
         {
             PortfolioId = portfolio.Id,
@@ -279,7 +303,15 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        var unit = new Unit { Property = property, UnitNumber = "1", MarketRent = 1000m, CreatedAt = now, UpdatedAt = now };
+        var unit = new Unit
+        {
+            PortfolioId = portfolio.Id,
+            Property = property,
+            UnitNumber = "1",
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
         var tenant = new Tenant
         {
             PortfolioId = portfolio.Id,
@@ -288,35 +320,89 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        var lease = new Lease
-        {
-            PortfolioId = portfolio.Id,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = tag,
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1000m,
-            SecurityDeposit = 1000m,
-            LateFeeAmount = 50m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        ctx.Leases.Add(lease);
+        ctx.AddRange(property, unit, tenant);
         await ctx.SaveChangesAsync();
 
-        ctx.Payments.Add(new Payment
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = tag,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+            RowVersion = Guid.NewGuid(),
+        };
+        ctx.LeaseManagements.Add(relationship);
+        await ctx.SaveChangesAsync();
+
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            LeaseManagementId = relationship.Id,
+            AccountNumber = $"TA-{tag}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            LeaseManagementId = relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{tag}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 1000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1000m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var party = new LeaseManagementParty
         {
             PortfolioId = portfolio.Id,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "RLS isolation fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        ctx.AddRange(account, agreement, party);
+        await ctx.SaveChangesAsync();
+
+        ctx.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
             Amount = 1000m,
-            DueDate = now.AddDays(-3),
-            CreatedAt = now,
-            UpdatedAt = now,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now.AddDays(-3)),
+            DueOn = DateOnly.FromDateTime(now.AddDays(-3)),
+            PostedAtUtc = now,
+            Description = "Overdue rent",
+            BusinessKey = $"rls-rent:{tag}",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = actor.Id,
         });
         await ctx.SaveChangesAsync();
 

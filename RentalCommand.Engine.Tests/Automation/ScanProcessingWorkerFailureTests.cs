@@ -55,6 +55,31 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         db.Database.EnsureCreated();
+        db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_lease_management_lifecycle" AS
+            SELECT management."PortfolioId" AS "PortfolioId",
+                   management."Id" AS "LeaseManagementId",
+                   'Occupied' AS "Lifecycle",
+                   agreement."Id" AS "CurrentAgreementId",
+                   party."TenantId" AS "CurrentPrimaryTenantId",
+                   trim(tenant."FirstName" || ' ' || tenant."LastName") AS "CurrentPrimaryTenantName"
+            FROM "LeaseManagements" AS management
+            LEFT JOIN "LeaseManagementParties" AS party
+              ON party."PortfolioId" = management."PortfolioId"
+             AND party."LeaseManagementId" = management."Id"
+             AND party."Role" = 'PrimaryTenant'
+             AND party."EffectiveThrough" IS NULL
+            LEFT JOIN "Tenants" AS tenant
+              ON tenant."PortfolioId" = party."PortfolioId"
+             AND tenant."Id" = party."TenantId"
+            LEFT JOIN "LeaseAgreements" AS agreement
+              ON agreement."PortfolioId" = management."PortfolioId"
+             AND agreement."LeaseManagementId" = management."Id"
+             AND agreement."VoidedAtUtc" IS NULL
+             AND agreement."DraftCanceledAtUtc" IS NULL
+            WHERE management."CanceledAtUtc" IS NULL
+              AND management."AccountClosedAtUtc" IS NULL
+            """);
         db.Portfolios.Add(new Portfolio
         {
             Id = 1,
@@ -63,6 +88,17 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             TimeZone = "UTC",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
+        });
+        db.Users.Add(new ApplicationUser
+        {
+            Id = 1,
+            PortfolioId = 1,
+            UserName = "scan-worker@example.test",
+            NormalizedUserName = "SCAN-WORKER@EXAMPLE.TEST",
+            Email = "scan-worker@example.test",
+            NormalizedEmail = "SCAN-WORKER@EXAMPLE.TEST",
+            DisplayName = "Scan Worker",
+            CreatedAt = DateTime.UtcNow,
         });
         db.SaveChanges();
     }
@@ -263,7 +299,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     }
 
     [Fact]
-    public async Task Cycle_WorkOrderExtraction_GroundingContextIncludesActiveLeases()
+    public async Task Cycle_WorkOrderExtraction_GroundingContextIncludesCurrentLeaseRelationship()
     {
         using (var scope = _provider.CreateScope())
         {
@@ -303,21 +339,68 @@ public class ScanProcessingWorkerFailureTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             });
-            db.Leases.Add(new Lease
+            db.LeaseManagements.Add(new LeaseManagement
             {
                 Id = 40,
+                PublicId = Guid.NewGuid(),
                 PortfolioId = 1,
                 PropertyId = 10,
                 UnitId = 20,
+                RelationshipNumber = "QA-2026-001-1A",
+                PossessionGivenAtUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = 1,
+                RowVersion = Guid.NewGuid(),
+            });
+            db.TenantAccounts.Add(new TenantAccount
+            {
+                Id = 41,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                LeaseManagementId = 40,
+                AccountNumber = "TA-QA-2026-001-1A",
+                Currency = "USD",
+                OpenedAtUtc = now,
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            });
+            db.LeaseManagementParties.Add(new LeaseManagementParty
+            {
+                Id = 42,
+                PortfolioId = 1,
+                LeaseManagementId = 40,
                 TenantId = 30,
-                LeaseNumber = "QA-2026-001-1A",
-                Status = Core.Enums.LeaseStatus.Active,
-                StartDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                EndDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                MonthlyRent = 1125m,
-                SecurityDeposit = 1125m,
-                CreatedAt = now,
-                UpdatedAt = now,
+                Role = Core.Enums.LeaseManagementPartyRole.PrimaryTenant,
+                EffectiveFrom = new DateOnly(2026, 1, 1),
+                ChangeReason = "Canonical grounding fixture",
+                CreatedAtUtc = now,
+                CreatedByUserId = 1,
+            });
+            db.LeaseAgreements.Add(new LeaseAgreement
+            {
+                Id = 43,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                LeaseManagementId = 40,
+                VersionNumber = 1,
+                AgreementNumber = "QA-2026-001-1A",
+                ChangeType = Core.Enums.LeaseAgreementChangeType.Initial,
+                TermType = Core.Enums.LeaseAgreementTermType.FixedTerm,
+                TermStartOn = new DateOnly(2026, 1, 1),
+                TermEndOn = new DateOnly(2027, 1, 1),
+                GoverningFromOn = new DateOnly(2026, 1, 1),
+                BaseRentAmount = 1125m,
+                RentDueDay = 1,
+                SecurityDepositObligation = 1125m,
+                LateFeeAmount = 0m,
+                GracePeriodDays = 0,
+                Currency = "USD",
+                TermsSchemaVersion = 1,
+                TermsPayload = "{}",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = 1,
             });
             db.SaveChanges();
         }
@@ -331,8 +414,10 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         await RunCycleAsync();
 
         _llm.LastGroundingContext.Should().NotBeNullOrWhiteSpace();
-        _llm.LastGroundingContext.Should().Contain("\"leases\"");
+        _llm.LastGroundingContext.Should().Contain("\"leaseManagements\"");
         _llm.LastGroundingContext.Should().Contain("\"id\":40");
+        _llm.LastGroundingContext.Should().Contain("\"leaseAgreementId\":43");
+        _llm.LastGroundingContext.Should().Contain("\"relationshipNumber\":\"QA-2026-001-1A\"");
         _llm.LastGroundingContext.Should().Contain("QA-2026-001-1A");
         _llm.LastGroundingContext.Should().Contain("\"unitId\":20");
         _llm.LastGroundingContext.Should().Contain("\"tenantId\":30");
