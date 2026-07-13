@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -17,6 +18,7 @@ namespace RentalCommand.Api.Tests.Domain;
 public class SandboxServiceTests : IDisposable
 {
     private readonly SqliteTestContext _ctx = new();
+    private readonly RecordingRlsExecutionContext _rls = new();
 
     public void Dispose() => _ctx.Dispose();
 
@@ -25,7 +27,8 @@ public class SandboxServiceTests : IDisposable
         var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance, TimeProvider.System);
         var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
             _ctx.Db, NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance, TimeProvider.System);
-        return new SandboxService(_ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System);
+        return new SandboxService(
+            _ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System, _rls);
     }
 
     // -----------------------------------------------------------------------
@@ -108,6 +111,20 @@ public class SandboxServiceTests : IDisposable
         state!.IsSandbox.Should().BeFalse();
         // No-op on an already-live account: data is left intact (we did not wipe a real portfolio).
         (await _ctx.Db.Properties.CountAsync()).Should().Be(propsBefore);
+        _rls.Reasons.Should().BeEmpty("an already-live portfolio performs no destructive graduation");
+    }
+
+    [Fact]
+    public async Task GoLive_UsesDedicatedBypass_OnlyForGraduationLifetime()
+    {
+        MarkSandbox(portfolioId: 1, DateTime.UtcNow);
+        SeedRichGraph(portfolioId: 1);
+
+        _rls.IsBypassActive.Should().BeFalse();
+        await BuildService().GoLiveAsync(1, CancellationToken.None);
+
+        _rls.Reasons.Should().Equal(RlsBypassReason.SandboxGraduation);
+        _rls.IsBypassActive.Should().BeFalse("the reason-coded lease ends with the transaction");
     }
 
     [Fact]
@@ -212,6 +229,7 @@ public class SandboxServiceTests : IDisposable
 
         // Demo data was actually seeded.
         (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
+        _rls.Reasons.Should().BeEmpty("onboarding setup is not the destructive graduation wipe");
 
         var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
         portfolio.IsSandbox.Should().BeTrue();
@@ -270,6 +288,28 @@ public class SandboxServiceTests : IDisposable
         p.IsSandbox = true;
         p.SandboxSeededAtUtc = seededAt;
         _ctx.Db.SaveChanges();
+    }
+
+    private sealed class RecordingRlsExecutionContext : IRlsExecutionContext
+    {
+        private RlsBypassReason? _active;
+
+        public bool IsBypassActive => _active is not null;
+        public RlsBypassReason? ActiveBypassReason => _active;
+        public List<RlsBypassReason> Reasons { get; } = [];
+
+        public IDisposable BeginBypass(RlsBypassReason reason)
+        {
+            _active.Should().BeNull("the sandbox service must not nest broad RLS bypass leases");
+            _active = reason;
+            Reasons.Add(reason);
+            return new Lease(this);
+        }
+
+        private sealed class Lease(RecordingRlsExecutionContext owner) : IDisposable
+        {
+            public void Dispose() => owner._active = null;
+        }
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -13,19 +14,22 @@ public sealed class SandboxService : ISandboxService
     private readonly Auth.DemoDataSeeder _demoSeeder;
     private readonly ILogger<SandboxService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IRlsExecutionContext _rlsExecutionContext;
 
     public SandboxService(
         RentalCommandDbContext db,
         ISelfOwnerProvisioner selfOwnerProvisioner,
         Auth.DemoDataSeeder demoSeeder,
         ILogger<SandboxService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IRlsExecutionContext rlsExecutionContext)
     {
         _db = db;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _demoSeeder = demoSeeder;
         _logger = logger;
         _timeProvider = timeProvider;
+        _rlsExecutionContext = rlsExecutionContext;
     }
 
     public async Task<SandboxStateResponse?> GetStateAsync(int portfolioId, CancellationToken ct = default)
@@ -56,6 +60,7 @@ public sealed class SandboxService : ISandboxService
 
         // Transactional: the data wipe and the flag flip commit together. A failure rolls everything
         // back so we can never end up Live-but-still-holding-demo-data (or vice-versa).
+        using var rlsBypass = _rlsExecutionContext.BeginBypass(RlsBypassReason.SandboxGraduation);
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
         await WipePortfolioDataAsync(portfolioId, ct);

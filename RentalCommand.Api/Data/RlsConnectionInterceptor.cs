@@ -16,11 +16,13 @@ public enum RlsBypassReason
     CredentialVerifiedContextSelection = 6,
     RefreshCredentialContextResolution = 7,
     AccountingOAuthCallback = 8,
+    SandboxGraduation = 9,
 }
 
 public interface IRlsExecutionContext
 {
     bool IsBypassActive { get; }
+    RlsBypassReason? ActiveBypassReason { get; }
     IDisposable BeginBypass(RlsBypassReason reason);
 }
 
@@ -33,6 +35,7 @@ public sealed class RlsExecutionContext : IRlsExecutionContext
     private readonly AsyncLocal<BypassLease?> _current = new();
 
     public bool IsBypassActive => _current.Value is not null;
+    public RlsBypassReason? ActiveBypassReason => _current.Value?.Reason;
 
     public IDisposable BeginBypass(RlsBypassReason reason)
     {
@@ -72,7 +75,10 @@ public sealed class RlsExecutionContext : IRlsExecutionContext
     }
 }
 
-internal readonly record struct RlsSessionState(int PortfolioId, bool IsAdmin);
+internal readonly record struct RlsSessionState(
+    int PortfolioId,
+    bool IsAdmin,
+    RlsBypassReason? BypassReason = null);
 
 /// <summary>
 /// Sets PostgreSQL RLS session state from the middleware-validated canonical access context. Legacy
@@ -82,6 +88,8 @@ internal readonly record struct RlsSessionState(int PortfolioId, bool IsAdmin);
 /// </summary>
 public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
 {
+    internal const string RuntimeRole = "rentalcommand_api";
+
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IRlsExecutionContext _executionContext;
 
@@ -106,7 +114,8 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
     {
         var state = ResolveSessionState(
             _httpContextAccessor.HttpContext,
-            _executionContext.IsBypassActive);
+            _executionContext.IsBypassActive,
+            _executionContext.ActiveBypassReason);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = BuildSql(state);
         cmd.ExecuteNonQuery();
@@ -118,17 +127,26 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
     {
         var state = ResolveSessionState(
             _httpContextAccessor.HttpContext,
-            _executionContext.IsBypassActive);
+            _executionContext.IsBypassActive,
+            _executionContext.ActiveBypassReason);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = BuildSql(state);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    internal static RlsSessionState ResolveSessionState(HttpContext? httpContext, bool bypassActive)
+    internal static RlsSessionState ResolveSessionState(
+        HttpContext? httpContext,
+        bool bypassActive,
+        RlsBypassReason? bypassReason = null)
     {
         if (bypassActive)
         {
-            return new RlsSessionState(0, true);
+            if (bypassReason is null || !Enum.IsDefined(bypassReason.Value))
+            {
+                throw new InvalidOperationException("An active RLS bypass must identify its reason.");
+            }
+
+            return new RlsSessionState(0, true, bypassReason);
         }
 
         if (httpContext is not null &&
@@ -144,7 +162,11 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         return new RlsSessionState(0, false);
     }
 
-    private static string BuildSql(RlsSessionState state) =>
+    internal static string BuildSql(RlsSessionState state) =>
+        (state.BypassReason == RlsBypassReason.StartupMigrationAndSeed
+            ? "RESET ROLE; "
+            : $"SET ROLE {RuntimeRole}; ") +
         $"SET app.current_portfolio_id = '{state.PortfolioId}'; " +
-        $"SET app.is_admin = '{(state.IsAdmin ? "true" : "false")}';";
+        $"SET app.is_admin = '{(state.IsAdmin ? "true" : "false")}'; " +
+        $"SET app.rls_bypass_reason = '{state.BypassReason?.ToString() ?? string.Empty}';";
 }

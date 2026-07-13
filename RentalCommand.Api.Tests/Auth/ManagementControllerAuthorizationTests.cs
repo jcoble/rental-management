@@ -52,6 +52,18 @@ public sealed class ManagementControllerAuthorizationTests
             "canonical tokens deliberately contain no Identity role claims");
     }
 
+    [Theory]
+    [InlineData(nameof(SandboxController.GoLive))]
+    [InlineData(nameof(SandboxController.OnboardingChoice))]
+    public void SandboxLifecycleMutations_RequireWorkspaceDestructiveAuthority(string methodName)
+    {
+        var method = typeof(SandboxController).GetMethod(methodName)!;
+
+        method.GetCustomAttributes<AuthorizeAttribute>(inherit: true)
+            .Should().ContainSingle(attribute =>
+                attribute.Policy == CapabilityPolicy.For(CapabilityKeys.AccountDestructiveActions));
+    }
+
     [Fact]
     public async Task CanonicalAdministratorAssignment_AdmitsManagementWithoutRoleClaims()
     {
