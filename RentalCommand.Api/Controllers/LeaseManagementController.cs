@@ -893,19 +893,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
             && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
     }
 
-    private bool TryReadAccessContext(out LeaseManagementReadContext access)
-    {
-        access = default;
-        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
-        {
-            return false;
-        }
-
-        access = new LeaseManagementReadContext(
-            GetPortfolioId(), GetUserId(), sessionId, accessContextId, accessRevision);
-        return true;
-    }
-
     private readonly record struct MutationEnvelope(
         int PortfolioId,
         int UserId,
