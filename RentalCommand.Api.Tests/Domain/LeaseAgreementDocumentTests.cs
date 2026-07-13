@@ -173,11 +173,19 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
                 SortOrder = 2,
             },
         };
-        var data = new LeaseAgreementData
+        var data = new LeaseAgreementRenderData
         {
-            Lease = lease,
+            PropertyId = lease.PropertyId,
+            AgreementNumber = lease.LeaseNumber,
+            TermStartOn = DateOnly.FromDateTime(lease.StartDate),
+            TermEndOn = DateOnly.FromDateTime(lease.EndDate),
+            BaseRentAmount = lease.MonthlyRent,
+            SecurityDepositObligation = lease.SecurityDeposit,
+            LateFeeAmount = lease.LateFeeAmount,
+            RentDueDay = lease.RentDueDay,
             LandlordName = "Acme Property Management LLC",
             TenantName = "Marcus Williams",
+            TenantEmail = lease.Tenant?.Email ?? string.Empty,
             PropertyName = "Maple Court",
             PropertyAddress = "10 Maple Ct, Columbus, OH 43215",
             UnitNumber = "2B",

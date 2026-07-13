@@ -515,7 +515,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         return ms.ToArray();
     }
 
-    private static LeaseAgreementData BuildLeaseAgreementData(Lease lease, Portfolio? portfolio)
+    private static LeaseAgreementRenderData BuildLeaseAgreementData(Lease lease, Portfolio? portfolio)
     {
         var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
             ? portfolio!.ManagementCompanyName
@@ -535,11 +535,19 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
                 $"{property.City}, {property.State} {property.PostalCode}".Trim(),
             }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
-        return new LeaseAgreementData
+        return new LeaseAgreementRenderData
         {
-            Lease = lease,
+            PropertyId = lease.PropertyId,
+            AgreementNumber = lease.LeaseNumber,
+            TermStartOn = DateOnly.FromDateTime(lease.StartDate),
+            TermEndOn = DateOnly.FromDateTime(lease.EndDate),
+            BaseRentAmount = lease.MonthlyRent,
+            SecurityDepositObligation = lease.SecurityDeposit,
+            LateFeeAmount = lease.LateFeeAmount,
+            RentDueDay = lease.RentDueDay,
             LandlordName = landlordName,
             TenantName = tenantName,
+            TenantEmail = lease.Tenant?.Email ?? string.Empty,
             PropertyName = property?.Name ?? string.Empty,
             PropertyAddress = propertyAddress,
             UnitNumber = lease.Unit?.UnitNumber,

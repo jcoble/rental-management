@@ -1284,11 +1284,19 @@ public class LeaseService : ILeaseService
                 $"{property.City}, {property.State} {property.PostalCode}".Trim(),
             }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
-        var data = new LeaseAgreementData
+        var data = new LeaseAgreementRenderData
         {
-            Lease = lease,
+            PropertyId = lease.PropertyId,
+            AgreementNumber = lease.LeaseNumber,
+            TermStartOn = DateOnly.FromDateTime(lease.StartDate),
+            TermEndOn = DateOnly.FromDateTime(lease.EndDate),
+            BaseRentAmount = lease.MonthlyRent,
+            SecurityDepositObligation = lease.SecurityDeposit,
+            LateFeeAmount = lease.LateFeeAmount,
+            RentDueDay = lease.RentDueDay,
             LandlordName = landlordName,
             TenantName = tenantName,
+            TenantEmail = lease.Tenant?.Email ?? string.Empty,
             PropertyName = property?.Name ?? string.Empty,
             PropertyAddress = propertyAddress,
             UnitNumber = lease.Unit?.UnitNumber,

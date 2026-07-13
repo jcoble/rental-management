@@ -20,7 +20,7 @@ public sealed record LeaseAgreementRenderResult(
 
 public interface ILeaseAgreementRenderer
 {
-    Task<LeaseAgreementRenderResult> RenderAsync(int portfolioId, LeaseAgreementData data, CancellationToken ct = default);
+    Task<LeaseAgreementRenderResult> RenderAsync(int portfolioId, LeaseAgreementRenderData data, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -53,10 +53,10 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
 
     public async Task<LeaseAgreementRenderResult> RenderAsync(
         int portfolioId,
-        LeaseAgreementData data,
+        LeaseAgreementRenderData data,
         CancellationToken ct = default)
     {
-        var template = await ResolveActiveOverlayTemplateAsync(portfolioId, data.Lease.PropertyId, ct);
+        var template = await ResolveActiveOverlayTemplateAsync(portfolioId, data.PropertyId, ct);
         if (template?.OriginalStoredFile is null)
         {
             return new LeaseAgreementRenderResult(_fallbackPdf.Generate(data), null, null, null);
@@ -113,7 +113,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
     internal static byte[] RenderOverlayPreview(
         byte[] originalBytes,
         IReadOnlyList<DocumentTemplateField> fields,
-        LeaseAgreementData data)
+        LeaseAgreementRenderData data)
     {
         var valueMap = BuildValueMap(data);
         var renderableFields = fields
@@ -214,27 +214,26 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         return string.IsNullOrWhiteSpace(field.DefaultText) ? null : field.DefaultText.Trim();
     }
 
-    private static IReadOnlyDictionary<string, string> BuildValueMap(LeaseAgreementData data)
+    private static IReadOnlyDictionary<string, string> BuildValueMap(LeaseAgreementRenderData data)
     {
-        var lease = data.Lease;
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["landlord.name"] = data.LandlordName,
             ["tenant.fullName"] = data.TenantName,
-            ["tenant.email"] = lease.Tenant?.Email ?? string.Empty,
+            ["tenant.email"] = data.TenantEmail,
             ["property.name"] = data.PropertyName,
             ["property.address"] = data.PropertyAddress,
             ["unit.number"] = data.UnitNumber ?? string.Empty,
-            ["lease.startDate"] = Date(lease.StartDate),
-            ["lease.endDate"] = Date(lease.EndDate),
-            ["lease.monthlyRent"] = Money(lease.MonthlyRent),
-            ["lease.securityDeposit"] = Money(lease.SecurityDeposit),
-            ["lease.lateFeeAmount"] = Money(lease.LateFeeAmount),
-            ["lease.rentDueDay"] = lease.RentDueDay.ToString(CultureInfo.InvariantCulture),
+            ["lease.startDate"] = Date(data.TermStartOn),
+            ["lease.endDate"] = data.TermEndOn is { } termEnd ? Date(termEnd) : string.Empty,
+            ["lease.monthlyRent"] = Money(data.BaseRentAmount),
+            ["lease.securityDeposit"] = Money(data.SecurityDepositObligation),
+            ["lease.lateFeeAmount"] = Money(data.LateFeeAmount),
+            ["lease.rentDueDay"] = data.RentDueDay.ToString(CultureInfo.InvariantCulture),
         };
     }
 
-    private static string Date(DateTime value) =>
+    private static string Date(DateOnly value) =>
         value.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture);
 
     private static string Money(decimal value) =>
