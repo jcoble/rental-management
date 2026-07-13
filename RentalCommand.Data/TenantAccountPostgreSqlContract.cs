@@ -16,6 +16,7 @@ internal static class TenantAccountPostgreSqlContract
         CreateConditionPeriodGuard,
         CreatePaymentAttemptWriteGuard,
         CreatePaymentAttemptClaimFunction,
+        CreatePaymentAttemptExactClaimFunction,
         CreatePaymentAttemptTransitionFunction,
         CreatePaymentAttemptValidator,
         CreateOpenAccountWriteGuard,
@@ -231,6 +232,8 @@ internal static class TenantAccountPostgreSqlContract
             OR NEW."PortfolioId" IS DISTINCT FROM OLD."PortfolioId"
             OR NEW."TenantAccountId" IS DISTINCT FROM OLD."TenantAccountId"
             OR NEW."Provider" IS DISTINCT FROM OLD."Provider"
+            OR (OLD."ProviderObjectId" IS NOT NULL
+                AND NEW."ProviderObjectId" IS DISTINCT FROM OLD."ProviderObjectId")
             OR NEW."IdempotencyKey" IS DISTINCT FROM OLD."IdempotencyKey"
             OR NEW."AttemptType" IS DISTINCT FROM OLD."AttemptType"
             OR NEW."Amount" IS DISTINCT FROM OLD."Amount"
@@ -303,6 +306,7 @@ internal static class TenantAccountPostgreSqlContract
         AS $function$
         DECLARE
           prior_state varchar(30);
+          prior_provider_object_id varchar(200);
           now_utc timestamp with time zone := clock_timestamp();
           changed_count integer;
         BEGIN
@@ -311,8 +315,8 @@ internal static class TenantAccountPostgreSqlContract
               USING ERRCODE = '22023';
           END IF;
 
-          SELECT attempt."State"
-            INTO prior_state
+          SELECT attempt."State", attempt."ProviderObjectId"
+            INTO prior_state, prior_provider_object_id
           FROM "TenantPaymentAttempts" AS attempt
           WHERE attempt."Id" = p_id
             AND attempt."TenantAccountId" = p_tenant_account_id
@@ -325,8 +329,17 @@ internal static class TenantAccountPostgreSqlContract
             RETURN false;
           END IF;
 
+          IF prior_provider_object_id IS NOT NULL
+             AND p_provider_object_id IS NOT NULL
+             AND prior_provider_object_id IS DISTINCT FROM p_provider_object_id THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt % is already bound to provider object %',
+              p_id, prior_provider_object_id
+              USING ERRCODE = '23514';
+          END IF;
+
           IF prior_state = 'Succeeded'
              OR prior_state = 'Canceled'
+             OR (prior_state = 'Failed' AND p_new_state = 'Submitted')
              OR (prior_state = 'Prepared' AND p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown'))
              OR (prior_state IN ('Submitted','Failed','Unknown')
                  AND p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown')) THEN
@@ -338,7 +351,7 @@ internal static class TenantAccountPostgreSqlContract
 
           UPDATE "TenantPaymentAttempts" AS attempt
           SET "State" = p_new_state,
-              "ProviderObjectId" = COALESCE(p_provider_object_id, attempt."ProviderObjectId"),
+              "ProviderObjectId" = COALESCE(attempt."ProviderObjectId", p_provider_object_id),
               "SubmittedAtUtc" = CASE
                 WHEN p_new_state IN ('Submitted','Succeeded')
                   THEN COALESCE(attempt."SubmittedAtUtc", now_utc)
@@ -364,6 +377,50 @@ internal static class TenantAccountPostgreSqlContract
           GET DIAGNOSTICS changed_count = ROW_COUNT;
           PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
           RETURN changed_count = 1;
+        END;
+        $function$;
+        """;
+
+    private const string CreatePaymentAttemptExactClaimFunction = """
+        CREATE OR REPLACE FUNCTION rc_claim_exact_tenant_payment_attempt(
+          p_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_claim_owner varchar(200),
+          p_lease_duration interval DEFAULT interval '5 minutes')
+        RETURNS uuid
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          claimed_token uuid;
+          now_utc timestamp with time zone := clock_timestamp();
+        BEGIN
+          IF NULLIF(btrim(p_claim_owner), '') IS NULL OR p_lease_duration <= interval '0 seconds' THEN
+            RAISE EXCEPTION 'Payment-attempt claim owner and positive lease duration are required'
+              USING ERRCODE = '22023';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "ClaimOwner" = p_claim_owner,
+              "ClaimToken" = gen_random_uuid(),
+              "ClaimExpiresAtUtc" = now_utc + p_lease_duration,
+              "AttemptCount" = CASE
+                WHEN attempt."State" = 'Prepared' AND attempt."ProviderObjectId" IS NULL
+                  THEN attempt."AttemptCount" + 1
+                ELSE attempt."AttemptCount"
+              END,
+              "UpdatedAtUtc" = now_utc
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."State" IN ('Prepared','Submitted','Failed','Unknown')
+            AND (attempt."ClaimToken" IS NULL OR attempt."ClaimExpiresAtUtc" <= now_utc)
+          RETURNING attempt."ClaimToken" INTO claimed_token;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
+          RETURN claimed_token;
         END;
         $function$;
         """;
@@ -958,6 +1015,7 @@ internal static class TenantAccountPostgreSqlContract
         DROP FUNCTION IF EXISTS rc_validate_tenant_payment_attempt();
         DROP FUNCTION IF EXISTS rc_guard_open_tenant_account_money_write();
         DROP FUNCTION IF EXISTS rc_transition_tenant_payment_attempt(bigint, integer, integer, uuid, varchar, varchar, varchar, varchar, timestamp with time zone);
+        DROP FUNCTION IF EXISTS rc_claim_exact_tenant_payment_attempt(bigint, integer, integer, varchar, interval);
         DROP FUNCTION IF EXISTS rc_claim_tenant_payment_attempt(bigint, integer, integer, varchar, interval);
         DROP FUNCTION IF EXISTS rc_guard_tenant_payment_attempt_write();
         DROP FUNCTION IF EXISTS rc_guard_tenant_account_condition_period();
