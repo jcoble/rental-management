@@ -4,12 +4,14 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Scanning;
 
 public sealed class FinalizeScanUploadHandler
-    : IAtomicCommandHandler<FinalizeScanUploadCommand, FinalizeScanUploadResult>
+    : IAtomicCommandHandler<FinalizeScanUploadCommand, FinalizeScanUploadResult>,
+      IAtomicReplayAuthorizer<FinalizeScanUploadCommand>
 {
     public async Task<FinalizeScanUploadResult> HandleAsync(
         FinalizeScanUploadCommand command,
@@ -20,8 +22,8 @@ public sealed class FinalizeScanUploadHandler
             throw new InvalidOperationException("A scan upload must contain between 1 and 100 files.");
 
         var captureContext = command.CaptureContext
-            ?? new ScanCaptureContextData(null, null, null, null, null, null, null, null, null, null, null, null, null);
-        await ValidateCaptureContextAsync(command, captureContext, attempt.Persistence, ct);
+            ?? throw new InvalidOperationException("A canonical scan capture context is required.");
+        await AuthorizeCaptureContextAsync(command, captureContext, attempt.Persistence, ct);
 
         var expectations = new List<AtomicPendingFileUploadExpectation>(command.Files.Count * 2);
         for (var index = 0; index < command.Files.Count; index++)
@@ -233,20 +235,72 @@ public sealed class FinalizeScanUploadHandler
             drafts.Select(draft => new FinalizedScanDraft(draft.Id, draft.Status, draft.FilePath)).ToArray());
     }
 
-    private static async Task ValidateCaptureContextAsync(
+    public Task AuthorizeReplayAsync(
+        FinalizeScanUploadCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var captureContext = command.CaptureContext
+            ?? throw new InvalidOperationException("A canonical scan capture context is required.");
+        return AuthorizeCaptureContextAsync(command, captureContext, persistence, ct);
+    }
+
+    private static async Task AuthorizeCaptureContextAsync(
         FinalizeScanUploadCommand command,
         ScanCaptureContextData context,
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        if ((context.AccessContextId is null) != (context.AccessRevision is null))
-        {
-            throw new InvalidOperationException(
-                "Scan capture access context and revision must be supplied together.");
-        }
+        if (command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
+            || command.ExpectedAccessRevision <= 0 || command.UploadedByUserId <= 0
+            || context.AccessContextId != command.AccessContextId
+            || context.AccessRevision != command.ExpectedAccessRevision)
+            throw Unauthorized();
 
-        var accessContexts = persistence.Query<WorkspaceAccessContext>();
+        var capabilities = ScanDraftAuthorizationQuery.CapabilitiesForTarget(command.TargetEntityType);
+        if (capabilities.Count == 0)
+            throw Unauthorized();
+
+        var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var capabilityKeys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
+        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= securityNowUtc
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc)
+            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNowUtc
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > securityNowUtc)
+            && assignment.WorkspaceMembership.AccessContext!.UserId == command.UploadedByUserId
+            && assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ExpectedAccessRevision
+            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
+            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
+            && persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId && session.UserId == command.UploadedByUserId
+                && session.ActiveAccessContextId == command.AccessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > securityNowUtc)
+            && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                capabilityKeys.Contains(profileCapability.CapabilityDefinition!.Key)
+                && profileCapability.CapabilityDefinition.AuthorizationTargetKind
+                    == CapabilityAuthorizationTargetKind.Property));
+
         var properties = persistence.Query<Property>();
+        var authorizedProperties = properties.Where(property =>
+            property.PortfolioId == command.PortfolioId && property.DeletedAt == null
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == command.PortfolioId
+                        && selected.PropertyId == property.Id))));
         var units = persistence.Query<Unit>();
         var relationships = persistence.Query<LeaseManagement>();
         var agreements = persistence.Query<LeaseAgreement>();
@@ -256,33 +310,32 @@ public sealed class FinalizeScanUploadHandler
         var applications = persistence.Query<RentalApplication>();
         var listings = persistence.Query<RentalListing>();
 
-        // One translated predicate validates the complete graph before any StoredFile, ScanBatch,
-        // or ScanDraft row is added. Nested Any calls become correlated EXISTS clauses in the same
-        // SQL statement; no candidate rows are materialized for in-memory filtering.
+        // One translated predicate validates current authority and the complete capture graph before
+        // any StoredFile, ScanBatch, or ScanDraft row is added. Every nested Any becomes a correlated
+        // EXISTS in this SQL statement; no candidate business rows are materialized in memory.
         var valid = await persistence.Query<Portfolio>()
             .Where(portfolio => portfolio.Id == command.PortfolioId)
             .Select(_ =>
-                (context.AccessContextId == null || accessContexts.Any(access =>
-                    access.Id == context.AccessContextId.Value
-                    && access.PortfolioId == command.PortfolioId
-                    && access.UserId == command.UploadedByUserId
-                    && access.AccessRevision == context.AccessRevision
-                    && access.Status == WorkspaceAccessContextStatus.Active))
-                && (context.PropertyId == null || properties.Any(property =>
-                    property.Id == context.PropertyId.Value
-                    && property.PortfolioId == command.PortfolioId))
+                assignments.Any()
+                && (context.PropertyId == null || authorizedProperties.Any(property =>
+                    property.Id == context.PropertyId.Value))
                 && (context.UnitId == null || units.Any(unit =>
                     unit.Id == context.UnitId.Value
                     && unit.PortfolioId == command.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == unit.PropertyId)
                     && (context.PropertyId == null || unit.PropertyId == context.PropertyId.Value)))
                 && (context.LeaseManagementId == null || relationships.Any(relationship =>
                     relationship.Id == context.LeaseManagementId.Value
                     && relationship.PortfolioId == command.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == relationship.PropertyId)
                     && (context.PropertyId == null || relationship.PropertyId == context.PropertyId.Value)
                     && (context.UnitId == null || relationship.UnitId == context.UnitId.Value)))
                 && (context.LeaseAgreementId == null || agreements.Any(agreement =>
                     agreement.Id == context.LeaseAgreementId.Value
                     && agreement.PortfolioId == command.PortfolioId
+                    && agreement.LeaseManagement != null
+                    && authorizedProperties.Any(property =>
+                        property.Id == agreement.LeaseManagement.PropertyId)
                     && (context.LeaseManagementId == null
                         || agreement.LeaseManagementId == context.LeaseManagementId.Value)
                     && (context.PropertyId == null
@@ -292,6 +345,9 @@ public sealed class FinalizeScanUploadHandler
                 && (context.TenantAccountId == null || accounts.Any(account =>
                     account.Id == context.TenantAccountId.Value
                     && account.PortfolioId == command.PortfolioId
+                    && account.LeaseManagement != null
+                    && authorizedProperties.Any(property =>
+                        property.Id == account.LeaseManagement.PropertyId)
                     && (context.LeaseManagementId == null
                         || account.LeaseManagementId == context.LeaseManagementId.Value)
                     && (context.LeaseAgreementId == null || agreements.Any(agreement =>
@@ -304,6 +360,9 @@ public sealed class FinalizeScanUploadHandler
                 && (context.TenantLedgerEntryId == null || ledgerEntries.Any(entry =>
                     entry.Id == context.TenantLedgerEntryId.Value
                     && entry.PortfolioId == command.PortfolioId
+                    && entry.TenantAccount != null && entry.TenantAccount.LeaseManagement != null
+                    && authorizedProperties.Any(property =>
+                        property.Id == entry.TenantAccount.LeaseManagement.PropertyId)
                     && (context.TenantAccountId == null
                         || entry.TenantAccountId == context.TenantAccountId.Value)
                     && (context.LeaseManagementId == null
@@ -317,6 +376,7 @@ public sealed class FinalizeScanUploadHandler
                 && (context.WorkOrderId == null || workOrders.Any(workOrder =>
                     workOrder.Id == context.WorkOrderId.Value
                     && workOrder.PortfolioId == command.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == workOrder.PropertyId)
                     && (context.PropertyId == null || workOrder.PropertyId == context.PropertyId.Value)
                     && (context.UnitId == null || workOrder.UnitId == context.UnitId.Value)
                     && (context.LeaseManagementId == null
@@ -332,6 +392,8 @@ public sealed class FinalizeScanUploadHandler
                 && (context.ApplicationId == null || applications.Any(application =>
                     application.Id == context.ApplicationId.Value
                     && application.PortfolioId == command.PortfolioId
+                    && application.PropertyId != null
+                    && authorizedProperties.Any(property => property.Id == application.PropertyId)
                     && (context.PropertyId == null || application.PropertyId == context.PropertyId.Value)
                     && (context.UnitId == null || application.UnitId == context.UnitId.Value)
                     && (context.LeaseManagementId == null
@@ -343,6 +405,7 @@ public sealed class FinalizeScanUploadHandler
                 && (context.RentalListingId == null || listings.Any(listing =>
                     listing.Id == context.RentalListingId.Value
                     && listing.PortfolioId == command.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == listing.PropertyId)
                     && (context.PropertyId == null || listing.PropertyId == context.PropertyId.Value)
                     && (context.UnitId == null || listing.UnitId == context.UnitId.Value)
                     && (context.LeaseManagementId == null || relationships.Any(relationship =>
@@ -352,11 +415,11 @@ public sealed class FinalizeScanUploadHandler
             .SingleOrDefaultAsync(ct);
 
         if (!valid)
-        {
-            throw new InvalidOperationException(
-                "The scan capture context is outside this workspace or its records do not belong together.");
-        }
+            throw Unauthorized();
     }
+
+    private static UnauthorizedAccessException Unauthorized() =>
+        new("The current session is not authorized to finalize this scan upload.");
 
     private static StoredFile CreateStoredFile(
         FinalizeScanUploadCommand command,

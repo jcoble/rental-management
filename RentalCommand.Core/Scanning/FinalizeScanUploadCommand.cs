@@ -38,6 +38,9 @@ public sealed record FinalizeScanUploadFile(
 public sealed record FinalizeScanUploadCommand(
     int PortfolioId,
     int UploadedByUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
     string ClientOperationId,
     string RequestFingerprint,
     string TargetEntityType,

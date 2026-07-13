@@ -49,6 +49,7 @@ public static class CapabilityKeys
     public const string MoneyReconciliationDestructive = "money.reconciliation.destructive";
     public const string AccountDestructiveActions = "account.destructive-actions";
     public const string NotificationsManage = "notifications.manage";
+    public const string TenantNoticesManage = "notifications.tenant-notices.manage";
 }
 
 /// <summary>
@@ -126,13 +127,14 @@ public static class AccessCatalog
         new(35, CapabilityKeys.AccountDestructiveActions, "Perform destructive workspace or account actions.", CapabilityAuthorizationTargetKind.Workspace),
         new(36, CapabilityKeys.LeasingApplicationFeesCollect, "Collect in-scope application fees without refund authority.", CapabilityAuthorizationTargetKind.Property),
         new(37, CapabilityKeys.NotificationsManage, "Manage Team routing, tenant notice policy, delivery configuration, and notice templates.", CapabilityAuthorizationTargetKind.Workspace),
+        new(38, CapabilityKeys.TenantNoticesManage, "Manage tenant-notice drafts within assigned property scope.", CapabilityAuthorizationTargetKind.Property),
     ];
 
     public static readonly IReadOnlyDictionary<int, IReadOnlyList<int>> CapabilityIdsByRole =
         new Dictionary<int, IReadOnlyList<int>>
         {
             [1] = Capabilities.Select(capability => capability.Id).ToArray(),
-            [2] = Enumerable.Range(1, 13).ToArray(),
+            [2] = Enumerable.Range(1, 13).Append(38).ToArray(),
             [3] = Enumerable.Range(14, 7).Prepend(1).Append(36).ToArray(),
             [4] = Enumerable.Range(21, 4).ToArray(),
         };

@@ -51,12 +51,228 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                 $"Scan confirmation target {command.Target.Kind} is not supported by this writer."),
         };
 
-    public Task AuthorizeReplayAsync(
+    public async Task AuthorizeReplayAsync(
         ConfirmScanDraftCommand command,
         IAtomicPersistenceSession persistence,
-        CancellationToken ct) => command.Target.Kind == ScanConfirmationTargetKind.LeaseAgreement
-            ? CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(command, persistence, ct)
-            : Task.CompletedTask;
+        CancellationToken ct)
+    {
+        command.Target.Validate();
+        var capabilities = RequiredCapabilities(command.Target.Kind);
+        var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsDraftAuthorizedAsync(command, capabilities, persistence, securityNowUtc, ct))
+            throw Unauthorized();
+
+        if (command.Target.Kind == ScanConfirmationTargetKind.LeaseAgreement)
+        {
+            await CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(command, persistence, ct);
+            return;
+        }
+
+        var propertyId = await ResolveTargetPropertyIdAsync(command, persistence, ct);
+        if (!await HasPropertyAuthorityAsync(
+                command, capabilities, propertyId, persistence, securityNowUtc, ct))
+            throw Unauthorized();
+    }
+
+    private static IReadOnlyCollection<string> RequiredCapabilities(ScanConfirmationTargetKind kind) => kind switch
+    {
+        ScanConfirmationTargetKind.Expense => [CapabilityKeys.MoneyExpensesManage],
+        ScanConfirmationTargetKind.Payment => [CapabilityKeys.MoneyPaymentsManage],
+        ScanConfirmationTargetKind.WorkOrder => [CapabilityKeys.WorkManage],
+        ScanConfirmationTargetKind.LeaseAgreement =>
+            [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare],
+        ScanConfirmationTargetKind.Application => [CapabilityKeys.LeasingApplicationsManage],
+        ScanConfirmationTargetKind.Loan => [CapabilityKeys.MoneyExpensesManage],
+        _ => [],
+    };
+
+    private static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
+        ConfirmScanDraftCommand command,
+        IReadOnlyCollection<string> capabilities,
+        IAtomicPersistenceSession persistence,
+        DateTime securityNowUtc)
+    {
+        var keys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
+        return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= securityNowUtc
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc)
+            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNowUtc
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > securityNowUtc)
+            && assignment.WorkspaceMembership.AccessContext!.UserId == command.ConfirmedByUserId
+            && assignment.WorkspaceMembership.AccessContext.AccessRevision == command.ExpectedAccessRevision
+            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
+            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
+            && persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
+                && session.ActiveAccessContextId == command.AccessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > securityNowUtc)
+            && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                keys.Contains(profileCapability.CapabilityDefinition!.Key)
+                && profileCapability.CapabilityDefinition.AuthorizationTargetKind
+                    == CapabilityAuthorizationTargetKind.Property));
+    }
+
+    private static IQueryable<Property> AuthorizedProperties(
+        ConfirmScanDraftCommand command,
+        IReadOnlyCollection<string> capabilities,
+        IAtomicPersistenceSession persistence,
+        DateTime securityNowUtc)
+    {
+        var assignments = EffectiveAssignments(command, capabilities, persistence, securityNowUtc);
+        return persistence.Query<Property>().Where(property =>
+            property.PortfolioId == command.PortfolioId
+            && property.DeletedAt == null
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == command.PortfolioId
+                        && selected.PropertyId == property.Id))));
+    }
+
+    private static Task<bool> IsDraftAuthorizedAsync(
+        ConfirmScanDraftCommand command,
+        IReadOnlyCollection<string> capabilities,
+        IAtomicPersistenceSession persistence,
+        DateTime securityNowUtc,
+        CancellationToken ct)
+    {
+        var authorizedProperties = AuthorizedProperties(command, capabilities, persistence, securityNowUtc);
+        var assignments = EffectiveAssignments(command, capabilities, persistence, securityNowUtc);
+        var allProperties = assignments.Where(assignment =>
+            assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+
+        return persistence.Query<ScanDraft>().AnyAsync(draft =>
+            draft.Id == command.DraftId && draft.PortfolioId == command.PortfolioId
+            && (((draft.CapturePropertyId != null || draft.CaptureUnitId != null
+                    || draft.CaptureLeaseManagementId != null || draft.CaptureLeaseAgreementId != null
+                    || draft.CaptureTenantAccountId != null || draft.CaptureTenantLedgerEntryId != null
+                    || draft.CaptureWorkOrderId != null || draft.CaptureApplicationId != null
+                    || draft.CaptureRentalListingId != null)
+                && (draft.CapturePropertyId == null || authorizedProperties.Any(property =>
+                    property.Id == draft.CapturePropertyId))
+                && (draft.CaptureUnitId == null || persistence.Query<Unit>().Any(unit =>
+                    unit.Id == draft.CaptureUnitId && unit.PortfolioId == draft.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == unit.PropertyId)))
+                && (draft.CaptureLeaseManagementId == null || persistence.Query<LeaseManagement>().Any(management =>
+                    management.Id == draft.CaptureLeaseManagementId && management.PortfolioId == draft.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == management.PropertyId)))
+                && (draft.CaptureLeaseAgreementId == null || persistence.Query<LeaseAgreement>().Any(agreement =>
+                    agreement.Id == draft.CaptureLeaseAgreementId && agreement.PortfolioId == draft.PortfolioId
+                    && agreement.LeaseManagement != null
+                    && authorizedProperties.Any(property => property.Id == agreement.LeaseManagement.PropertyId)))
+                && (draft.CaptureTenantAccountId == null || persistence.Query<TenantAccount>().Any(account =>
+                    account.Id == draft.CaptureTenantAccountId && account.PortfolioId == draft.PortfolioId
+                    && account.LeaseManagement != null
+                    && authorizedProperties.Any(property => property.Id == account.LeaseManagement.PropertyId)))
+                && (draft.CaptureTenantLedgerEntryId == null || persistence.Query<TenantLedgerEntry>().Any(entry =>
+                    entry.Id == draft.CaptureTenantLedgerEntryId && entry.PortfolioId == draft.PortfolioId
+                    && entry.TenantAccount != null && entry.TenantAccount.LeaseManagement != null
+                    && authorizedProperties.Any(property =>
+                        property.Id == entry.TenantAccount.LeaseManagement.PropertyId)))
+                && (draft.CaptureWorkOrderId == null || persistence.Query<WorkOrder>().Any(order =>
+                    order.Id == draft.CaptureWorkOrderId && order.PortfolioId == draft.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == order.PropertyId)))
+                && (draft.CaptureApplicationId == null || persistence.Query<RentalApplication>().Any(application =>
+                    application.Id == draft.CaptureApplicationId && application.PortfolioId == draft.PortfolioId
+                    && application.PropertyId != null
+                    && authorizedProperties.Any(property => property.Id == application.PropertyId)))
+                && (draft.CaptureRentalListingId == null || persistence.Query<RentalListing>().Any(listing =>
+                    listing.Id == draft.CaptureRentalListingId && listing.PortfolioId == draft.PortfolioId
+                    && authorizedProperties.Any(property => property.Id == listing.PropertyId))))
+                || ((draft.CapturePropertyId == null && draft.CaptureUnitId == null
+                    && draft.CaptureLeaseManagementId == null && draft.CaptureLeaseAgreementId == null
+                    && draft.CaptureTenantAccountId == null && draft.CaptureTenantLedgerEntryId == null
+                    && draft.CaptureWorkOrderId == null && draft.CaptureApplicationId == null
+                    && draft.CaptureRentalListingId == null)
+                    && ((draft.CaptureAccessContextId == command.AccessContextId && assignments.Any())
+                        || allProperties.Any()))), ct);
+    }
+
+    private static async Task<int?> ResolveTargetPropertyIdAsync(
+        ConfirmScanDraftCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) => command.Target.Kind switch
+    {
+        ScanConfirmationTargetKind.Expense => await ResolveExpensePropertyIdAsync(
+            command, Required(command.Target.Expense), persistence, ct),
+        ScanConfirmationTargetKind.Payment => await persistence.Query<TenantAccount>()
+            .Where(account => account.Id == Required(command.Target.Payment).TenantAccountId
+                && account.PortfolioId == command.PortfolioId && account.LeaseManagement != null)
+            .Select(account => (int?)account.LeaseManagement!.PropertyId)
+            .SingleOrDefaultAsync(ct),
+        ScanConfirmationTargetKind.WorkOrder => Required(command.Target.WorkOrder).PropertyId,
+        ScanConfirmationTargetKind.Application => await ResolveOptionalPropertyIdAsync(
+            command, Required(command.Target.Application).PropertyId,
+            Required(command.Target.Application).UnitId, persistence, ct),
+        ScanConfirmationTargetKind.Loan => Required(command.Target.Loan).PropertyId,
+        _ => null,
+    };
+
+    private static async Task<int?> ResolveExpensePropertyIdAsync(
+        ConfirmScanDraftCommand command,
+        ScanExpenseTargetData target,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (target.PropertyId is int propertyId)
+            return propertyId;
+        if (target.UnitId is int unitId)
+            return await persistence.Query<Unit>()
+                .Where(unit => unit.Id == unitId && unit.PortfolioId == command.PortfolioId)
+                .Select(unit => (int?)unit.PropertyId).SingleOrDefaultAsync(ct);
+        if (target.WorkOrderId is int workOrderId)
+            return await persistence.Query<WorkOrder>()
+                .Where(order => order.Id == workOrderId && order.PortfolioId == command.PortfolioId)
+                .Select(order => (int?)order.PropertyId).SingleOrDefaultAsync(ct);
+        return null;
+    }
+
+    private static async Task<int?> ResolveOptionalPropertyIdAsync(
+        ConfirmScanDraftCommand command,
+        int? propertyId,
+        int? unitId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (propertyId is not null)
+            return propertyId;
+        return unitId is int selectedUnitId
+            ? await persistence.Query<Unit>()
+                .Where(unit => unit.Id == selectedUnitId && unit.PortfolioId == command.PortfolioId)
+                .Select(unit => (int?)unit.PropertyId).SingleOrDefaultAsync(ct)
+            : null;
+    }
+
+    private static Task<bool> HasPropertyAuthorityAsync(
+        ConfirmScanDraftCommand command,
+        IReadOnlyCollection<string> capabilities,
+        int? propertyId,
+        IAtomicPersistenceSession persistence,
+        DateTime securityNowUtc,
+        CancellationToken ct)
+    {
+        var assignments = EffectiveAssignments(command, capabilities, persistence, securityNowUtc);
+        return propertyId is int selectedPropertyId
+            ? AuthorizedProperties(command, capabilities, persistence, securityNowUtc)
+                .AnyAsync(property => property.Id == selectedPropertyId, ct)
+            : assignments.AnyAsync(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct);
+    }
+
+    private static UnauthorizedAccessException Unauthorized() =>
+        new("The current session is not authorized to confirm this scan draft.");
 
     private static async Task<ScanConfirmationTargetWriteResult> WriteExpenseAsync(
         ConfirmScanDraftCommand command,

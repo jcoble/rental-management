@@ -13,6 +13,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Controllers;
@@ -34,6 +35,7 @@ public class ScanController : ManagementControllerBase
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
+    private readonly TimeProvider _timeProvider;
 
     // Content types we trust to render inline (non-active: no script execution). Anything else
     // is forced to download as octet-stream so an uploaded html/svg/etc. can't run on our origin.
@@ -57,13 +59,15 @@ public class ScanController : ManagementControllerBase
         IScanUploadService uploads,
         IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
-        IFileStorage files)
+        IFileStorage files,
+        TimeProvider timeProvider)
     {
         _scan = scan;
         _uploads = uploads;
         _atomic = atomic;
         _db = db;
         _files = files;
+        _timeProvider = timeProvider;
     }
 
     // -------------------------------------------------------------------------
@@ -99,16 +103,19 @@ public class ScanController : ManagementControllerBase
         await file.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
 
+        var captureContext = await BuildCaptureContextAsync(ct);
+        if (!await CanCaptureAsync(targetEntityType, captureContext, ct))
+            return Forbid();
+
         try
         {
             var result = await _uploads.UploadAsync(
-                GetPortfolioId(),
-                GetUserId(),
+                GetWorkspaceReadScope(),
                 clientOperationId,
                 targetEntityType,
                 createBatch: false,
                 batchName: null,
-                await BuildCaptureContextAsync(ct),
+                captureContext,
                 [new ScanUploadFilePayload(bytes, file.FileName, file.ContentType)],
                 ct);
             var draft = result.Drafts.Single();
@@ -125,6 +132,10 @@ public class ScanController : ManagementControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
         }
     }
 
@@ -178,16 +189,19 @@ public class ScanController : ManagementControllerBase
             payloads.Add((ms.ToArray(), file.ContentType));
         }
 
+        var captureContext = await BuildCaptureContextAsync(ct);
+        if (!await CanCaptureAsync(target, captureContext, ct))
+            return Forbid();
+
         try
         {
             var result = await _uploads.UploadAsync(
-                portfolioId,
-                GetUserId(),
+                GetWorkspaceReadScope(),
                 clientOperationId,
                 target,
                 createBatch: true,
                 name,
-                await BuildCaptureContextAsync(ct),
+                captureContext,
                 payloads.Select((payload, index) => new ScanUploadFilePayload(
                     payload.Bytes,
                     nonEmpty[index].FileName,
@@ -214,6 +228,10 @@ public class ScanController : ManagementControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
         }
     }
 
@@ -260,6 +278,64 @@ public class ScanController : ManagementControllerBase
             Text(form, "sourceLabel", 100));
     }
 
+    private async Task<bool> CanCaptureAsync(
+        string? targetEntityType,
+        ScanCaptureContextData context,
+        CancellationToken ct)
+    {
+        var capabilities = ScanDraftAuthorizationQuery.CapabilitiesForTarget(targetEntityType);
+        if (capabilities.Count == 0)
+            return false;
+
+        var portfolioId = GetPortfolioId();
+        if (context.PropertyId is int propertyId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new PropertyCapabilityAuthorizationTarget(portfolioId, propertyId), ct);
+        if (context.UnitId is int unitId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new UnitCapabilityAuthorizationTarget(portfolioId, unitId), ct);
+        if (context.LeaseAgreementId is int agreementId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new LeaseAgreementCapabilityAuthorizationTarget(portfolioId, agreementId), ct);
+        if (context.LeaseManagementId is int leaseManagementId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new LeaseManagementCapabilityAuthorizationTarget(portfolioId, leaseManagementId), ct);
+        if (context.WorkOrderId is int workOrderId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new WorkOrderCapabilityAuthorizationTarget(portfolioId, workOrderId), ct);
+        if (context.ApplicationId is int applicationId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new RentalApplicationCapabilityAuthorizationTarget(portfolioId, applicationId), ct);
+
+        // Tenant-account, ledger-entry, and listing context resolve to one Property in SQL. A
+        // dangling or cross-workspace reference yields null and therefore fails closed.
+        var inferredPropertyId = await _db.Properties.AsNoTracking()
+            .Where(property => property.PortfolioId == portfolioId)
+            .Where(property =>
+                (context.TenantAccountId != null && _db.TenantAccounts.Any(account =>
+                    account.Id == context.TenantAccountId && account.PortfolioId == portfolioId
+                    && account.LeaseManagement != null && account.LeaseManagement.PropertyId == property.Id))
+                || (context.TenantLedgerEntryId != null && _db.TenantLedgerEntries.Any(entry =>
+                    entry.Id == context.TenantLedgerEntryId && entry.PortfolioId == portfolioId
+                    && entry.TenantAccount != null && entry.TenantAccount.LeaseManagement != null
+                    && entry.TenantAccount.LeaseManagement.PropertyId == property.Id))
+                || (context.RentalListingId != null && _db.RentalListings.Any(listing =>
+                    listing.Id == context.RentalListingId && listing.PortfolioId == portfolioId
+                    && listing.PropertyId == property.Id)))
+            .Select(property => (int?)property.Id)
+            .SingleOrDefaultAsync(ct);
+        if (inferredPropertyId is int inferred)
+            return await HasAnyCapabilityAsync(
+                capabilities, new PropertyCapabilityAuthorizationTarget(portfolioId, inferred), ct);
+
+        return context.TenantAccountId is null
+            && context.TenantLedgerEntryId is null
+            && context.RentalListingId is null
+            && await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
+                _db, GetWorkspaceReadScope(), targetEntityType,
+                _timeProvider.GetUtcNow().UtcDateTime, ct);
+    }
+
     // -------------------------------------------------------------------------
     // GET /api/v1/scans/batches  — list batches with rollup counts
     // -------------------------------------------------------------------------
@@ -271,11 +347,11 @@ public class ScanController : ManagementControllerBase
         [FromQuery] int take = 50,
         CancellationToken ct = default)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 100);
 
-        var batches = await QueryBatchSummaryRows(portfolioId)
+        var batches = await QueryBatchSummaryRows(scope)
             .OrderByDescending(b => b.CreatedAtUtc)
             .ThenByDescending(b => b.Id)
             .Skip(skip)
@@ -295,9 +371,9 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ScanBatchDetailResponse>> GetBatch(int id, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
 
-        var batch = await QueryBatchSummaryRows(portfolioId)
+        var batch = await QueryBatchSummaryRows(scope)
             .Where(b => b.Id == id)
             .Select(BatchSummaryProjection)
             .SingleOrDefaultAsync(ct);
@@ -307,9 +383,9 @@ public class ScanController : ManagementControllerBase
 
         // Portfolio-scoped: only this portfolio's drafts in this batch (IDOR-safe — a foreign caller
         // can neither read the batch above nor any draft here).
-        var drafts = await _db.ScanDrafts
+        var drafts = await AuthorizedDrafts(scope)
             .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
+            .Where(d => d.BatchId == id)
             .OrderBy(d => d.CreatedAt)
             .ThenBy(d => d.Id)
             .Select(d => new ScanBatchDraftQueryRow
@@ -345,30 +421,34 @@ public class ScanController : ManagementControllerBase
     // Batch rollup helpers
     // -------------------------------------------------------------------------
 
-    private IQueryable<ScanBatchSummaryQueryRow> QueryBatchSummaryRows(int portfolioId) =>
+    private IQueryable<ScanBatchSummaryQueryRow> QueryBatchSummaryRows(WorkspaceReadScope scope)
+    {
+        var authorizedDrafts = AuthorizedDrafts(scope);
+        return
         _db.ScanBatches
             .AsNoTracking()
-            .Where(batch => batch.PortfolioId == portfolioId)
+            .Where(batch => batch.PortfolioId == scope.PortfolioId
+                && authorizedDrafts.Any(draft => draft.BatchId == batch.Id))
             .Select(batch => new ScanBatchSummaryQueryRow
             {
                 Id = batch.Id,
                 Name = batch.Name,
                 TargetEntityType = batch.TargetEntityType,
-                FileCount = batch.FileCount,
                 CreatedAtUtc = batch.CreatedAtUtc,
-                Total = _db.ScanDrafts.Count(d => d.PortfolioId == portfolioId && d.BatchId == batch.Id),
-                Pending = _db.ScanDrafts.Count(d =>
-                    d.PortfolioId == portfolioId && d.BatchId == batch.Id &&
+                Total = authorizedDrafts.Count(d => d.BatchId == batch.Id),
+                Pending = authorizedDrafts.Count(d =>
+                    d.BatchId == batch.Id &&
                     (d.Status == "Pending" || d.Status == "Processing" || d.Status == "Confirming")),
-                Reviewing = _db.ScanDrafts.Count(d =>
-                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Reviewing"),
-                Confirmed = _db.ScanDrafts.Count(d =>
-                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Confirmed"),
-                Rejected = _db.ScanDrafts.Count(d =>
-                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Rejected"),
-                Failed = _db.ScanDrafts.Count(d =>
-                    d.PortfolioId == portfolioId && d.BatchId == batch.Id && d.Status == "Failed"),
+                Reviewing = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Reviewing"),
+                Confirmed = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Confirmed"),
+                Rejected = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Rejected"),
+                Failed = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Failed"),
             });
+    }
+
+    private IQueryable<ScanDraft> AuthorizedDrafts(WorkspaceReadScope scope) =>
+        _db.ScanDrafts.AsNoTracking().WhereAuthorizedForReview(
+            _db, scope, _timeProvider.GetUtcNow().UtcDateTime);
 
     private static readonly Expression<Func<ScanBatchSummaryQueryRow, ScanBatchSummaryResponse>> BatchSummaryProjection =
         row => new ScanBatchSummaryResponse(
@@ -380,7 +460,7 @@ public class ScanController : ManagementControllerBase
                 : row.Reviewing > 0 || row.Confirmed > 0 || row.Rejected > 0
                     ? "Reviewing"
                     : "Processing",
-            row.FileCount,
+            row.Total,
             row.CreatedAtUtc,
             new ScanBatchCounts(row.Total, row.Pending, row.Reviewing, row.Confirmed, row.Rejected, row.Failed));
 
@@ -389,7 +469,6 @@ public class ScanController : ManagementControllerBase
         public int Id { get; init; }
         public string? Name { get; init; }
         public string TargetEntityType { get; init; } = string.Empty;
-        public int FileCount { get; init; }
         public DateTime CreatedAtUtc { get; init; }
         public int Total { get; init; }
         public int Pending { get; init; }
@@ -480,9 +559,10 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ScanDraftResponse>> Get(int id, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        var draft = await _db.ScanDrafts
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+        var scope = GetWorkspaceReadScope();
+        var portfolioId = scope.PortfolioId;
+        var draft = await AuthorizedDrafts(scope)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
 
         if (draft is null)
             return NotFound(new { error = "Scan draft not found" });
@@ -546,7 +626,7 @@ public class ScanController : ManagementControllerBase
         CancellationToken ct = default)
     {
         var page = await LoadScanDraftPageAsync(
-            GetPortfolioId(),
+            GetWorkspaceReadScope(),
             status,
             new ListQuery { Skip = skip, Take = take },
             ct);
@@ -560,19 +640,18 @@ public class ScanController : ManagementControllerBase
         [FromQuery] string? status,
         CancellationToken ct = default)
     {
-        var page = await LoadScanDraftPageAsync(GetPortfolioId(), status, query, ct);
+        var page = await LoadScanDraftPageAsync(GetWorkspaceReadScope(), status, query, ct);
         return Ok(page);
     }
 
     private async Task<ScanDraftListResponse> LoadScanDraftPageAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string? status,
         ListQuery listQuery,
         CancellationToken ct)
     {
-        var query = _db.ScanDrafts
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId);
+        var portfolioId = scope.PortfolioId;
+        var query = AuthorizedDrafts(scope);
 
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(d => d.Status == status);
@@ -770,28 +849,36 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Retry(int id, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
+        var outcome = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var draft = await _db.ScanDrafts
+                .WhereAuthorizedForReview(
+                    _db, scope, _timeProvider.GetUtcNow().UtcDateTime)
+                .AsTracking()
+                .SingleOrDefaultAsync(d => d.Id == id, innerCt);
+            if (draft is null)
+                return "not-found";
+            if (draft.Status != "Failed")
+                return "invalid-status";
 
-        var updated = await _db.ScanDrafts
-            .Where(d => d.Id == id && d.PortfolioId == portfolioId && d.Status == "Failed")
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(d => d.Status, "Pending")
-                .SetProperty(d => d.ExtractedFields, (string?)null)
-                .SetProperty(d => d.ModelId, (string?)null)
-                .SetProperty(d => d.TokensUsed, (int?)null)
-                .SetProperty(d => d.CostUsd, (decimal?)null)
-                .SetProperty(d => d.FailureReason, (string?)null)
-                .SetProperty(d => d.ReviewedAt, (DateTime?)null)
-                .SetProperty(d => d.ReviewedBy, (string?)null)
-                .SetProperty(d => d.ConfirmedAt, (DateTime?)null), ct);
+            draft.Status = "Pending";
+            draft.ExtractedFields = null;
+            draft.ModelId = null;
+            draft.TokensUsed = null;
+            draft.CostUsd = null;
+            draft.FailureReason = null;
+            draft.ReviewedAt = null;
+            draft.ReviewedBy = null;
+            draft.ConfirmedAt = null;
+            await _db.SaveChangesAsync(innerCt);
+            return "updated";
+        }, ct);
 
-        if (updated == 1)
+        if (outcome == "updated")
             return Ok();
 
-        var exists = await _db.ScanDrafts
-            .AnyAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
-
-        return exists
+        return outcome == "invalid-status"
             ? BadRequest(new { error = "Only failed scan drafts can be retried." })
             : NotFound(new { error = "Scan draft not found" });
     }
@@ -805,7 +892,8 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DownloadFile(int id, [FromQuery] string? full, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
+        var portfolioId = scope.PortfolioId;
 
         // Accept both ?full=1 and ?full=true (case-insensitive). A plain bool param would
         // 400 on "1"/"0", so parse the flag ourselves; anything else (null, empty, "0",
@@ -814,8 +902,8 @@ public class ScanController : ManagementControllerBase
             && (full.Equals("1", StringComparison.OrdinalIgnoreCase)
                 || full.Equals("true", StringComparison.OrdinalIgnoreCase));
 
-        var draft = await _db.ScanDrafts
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+        var draft = await AuthorizedDrafts(scope)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
 
         if (draft is null)
             return NotFound(new { error = "Scan draft not found" });
@@ -889,7 +977,10 @@ public class ScanController : ManagementControllerBase
             return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
         }
 
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
+        var portfolioId = scope.PortfolioId;
+        if (!await AuthorizedDrafts(scope).AnyAsync(draft => draft.Id == id, ct))
+            return NotFound(new { error = "Scan draft not found." });
         ScanConfirmationPreparation preparation;
         try
         {
@@ -989,7 +1080,7 @@ public class ScanController : ManagementControllerBase
         CancellationToken ct)
     {
         var found = await _scan.RejectDraftAsync(
-            GetPortfolioId(), id, GetUserId(), body?.Reason, ct);
+            GetWorkspaceReadScope(), id, GetUserId(), body?.Reason, ct);
 
         return found ? Ok() : NotFound(new { error = "Scan draft not found" });
     }

@@ -32,6 +32,11 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                 $"Confirmation for {command.Target.Kind} is not available yet.");
         }
 
+        // Normal executions need the same current-session/access-revision/resource proof as
+        // receipt replays. Revalidate before claiming so authorization and every protected write
+        // share this transaction.
+        await _targetWriter.AuthorizeReplayAsync(command, attempt.Persistence, ct);
+
         var claim = await attempt.ScanConfirmation.TryClaimAsync(
             command.PortfolioId,
             command.DraftId,

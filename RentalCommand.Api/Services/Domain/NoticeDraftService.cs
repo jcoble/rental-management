@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -28,12 +30,12 @@ public sealed class NoticeDraftService : INoticeDraftService
     }
 
     public async Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string? status,
         ListQuery page,
         CancellationToken ct = default)
     {
-        var query = ResponseQuery(portfolioId);
+        var query = ResponseQuery(scope, _timeProvider.UtcNow());
         if (!string.IsNullOrWhiteSpace(status))
         {
             query = query.Where(draft => draft.Status == status);
@@ -50,68 +52,115 @@ public sealed class NoticeDraftService : INoticeDraftService
             .ToListAsync(ct);
     }
 
+    public Task<NoticeDraftResponse?> GetAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default) =>
+        ResponseQuery(scope, _timeProvider.UtcNow())
+            .Where(draft => draft.Id == id)
+            .TagWith("TSK-668 authorized tenant notice detail")
+            .SingleOrDefaultAsync(ct);
+
     public async Task<GenerateNoticeDraftsResponse> GenerateAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         GenerateNoticeDraftsRequest? request = null,
         CancellationToken ct = default)
     {
-        var generated = await _drafts.GenerateManualAsync(
-            portfolioId,
-            request?.RecipientTenantId,
-            request?.LeaseManagementId,
-            request?.TenantAccountId,
-            request?.TenantLedgerEntryId,
-            request?.NoticeType,
-            ct);
-
-        return new GenerateNoticeDraftsResponse
+        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
         {
-            CreatedCount = generated.FirstOrDefault()?.CreatedCount ?? 0,
-            Drafts = generated.Select(Map).ToList(),
-        };
+            var securityNowUtc = _timeProvider.UtcNow();
+            if (HasRelationshipFilter(request) &&
+                !await ResolvesToAuthorizedPropertyAsync(scope, request!, securityNowUtc, innerCt))
+            {
+                return new GenerateNoticeDraftsResponse();
+            }
+
+            var generated = await _drafts.GenerateManualAsync(
+                scope,
+                request?.RecipientTenantId,
+                request?.LeaseManagementId,
+                request?.TenantAccountId,
+                request?.TenantLedgerEntryId,
+                request?.NoticeType,
+                securityNowUtc,
+                innerCt);
+
+            return new GenerateNoticeDraftsResponse
+            {
+                CreatedCount = generated.FirstOrDefault()?.CreatedCount ?? 0,
+                Drafts = generated.Select(Map).ToList(),
+            };
+        }, ct);
     }
 
     public async Task<NoticeDraftResponse?> UpdateAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int id,
         UpdateNoticeDraftRequest request,
         CancellationToken ct = default)
     {
-        var draft = await BaseQuery(portfolioId).FirstOrDefaultAsync(row => row.Id == id, ct);
-        if (draft == null || draft.Status != "Draft") return null;
+        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var draft = await BaseQuery(scope, _timeProvider.UtcNow())
+                .FirstOrDefaultAsync(row => row.Id == id, innerCt);
+            if (draft == null || draft.Status != "Draft") return null;
 
-        if (!string.IsNullOrWhiteSpace(request.Subject)) draft.Subject = request.Subject.Trim();
-        if (!string.IsNullOrWhiteSpace(request.Body)) draft.Body = request.Body.Trim();
-        draft.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-        return Map(draft);
+            if (!string.IsNullOrWhiteSpace(request.Subject)) draft.Subject = request.Subject.Trim();
+            if (!string.IsNullOrWhiteSpace(request.Body)) draft.Body = request.Body.Trim();
+            draft.UpdatedAt = _timeProvider.UtcNow();
+            await _db.SaveChangesAsync(innerCt);
+            return Map(draft);
+        }, ct);
     }
 
     public async Task<NoticeDraftResponse?> DismissAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int id,
         CancellationToken ct = default)
     {
-        var draft = await BaseQuery(portfolioId).FirstOrDefaultAsync(row => row.Id == id, ct);
-        if (draft == null || draft.Status != "Draft") return null;
+        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var draft = await BaseQuery(scope, _timeProvider.UtcNow())
+                .FirstOrDefaultAsync(row => row.Id == id, innerCt);
+            if (draft == null || draft.Status != "Draft") return null;
 
-        draft.Status = "Dismissed";
-        draft.DismissedAt = _timeProvider.UtcNow();
-        draft.UpdatedAt = draft.DismissedAt.Value;
-        await _db.SaveChangesAsync(ct);
-        return Map(draft);
+            draft.Status = "Dismissed";
+            draft.DismissedAt = _timeProvider.UtcNow();
+            draft.UpdatedAt = draft.DismissedAt.Value;
+            await _db.SaveChangesAsync(innerCt);
+            return Map(draft);
+        }, ct);
     }
 
-    private IQueryable<NoticeDraft> BaseQuery(int portfolioId) =>
+    private IQueryable<NoticeDraft> BaseQuery(WorkspaceReadScope scope, DateTime securityNowUtc)
+    {
+        var authorizedProperties = AuthorizedProperties(scope, securityNowUtc);
+        return
         _db.NoticeDrafts
             .Include(draft => draft.RecipientLeaseManagementParty).ThenInclude(party => party!.Tenant)
             .Include(draft => draft.Property)
             .Include(draft => draft.LeaseManagement).ThenInclude(management => management!.Unit)
-            .Where(draft => draft.PortfolioId == portfolioId);
+            .Where(draft =>
+                draft.PortfolioId == scope.PortfolioId &&
+                draft.PropertyId != null &&
+                authorizedProperties.Any(property =>
+                    property.Id == draft.PropertyId.Value &&
+                    property.PortfolioId == draft.PortfolioId));
+    }
 
-    private IQueryable<NoticeDraftResponse> ResponseQuery(int portfolioId) =>
+    private IQueryable<NoticeDraftResponse> ResponseQuery(
+        WorkspaceReadScope scope,
+        DateTime securityNowUtc)
+    {
+        var authorizedProperties = AuthorizedProperties(scope, securityNowUtc);
+        return
         _db.NoticeDrafts.AsNoTracking()
-            .Where(draft => draft.PortfolioId == portfolioId)
+            .Where(draft =>
+                draft.PortfolioId == scope.PortfolioId &&
+                draft.PropertyId != null &&
+                authorizedProperties.Any(property =>
+                    property.Id == draft.PropertyId.Value &&
+                    property.PortfolioId == draft.PortfolioId))
             .Select(draft => new NoticeDraftResponse
             {
                 Id = draft.Id,
@@ -140,6 +189,55 @@ public sealed class NoticeDraftService : INoticeDraftService
                 ApprovedAt = draft.ApprovedAt,
                 DismissedAt = draft.DismissedAt,
             });
+    }
+
+    private IQueryable<Property> AuthorizedProperties(
+        WorkspaceReadScope scope,
+        DateTime securityNowUtc) =>
+        _db.Properties.AsNoTracking().WhereAuthorized(
+            _db,
+            scope,
+            CapabilityKeys.TenantNoticesManage,
+            securityNowUtc);
+
+    /// <summary>
+    /// Resolves every caller-supplied relationship identifier against the same management/account
+    /// row and its authorized Property in one translated SQL EXISTS. Mixed-workspace and mixed-
+    /// relationship identifiers therefore fail closed before the set-based generation command.
+    /// </summary>
+    private Task<bool> ResolvesToAuthorizedPropertyAsync(
+        WorkspaceReadScope scope,
+        GenerateNoticeDraftsRequest request,
+        DateTime securityNowUtc,
+        CancellationToken ct)
+    {
+        var authorizedProperties = AuthorizedProperties(scope, securityNowUtc);
+        return _db.LeaseManagements.AsNoTracking().AnyAsync(management =>
+            management.PortfolioId == scope.PortfolioId &&
+            authorizedProperties.Any(property =>
+                property.Id == management.PropertyId &&
+                property.PortfolioId == management.PortfolioId) &&
+            (request.LeaseManagementId == null || management.Id == request.LeaseManagementId.Value) &&
+            (request.RecipientTenantId == null || management.Parties.Any(party =>
+                party.PortfolioId == management.PortfolioId &&
+                party.TenantId == request.RecipientTenantId.Value)) &&
+            (request.TenantAccountId == null ||
+                management.TenantAccount != null &&
+                management.TenantAccount.PortfolioId == management.PortfolioId &&
+                management.TenantAccount.Id == request.TenantAccountId.Value) &&
+            (request.TenantLedgerEntryId == null ||
+                management.TenantAccount != null &&
+                management.TenantAccount.PortfolioId == management.PortfolioId &&
+                management.TenantAccount.LedgerEntries.Any(entry =>
+                    entry.PortfolioId == management.PortfolioId &&
+                    entry.Id == request.TenantLedgerEntryId.Value)), ct);
+    }
+
+    private static bool HasRelationshipFilter(GenerateNoticeDraftsRequest? request) =>
+        request?.RecipientTenantId is not null ||
+        request?.LeaseManagementId is not null ||
+        request?.TenantAccountId is not null ||
+        request?.TenantLedgerEntryId is not null;
 
     private static NoticeDraftResponse Map(GeneratedTenantNoticeDraft draft) => new()
     {

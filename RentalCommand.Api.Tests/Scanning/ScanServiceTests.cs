@@ -7,6 +7,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -24,11 +25,14 @@ public class ScanServiceTests : IDisposable
 {
     // Shared portfolio id used by all seeds in a test.
     private const int PortfolioId = 1;
+    private static readonly Guid SessionId =
+        Guid.Parse("33333333-3333-3333-3333-333333333333");
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public ScanServiceTests()
     {
@@ -54,6 +58,8 @@ public class ScanServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
+            _db, PortfolioId, userId: 3, sessionId: SessionId).Scope;
 
         _audit        = new RecordingAuditService();
 
@@ -220,11 +226,14 @@ public class ScanServiceTests : IDisposable
     {
         var draft = SeedDraft("Reviewing", extractedFields: null);
 
-        var rejected = await _sut.RejectDraftAsync(PortfolioId, draft.Id, userId: 3, reason: "Not a valid receipt");
+        var rejected = await _sut.RejectDraftAsync(
+            _scope, draft.Id, userId: 3, reason: "Not a valid receipt");
 
         rejected.Should().BeTrue();
 
-        var rejectedDraft = await _db.ScanDrafts.FindAsync(draft.Id);
+        _db.ChangeTracker.Clear();
+        var rejectedDraft = await _db.ScanDrafts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == draft.Id);
         rejectedDraft!.Status.Should().Be("Rejected");
         rejectedDraft.ReviewedBy.Should().Be("3");
         rejectedDraft.FailureReason.Should().Be("Not a valid receipt");
@@ -240,11 +249,14 @@ public class ScanServiceTests : IDisposable
         draft.FailureReason = "Extraction timed out";
         await _db.SaveChangesAsync();
 
-        var rejected = await _sut.RejectDraftAsync(PortfolioId, draft.Id, userId: 3, reason: "   ");
+        var rejected = await _sut.RejectDraftAsync(
+            _scope, draft.Id, userId: 3, reason: "   ");
 
         rejected.Should().BeTrue();
 
-        var rejectedDraft = await _db.ScanDrafts.FindAsync(draft.Id);
+        _db.ChangeTracker.Clear();
+        var rejectedDraft = await _db.ScanDrafts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == draft.Id);
         rejectedDraft!.Status.Should().Be("Rejected");
         rejectedDraft.FailureReason.Should().Be("Extraction timed out");
     }

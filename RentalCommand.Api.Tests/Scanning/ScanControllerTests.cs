@@ -22,9 +22,13 @@ namespace RentalCommand.Api.Tests.Scanning;
 
 public class ScanControllerTests : IDisposable
 {
+    private static readonly Guid SessionId =
+        Guid.Parse("11111111-1111-1111-1111-111111111111");
+
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly List<string> _executedSql = [];
+    private readonly CanonicalScanTestAuthorization _authorization;
 
     public ScanControllerTests()
     {
@@ -38,6 +42,8 @@ public class ScanControllerTests : IDisposable
 
         _db = new ScanControllerTestDbContext(options);
         _db.Database.EnsureCreated();
+        _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
+            _db, portfolioId: 42, userId: 7, sessionId: SessionId);
     }
 
     public void Dispose()
@@ -52,8 +58,10 @@ public class ScanControllerTests : IDisposable
         var scan = new Mock<IScanService>(MockBehavior.Strict);
         var uploads = new Mock<IScanUploadService>(MockBehavior.Strict);
         uploads.Setup(s => s.UploadAsync(
-                42,
-                7,
+                It.Is<WorkspaceReadScope>(scope => scope.PortfolioId == 42
+                    && scope.UserId == 7
+                    && scope.AccessContextId == 1
+                    && scope.AccessRevision == 1),
                 "scan-op",
                 "WorkOrder",
                 false,
@@ -100,15 +108,6 @@ public class ScanControllerTests : IDisposable
     [InlineData("", true)]        // empty      → thumbnail
     public async Task DownloadFile_FullFlag_SelectsOriginalOrThumbnail(string? full, bool expectThumbnail)
     {
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = 42,
-            Name = "Portfolio 42",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
         _db.ScanDrafts.Add(new ScanDraft
         {
             Id = 51,
@@ -160,25 +159,6 @@ public class ScanControllerTests : IDisposable
     public async Task ListPage_IncludesCreatedUnitId_ForUnitTiedConfirmedRecords()
     {
         var now = DateTime.UtcNow;
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = 42,
-            Name = "Portfolio 42",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = 7,
-            UserName = "scan-controller@example.test",
-            NormalizedUserName = "SCAN-CONTROLLER@EXAMPLE.TEST",
-            Email = "scan-controller@example.test",
-            NormalizedEmail = "SCAN-CONTROLLER@EXAMPLE.TEST",
-            DisplayName = "Scan Controller",
-            CreatedAt = now,
-        });
         _db.Properties.Add(new Property
         {
             Id = 10,
@@ -377,6 +357,7 @@ public class ScanControllerTests : IDisposable
         AtomicCommandDisposition disposition,
         bool replayed)
     {
+        SeedAuthorizedDraft(17);
         var command = ExpenseCommand(17);
         var scan = new Mock<IScanService>(MockBehavior.Strict);
         scan.Setup(service => service.PrepareConfirmationAsync(
@@ -424,6 +405,7 @@ public class ScanControllerTests : IDisposable
     [Fact]
     public async Task Confirm_AlreadyConfirmed_ReturnsCanonicalEntityWithoutLegacyWrite()
     {
+        SeedAuthorizedDraft(17);
         var scan = ReadyScan(ExpenseCommand(17));
         var atomic = new RecordingAtomicUnitOfWork
         {
@@ -465,6 +447,7 @@ public class ScanControllerTests : IDisposable
         notFound.Should().BeOfType<NotFoundObjectResult>();
         unusedAtomic.Calls.Should().Be(0);
 
+        SeedAuthorizedDraft(17);
         var rejectedScan = ReadyScan(ExpenseCommand(17));
         var rejectedAtomic = new RecordingAtomicUnitOfWork
         {
@@ -491,6 +474,7 @@ public class ScanControllerTests : IDisposable
     [Fact]
     public async Task Confirm_LeasePreparation_ReturnsTemporaryUnavailableWithoutAtomicOrLegacyWriter()
     {
+        SeedAuthorizedDraft(17, nameof(LeaseAgreement));
         var scan = new Mock<IScanService>(MockBehavior.Strict);
         scan.Setup(service => service.PrepareConfirmationAsync(
                 42, 17, 7, "{}", It.IsAny<CancellationToken>()))
@@ -517,22 +501,15 @@ public class ScanControllerTests : IDisposable
         IScanUploadService? uploads = null)
     {
         var httpContext = new DefaultHttpContext();
-        httpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
-            Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            UserId: 7,
-            AccessContextId: 1,
-            PortfolioId: 42,
-            AccessRevision: 1,
-            LastAuthorizedExperience: null,
-            WorkspaceMembershipId: null,
-            DefaultExperience: null);
+        httpContext.Items[CanonicalAccessContextHttpItem.Key] = _authorization.HttpAccessContext;
 
         var controller = new ScanController(
             scan,
             uploads ?? Mock.Of<IScanUploadService>(),
             atomic ?? Mock.Of<IAtomicUnitOfWork>(),
             _db,
-            files ?? Mock.Of<IFileStorage>())
+            files ?? Mock.Of<IFileStorage>(),
+            TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {
@@ -551,6 +528,22 @@ public class ScanControllerTests : IDisposable
             .ReturnsAsync(new ScanConfirmationPreparation(
                 ScanConfirmationPreparationOutcome.Ready, command));
         return scan;
+    }
+
+    private void SeedAuthorizedDraft(int id, string targetEntityType = "Expense")
+    {
+        _db.ScanDrafts.Add(new ScanDraft
+        {
+            Id = id,
+            PortfolioId = 42,
+            TargetEntityType = targetEntityType,
+            Status = "Reviewing",
+            FilePath = $"uploads/scan-{id}.jpg",
+            CaptureAccessContextId = _authorization.Scope.AccessContextId,
+            CaptureAccessRevision = _authorization.Scope.AccessRevision,
+            CreatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
     }
 
     private static ConfirmScanDraftCommand ExpenseCommand(int draftId) => new(

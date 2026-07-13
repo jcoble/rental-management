@@ -1842,6 +1842,13 @@ namespace RentalCommand.Data.Migrations
                             AuthorizationTargetKind = "Workspace",
                             Description = "Manage Team routing, tenant notice policy, delivery configuration, and notice templates.",
                             Key = "notifications.manage"
+                        },
+                        new
+                        {
+                            Id = 38,
+                            AuthorizationTargetKind = "Property",
+                            Description = "Manage tenant-notice drafts within assigned property scope.",
+                            Key = "notifications.tenant-notices.manage"
                         });
                 });
 
@@ -6546,6 +6553,11 @@ namespace RentalCommand.Data.Migrations
                         },
                         new
                         {
+                            RoleProfileId = 1,
+                            CapabilityDefinitionId = 38
+                        },
+                        new
+                        {
                             RoleProfileId = 2,
                             CapabilityDefinitionId = 1
                         },
@@ -6608,6 +6620,11 @@ namespace RentalCommand.Data.Migrations
                         {
                             RoleProfileId = 2,
                             CapabilityDefinitionId = 13
+                        },
+                        new
+                        {
+                            RoleProfileId = 2,
+                            CapabilityDefinitionId = 38
                         },
                         new
                         {

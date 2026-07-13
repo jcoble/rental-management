@@ -30,7 +30,7 @@ public class AnalyticsController : ManagementControllerBase
     [ProducesResponseType(typeof(AnalyticsOverview), StatusCodes.Status200OK)]
     public async Task<ActionResult<AnalyticsOverview>> Overview(CancellationToken ct)
     {
-        var overview = await _analytics.GetOverviewAsync(GetPortfolioId(), ct);
+        var overview = await _analytics.GetOverviewAsync(GetWorkspaceReadScope(), ct);
         return Ok(overview);
     }
 }

@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -11,6 +12,7 @@ using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Scanning;
 
@@ -707,39 +709,44 @@ public sealed class ScanService : IScanService
     // -------------------------------------------------------------------------
 
     public async Task<bool> RejectDraftAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int draftId,
         int userId,
         string? reason,
         CancellationToken ct = default)
     {
-        var draft = await _db.ScanDrafts
-            .FirstOrDefaultAsync(d => d.Id == draftId && d.PortfolioId == portfolioId, ct);
+        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            // The session, access revision, target capability, and property scope are re-read in
+            // this transaction. A controller check is deliberately insufficient for a mutation.
+            var draft = await _db.ScanDrafts
+                .WhereAuthorizedForReview(
+                    _db, scope, _timeProvider.GetUtcNow().UtcDateTime)
+                .AsTracking()
+                .SingleOrDefaultAsync(candidate => candidate.Id == draftId, innerCt);
 
-        if (draft is null)
-            return false;
+            if (draft is null || draft.Status is "Confirmed" or "Rejected" or "Confirming")
+                return false;
 
-        if (draft.Status is "Confirmed" or "Rejected" or "Confirming")
-            return false; // already finalized or mid-confirm — don't race with a concurrent confirm
+            draft.Status = "Rejected";
+            draft.ReviewedAt = _timeProvider.UtcNow();
+            draft.ReviewedBy = userId.ToString();
+            var rejectionReason = Truncate(reason?.Trim(), 500);
+            if (rejectionReason is not null)
+                draft.FailureReason = rejectionReason;
+            await _db.SaveChangesAsync(innerCt);
 
-        draft.Status = "Rejected";
-        draft.ReviewedAt = _timeProvider.UtcNow();
-        draft.ReviewedBy = userId.ToString();
-        var rejectionReason = Truncate(reason?.Trim(), 500);
-        if (rejectionReason is not null)
-            draft.FailureReason = rejectionReason;
-        await _db.SaveChangesAsync(ct);
+            await _audit.LogAsync(
+                scope.PortfolioId,
+                "ScanDraft",
+                draftId,
+                AuditLogOperation.Rejected,
+                userId: userId,
+                changeReason: reason,
+                ct: innerCt);
 
-        await _audit.LogAsync(
-            portfolioId,
-            "ScanDraft",
-            draftId,
-            AuditLogOperation.Rejected,
-            userId: userId,
-            changeReason: reason,
-            ct: ct);
-
-        return true;
+            return true;
+        }, ct);
     }
 
     private static string? Truncate(string? value, int maxLength) =>

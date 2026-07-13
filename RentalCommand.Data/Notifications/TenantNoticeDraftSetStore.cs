@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Data.Notifications;
 
@@ -11,12 +12,13 @@ public interface ITenantNoticeDraftSetStore
         CancellationToken ct = default);
 
     Task<IReadOnlyList<GeneratedTenantNoticeDraft>> GenerateManualAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int? recipientTenantId,
         int? leaseManagementId,
         int? tenantAccountId,
         long? tenantLedgerEntryId,
         string? noticeType,
+        DateTime securityNowUtc,
         CancellationToken ct = default);
 }
 
@@ -72,6 +74,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         CancellationToken ct = default) =>
         ExecuteAsync(
             ClaimedSourceSql,
+            AllSourcePropertiesSql,
             [
                 Parameter("claim_token", NpgsqlDbType.Uuid, claimToken),
                 Parameter("recipient_tenant_id", NpgsqlDbType.Integer, null),
@@ -79,17 +82,26 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
             ct);
 
     public Task<IReadOnlyList<GeneratedTenantNoticeDraft>> GenerateManualAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int? recipientTenantId,
         int? leaseManagementId,
         int? tenantAccountId,
         long? tenantLedgerEntryId,
         string? noticeType,
+        DateTime securityNowUtc,
         CancellationToken ct = default) =>
         ExecuteAsync(
             ManualSourceSql,
+            AuthorizedSourcePropertiesSql,
             [
-                Parameter("portfolio_id", NpgsqlDbType.Integer, portfolioId),
+                Parameter("portfolio_id", NpgsqlDbType.Integer, scope.PortfolioId),
+                Parameter("user_id", NpgsqlDbType.Integer, scope.UserId),
+                Parameter("session_id", NpgsqlDbType.Uuid, scope.SessionId),
+                Parameter("access_context_id", NpgsqlDbType.Integer, scope.AccessContextId),
+                Parameter("access_revision", NpgsqlDbType.Bigint, scope.AccessRevision),
+                Parameter("security_now_utc", NpgsqlDbType.TimestampTz, securityNowUtc),
+                Parameter("required_capability", NpgsqlDbType.Text,
+                    CapabilityKeys.TenantNoticesManage),
                 Parameter("recipient_tenant_id", NpgsqlDbType.Integer, recipientTenantId),
                 Parameter("lease_management_id", NpgsqlDbType.Integer, leaseManagementId),
                 Parameter("tenant_account_id", NpgsqlDbType.Integer, tenantAccountId),
@@ -101,11 +113,13 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
 
     private async Task<IReadOnlyList<GeneratedTenantNoticeDraft>> ExecuteAsync(
         string sourceSql,
+        string authorizedPropertiesSql,
         NpgsqlParameter[] parameters,
         CancellationToken ct)
     {
         var rows = await _db.Database
-            .SqlQueryRaw<GeneratedTenantNoticeDraft>(BuildSql(sourceSql), parameters)
+            .SqlQueryRaw<GeneratedTenantNoticeDraft>(
+                BuildSql(sourceSql, authorizedPropertiesSql), parameters)
             .ToListAsync(ct);
         return rows;
     }
@@ -126,6 +140,78 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
          AND policy."PortfolioId" = work."PortfolioId"
         WHERE work."Status" = 'Claimed'
           AND work."ClaimToken" = @claim_token
+        """;
+
+    // Engine batches are already fenced by the claimed work-item token and execute under the
+    // engine's workspace RLS context. Interactive generation uses the stricter canonical session,
+    // capability, and selected-property CTE below.
+    private const string AllSourcePropertiesSql = """
+        SELECT property."Id", property."PortfolioId"
+        FROM "Properties" AS property
+        WHERE property."DeletedAt" IS NULL
+        """;
+
+    private const string AuthorizedSourcePropertiesSql = """
+        SELECT property."Id", property."PortfolioId"
+        FROM "Properties" AS property
+        WHERE property."PortfolioId" = @portfolio_id
+          AND property."DeletedAt" IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM "AuthSessions" AS session
+            INNER JOIN "WorkspaceAccessContexts" AS context
+              ON context."Id" = session."ActiveAccessContextId"
+             AND context."UserId" = session."UserId"
+            INNER JOIN "WorkspaceMemberships" AS membership
+              ON membership."AccessContextId" = context."Id"
+             AND membership."PortfolioId" = context."PortfolioId"
+            INNER JOIN "MembershipRoleAssignments" AS assignment
+              ON assignment."WorkspaceMembershipId" = membership."Id"
+             AND assignment."PortfolioId" = membership."PortfolioId"
+            INNER JOIN "RoleProfileCapabilities" AS profile_capability
+              ON profile_capability."RoleProfileId" = assignment."RoleProfileId"
+            INNER JOIN "CapabilityDefinitions" AS capability
+              ON capability."Id" = profile_capability."CapabilityDefinitionId"
+            WHERE session."Id" = @session_id
+              AND session."UserId" = @user_id
+              AND session."ActiveAccessContextId" = @access_context_id
+              AND session."Status" = 'Active'
+              AND session."RevokedAtUtc" IS NULL
+              AND session."ExpiresAtUtc" > @security_now_utc
+              AND context."Id" = @access_context_id
+              AND context."PortfolioId" = property."PortfolioId"
+              AND context."AccessRevision" = @access_revision
+              AND context."Status" = 'Active'
+              AND context."SuspendedAtUtc" IS NULL
+              AND context."RevokedAtUtc" IS NULL
+              AND membership."Status" = 'Active'
+              AND membership."SuspendedAtUtc" IS NULL
+              AND membership."RevokedAtUtc" IS NULL
+              AND membership."EffectiveFromUtc" <= @security_now_utc
+              AND (membership."EffectiveToUtc" IS NULL
+                   OR membership."EffectiveToUtc" > @security_now_utc)
+              AND assignment."Status" = 'Active'
+              AND assignment."SuspendedAtUtc" IS NULL
+              AND assignment."RevokedAtUtc" IS NULL
+              AND assignment."EffectiveFromUtc" <= @security_now_utc
+              AND (assignment."EffectiveToUtc" IS NULL
+                   OR assignment."EffectiveToUtc" > @security_now_utc)
+              AND capability."Key" = @required_capability
+              AND capability."AuthorizationTargetKind" = 'Property'
+              AND (
+                assignment."ScopeKind" = 'AllProperties'
+                OR (
+                  assignment."ScopeKind" = 'SelectedProperties'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM "MembershipRoleAssignmentProperties" AS selected
+                    WHERE selected."MembershipRoleAssignmentId" = assignment."Id"
+                      AND selected."PortfolioId" = assignment."PortfolioId"
+                      AND selected."PropertyId" = property."Id"
+                  )
+                )
+              )
+          )
         """;
 
     private const string ManualSourceSql = """
@@ -259,8 +345,11 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
     private const string PortfolioNameToken = "{{portfolio_name}}";
     private const string RenewalStartDateToken = "{{renewal_start_date}}";
 
-    private static string BuildSql(string sourceSql) => $$"""
-        WITH source_candidates AS MATERIALIZED (
+    private static string BuildSql(string sourceSql, string authorizedPropertiesSql) => $$"""
+        WITH authorized_properties AS MATERIALIZED (
+        {{authorizedPropertiesSql}}
+        ),
+        source_candidates AS MATERIALIZED (
         {{sourceSql}}
         ),
         canonical_candidates AS MATERIALIZED (
@@ -329,6 +418,9 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
             ON property."PortfolioId" = management."PortfolioId"
            AND property."Id" = management."PropertyId"
            AND property."DeletedAt" IS NULL
+          INNER JOIN authorized_properties AS authorized_property
+            ON authorized_property."PortfolioId" = property."PortfolioId"
+           AND authorized_property."Id" = property."Id"
           INNER JOIN "Units" AS unit
             ON unit."PortfolioId" = management."PortfolioId"
            AND unit."PropertyId" = management."PropertyId"
@@ -596,7 +688,9 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         INNER JOIN "Units" AS unit
           ON unit."PortfolioId" = management."PortfolioId"
          AND unit."Id" = management."UnitId"
-        LEFT JOIN "Properties" AS property ON property."Id" = resolved."PropertyId"
+        LEFT JOIN "Properties" AS property
+          ON property."PortfolioId" = resolved."PortfolioId"
+         AND property."Id" = resolved."PropertyId"
         ORDER BY resolved."TriggerDate", resolved."Id";
         """;
 }
