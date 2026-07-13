@@ -31,7 +31,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private int _propertyId;
     private int _unitId;
     private int _tenantId;
-    private int _leaseId;
     private int _leaseManagementId;
     private int _tenantAccountId;
     private int _vendorId;
@@ -211,7 +210,18 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             CreatedAtUtc = CommandTime,
             CreatedByUserId = _actorUserId,
         };
-        scope.Db.TenantAccounts.Add(tenantAccount);
+        var primaryParty = new LeaseManagementParty
+        {
+            PortfolioId = _portfolioId,
+            LeaseManagementId = relationship.Id,
+            TenantId = _tenantId,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(CommandTime.AddDays(-1)),
+            ChangeReason = "Canonical work-order scan fixture",
+            CreatedAtUtc = CommandTime,
+            CreatedByUserId = _actorUserId,
+        };
+        scope.Db.AddRange(tenantAccount, primaryParty);
         await scope.Db.SaveChangesAsync();
         _tenantAccountId = tenantAccount.Id;
         _leaseManagementId = relationship.Id;
@@ -219,24 +229,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         _accessContextId = accessContext.Id;
         _accessRevision = accessContext.AccessRevision;
 
-        var lease = new Lease
-        {
-            PortfolioId = _portfolioId,
-            PropertyId = _propertyId,
-            UnitId = _unitId,
-            TenantId = _tenantId,
-            LeaseNumber = "SCAN-BASE",
-            Status = LeaseStatus.Active,
-            StartDate = CommandTime.AddMonths(-1),
-            EndDate = CommandTime.AddYears(1),
-            MonthlyRent = 1_000m,
-            RentDueDay = 1,
-            CreatedAt = CommandTime,
-            UpdatedAt = CommandTime,
-        };
-        scope.Db.Leases.Add(lease);
-        await scope.Db.SaveChangesAsync();
-        _leaseId = lease.Id;
     }
 
     public async Task DisposeAsync()
@@ -481,7 +473,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ScanConfirmationTargetKind.WorkOrder => new ScanConfirmationTargetData(
                 kind,
                 WorkOrder: new ScanWorkOrderTargetData(
-                    _propertyId, _unitId, _tenantId, _leaseId, _vendorId,
+                    _propertyId, _unitId, _tenantId, _leaseManagementId, _vendorId,
                     "Leaking sink", "Water under sink", "Plumbing",
                     WorkOrderPriority.High, 150m)),
             ScanConfirmationTargetKind.Application => new ScanConfirmationTargetData(
