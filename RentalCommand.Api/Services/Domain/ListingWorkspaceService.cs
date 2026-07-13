@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
@@ -21,6 +23,34 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private const string EntityType = nameof(RentalListing);
     private const string Zillow = ListingProviderKeys.Zillow;
     private const string ZillowManagerUrl = "https://www.zillow.com/rental-manager/properties";
+    internal const string PhotoOrderValidationSql = """
+        WITH requested AS (
+            SELECT item."PhotoId", item."Position"::integer
+            FROM unnest(@photoIds::integer[]) WITH ORDINALITY AS item("PhotoId", "Position")
+        )
+        SELECT
+            COUNT(*) = COUNT(DISTINCT requested."PhotoId")
+            AND COUNT(*) = (
+                SELECT COUNT(*)
+                FROM "ListingPhotos" photo
+                WHERE photo."RentalListingId" = @listingId
+                  AND photo."PortfolioId" = @portfolioId)
+            AND COUNT(*) = COUNT(photo."Id") AS "IsValid",
+            COALESCE(BOOL_OR(photo."Position" <> requested."Position"), FALSE) AS "HasChanges"
+        FROM requested
+        LEFT JOIN "ListingPhotos" photo
+          ON photo."Id" = requested."PhotoId"
+         AND photo."RentalListingId" = @listingId
+         AND photo."PortfolioId" = @portfolioId
+        """;
+    internal const string PhotoOrderUpdateSql = """
+        UPDATE "ListingPhotos" AS photo
+        SET "Position" = requested."Position"::integer
+        FROM unnest(@photoIds::integer[]) WITH ORDINALITY AS requested("PhotoId", "Position")
+        WHERE photo."Id" = requested."PhotoId"
+          AND photo."RentalListingId" = @listingId
+          AND photo."PortfolioId" = @portfolioId
+        """;
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _updates;
     private readonly IAuditTrailService _audit;
@@ -152,9 +182,12 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         ListingWorkspaceResponse? response = null;
         await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
         {
-            var listing = await LoadTrackedAsync(portfolioId, unitId, ct);
-            var photo = listing?.Photos.SingleOrDefault(item => item.Id == photoId);
-            if (listing is null || photo is null) return null;
+            var photo = await _db.ListingPhotos.FirstOrDefaultAsync(item =>
+                item.Id == photoId && item.PortfolioId == portfolioId
+                && item.RentalListing != null && item.RentalListing.UnitId == unitId, ct);
+            if (photo is null) return null;
+            var listing = await _db.RentalListings.SingleAsync(item =>
+                item.Id == photo.RentalListingId && item.PortfolioId == portfolioId, ct);
 
             var pending = await _db.PendingFileUploads.SingleOrDefaultAsync(upload =>
                 upload.Id == admission.Id && upload.PortfolioId == portfolioId
@@ -195,18 +228,19 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             photo.StoredFileId = stored.Id;
             photo.FileName = fileName;
             photo.Sha256 = sha256;
-            listing.ContentVersion++;
-            listing.UpdatedAt = now;
             pending.State = PendingFileUploadState.Finalized;
             pending.StoredFileId = stored.Id;
             pending.UpdatedAtUtc = now;
+            listing.ContentVersion++;
+            listing.UpdatedAt = now;
             await _db.SaveChangesAsync(ct);
             await _audit.LogAsync(portfolioId, nameof(ListingPhoto), photo.Id, AuditLogOperation.Updated,
                 userId: userId, newValues: JsonSerializer.Serialize(new { photo.Position, photo.Category, photo.Caption, fileName, sha256 }),
                 changeReason: "Attached listing photo", ct: ct);
             await transaction.CommitAsync(ct);
-            response = ToResponse(listing);
         }
+
+        response = await GetAsync(portfolioId, unitId, ct);
 
         if (response is not null)
             await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response.Id, response, ct);
@@ -214,25 +248,28 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     }
 
     public Task<ListingWorkspaceResponse?> UpdatePhotoAsync(int portfolioId, int unitId, int photoId,
-        UpdateListingPhotoRequest request, int userId, CancellationToken ct = default) =>
-        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Updated listing photo details", async (listing, now) =>
+        UpdateListingPhotoRequest request, int userId, CancellationToken ct = default)
+    {
+        var category = CleanRequired(request.Category, "Photo category");
+        var caption = CleanOptional(request.Caption);
+        return MutatePhotoPackageAsync(portfolioId, unitId, userId, "Updated listing photo details", async (listingId, _) =>
         {
-            var photo = listing.Photos.SingleOrDefault(item => item.Id == photoId);
+            var photo = await _db.ListingPhotos.FirstOrDefaultAsync(item =>
+                item.Id == photoId && item.PortfolioId == portfolioId && item.RentalListingId == listingId, ct);
             if (photo is null) return false;
-            var category = CleanRequired(request.Category, "Photo category");
-            var caption = CleanOptional(request.Caption);
             if (photo.Category == category && photo.Caption == caption) return false;
             photo.Category = category;
             photo.Caption = caption;
-            await Task.CompletedTask;
             return true;
         }, ct);
+    }
 
     public Task<ListingWorkspaceResponse?> RemovePhotoAsync(int portfolioId, int unitId, int photoId, int userId,
         CancellationToken ct = default) =>
-        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Removed listing photo attachment", async (listing, now) =>
+        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Removed listing photo attachment", async (listingId, now) =>
         {
-            var photo = listing.Photos.SingleOrDefault(item => item.Id == photoId);
+            var photo = await _db.ListingPhotos.FirstOrDefaultAsync(item =>
+                item.Id == photoId && item.PortfolioId == portfolioId && item.RentalListingId == listingId, ct);
             if (photo?.StoredFileId is not int storedFileId) return false;
             var stored = await _db.StoredFiles.SingleAsync(file => file.Id == storedFileId && file.PortfolioId == portfolioId, ct);
             stored.DeletedAt = now;
@@ -250,27 +287,21 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
 
     public Task<ListingWorkspaceResponse?> ReorderPhotosAsync(int portfolioId, int unitId,
         ReorderListingPhotosRequest request, int userId, CancellationToken ct = default) =>
-        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Reordered listing photo package", async (listing, _) =>
+        MutatePhotoPackageAsync(portfolioId, unitId, userId, "Reordered listing photo package", async (listingId, _) =>
         {
-            var requested = request.PhotoIds.Distinct().ToArray();
-            if (requested.Length != request.PhotoIds.Count || requested.Length != listing.Photos.Count
-                || listing.Photos.Any(photo => !requested.Contains(photo.Id)))
+            var requested = request.PhotoIds.ToArray();
+            var validation = await ValidatePhotoOrderAsync(listingId, portfolioId, requested, ct);
+            if (!validation.IsValid)
                 throw new DomainValidationException("Photo order must include every photo exactly once.");
+            if (!validation.HasChanges) return false;
 
-            var changed = listing.Photos.Any(photo => request.PhotoIds[photo.Position - 1] != photo.Id);
-            if (!changed) return false;
-            await _db.ListingPhotos.Where(photo => photo.RentalListingId == listing.Id && photo.PortfolioId == portfolioId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(photo => photo.Position, photo => photo.Position + 1000), ct);
-            for (var index = 0; index < request.PhotoIds.Count; index++)
-            {
-                var photo = listing.Photos.Single(item => item.Id == request.PhotoIds[index]);
-                photo.Position = index + 1;
-
-                // ExecuteUpdate bypasses EF's change tracker. Force every final position back to the
-                // database, including photos whose new position happens to equal their tracked value;
-                // otherwise those rows would remain at the temporary +1000 position.
-                _db.Entry(photo).Property(item => item.Position).IsModified = true;
-            }
+            // Avoid transient collisions with the unique (listing, position) index, then apply the
+            // complete caller-supplied order in one set-based PostgreSQL UPDATE. No photo rows are
+            // materialized and no per-row writes are issued.
+            await _db.ListingPhotos
+                .Where(photo => photo.RentalListingId == listingId && photo.PortfolioId == portfolioId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(photo => photo.Position, photo => photo.Position + 1_000_000), ct);
+            await ApplyPhotoOrderAsync(listingId, portfolioId, requested, ct);
             return true;
         }, ct);
 
@@ -296,17 +327,20 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
 
     private async Task<ListingWorkspaceResponse?> MutatePhotoPackageAsync(
         int portfolioId, int unitId, int userId, string reason,
-        Func<RentalListing, DateTime, Task<bool>> mutation, CancellationToken ct)
+        Func<int, DateTime, Task<bool>> mutation, CancellationToken ct)
     {
-        ListingWorkspaceResponse? response = null;
+        var listingFound = false;
         var strategy = _db.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
         {
             await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-            var listing = await LoadTrackedAsync(portfolioId, unitId, ct);
+            var listing = await _db.RentalListings
+                .Where(listing => listing.PortfolioId == portfolioId && listing.UnitId == unitId)
+                .SingleOrDefaultAsync(ct);
             if (listing is null) return;
+            listingFound = true;
             var now = _time.UtcNow();
-            if (await mutation(listing, now))
+            if (await mutation(listing.Id, now))
             {
                 listing.ContentVersion++;
                 listing.UpdatedAt = now;
@@ -315,11 +349,37 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                     userId: userId, changeReason: reason, ct: ct);
             }
             await transaction.CommitAsync(ct);
-            response = ToResponse(listing);
         });
+        if (!listingFound) return null;
+        var response = await GetAsync(portfolioId, unitId, ct);
         if (response is not null)
             await _updates.BroadcastEntityUpdateAsync(portfolioId, EntityType, response.Id, response, ct);
         return response;
+    }
+
+    private async Task<PhotoOrderValidation> ValidatePhotoOrderAsync(
+        int listingId, int portfolioId, int[] photoIds, CancellationToken ct)
+    {
+        var ids = new NpgsqlParameter("photoIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = photoIds };
+        return await _db.Database.SqlQueryRaw<PhotoOrderValidation>(PhotoOrderValidationSql,
+                ids,
+                new NpgsqlParameter("listingId", NpgsqlDbType.Integer) { Value = listingId },
+                new NpgsqlParameter("portfolioId", NpgsqlDbType.Integer) { Value = portfolioId })
+            .SingleAsync(ct);
+    }
+
+    private Task<int> ApplyPhotoOrderAsync(int listingId, int portfolioId, int[] photoIds, CancellationToken ct)
+        => _db.Database.ExecuteSqlRawAsync(PhotoOrderUpdateSql,
+            [
+                new NpgsqlParameter("photoIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = photoIds },
+                new NpgsqlParameter("listingId", NpgsqlDbType.Integer) { Value = listingId },
+                new NpgsqlParameter("portfolioId", NpgsqlDbType.Integer) { Value = portfolioId },
+            ], ct);
+
+    private sealed class PhotoOrderValidation
+    {
+        public bool IsValid { get; set; }
+        public bool HasChanges { get; set; }
     }
 
     public async Task<ListingWorkspaceResponse?> PrepareConnectedAsync(
