@@ -38,14 +38,25 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         _db = new WorkOrderSmsTestDbContext(options);
         _db.Database.EnsureCreated();
 
+        var now = DateTime.UtcNow;
         _db.Portfolios.Add(new Portfolio
         {
             Id = PortfolioId,
             Name = "Test Portfolio",
             ManagementCompanyName = "Test Co",
             TimeZone = "America/New_York",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 1,
+            UserName = "work-order-sms-tests@example.test",
+            NormalizedUserName = "WORK-ORDER-SMS-TESTS@EXAMPLE.TEST",
+            Email = "work-order-sms-tests@example.test",
+            NormalizedEmail = "WORK-ORDER-SMS-TESTS@EXAMPLE.TEST",
+            DisplayName = "Work Order SMS Test Actor",
+            CreatedAt = now,
         });
         _db.SaveChanges();
 
@@ -163,6 +174,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         var now = DateTime.UtcNow;
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = $"U-{tenant.Id}",
             CreatedAt = now,
@@ -178,6 +190,9 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
             PropertyId = property.Id,
             UnitId = unit.Id,
             RelationshipNumber = $"SMS-{tenant.Id}",
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            PossessionAgreementExceptionReason = "Work-order fixture has no legal-document artifact.",
+            PossessionAgreementExceptionAuthorizedByUserId = 1,
             CreatedAtUtc = now,
             CreatedByUserId = 1,
             UpdatedAtUtc = now,

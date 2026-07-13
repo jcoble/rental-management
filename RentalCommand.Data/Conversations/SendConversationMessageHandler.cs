@@ -47,7 +47,7 @@ public sealed class SendConversationMessageHandler
 
             conversation = existing;
             tenant = existing.Tenant;
-            conversation.LastMessageAt = command.OccurredAtUtc;
+            conversation.LastMessageAt = command.CreatedAtUtc;
             conversation.LastMessagePreview = Preview(command.Body);
             if (command.SenderRole == ConversationSenderRole.Landlord)
             {
@@ -76,8 +76,8 @@ public sealed class SendConversationMessageHandler
                 TenantId = tenant.Id,
                 Subject = command.Subject,
                 StartedByLandlord = command.SenderRole == ConversationSenderRole.Landlord,
-                CreatedAt = command.OccurredAtUtc,
-                LastMessageAt = command.OccurredAtUtc,
+                CreatedAt = command.CreatedAtUtc,
+                LastMessageAt = command.CreatedAtUtc,
                 LastMessagePreview = Preview(command.Body),
                 LandlordUnreadCount = command.SenderRole == ConversationSenderRole.Tenant ? 1 : 0,
                 TenantUnreadCount = command.SenderRole == ConversationSenderRole.Landlord ? 1 : 0,
@@ -94,7 +94,7 @@ public sealed class SendConversationMessageHandler
             SenderRole = command.SenderRole,
             Body = command.Body,
             Channels = channels.Count == 0 ? null : string.Join(',', channels),
-            CreatedAt = command.OccurredAtUtc,
+            CreatedAt = command.CreatedAtUtc,
         };
         attempt.Persistence.Add(message);
         await attempt.FlushBusinessAsync(ct);
@@ -141,7 +141,7 @@ public sealed class SendConversationMessageHandler
                 command,
                 conversation,
                 channels,
-                DateOnly.FromDateTime(command.OccurredAtUtc),
+                DateOnly.FromDateTime(command.CreatedAtUtc),
                 ct)
             : await CreateStaffNotificationsAsync(attempt, command, conversation, tenant, ct);
         if (notifications.Count > 0)
@@ -188,7 +188,7 @@ public sealed class SendConversationMessageHandler
                 command.PortfolioId,
                 tenant.Id,
                 CapabilityKeys.RentalsRead,
-                command.OccurredAtUtc)
+                command.CreatedAtUtc)
             .OrderBy(userId => userId)
             .ToListAsync(ct);
 
@@ -205,7 +205,7 @@ public sealed class SendConversationMessageHandler
             ActionUrl = $"/messages?conversationId={conversation.Id}",
             RelatedEntityType = nameof(Conversation),
             RelatedEntityId = conversation.Id,
-            CreatedAt = command.OccurredAtUtc,
+            CreatedAt = command.CreatedAtUtc,
         }).ToList();
     }
 
@@ -253,7 +253,7 @@ public sealed class SendConversationMessageHandler
                 ActionUrl = $"/portal/messages?conversation={conversation.Id}",
                 RelatedEntityType = nameof(Conversation),
                 RelatedEntityId = conversation.Id,
-                CreatedAt = command.OccurredAtUtc,
+                CreatedAt = command.CreatedAtUtc,
             },
         ];
     }
@@ -274,8 +274,8 @@ public sealed class SendConversationMessageHandler
                 MessageType = "email",
                 Payload = JsonSerializer.Serialize(new { to = tenant.Email, subject = conversation.Subject, body = command.Body }),
                 IdempotencyKey = $"conversation:{conversation.Id}:message:{message.Id}:email:{DestinationHash(tenant.Email!)}",
-                CreatedAtUtc = command.OccurredAtUtc,
-                NextAttemptAtUtc = command.OccurredAtUtc,
+                CreatedAtUtc = command.CreatedAtUtc,
+                NextAttemptAtUtc = command.CreatedAtUtc,
             });
         }
 
@@ -287,8 +287,8 @@ public sealed class SendConversationMessageHandler
                 MessageType = "sms",
                 Payload = JsonSerializer.Serialize(new { to = tenant.Phone, message = command.Body }),
                 IdempotencyKey = $"conversation:{conversation.Id}:message:{message.Id}:sms:{DestinationHash(tenant.Phone!)}",
-                CreatedAtUtc = command.OccurredAtUtc,
-                NextAttemptAtUtc = command.OccurredAtUtc,
+                CreatedAtUtc = command.CreatedAtUtc,
+                NextAttemptAtUtc = command.CreatedAtUtc,
             });
         }
     }

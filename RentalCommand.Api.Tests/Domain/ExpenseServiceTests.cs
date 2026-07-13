@@ -455,6 +455,7 @@ public class ExpenseServiceTests : IDisposable
 
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "1A",
             Bedrooms = 1,
@@ -465,6 +466,7 @@ public class ExpenseServiceTests : IDisposable
         };
         var otherUnit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "2A",
             Bedrooms = 1,

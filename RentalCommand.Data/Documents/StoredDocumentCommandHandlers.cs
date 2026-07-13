@@ -171,19 +171,20 @@ public sealed class DeleteStoredDocumentHandler
         var entityType = row.EntityType ?? string.Empty;
         var entityId = row.EntityId ?? 0;
         row.DeletedAt = command.DeletedAtUtc;
-        attempt.BindSemanticAudit(row, new AtomicSemanticAudit(
+
+        // Soft deletion is captured by the atomic interceptor as a Deleted mutation. Enrich the
+        // descriptor after the flush so the semantic detail is bound to that exact classification.
+        var flush = await attempt.FlushBusinessAsync(ct);
+        var mutation = flush.Mutations.Single(candidate => ReferenceEquals(candidate.EntityReference, row));
+        attempt.EnrichMutation(mutation, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(StoredFile),
             row.Id,
-            AuditLogOperation.Updated,
+            AuditLogOperation.Deleted,
             UserId: command.UserId,
             OldValues: JsonSerializer.Serialize(new { row.FileName, DeletedAt = (DateTime?)null }),
             NewValues: JsonSerializer.Serialize(new { row.FileName, row.DeletedAt }),
             ChangeReason: $"Document removed: {row.FileName}"));
-
-        // Flush the bound StoredFile mutation before staging a semantic Unit history entry. Staging
-        // first would make the Unit descriptor compete with the exact StoredFile mutation audit.
-        await attempt.FlushBusinessAsync(ct);
 
         if (string.Equals(entityType, nameof(StoredDocumentTarget.Unit), StringComparison.Ordinal))
         {

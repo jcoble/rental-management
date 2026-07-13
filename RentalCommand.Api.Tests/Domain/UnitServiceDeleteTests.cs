@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -9,19 +10,27 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class UnitServiceDeleteTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class UnitServiceDeleteTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
-    private readonly UnitService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private UnitService _sut = null!;
 
-    public UnitServiceDeleteTests()
+    public UnitServiceDeleteTests(MigratedPostgreSqlFixture fixture)
     {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task DeleteAsync_RejectsUnitWithLeaseHistory()

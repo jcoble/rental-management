@@ -2,6 +2,7 @@ using FluentAssertions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -14,20 +15,27 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <see cref="UnitService.UpdateAsync"/> — a clear, field-specific 409 instead of the opaque
 /// unique-index conflict the DB would otherwise surface.
 /// </summary>
-public class UnitServiceCreateTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class UnitServiceCreateTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx;
-    private readonly UnitService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private UnitService _sut = null!;
 
-    public UnitServiceCreateTests()
+    public UnitServiceCreateTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext();
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task CreateAsync_ThrowsClear409WhenUnitNumberDuplicatedOnProperty()

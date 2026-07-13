@@ -74,7 +74,7 @@ public class TenantPortalProvisioningServiceTests : IDisposable
                 u.Id = 555;
                 created = u;
                 password = pwd;
-                _ctx.Db.Users.Attach(u);
+                _ctx.Db.Users.Add(u);
             })
             .ReturnsAsync(IdentityResult.Success);
 

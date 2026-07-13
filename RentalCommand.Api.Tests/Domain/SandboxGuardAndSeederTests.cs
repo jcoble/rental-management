@@ -25,6 +25,40 @@ public class SandboxGuardAndSeederTests : IDisposable
 {
     private readonly SqliteTestContext _ctx = new();
 
+    public SandboxGuardAndSeederTests()
+    {
+        var now = DateTime.UtcNow;
+        var actor = new ApplicationUser
+        {
+            Id = 1,
+            UserName = "sandbox-tests@example.test",
+            NormalizedUserName = "SANDBOX-TESTS@EXAMPLE.TEST",
+            Email = "sandbox-tests@example.test",
+            NormalizedEmail = "SANDBOX-TESTS@EXAMPLE.TEST",
+            DisplayName = "Sandbox Test Actor",
+            CreatedAt = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
+        {
+            User = actor,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            Membership = new WorkspaceMembership
+            {
+                PortfolioId = 1,
+                Status = WorkspaceMembershipStatus.Active,
+                DefaultExperience = WorkspaceExperience.Management,
+                EffectiveFromUtc = now,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            },
+        });
+        _ctx.Db.SaveChanges();
+    }
+
     public void Dispose() => _ctx.Dispose();
 
     // -----------------------------------------------------------------------
@@ -218,17 +252,7 @@ public class SandboxGuardAndSeederTests : IDisposable
     {
         var now = DateTime.UtcNow;
 
-        var actor = new ApplicationUser
-        {
-            Id = 1,
-            UserName = "sandbox-payment@example.test",
-            NormalizedUserName = "SANDBOX-PAYMENT@EXAMPLE.TEST",
-            Email = "sandbox-payment@example.test",
-            NormalizedEmail = "SANDBOX-PAYMENT@EXAMPLE.TEST",
-            DisplayName = "Sandbox Payment Actor",
-            CreatedAt = now,
-        };
-        _ctx.Db.Users.Add(actor);
+        var actor = _ctx.Db.Users.Single(user => user.Id == 1);
 
         var property = new Property
         {

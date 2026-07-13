@@ -260,9 +260,9 @@ public sealed class AuditSearchTests : IAsyncLifetime
         (await SearchIds("203.0.113")).Should().BeEquivalentTo(new[] { 76, 7 });
         // Action verb → operation. "updated" narrows to the WorkOrder row.
         (await SearchIds("updated")).Should().Equal(11);
-        // Friendly verb the describer renders for Created → both Created rows.
-        (await SearchIds("recorded")).Should().Equal(76);
-        (await SearchIds("received")).Should().Equal(7);
+        // Friendly verbs map to the stored Created operation, so both Created rows match.
+        (await SearchIds("recorded")).Should().BeEquivalentTo(new[] { 76, 7 });
+        (await SearchIds("received")).Should().BeEquivalentTo(new[] { 76, 7 });
     }
 
     [SkippableFact]

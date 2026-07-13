@@ -15,7 +15,7 @@ public sealed record SendConversationMessageCommand(
     string Body,
     ConversationSenderRole SenderRole,
     IReadOnlyList<string> RequestedChannels,
-    DateTime OccurredAtUtc) : IAtomicCommandData;
+    DateTime CreatedAtUtc) : IAtomicCommandData;
 
 public enum SendConversationMessageOutcome
 {
