@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Services;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -131,34 +130,12 @@ public class ScheduleEService : IScheduleEService
             loanQuery = loanQuery.Where(l => l.PropertyId == propertyId.Value);
         var loanPropertyIdsQuery = loanQuery.Select(l => l.PropertyId).Distinct();
 
-        // ── Depreciation (computed per property from its own basis; §6/§18) ────────────────────────
+        // ── Depreciation (one SQL union/group/total over property and asset bases; §6/§18) ────────
         var propertyBasisQuery = _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId);
         if (propertyId.HasValue)
             propertyBasisQuery = propertyBasisQuery.Where(p => p.Id == propertyId.Value);
-
-        var propertyBases = await propertyBasisQuery
-            .Select(p => new
-            {
-                p.Id,
-                p.PurchasePrice,
-                p.LandValue,
-                p.InServiceDate,
-                p.ManualAnnualDepreciation,
-                p.AccumulatedDepreciation,
-            })
-            .ToListAsync(ct);
-
-        var depreciationByProperty = new Dictionary<int, DepreciationResult>();
-        foreach (var b in propertyBases)
-        {
-            var result = DepreciationCalculator.AnnualForYear(
-                new PropertyDepreciationBasis(b.PurchasePrice, b.LandValue, b.InServiceDate, b.ManualAnnualDepreciation, b.AccumulatedDepreciation),
-                year);
-            if (result.Amount > 0m)
-                depreciationByProperty[b.Id] = result;
-        }
 
         var capitalAssetQuery = _db.CapitalAssets
             .AsNoTracking()
@@ -169,37 +146,105 @@ public class ScheduleEService : IScheduleEService
         if (propertyId.HasValue)
             capitalAssetQuery = capitalAssetQuery.Where(a => a.PropertyId == propertyId.Value);
 
-        var capitalAssets = await capitalAssetQuery
-            .Select(a => new
+        var propertyDepreciationComponents =
+            from property in propertyBasisQuery
+            let buildingBasis = property.PurchasePrice.HasValue
+                ? Math.Round(property.PurchasePrice.Value - (property.LandValue ?? 0m), 2)
+                : (decimal?)null
+            let remaining = buildingBasis.HasValue
+                ? (buildingBasis.Value - property.AccumulatedDepreciation > 0m
+                    ? buildingBasis.Value - property.AccumulatedDepreciation
+                    : 0m)
+                : (decimal?)null
+            let computedAnnual = buildingBasis.HasValue && buildingBasis.Value > 0m &&
+                                 property.InServiceDate.HasValue && year >= property.InServiceDate.Value.Year
+                ? Math.Round(
+                    buildingBasis.Value / 27.5m *
+                    (year == property.InServiceDate.Value.Year
+                        ? 12 - property.InServiceDate.Value.Month + 0.5m
+                        : 12m) / 12m,
+                    2)
+                : 0m
+            let requestedAmount = property.ManualAnnualDepreciation.HasValue
+                ? Math.Round(property.ManualAnnualDepreciation.Value, 2)
+                : computedAnnual
+            let nonNegativeAmount = requestedAmount > 0m ? requestedAmount : 0m
+            let cappedAmount = remaining.HasValue && nonNegativeAmount > remaining.Value
+                ? remaining.Value
+                : nonNegativeAmount
+            let finalAmount = cappedAmount ?? 0m
+            where finalAmount > 0m
+            select new
             {
-                a.PropertyId,
-                a.CostBasis,
-                a.InServiceDate,
-                a.Method,
-                a.RecoveryYears,
-                a.Convention,
-                a.AccumulatedDepreciation,
+                PropertyId = property.Id,
+                Amount = finalAmount,
+                FirstYearEstimateMarker = !property.ManualAnnualDepreciation.HasValue &&
+                                          property.InServiceDate.HasValue &&
+                                          year == property.InServiceDate.Value.Year ? 1 : 0,
+            };
+
+        var capitalAssetDepreciationComponents =
+            from asset in capitalAssetQuery
+            let basis = Math.Round(asset.CostBasis, 2)
+            let remaining = basis - asset.AccumulatedDepreciation > 0m
+                ? basis - asset.AccumulatedDepreciation
+                : 0m
+            let yearIndex = year - asset.InServiceDate.Year
+            let straightLineAnnual = asset.RecoveryYears > 0m ? basis / asset.RecoveryYears : 0m
+            let straightLineAmount = asset.Method == DepreciationMethod.StraightLine &&
+                                     asset.Convention == DepreciationConvention.MidMonth && yearIndex >= 0
+                ? Math.Round(straightLineAnnual *
+                    (yearIndex == 0 ? 12 - asset.InServiceDate.Month + 0.5m : 12m) / 12m, 2)
+                : asset.Method == DepreciationMethod.StraightLine &&
+                  asset.Convention == DepreciationConvention.HalfYear &&
+                  yearIndex >= 0 && yearIndex <= asset.RecoveryYears
+                    ? Math.Round(straightLineAnnual *
+                        (yearIndex == 0 || yearIndex == asset.RecoveryYears ? 0.5m : 1m), 2)
+                    : 0m
+            let macrsRate = asset.Method == DepreciationMethod.Macrs &&
+                            asset.Convention == DepreciationConvention.HalfYear
+                ? asset.RecoveryYears == 5m
+                    ? yearIndex == 0 ? 0.20m : yearIndex == 1 ? 0.32m : yearIndex == 2 ? 0.192m :
+                      yearIndex == 3 ? 0.1152m : yearIndex == 4 ? 0.1152m : yearIndex == 5 ? 0.0576m : 0m
+                    : asset.RecoveryYears == 7m
+                        ? yearIndex == 0 ? 0.1429m : yearIndex == 1 ? 0.2449m : yearIndex == 2 ? 0.1749m :
+                          yearIndex == 3 ? 0.1249m : yearIndex == 4 ? 0.0893m : yearIndex == 5 ? 0.0892m :
+                          yearIndex == 6 ? 0.0893m : yearIndex == 7 ? 0.0446m : 0m
+                        : asset.RecoveryYears == 15m
+                            ? yearIndex == 0 ? 0.05m : yearIndex == 1 ? 0.095m : yearIndex == 2 ? 0.0855m :
+                              yearIndex == 3 ? 0.077m : yearIndex == 4 ? 0.0693m : yearIndex == 5 ? 0.0623m :
+                              yearIndex == 6 ? 0.059m : yearIndex == 7 ? 0.059m : yearIndex == 8 ? 0.0591m :
+                              yearIndex == 9 ? 0.059m : yearIndex == 10 ? 0.0591m : yearIndex == 11 ? 0.059m :
+                              yearIndex == 12 ? 0.0591m : yearIndex == 13 ? 0.059m : yearIndex == 14 ? 0.0591m :
+                              yearIndex == 15 ? 0.0295m : 0m
+                            : 0m
+                : 0m
+            let requestedAmount = asset.Method == DepreciationMethod.Macrs
+                ? Math.Round(basis * macrsRate, 2)
+                : straightLineAmount
+            let cappedAmount = requestedAmount > remaining ? remaining : requestedAmount
+            where basis > 0m && remaining > 0m && yearIndex >= 0 && cappedAmount > 0m
+            select new
+            {
+                asset.PropertyId,
+                Amount = cappedAmount,
+                FirstYearEstimateMarker = yearIndex == 0 ? 1 : 0,
+            };
+
+        var depreciationComponents = propertyDepreciationComponents.Concat(capitalAssetDepreciationComponents);
+        var depreciationRows = await depreciationComponents
+            .GroupBy(component => component.PropertyId)
+            .Select(group => new
+            {
+                PropertyId = group.Key,
+                Amount = group.Sum(component => component.Amount),
+                IsFirstYearEstimate = group.Max(component => component.FirstYearEstimateMarker) == 1,
+                TotalAmount = depreciationComponents.Sum(component => (decimal?)component.Amount) ?? 0m,
             })
             .ToListAsync(ct);
 
-        foreach (var asset in capitalAssets)
-        {
-            var result = DepreciationCalculator.AnnualForYear(
-                asset.CostBasis,
-                asset.InServiceDate,
-                asset.Method,
-                asset.RecoveryYears,
-                asset.Convention,
-                asset.AccumulatedDepreciation,
-                year);
-            if (result.Amount > 0m)
-                AddDepreciation(depreciationByProperty, asset.PropertyId, result);
-        }
-
-        var depreciationPropertyIds = depreciationByProperty
-            .Where(kvp => kvp.Value.Amount > 0m)
-            .Select(kvp => kvp.Key)
-            .ToArray();
+        var depreciationByProperty = depreciationRows.ToDictionary(row => row.PropertyId);
+        var depreciationPropertyIds = depreciationRows.Select(row => row.PropertyId).ToArray();
 
         var deductibleExpenseQuery = expenseQuery
             .Where(e =>
@@ -213,12 +258,12 @@ public class ScheduleEService : IScheduleEService
         var totalDeductibleExpenses = await deductibleExpenseQuery
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
-        var totalDepreciation = depreciationByProperty.Values.Sum(d => d.Amount);
+        var totalDepreciation = depreciationRows.FirstOrDefault()?.TotalAmount ?? 0m;
 
         // ── Property rows ─────────────────────────────────────────────────────────────────────────
         // Project the Schedule E row facts with the ordered property rows. Income, modeled interest,
         // and deductible expenses are correlated SQL sums, so no aggregate dictionaries are joined back
-        // to properties in memory. Depreciation remains the existing app-domain calculation from basis.
+        // to properties in memory. Depreciation is already one grouped SQL result keyed for DTO shaping.
         var reportPropertyQuery = _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId);
@@ -260,17 +305,21 @@ public class ScheduleEService : IScheduleEService
             : await deductibleExpenseQuery
                 .Where(e => e.PropertyId == null)
                 .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+        var hasUnassignedExpenseCategory = !propertyId.HasValue &&
+                                           await expenseQuery.AnyAsync(e => e.PropertyId == null, ct);
         var hasUnassignedRow = !propertyId.HasValue &&
                                (unassignedIncome != 0m ||
                                 unassignedDeductibleExpenses != 0m ||
-                                expenseCategoryTotals.Any(r => r.PropertyId == UnassignedPropertyId));
+                                hasUnassignedExpenseCategory);
 
         var reports = new List<ScheduleEPropertyReport>(propertyRows.Count + (hasUnassignedRow ? 1 : 0));
 
         foreach (var prop in propertyRows)
         {
-            var depreciation = depreciationByProperty.TryGetValue(prop.Id, out var depr) ? depr.Amount : 0m;
-            var depreciationIsEstimate = depr.IsFirstYearEstimate && depreciation > 0m;
+            var depreciation = depreciationByProperty.TryGetValue(prop.Id, out var depreciationRow)
+                ? depreciationRow.Amount
+                : 0m;
+            var depreciationIsEstimate = depreciationRow?.IsFirstYearEstimate == true && depreciation > 0m;
 
             // Build category list in enum-declared order; omit zero amounts. Deterministic legacy
             // double-count exclusion (§10/§18): when a loan exists for the property, drop the manual
@@ -354,17 +403,4 @@ public class ScheduleEService : IScheduleEService
         NetIncome = 0m,
     };
 
-    private static void AddDepreciation(
-        IDictionary<int, DepreciationResult> byProperty, int propertyId, DepreciationResult result)
-    {
-        if (byProperty.TryGetValue(propertyId, out var existing))
-        {
-            byProperty[propertyId] = new DepreciationResult(
-                existing.Amount + result.Amount,
-                existing.IsFirstYearEstimate || result.IsFirstYearEstimate);
-            return;
-        }
-
-        byProperty[propertyId] = result;
-    }
 }

@@ -346,6 +346,15 @@ public class ScheduleEServiceTests : IDisposable
         _commands.Where(IsStandaloneLoanPropertyIdScan)
             .Should()
             .BeEmpty("loan-backed mortgage-interest exclusions should stay as a SQL subquery instead of a materialized property-id set");
+
+        var depreciationSql = _commands.Where(IsDepreciationAggregate).ToList();
+        depreciationSql.Should().ContainSingle(
+            "property and capital-asset depreciation must be unioned, filtered, grouped, and totaled by one SQL statement");
+        depreciationSql[0].Should().Contain("UNION ALL");
+        depreciationSql[0].Should().Contain("GROUP BY");
+        (depreciationSql[0].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         depreciationSql[0].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("both per-property and report depreciation totals must be summed in SQL");
     }
 
     private static bool IsStandaloneIncomeByPropertyAggregate(string sql) =>
@@ -367,6 +376,12 @@ public class ScheduleEServiceTests : IDisposable
     private static bool IsStandaloneLoanPropertyIdScan(string sql) =>
         sql.TrimStart().StartsWith("SELECT DISTINCT \"l\".\"PropertyId\"", StringComparison.Ordinal) &&
         sql.Contains("FROM \"Loans\" AS \"l\"", StringComparison.Ordinal);
+
+    private static bool IsDepreciationAggregate(string sql) =>
+        sql.Contains("FROM \"Properties\"", StringComparison.Ordinal) &&
+        sql.Contains("CapitalAssets", StringComparison.Ordinal) &&
+        sql.Contains("PurchasePrice", StringComparison.Ordinal) &&
+        sql.Contains("RecoveryYears", StringComparison.Ordinal);
 
     private LeaseAgreement SeedAgreement(
         Property property,
