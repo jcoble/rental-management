@@ -320,7 +320,7 @@ public sealed class MoveOutStatementTests : IDisposable
         FilePath = filePath,
         ContentType = "image/png",
         FileSize = OnePixelPng.Length,
-        EntityType = "SecurityDeposit",
+        EntityType = nameof(SecurityDepositAccount),
         EntityId = accountId,
         UploadedAt = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc),
     };

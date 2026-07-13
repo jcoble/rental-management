@@ -18,7 +18,7 @@ internal static class StoredFileQueries
     /// <paramref name="entityId"/> within the caller's portfolio, or <c>null</c> when none exists.
     /// </summary>
     public static Task<StoredFile?> FindLatestEntityFileAsync(
-        this RentalCommandDbContext db, int portfolioId, string entityType, int entityId, CancellationToken ct)
+        this RentalCommandDbContext db, int portfolioId, string entityType, long entityId, CancellationToken ct)
         => db.StoredFiles
             .AsNoTracking()
             .Where(f => f.PortfolioId == portfolioId &&
@@ -37,7 +37,7 @@ internal static class StoredFileQueries
         IFileStorage files,
         int portfolioId,
         string entityType,
-        int entityId,
+        long entityId,
         CancellationToken ct)
     {
         var storedFile = await db.FindLatestEntityFileAsync(portfolioId, entityType, entityId, ct);

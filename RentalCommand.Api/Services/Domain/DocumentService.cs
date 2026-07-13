@@ -85,7 +85,7 @@ public sealed class DocumentService : IDocumentService
     public async Task<IReadOnlyList<DocumentDto>> ListAsync(
         int portfolioId,
         string entityType,
-        int entityId,
+        long entityId,
         CancellationToken ct = default)
     {
         var rows = await _db.StoredFiles
@@ -105,7 +105,7 @@ public sealed class DocumentService : IDocumentService
         Guid pendingUploadId,
         int portfolioId,
         StoredDocumentTarget target,
-        int entityId,
+        long entityId,
         int userId,
         int? tenantId,
         bool isStaff,

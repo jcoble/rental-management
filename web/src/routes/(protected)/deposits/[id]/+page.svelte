@@ -247,7 +247,7 @@
 		}
 	}
 
-	const ENTITY_TYPE = 'SecurityDeposit';
+	const ENTITY_TYPE = 'SecurityDepositAccount';
 	const photosQuery = createQuery(() => ({
 		queryKey: ['deposit-documents', depositId],
 		queryFn: () => documents.list(ENTITY_TYPE, depositId),

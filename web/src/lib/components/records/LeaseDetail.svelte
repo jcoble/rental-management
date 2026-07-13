@@ -1348,7 +1348,7 @@
 
 		<!-- Documents section -->
 		<div data-testid="lease-detail-documents">
-			<DocumentsPanel entityType="Lease" entityId={leaseId} />
+			<DocumentsPanel entityType="LeaseAgreement" entityId={leaseId} />
 		</div>
 			</Tabs.Content>
 

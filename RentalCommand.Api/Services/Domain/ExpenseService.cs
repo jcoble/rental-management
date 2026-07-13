@@ -180,7 +180,7 @@ public class ExpenseService : IExpenseService
     private async Task<List<ExpenseResponse>> MapExpenseResponsesAsync(int portfolioId, IReadOnlyCollection<Expense> items, CancellationToken ct)
     {
         // One batched query for all expense ids in this page — avoids N+1.
-        var expenseIds = items.Select(e => e.Id).ToList();
+        var expenseIds = items.Select(e => (long)e.Id).ToList();
         var filesByExpenseId = await _db.StoredFiles
             .AsNoTracking()
             .Where(f =>

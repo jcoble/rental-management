@@ -8,7 +8,7 @@ public sealed class DocumentDto
     public string ContentType { get; set; } = string.Empty;
     public long SizeBytes { get; set; }
     public string EntityType { get; set; } = string.Empty;
-    public int? EntityId { get; set; }
+    public long? EntityId { get; set; }
 
     /// <summary>True when the content type indicates an image (used by UI to pick a preview vs icon).</summary>
     public bool IsImage { get; set; }

@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Services.Domain;
 public class SecurityDepositService : ISecurityDepositService
 {
     /// <summary>StoredFile.EntityType used for photos attached to a security-deposit account.</summary>
-    internal const string DepositEntityType = "SecurityDeposit";
+    internal const string DepositEntityType = nameof(RentalCommand.Core.Entities.SecurityDepositAccount);
 
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
@@ -252,7 +252,7 @@ public class SecurityDepositService : ISecurityDepositService
 
     /// <summary>
     /// Loads decoded image bytes for photos attached to this deposit account (StoredFile rows with
-    /// EntityType=SecurityDeposit). Best-effort: a file that fails to load is skipped, never fatal.
+    /// EntityType=SecurityDepositAccount). Best-effort: a file that fails to load is skipped, never fatal.
     /// </summary>
     private async Task<IReadOnlyList<byte[]>> LoadDepositPhotosAsync(int portfolioId, int depositId, CancellationToken ct)
     {
