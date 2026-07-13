@@ -185,7 +185,8 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain("TenantAccounts");
         sql.Should().Contain("LeaseManagements");
-        sql.Should().Contain("LeaseManagementParties");
+        sql.Should().NotContain("LeaseManagementParties",
+            "staff capability authorization is membership/property scoped, not tenant-party scoped");
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("vw_tenant_account_balances");
         sql.Should().Contain("TenantLedgerEntries");
@@ -303,7 +304,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             sql.Should().Contain("TenantAccounts");
             sql.Should().Contain("LeaseManagements");
             sql.Should().Contain("UnitId");
-            sql.Should().Contain(" IN ");
+            sql.Should().Contain("= ANY", "Npgsql translates membership over a parameterized id set to PostgreSQL ANY");
             sql.Should().NotContain("\"Payments\"");
             sql.Should().NotContain("\"Leases\"");
         }
