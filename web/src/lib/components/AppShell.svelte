@@ -231,7 +231,7 @@
 	const authState = getAuthState();
 	let currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
 	let activeExperience = $derived(authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null);
-	let activeCapabilities = $derived(new Set(
+	let activeCapabilities = $derived<Set<string>>(new Set<string>(
 		currentAccess?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
 			entry.experience === activeExperience)?.capabilityKeys ?? []
 	));

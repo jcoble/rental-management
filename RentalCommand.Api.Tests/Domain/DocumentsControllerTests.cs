@@ -109,6 +109,10 @@ public sealed class DocumentsControllerTests : IDisposable
                 7,
                 null,
                 true,
+                It.Is<WorkspaceReadScope?>(scope =>
+                    scope.HasValue &&
+                    scope.Value.PortfolioId == PortfolioId &&
+                    scope.Value.UserId == 7),
                 "upload-operation",
                 It.IsAny<string>(),
                 It.IsAny<string>(),
@@ -164,6 +168,10 @@ public sealed class DocumentsControllerTests : IDisposable
             7,
             null,
             true,
+            It.Is<WorkspaceReadScope?>(scope =>
+                scope.HasValue &&
+                scope.Value.PortfolioId == PortfolioId &&
+                scope.Value.UserId == 7),
             "upload-operation",
             It.IsAny<string>(),
             It.IsAny<string>(),
@@ -227,6 +235,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 7,
                 tenantId,
                 false,
+                (WorkspaceReadScope?)null,
                 "tenant-upload-operation",
                 It.IsAny<string>(),
                 It.IsAny<string>(),
@@ -281,6 +290,7 @@ public sealed class DocumentsControllerTests : IDisposable
             7,
             tenantId,
             false,
+            (WorkspaceReadScope?)null,
             "tenant-upload-operation",
             It.IsAny<string>(),
             It.IsAny<string>(),

@@ -120,7 +120,6 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
             _ctx.Db,
             new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
             Mock.Of<ICanonicalAccountBootstrapService>(),
-            new RlsExecutionContext(),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
     }

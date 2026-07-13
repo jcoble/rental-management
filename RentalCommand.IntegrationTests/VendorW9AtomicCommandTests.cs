@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Vendors;
 using RentalCommand.Data;
@@ -29,6 +30,9 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
     private int _portfolioId;
     private int _otherPortfolioId;
     private int _vendorId;
+    private Guid _authSessionId;
+    private int _accessContextId;
+    private long _accessRevision;
 
     public async Task InitializeAsync()
     {
@@ -72,6 +76,18 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
 
         await using var db = NewContext();
         await db.Database.MigrateAsync();
+        var actor = new ApplicationUser
+        {
+            Id = 73,
+            UserName = "vendor-w9-owner@example.test",
+            NormalizedUserName = "VENDOR-W9-OWNER@EXAMPLE.TEST",
+            Email = "vendor-w9-owner@example.test",
+            NormalizedEmail = "VENDOR-W9-OWNER@EXAMPLE.TEST",
+            DisplayName = "Vendor W-9 Owner",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = _now,
+        };
         var portfolio = new Portfolio
         {
             Name = "W-9 Portfolio",
@@ -88,10 +104,59 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             CreatedAt = _now,
             UpdatedAt = _now,
         };
-        db.Portfolios.AddRange(portfolio, other);
+        db.AddRange(actor, portfolio, other);
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
         _otherPortfolioId = other.Id;
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        db.Add(membership);
+        await db.SaveChangesAsync();
+
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = membership.Id,
+            PortfolioId = portfolio.Id,
+            RoleProfileId = 2,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = actor.Id,
+            ActiveAccessContextId = accessContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = _now,
+            LastSeenAtUtc = _now,
+            ExpiresAtUtc = _now.AddDays(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        _authSessionId = session.Id;
+        _accessContextId = accessContext.Id;
+        _accessRevision = accessContext.AccessRevision;
 
         // Keep the scoped portfolio id and target vendor id distinct so the SQL probe can
         // independently prove that both values were sent to the translated eligibility query.
@@ -254,7 +319,16 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         new("vendor-w9.request", $"{portfolioId ?? _portfolioId}:{vendorId ?? _vendorId}:{operationId}");
 
     private RequestVendorW9Command Command(int portfolioId, int vendorId, string operationId) =>
-        new(portfolioId, vendorId, operationId, 73, _now);
+        new(
+            portfolioId,
+            vendorId,
+            operationId,
+            73,
+            _authSessionId,
+            73,
+            _accessContextId,
+            _accessRevision,
+            _now);
 
     private Vendor NewVendor(int portfolioId, string? phone) => new()
     {

@@ -178,11 +178,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
             new CanonicalAccountBootstrapService(
                 _users,
                 _sqlite.Db,
-                new RlsExecutionContext(),
-                TimeProvider.System,
-                new InitialWorkspaceAuthorityProvisioner(_sqlite.Db, TimeProvider.System),
-                new NotificationFoundationService(_sqlite.Db, TimeProvider.System)),
-            new RlsExecutionContext(),
+                TimeProvider.System),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
     }

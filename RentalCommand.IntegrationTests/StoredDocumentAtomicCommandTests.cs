@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -20,6 +21,7 @@ namespace RentalCommand.IntegrationTests;
 /// <summary>PostgreSQL proof for general StoredFile create/delete command boundaries.</summary>
 public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 {
+    private const int ActorUserId = 73;
     private const string ContentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -27,6 +29,9 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     private int _portfolioId;
     private int _unitId;
     private int _otherUnitId;
+    private Guid _sessionId;
+    private int _accessContextId;
+    private long _accessRevision;
 
     [Fact]
     public void Document_target_contract_is_canonical_and_supports_bigint_ledger_ids()
@@ -100,6 +105,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         await db.Database.MigrateAsync();
         (_portfolioId, _unitId) = await SeedUnitAsync(db, "Primary");
         (_, _otherUnitId) = await SeedUnitAsync(db, "Other");
+        (_sessionId, _accessContextId, _accessRevision) = await SeedManagementAccessAsync(db);
     }
 
     public async Task DisposeAsync()
@@ -195,9 +201,21 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         await using var scope = _services!.CreateAsyncScope();
         var documents = scope.ServiceProvider.GetRequiredService<IDocumentService>();
         var first = await documents.DeleteAsync(
-            _portfolioId, created!.Id, 73, null, true, "delete-one");
+            portfolioId: _portfolioId,
+            id: created!.Id,
+            userId: ActorUserId,
+            tenantId: null,
+            isStaff: true,
+            staffScope: ManagementScope(),
+            clientOperationId: "delete-one");
         var replay = await documents.DeleteAsync(
-            _portfolioId, created.Id, 73, null, true, "delete-one");
+            portfolioId: _portfolioId,
+            id: created.Id,
+            userId: ActorUserId,
+            tenantId: null,
+            isStaff: true,
+            staffScope: ManagementScope(),
+            clientOperationId: "delete-one");
 
         first.Should().BeTrue();
         replay.Should().BeTrue();
@@ -282,21 +300,29 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         }
         await using var scope = _services!.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IDocumentService>().CreateAsync(
-            pendingUploadId,
-            _portfolioId,
-            StoredDocumentTarget.Unit,
-            entityId ?? _unitId,
-            73,
-            null,
-            true,
-            operationId,
-            fingerprint,
-            ContentHash,
-            "lease.pdf",
-            "application/pdf",
-            42,
-            storagePath);
+            pendingUploadId: pendingUploadId,
+            portfolioId: _portfolioId,
+            target: StoredDocumentTarget.Unit,
+            entityId: entityId ?? _unitId,
+            userId: ActorUserId,
+            tenantId: null,
+            isStaff: true,
+            staffScope: ManagementScope(),
+            clientOperationId: operationId,
+            requestFingerprint: fingerprint,
+            contentSha256: ContentHash,
+            fileName: "lease.pdf",
+            contentType: "application/pdf",
+            sizeBytes: 42,
+            storagePath: storagePath);
     }
+
+    private WorkspaceReadScope ManagementScope() => new(
+        PortfolioId: _portfolioId,
+        UserId: ActorUserId,
+        SessionId: _sessionId,
+        AccessContextId: _accessContextId,
+        AccessRevision: _accessRevision);
 
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -339,12 +365,75 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         return (portfolio.Id, unit.Id);
     }
 
+    private async Task<(Guid SessionId, int AccessContextId, long AccessRevision)>
+        SeedManagementAccessAsync(RentalCommandDbContext db)
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            Id = ActorUserId,
+            UserName = "stored-document-atomic-user",
+            NormalizedUserName = "STORED-DOCUMENT-ATOMIC-USER",
+            Email = "stored-document-atomic@example.test",
+            NormalizedEmail = "STORED-DOCUMENT-ATOMIC@EXAMPLE.TEST",
+            DisplayName = "Stored Document Atomic User",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = _portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        return (session.Id, accessContext.Id, accessContext.AccessRevision);
+    }
+
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is not available; StoredFile PostgreSQL proof skipped.");
 
     private sealed class TestActor : ICurrentActor
     {
-        public int? UserId => 73;
+        public int? UserId => ActorUserId;
         public string? ActorLabel => null;
         public string? IpAddress => "127.0.0.1";
     }
