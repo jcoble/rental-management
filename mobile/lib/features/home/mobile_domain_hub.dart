@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_chrome.dart';
 import 'mobile_domain_navigation.dart';
@@ -50,7 +53,7 @@ class MoneyHubScreen extends StatelessWidget {
   );
 }
 
-class WorkHubScreen extends StatelessWidget {
+class WorkHubScreen extends ConsumerWidget {
   const WorkHubScreen({
     super.key,
     this.onControllerReady,
@@ -61,13 +64,29 @@ class WorkHubScreen extends StatelessWidget {
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Work',
-    subtitle: 'Maintenance, inspections, vendors and scheduled work.',
-    destinations: workHubDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) {
+      return const SizedBox.shrink();
+    }
+    final capabilities = auth.capabilities;
+    final assignedWorkExperience =
+        auth.activeExperience == WorkspaceExperience.maintenance;
+    final destinations = workDestinationsFor(
+      capabilities,
+      assignedWorkExperience: assignedWorkExperience,
+    );
+
+    return MobileDomainHubScreen(
+      title: assignedWorkExperience ? 'My work' : 'Work',
+      subtitle: assignedWorkExperience
+          ? 'Your assigned repairs, updates and conversations.'
+          : 'Maintenance, inspections, vendors and scheduled work.',
+      destinations: destinations,
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+    );
+  }
 }
 
 class InboxHubScreen extends StatelessWidget {

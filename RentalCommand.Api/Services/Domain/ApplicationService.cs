@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
@@ -49,46 +50,89 @@ public sealed class ApplicationService : IApplicationService
         if (portfolio is null)
             return null;
 
-        // Availability and operational eligibility are derived by PostgreSQL from the canonical
-        // occupancy view. Unit has no mutable availability field.
-        var properties = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolio.Id && p.Status != PropertyStatus.Inactive)
-            .OrderBy(p => p.Name)
-            .Select(p => new PublicPropertyOption
-            {
-                Id = p.Id,
-                Name = p.Name,
-                AddressLine1 = p.AddressLine1,
-                City = p.City,
-                State = p.State,
-                Units = (from unit in _db.Units
-                         where unit.PortfolioId == portfolio.Id && unit.PropertyId == p.Id
-                         join occupancy in _db.UnitOccupancyProjections
-                             on new { unit.PortfolioId, UnitId = unit.Id }
-                             equals new { occupancy.PortfolioId, occupancy.UnitId }
-                         where !occupancy.IsInTurnover
-                               && !occupancy.IsOutOfService
-                               && !occupancy.IsOnManagementHold
-                         orderby unit.UnitNumber
-                         select new PublicUnitOption
-                         {
-                             Id = unit.Id,
-                             UnitNumber = unit.UnitNumber,
-                             Status = occupancy.IsOccupied
-                                 ? DerivedUnitStatus.Occupied
-                                 : occupancy.HasScheduledMoveIn
-                                     ? DerivedUnitStatus.Reserved
-                                     : DerivedUnitStatus.Vacant,
-                         }).ToList(),
-            })
+        // PostgreSQL performs the property/unit join, operational filtering, ordering, and grouping
+        // in one statement. In particular, the LEFT JOIN keeps active properties that currently
+        // have no eligible units. Unit has no mutable availability field; the canonical occupancy
+        // view is the only source for its presentation status.
+        var rows = await _db.Database.SqlQuery<PublicPropertyOptionDatabaseRow>($"""
+            WITH eligible_units AS (
+                SELECT
+                    unit."Id",
+                    unit."PortfolioId",
+                    unit."PropertyId",
+                    unit."UnitNumber",
+                    CASE
+                        WHEN occupancy."IsOccupied" THEN {(int)DerivedUnitStatus.Occupied}
+                        WHEN occupancy."HasScheduledMoveIn" THEN {(int)DerivedUnitStatus.Reserved}
+                        ELSE {(int)DerivedUnitStatus.Vacant}
+                    END AS "Status"
+                FROM "Units" AS unit
+                INNER JOIN "vw_unit_occupancy" AS occupancy
+                    ON occupancy."PortfolioId" = unit."PortfolioId"
+                    AND occupancy."UnitId" = unit."Id"
+                WHERE unit."PortfolioId" = {portfolio.Id}
+                    AND unit."DeletedAt" IS NULL
+                    AND NOT occupancy."IsInTurnover"
+                    AND NOT occupancy."IsOutOfService"
+                    AND NOT occupancy."IsOnManagementHold"
+            )
+            SELECT
+                property."Id",
+                property."Name",
+                property."AddressLine1",
+                property."City",
+                property."State",
+                COALESCE(
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'Id', eligible."Id",
+                            'UnitNumber', eligible."UnitNumber",
+                            'Status', eligible."Status")
+                        ORDER BY eligible."UnitNumber", eligible."Id")
+                        FILTER (WHERE eligible."Id" IS NOT NULL),
+                    '[]'::jsonb)::text AS "UnitsJson"
+            FROM "Properties" AS property
+            LEFT JOIN eligible_units AS eligible
+                ON eligible."PortfolioId" = property."PortfolioId"
+                AND eligible."PropertyId" = property."Id"
+            WHERE property."PortfolioId" = {portfolio.Id}
+                AND property."DeletedAt" IS NULL
+                AND property."Status" <> {(int)PropertyStatus.Inactive}
+            GROUP BY
+                property."Id",
+                property."Name",
+                property."AddressLine1",
+                property."City",
+                property."State"
+            ORDER BY property."Name", property."Id"
+            """)
             .ToListAsync(ct);
+
+        var properties = rows.Select(row => new PublicPropertyOption
+        {
+            Id = row.Id,
+            Name = row.Name,
+            AddressLine1 = row.AddressLine1,
+            City = row.City,
+            State = row.State,
+            Units = JsonSerializer.Deserialize<PublicUnitOption[]>(row.UnitsJson) ?? [],
+        }).ToList();
 
         return new PublicApplicationFormInfo
         {
             ManagementCompanyName = portfolio.ManagementCompanyName,
             Properties = properties,
         };
+    }
+
+    private sealed class PublicPropertyOptionDatabaseRow
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string AddressLine1 { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+        public string UnitsJson { get; set; } = "[]";
     }
 
     public async Task<SubmitApplicationResult?> SubmitAsync(

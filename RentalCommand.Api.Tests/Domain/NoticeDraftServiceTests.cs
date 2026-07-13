@@ -56,6 +56,8 @@ public class NoticeDraftServiceTests : IDisposable
         result.Drafts.Should().ContainSingle(d =>
             d.LeaseManagementId == relationship.Management.Id &&
             d.TenantAccountId == relationship.Account.Id &&
+            d.RecipientLeaseManagementPartyId == relationship.Party.Id &&
+            d.LeaseAgreementId == relationship.Agreement.Id &&
             d.RecipientTenantId == relationship.Tenant.Id &&
             d.NoticeType == "lease-non-renewal");
     }
@@ -96,7 +98,8 @@ public class NoticeDraftServiceTests : IDisposable
             PortfolioId = 1,
             LeaseManagementId = relationship.Management.Id,
             TenantAccountId = relationship.Account.Id,
-            RecipientTenantId = relationship.Tenant.Id,
+            RecipientLeaseManagementPartyId = relationship.Party.Id,
+            LeaseAgreementId = relationship.Agreement.Id,
             PropertyId = relationship.Property.Id,
             NoticeType = "lease-renewal-offer",
             Status = "Draft",
@@ -205,6 +208,8 @@ public class NoticeDraftServiceTests : IDisposable
         draft.NoticeType.Should().Be("rent-reminder");
         draft.LeaseManagementId.Should().Be(relationship.Management.Id);
         draft.TenantAccountId.Should().Be(relationship.Account.Id);
+        draft.RecipientLeaseManagementPartyId.Should().Be(relationship.Party.Id);
+        draft.LeaseAgreementId.Should().Be(relationship.Agreement.Id);
         draft.RecipientTenantId.Should().Be(relationship.Tenant.Id);
         draft.Body.Should().Contain("Sam Rivera").And.Contain("$1,500");
     }
@@ -312,7 +317,8 @@ public class NoticeDraftServiceTests : IDisposable
             LeaseManagementId = relationship.Management.Id,
             TenantAccountId = relationship.Account.Id,
             TenantLedgerEntryId = charge.Id,
-            RecipientTenantId = relationship.Tenant.Id,
+            RecipientLeaseManagementPartyId = relationship.Party.Id,
+            LeaseAgreementId = relationship.Agreement.Id,
             PropertyId = relationship.Property.Id,
             NoticeType = "rent-reminder",
             Status = "Approved",
@@ -599,7 +605,7 @@ public class NoticeDraftServiceTests : IDisposable
             Db.SaveChanges();
             Db.ChangeTracker.Clear();
 
-            return new NoticeRelationship(management, agreement, account, tenant, property, unit);
+            return new NoticeRelationship(management, agreement, account, party, tenant, property, unit);
         }
 
         public TenantLedgerEntry AddCharge(
@@ -685,6 +691,7 @@ public class NoticeDraftServiceTests : IDisposable
         LeaseManagement Management,
         LeaseAgreement Agreement,
         TenantAccount Account,
+        LeaseManagementParty Party,
         Tenant Tenant,
         Property Property,
         Unit Unit);

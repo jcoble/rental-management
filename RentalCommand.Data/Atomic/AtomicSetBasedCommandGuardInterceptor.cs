@@ -14,9 +14,11 @@ namespace RentalCommand.Data.Atomic;
 internal sealed class AtomicSetBasedCommandGuardInterceptor : DbCommandInterceptor
 {
     // A DML keyword must own a table target. PostgreSQL row-lock clauses such as FOR UPDATE OF
-    // are query operations and must not consume an UPDATE mutation permit.
+    // are query operations and must not consume an UPDATE mutation permit. Likewise, the
+    // UPDATE SET fragment in INSERT ... ON CONFLICT ... DO UPDATE SET belongs to the insert;
+    // SET is not a second mutation target.
     private static readonly Regex RawDml = new(
-        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)(?!\s+(?:OF|SKIP|NOWAIT)\b)|(?<delete>DELETE\s+FROM))\s+(?<table>""[^""]+""|[A-Za-z_][A-Za-z0-9_$]*)",
+        @"\b(?:(?<insert>INSERT\s+INTO)|(?<update>UPDATE)(?!\s+(?:OF|SKIP|NOWAIT|SET)\b)|(?<delete>DELETE\s+FROM))\s+(?<table>""[^""]+""|[A-Za-z_][A-Za-z0-9_$]*)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly AtomicAuditScope _scope;
 

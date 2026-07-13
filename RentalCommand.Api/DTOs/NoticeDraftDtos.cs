@@ -5,6 +5,9 @@ public class NoticeDraftResponse
     public int Id { get; set; }
     public int LeaseManagementId { get; set; }
     public int TenantAccountId { get; set; }
+    public int RecipientLeaseManagementPartyId { get; set; }
+    public int? LeaseAgreementId { get; set; }
+    public int? LeaseAddendumId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
     public int RecipientTenantId { get; set; }
     public int? PropertyId { get; set; }

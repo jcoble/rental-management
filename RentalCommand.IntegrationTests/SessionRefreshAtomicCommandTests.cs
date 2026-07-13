@@ -57,7 +57,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         _connectionString = _postgres.GetConnectionString();
         await using (var db = NewPlainContext())
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
             await SeedSessionAsync(db);
         }
 

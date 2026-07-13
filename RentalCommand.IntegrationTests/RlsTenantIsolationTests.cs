@@ -254,8 +254,12 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await ExecAsync(conn, "SET app.rls_bypass_reason = 'PlatformOperation';");
         (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
 
-        // Only the dedicated reason admits the set-based wipe.
-        await ExecAsync(conn, "SET app.rls_bypass_reason = 'SandboxGraduation';");
+        // Only the dedicated reason together with an explicit target portfolio admits the
+        // set-based wipe. Administrative scope alone must never turn this into a global delete.
+        await ExecAsync(conn,
+            $"SET app.current_portfolio_id = '{_portfolioA}'; " +
+            "SET app.is_admin = 'false'; " +
+            "SET app.rls_bypass_reason = 'SandboxGraduation';");
         (await ExecAffectedAsync(conn, deleteSql)).Should().BeGreaterThan(0);
 
         // The command remains explicitly scoped; the other portfolio's durable ledger survives.

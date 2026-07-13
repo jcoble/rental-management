@@ -712,9 +712,12 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.Destination).IsRequired().HasMaxLength(500);
             entity.Property(e => e.IdempotencyKey).IsRequired().HasMaxLength(300);
             entity.HasIndex(e => e.OutboxMessageId).IsUnique();
-            entity.HasIndex(e => new { e.RenderedNoticeId, e.RecipientTenantId, e.Channel }).IsUnique();
+            entity.HasIndex(e => new { e.RenderedNoticeId, e.RecipientLeaseManagementPartyId, e.Channel }).IsUnique();
             entity.HasOne(e => e.RenderedNotice).WithMany()
                 .HasForeignKey(e => new { e.RenderedNoticeId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.RecipientLeaseManagementParty).WithMany()
+                .HasForeignKey(e => new { e.RecipientLeaseManagementPartyId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.OutboxMessage).WithMany().HasForeignKey(e => e.OutboxMessageId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -982,8 +985,10 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseManagementId);
             entity.HasIndex(e => e.TenantAccountId);
+            entity.HasIndex(e => e.RecipientLeaseManagementPartyId);
+            entity.HasIndex(e => e.LeaseAgreementId);
+            entity.HasIndex(e => e.LeaseAddendumId);
             entity.HasIndex(e => e.TenantLedgerEntryId);
-            entity.HasIndex(e => e.RecipientTenantId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.NoticeType, e.Status });
             entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId, e.NoticeType, e.Status });
@@ -1001,18 +1006,28 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.TenantAccount)
                 .WithMany()
-                .HasForeignKey(e => new { e.TenantAccountId, e.PortfolioId })
-                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .HasForeignKey(e => new { e.TenantAccountId, e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.RecipientLeaseManagementParty)
+                .WithMany()
+                .HasForeignKey(e => new { e.RecipientLeaseManagementPartyId, e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.LeaseAgreement)
+                .WithMany()
+                .HasForeignKey(e => new { e.LeaseAgreementId, e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.LeaseAddendum)
+                .WithMany()
+                .HasForeignKey(e => new { e.LeaseAddendumId, e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.TenantLedgerEntry)
                 .WithMany()
                 .HasForeignKey(e => new { e.TenantLedgerEntryId, e.TenantAccountId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId })
-                .OnDelete(DeleteBehavior.Restrict);
-            entity.HasOne(e => e.RecipientTenant)
-                .WithMany()
-                .HasForeignKey(e => new { e.RecipientTenantId, e.PortfolioId })
-                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.Property)
                 .WithMany()

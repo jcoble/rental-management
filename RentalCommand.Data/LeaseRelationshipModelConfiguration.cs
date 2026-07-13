@@ -138,6 +138,7 @@ internal static class LeaseRelationshipModelConfiguration
         {
             entity.HasKey(e => e.Id);
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.HasAlternateKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId });
             entity.Property(e => e.Role).HasConversion<string>().HasMaxLength(30);
             entity.Property(e => e.EffectiveFrom).HasColumnType("date");
             entity.Property(e => e.EffectiveThrough).HasColumnType("date");

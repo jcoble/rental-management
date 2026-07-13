@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Banking;
@@ -20,15 +22,18 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class BankingServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class BankingServiceTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _ctx = new();
-    private readonly BankingService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly Mock<IPlaidBankingProvider> _plaid = new();
     private readonly List<IDisposable> _atomicHosts = [];
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private BankingService _sut = null!;
 
-    public BankingServiceTests()
+    public BankingServiceTests(MigratedPostgreSqlFixture fixture)
     {
+        _fixture = fixture;
         _plaid
             .Setup(p => p.SyncTransactionsAsync(
                 It.IsAny<PlaidRuntimeSettings>(),
@@ -36,13 +41,18 @@ public class BankingServiceTests : IDisposable
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PlaidTransactionsSyncResult(null, [], [], [], "initial-request-id"));
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
         _sut = CreateService();
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
         foreach (var host in _atomicHosts) host.Dispose();
-        _ctx.Dispose();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -157,18 +167,21 @@ public class BankingServiceTests : IDisposable
         var connection = _ctx.Db.BankConnections.Single();
         var transaction = _ctx.Db.BankTransactions.Single();
 
-        _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
+        var connectionAudit = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankConnection" &&
             a.EntityId == connection.Id &&
-            a.Operation == AuditLogOperation.Created &&
-            a.NewValues != null &&
-            a.NewValues.Contains("\"institutionName\":\"Test Bank\""));
-        _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
+            a.Operation == AuditLogOperation.Created).Subject;
+        using var connectionValues = JsonDocument.Parse(connectionAudit.NewValues!);
+        connectionValues.RootElement.GetProperty("institutionName").GetString()
+            .Should().Be("Test Bank");
+
+        var transactionAudit = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankTransaction" &&
             a.EntityId == transaction.Id &&
-            a.Operation == AuditLogOperation.Created &&
-            a.NewValues != null &&
-            a.NewValues.Contains("\"providerTransactionId\":\"audit-import-1\""));
+            a.Operation == AuditLogOperation.Created).Subject;
+        using var transactionValues = JsonDocument.Parse(transactionAudit.NewValues!);
+        transactionValues.RootElement.GetProperty("providerTransactionId").GetString()
+            .Should().Be("audit-import-1");
     }
 
     [Fact]
@@ -205,9 +218,14 @@ public class BankingServiceTests : IDisposable
             a.EntityType == "BankTransaction" &&
             a.EntityId == transactionId &&
             a.Operation == AuditLogOperation.Updated).Subject;
-        log.OldValues.Should().Contain("\"matchStatus\":\"Unmatched\"");
-        log.NewValues.Should().Contain("\"matchStatus\":\"Matched\"");
-        log.NewValues.Should().Contain($"\"matchedTenantLedgerEntryId\":{payment.Id}");
+        using var oldValues = JsonDocument.Parse(log.OldValues!);
+        using var newValues = JsonDocument.Parse(log.NewValues!);
+        oldValues.RootElement.GetProperty("matchStatus").GetString()
+            .Should().Be("Unmatched");
+        newValues.RootElement.GetProperty("matchStatus").GetString()
+            .Should().Be("Matched");
+        newValues.RootElement.GetProperty("matchedTenantLedgerEntryId").GetInt64()
+            .Should().Be(payment.Id);
         log.ChangeReason.Should().Contain("receipt");
     }
 
@@ -357,28 +375,20 @@ public class BankingServiceTests : IDisposable
         var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
 
         // Named match: merchant text contains the tenant name.
-        var namedCtx = new SqliteTestContext();
-        try
-        {
-            SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
-            var namedSvc = CreateServiceFor(namedCtx);
-            var namedResult = await namedSvc.ImportAsync(1, BankImport("named-1", date, "Carlos Reyes", 1500m));
-            var namedScore = namedResult.Transactions.Single().SuggestedMatch!.Confidence;
+        await using var namedCtx = await _fixture.CreateContextAsync();
+        SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+        var namedSvc = CreateServiceFor(namedCtx);
+        var namedResult = await namedSvc.ImportAsync(1, BankImport("named-1", date, "Carlos Reyes", 1500m));
+        var namedScore = namedResult.Transactions.Single().SuggestedMatch!.Confidence;
 
-            // Date-only match: no merchant name overlap, same amount + date.
-            var anonCtx = new SqliteTestContext();
-            try
-            {
-                SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
-                var anonSvc = CreateServiceFor(anonCtx);
-                var anonResult = await anonSvc.ImportAsync(1, BankImport("anon-1", date, null, 1500m));
-                var anonScore = anonResult.Transactions.Single().SuggestedMatch!.Confidence;
+        // Date-only match: no merchant name overlap, same amount + date.
+        await using var anonCtx = await _fixture.CreateContextAsync();
+        SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+        var anonSvc = CreateServiceFor(anonCtx);
+        var anonResult = await anonSvc.ImportAsync(1, BankImport("anon-1", date, null, 1500m));
+        var anonScore = anonResult.Transactions.Single().SuggestedMatch!.Confidence;
 
-                namedScore.Should().BeGreaterThan(anonScore);
-            }
-            finally { anonCtx.Dispose(); }
-        }
-        finally { namedCtx.Dispose(); }
+        namedScore.Should().BeGreaterThan(anonScore);
     }
 
     [Fact]
@@ -492,7 +502,8 @@ public class BankingServiceTests : IDisposable
     public async Task GetSummaryAsync_ComputesLastSyncedAtInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var older = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc);
@@ -535,7 +546,8 @@ public class BankingServiceTests : IDisposable
     public async Task GetSummaryAsync_ComputesConnectionCountInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var now = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
         ctx.Db.BankConnections.AddRange(
@@ -576,7 +588,8 @@ public class BankingServiceTests : IDisposable
     public async Task ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         var payment = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-target");
@@ -599,18 +612,18 @@ public class BankingServiceTests : IDisposable
         reviewQueueSql.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase),
+            sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase),
             "the review queue count must use the DB-side suggestion predicate instead of counting mapped rows");
         reviewQueueSql.Should().Contain(sql =>
             sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase),
+            sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase),
             "the review queue row query must prefilter suggestible transactions in SQL before scoring");
 
-        var paymentCandidateSql = executedSql
-            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+        var receiptCandidateSql = executedSql
+            .Where(sql => sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        paymentCandidateSql.Should().Contain(sql =>
+        receiptCandidateSql.Should().Contain(sql =>
             sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("COALESCE", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
@@ -624,7 +637,8 @@ public class BankingServiceTests : IDisposable
     public async Task ReviewQueue_RanksPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
@@ -640,11 +654,11 @@ public class BankingServiceTests : IDisposable
         item.Transaction.SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
         item.Transaction.SuggestedMatch.EntityId.Should().Be(carlos.Id);
 
-        var paymentCandidateSql = executedSql
-            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+        var receiptCandidateSql = executedSql
+            .Where(sql => sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        paymentCandidateSql.Should().Contain(sql =>
+        receiptCandidateSql.Should().Contain(sql =>
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CASE", StringComparison.OrdinalIgnoreCase),
             "bank suggestion candidate ranking must run in SQL, not after materializing every same-amount/date candidate");
@@ -654,7 +668,8 @@ public class BankingServiceTests : IDisposable
     public async Task ReviewQueue_PagesSuggestibleTransactionsInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
@@ -687,7 +702,8 @@ public class BankingServiceTests : IDisposable
     public async Task ListTransactionsAsync_PagesFilteredTransactionsInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var connection = SeedBankConnectionInto(ctx);
         SeedBankTransactionInto(ctx, connection.Id, "txn-1", new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc), "Unmatched");
@@ -764,7 +780,7 @@ public class BankingServiceTests : IDisposable
     [Fact]
     public async Task ExchangePlaidPublicTokenAsync_ReusesExistingConnectionByLookupHash()
     {
-        using var ctx = new SqliteTestContext();
+        await using var ctx = await _fixture.CreateContextAsync();
         var sut = CreateServiceFor(ctx);
         _plaid
             .Setup(p => p.ExchangePublicTokenAsync(
@@ -1045,7 +1061,7 @@ public class BankingServiceTests : IDisposable
             ],
         };
 
-    private static BankConnection SeedBankConnectionInto(SqliteTestContext ctx)
+    private static BankConnection SeedBankConnectionInto(MigratedPostgreSqlTestContext ctx)
     {
         var now = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
         var connection = new BankConnection
@@ -1064,7 +1080,7 @@ public class BankingServiceTests : IDisposable
     }
 
     private static void SeedBankTransactionInto(
-        SqliteTestContext ctx,
+        MigratedPostgreSqlTestContext ctx,
         int connectionId,
         string providerTransactionId,
         DateTime postedAt,
@@ -1089,7 +1105,12 @@ public class BankingServiceTests : IDisposable
         SeedRentPaymentInto(_ctx, firstName, lastName, amount, paidAt, leaseNumber);
 
     private static TenantLedgerEntry SeedRentPaymentInto(
-        SqliteTestContext ctx, string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber)
+        MigratedPostgreSqlTestContext ctx,
+        string firstName,
+        string lastName,
+        decimal amount,
+        DateTime paidAt,
+        string leaseNumber)
     {
         var property = new Property
         {
@@ -1169,7 +1190,7 @@ public class BankingServiceTests : IDisposable
         return receipt;
     }
 
-    private BankingService CreateServiceFor(SqliteTestContext ctx, PlaidOptions? options = null)
+    private BankingService CreateServiceFor(MigratedPostgreSqlTestContext ctx, PlaidOptions? options = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
@@ -1183,7 +1204,7 @@ public class BankingServiceTests : IDisposable
         services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();
         services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(ctx.Connection).UseAtomicPersistenceKernel(provider));
+            builder.UseNpgsql(ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         var provider = services.BuildServiceProvider();
         var scope = provider.CreateScope();
         _atomicHosts.Add(scope);

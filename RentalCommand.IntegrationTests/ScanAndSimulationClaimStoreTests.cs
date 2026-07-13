@@ -1,6 +1,8 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using RentalCommand.Api.Data;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
@@ -114,20 +116,17 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         var portfolioId = await SeedPortfolioAsync(now);
         await SeedScansAsync(portfolioId, now, 1);
 
-        var apiRoleConnection = new NpgsqlConnectionStringBuilder(_connectionString)
-        {
-            Username = "rentalcommand_api",
-            Password = "rentalcommand_api_dev",
-        }.ConnectionString;
-
-        await using (var failClosed = NewContext(apiRoleConnection))
+        var failClosedInterceptor = new RlsConnectionInterceptor(
+            new HttpContextAccessor(),
+            new RlsExecutionContext());
+        await using (var failClosed = NewContext(rlsInterceptor: failClosedInterceptor))
         {
             (await new ScanProcessingClaimStore(failClosed)
                 .ClaimAsync("no-engine-context", TimeSpan.FromMinutes(2), 1))
                 .Should().BeEmpty();
         }
 
-        await using var engineContext = NewContext(apiRoleConnection, new EngineRlsInterceptor());
+        await using var engineContext = NewContext(rlsInterceptor: new EngineRlsInterceptor());
         (await new ScanProcessingClaimStore(engineContext)
             .ClaimAsync("engine-context", TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
@@ -226,7 +225,7 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
 
     private RentalCommandDbContext NewContext(
         string? connectionString = null,
-        EngineRlsInterceptor? rlsInterceptor = null)
+        DbConnectionInterceptor? rlsInterceptor = null)
     {
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseNpgsql(connectionString ?? _connectionString);
