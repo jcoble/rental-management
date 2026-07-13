@@ -165,6 +165,29 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         _ctx.Db.LeaseManagements.Add(relationship);
         _ctx.Db.SaveChanges();
 
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Analytics",
+            LastName = unitNumber,
+            Email = $"analytics-{unitNumber}@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Analytics fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
         var account = new TenantAccount
         {
             PublicId = Guid.NewGuid(),
@@ -199,13 +222,32 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
             TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, ActorUserId, now),
-            IssuedAtUtc = now.AddMonths(-1),
-            FullyExecutedAtUtc = now.AddMonths(-1),
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,
         };
-        _ctx.Db.AddRange(account, agreement);
+        _ctx.Db.AddRange(party, account, agreement);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = tenant.Email,
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _ctx.Db.SaveChanges();
+
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, now);
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now.AddMonths(-1);
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now.AddMonths(-1);
         _ctx.Db.SaveChanges();
 
         var charge = new TenantLedgerEntry
@@ -263,6 +305,59 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
 
         return property;
     }
+
+    private (LegalDocumentArtifact Issued, LegalDocumentArtifact Executed) SeedAgreementArtifacts(
+        int relationshipId,
+        DateTime now)
+    {
+        var issuedFile = AgreementFile($"agreement-{relationshipId}-issued.pdf", now);
+        var executedFile = AgreementFile($"agreement-{relationshipId}-executed.pdf", now);
+        _ctx.Db.StoredFiles.AddRange(issuedFile, executedFile);
+        _ctx.Db.SaveChanges();
+
+        var issuedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = issuedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = issuedFile.FilePath,
+            FileName = issuedFile.FileName,
+            ContentType = issuedFile.ContentType,
+            ByteLength = issuedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var executedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = executedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+            StorageKey = executedFile.FilePath,
+            FileName = executedFile.FileName,
+            ContentType = executedFile.ContentType,
+            ByteLength = executedFile.FileSize,
+            ContentSha256 = new string('c', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _ctx.Db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _ctx.Db.SaveChanges();
+        return (issuedArtifact, executedArtifact);
+    }
+
+    private static StoredFile AgreementFile(string fileName, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        FileName = fileName,
+        FilePath = $"test/{fileName}",
+        ContentType = "application/pdf",
+        FileSize = 1024,
+        UploadedAt = now,
+    };
 
     private WorkspaceReadScope SeedSelectedPropertyScope(int propertyId, string roleKey)
     {
