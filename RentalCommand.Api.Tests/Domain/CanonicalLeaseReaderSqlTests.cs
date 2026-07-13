@@ -174,11 +174,15 @@ public sealed class CanonicalLeaseReaderSqlTests
     public void Tenant_account_ledger_header_authorizes_and_aggregates_in_one_canonical_statement()
     {
         using var db = NewContext();
-        var service = NewLeaseService(db);
+        var service = NewLeaseManagementQueryService(db);
 
-        var sql = service.BuildCanonicalLedgerHeaderQuery(17, 42, restrictToTenantId: 9)
+        var sql = service.BuildCanonicalLedgerHeaderQuery(ReadAccess(), 42)
             .ToQueryString();
 
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("money.balances.read");
+        sql.Should().Contain("MembershipRoleAssignments");
+        sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain("TenantAccounts");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseManagementParties");
@@ -195,7 +199,7 @@ public sealed class CanonicalLeaseReaderSqlTests
     public void Tenant_account_ledger_entries_sort_and_page_in_the_database()
     {
         using var db = NewContext();
-        var service = NewLeaseService(db);
+        var service = NewLeaseManagementQueryService(db);
 
         var sql = service.BuildCanonicalLedgerEntriesQuery(17, 81)
             .OrderByDescending(entry => entry.EffectiveOn)
@@ -212,6 +216,70 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("OFFSET");
         sql.Should().NotContain("\"Payments\"");
         sql.Should().NotContain("OpeningBalances");
+    }
+
+    [Fact]
+    public void Lease_management_page_authorizes_filters_sorts_and_pages_canonical_rows_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+        var query = new LeaseManagementListQuery
+        {
+            PropertyId = 91,
+            TenantId = 27,
+            Lifecycle = "PossessionActive",
+            Search = "mallard",
+            Sort = "-tenantName",
+            Skip = 20,
+            Take = 10,
+        };
+
+        var sql = service.BuildSummaryQuery(ReadAccess(), query)
+            .OrderByDescending(row => row.PrimaryTenantName)
+            .ThenByDescending(row => row.LeaseManagementId)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseManagementParties");
+        sql.Should().Contain("vw_lease_management_lifecycle");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("vw_lease_agreement_status");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+    }
+
+    [Fact]
+    public void Lease_management_detail_parties_are_authorized_and_projected_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var headerSql = service.BuildDetailHeaderQuery(ReadAccess(), 42).ToQueryString();
+        var partySql = service.BuildPartyQuery(ReadAccess(), 42)
+            .OrderBy(row => row.Role)
+            .ThenBy(row => row.TenantName)
+            .ToQueryString();
+
+        foreach (var sql in new[] { headerSql, partySql })
+        {
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("rentals.read");
+            sql.Should().Contain("LeaseManagements");
+            sql.Should().NotContain("\"Leases\"");
+            sql.Should().NotContain("LeaseTenants");
+        }
+        partySql.Should().Contain("LeaseManagementParties");
+        partySql.Should().Contain("Tenants");
+        partySql.Should().Contain("ORDER BY");
     }
 
     [Fact]
@@ -243,14 +311,11 @@ public sealed class CanonicalLeaseReaderSqlTests
         dashboardSql.Should().Contain("AccountNumber");
     }
 
-    private static LeaseService NewLeaseService(RentalCommandDbContext db) => new(
-        db,
-        Mock.Of<IDataUpdateService>(),
-        Mock.Of<IFileStorage>(),
-        Mock.Of<ILeaseAgreementPdfGenerator>(),
-        Mock.Of<IAuditTrailService>(),
-        NullLogger<LeaseService>.Instance,
-        TimeProvider.System);
+    private static LeaseManagementQueryService NewLeaseManagementQueryService(RentalCommandDbContext db) =>
+        new(db, TimeProvider.System);
+
+    private static LeaseManagementReadContext ReadAccess() =>
+        new(17, 5, Guid.Parse("77777777-7777-7777-7777-777777777777"), 12, 3);
 
     private static RentalCommandDbContext NewContext() =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>()

@@ -37,14 +37,44 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.transfer-unit.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
-    private readonly ILeaseService _leaseService;
+    private readonly ILeaseManagementQueryService _queryService;
 
     public LeaseManagementController(
         IAtomicUnitOfWork atomic,
-        ILeaseService leaseService)
+        ILeaseManagementQueryService queryService)
     {
         _atomic = atomic;
-        _leaseService = leaseService;
+        _queryService = queryService;
+    }
+
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(LeaseManagementListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<LeaseManagementListResponse>> ListPage(
+        [FromQuery] LeaseManagementListQuery query,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        return Ok(await _queryService.ListPageAsync(access, query, ct));
+    }
+
+    [HttpGet("{leaseManagementId:int}")]
+    [ProducesResponseType(typeof(LeaseManagementDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseManagementDetailResponse>> Get(
+        int leaseManagementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        var item = await _queryService.GetAsync(access, leaseManagementId, ct);
+        return item is null ? NotFound(new { error = "Lease management relationship not found" }) : Ok(item);
     }
 
     /// <summary>
@@ -60,8 +90,12 @@ public sealed class LeaseManagementController : ManagementControllerBase
         [FromQuery] int skip = 0,
         [FromQuery] int? take = null)
     {
-        var ledger = await _leaseService.GetLedgerAsync(
-            GetPortfolioId(), leaseManagementId, null, skip, take, ct);
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        var ledger = await _queryService.GetLedgerAsync(access, leaseManagementId, skip, take, ct);
         return ledger == null ? NotFound(new { error = "Tenant account not found" }) : Ok(ledger);
     }
 
@@ -825,6 +859,19 @@ public sealed class LeaseManagementController : ManagementControllerBase
         return Guid.TryParse(User.FindFirstValue("sid"), out sessionId)
             && int.TryParse(User.FindFirstValue("ctx"), out accessContextId)
             && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
+    }
+
+    private bool TryReadAccessContext(out LeaseManagementReadContext access)
+    {
+        access = default;
+        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+        {
+            return false;
+        }
+
+        access = new LeaseManagementReadContext(
+            GetPortfolioId(), GetUserId(), sessionId, accessContextId, accessRevision);
+        return true;
     }
 
     private readonly record struct MutationEnvelope(

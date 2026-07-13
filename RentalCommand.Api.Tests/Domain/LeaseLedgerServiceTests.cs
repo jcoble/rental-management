@@ -31,6 +31,23 @@ public sealed class LeaseLedgerServiceTests
     }
 
     [Fact]
+    public void Canonical_relationship_page_and_detail_have_stable_routes()
+    {
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.ListPage))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("page");
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.Get))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("{leaseManagementId:int}");
+
+        typeof(LeaseManagementSummaryResponse).GetProperty("Id").Should().BeNull();
+        typeof(LeaseManagementSummaryResponse).GetProperty(nameof(LeaseManagementSummaryResponse.LeaseManagementId))
+            .Should().NotBeNull();
+        typeof(LeaseManagementSummaryResponse).GetProperty(nameof(LeaseManagementSummaryResponse.LeaseAgreementId))
+            .Should().NotBeNull();
+        typeof(LeaseManagementSummaryResponse).GetProperty(nameof(LeaseManagementSummaryResponse.TenantAccountId))
+            .Should().NotBeNull();
+    }
+
+    [Fact]
     public void Ledger_response_names_canonical_relationship_and_account_ids_only()
     {
         typeof(LeaseLedgerResponse).GetProperty(nameof(LeaseLedgerResponse.LeaseManagementId))

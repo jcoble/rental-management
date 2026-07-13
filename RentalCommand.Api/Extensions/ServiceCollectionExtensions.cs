@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         // --- controllers-leasing-money sub-unit ---
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<ILeaseService, LeaseService>();
+        services.AddScoped<ILeaseManagementQueryService, LeaseManagementQueryService>();
         services.AddSingleton<IDocumentTemplateFieldCatalog, DocumentTemplateFieldCatalog>();
         services.AddScoped<IDocumentTemplateService, DocumentTemplateService>();
         services.AddScoped<ILeaseQaService, LeaseQaService>();
