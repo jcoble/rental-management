@@ -52,6 +52,20 @@ final _tenantAccountOptionsProvider = FutureProvider.autoDispose
           .listTenantAccountOptions(search: query.search, skip: query.skip);
     });
 
+/// Resolves a contextual account that is not present in the current server page.
+/// A stale/not-found context is intentionally treated as no selection.
+final _tenantAccountOptionProvider = FutureProvider.autoDispose
+    .family<TenantAccountOption?, int>((ref, tenantAccountId) async {
+      try {
+        return await ref
+            .read(scanRepositoryProvider)
+            .getTenantAccountOption(tenantAccountId);
+      } on ApiException catch (error) {
+        if (error.statusCode == 404) return null;
+        rethrow;
+      }
+    });
+
 /// Properties for the in-portfolio property picker (Lease drafts only).
 final _propertiesProvider = FutureProvider.autoDispose<List<Property>>((
   ref,
@@ -965,6 +979,8 @@ class _ReviewBody extends ConsumerWidget {
                 if (draft.isPayment)
                   _TenantAccountSelector(
                     selectedTenantAccountId: selectedTenantAccountId,
+                    contextualTenantAccountId:
+                        draft.captureContext?.tenantAccountId,
                     onTenantAccountSelected: onTenantAccountSelected,
                   ),
 
@@ -1316,10 +1332,12 @@ class _DocumentPreview extends ConsumerWidget {
 class _TenantAccountSelector extends ConsumerStatefulWidget {
   const _TenantAccountSelector({
     required this.selectedTenantAccountId,
+    required this.contextualTenantAccountId,
     required this.onTenantAccountSelected,
   });
 
   final int? selectedTenantAccountId;
+  final int? contextualTenantAccountId;
   final ValueChanged<int?> onTenantAccountSelected;
 
   @override
@@ -1359,6 +1377,20 @@ class _TenantAccountSelectorState
     final accountsAsync = ref.watch(
       _tenantAccountOptionsProvider((search: _search, skip: _skip)),
     );
+    final pageAccounts =
+        accountsAsync.value?.items ?? const <TenantAccountOption>[];
+    final contextualId = widget.selectedTenantAccountId == null
+        ? widget.contextualTenantAccountId
+        : null;
+    final contextualIsInPage =
+        contextualId != null &&
+        pageAccounts.any((item) => item.tenantAccountId == contextualId);
+    final contextualAccountAsync =
+        contextualId != null &&
+            accountsAsync.value != null &&
+            !contextualIsInPage
+        ? ref.watch(_tenantAccountOptionProvider(contextualId))
+        : const AsyncValue<TenantAccountOption?>.data(null);
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -1399,6 +1431,19 @@ class _TenantAccountSelectorState
             ),
             data: (page) {
               final accounts = [...page.items];
+              final contextualAccount = contextualIsInPage
+                  ? accounts
+                        .where((item) => item.tenantAccountId == contextualId)
+                        .firstOrNull
+                  : contextualAccountAsync.value;
+              if (contextualAccount != null &&
+                  !accounts.any(
+                    (item) =>
+                        item.tenantAccountId ==
+                        contextualAccount.tenantAccountId,
+                  )) {
+                accounts.insert(0, contextualAccount);
+              }
               if (_selectedOption != null &&
                   !accounts.any(
                     (item) =>
@@ -1407,11 +1452,32 @@ class _TenantAccountSelectorState
                   )) {
                 accounts.insert(0, _selectedOption!);
               }
+              if (widget.selectedTenantAccountId == null &&
+                  contextualAccount != null) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted && widget.selectedTenantAccountId == null) {
+                    _selectedOption = contextualAccount;
+                    widget.onTenantAccountSelected(
+                      contextualAccount.tenantAccountId,
+                    );
+                  }
+                });
+              }
+              final visibleSelectedId =
+                  accounts.any(
+                    (item) =>
+                        item.tenantAccountId ==
+                        (widget.selectedTenantAccountId ??
+                            contextualAccount?.tenantAccountId),
+                  )
+                  ? widget.selectedTenantAccountId ??
+                        contextualAccount?.tenantAccountId
+                  : null;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   DropdownButtonFormField<int>(
-                    initialValue: widget.selectedTenantAccountId,
+                    initialValue: visibleSelectedId,
                     hint: const Text('Select a rental account'),
                     isExpanded: true,
                     decoration: const InputDecoration(

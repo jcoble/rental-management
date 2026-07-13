@@ -115,6 +115,8 @@ class ScanRepository {
     String? clientOperationId,
     int? propertyId,
     int? unitId,
+    int? leaseManagementId,
+    int? tenantAccountId,
     String? sourceLabel,
     void Function(double progress)? onSendProgress,
   }) async {
@@ -129,6 +131,8 @@ class ScanRepository {
         'clientOperationId': clientOperationId ?? const Uuid().v4(),
         'propertyId': ?propertyId,
         'unitId': ?unitId,
+        'leaseManagementId': ?leaseManagementId,
+        'tenantAccountId': ?tenantAccountId,
         if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
           'sourceLabel': sourceLabel.trim(),
       });
@@ -224,8 +228,9 @@ class ScanRepository {
   ///   — Lease: propertyId + unitId (required), tenantId? (optional), plus the
   ///     edited lease terms (lease_number, start_date, monthly_rent, …).
   ///
-  /// Returns the JSON response body so callers can read the created entity id
-  /// (e.g. `leaseId`) for navigation. May be `null` for empty responses.
+  /// Returns the JSON response body so callers can read precise created-record
+  /// identifiers (for example `leaseManagementId` and `agreementId`) for navigation.
+  /// May be `null` for empty responses.
   Future<Map<String, dynamic>?> confirm(
     int id,
     Map<String, dynamic> overrides,
@@ -269,7 +274,7 @@ class ScanRepository {
   }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
-        '/payments/account-options',
+        '/tenant-accounts/page',
         queryParameters: {
           'skip': skip,
           'take': take,
@@ -287,6 +292,27 @@ class ScanRepository {
         skip: (response.data?['skip'] as num?)?.toInt() ?? skip,
         take: (response.data?['take'] as num?)?.toInt() ?? take,
       );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Fetches one exact canonical tenant account for contextual preselection.
+  Future<TenantAccountOption> getTenantAccountOption(
+    int tenantAccountId,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/$tenantAccountId',
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TenantAccountOption.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

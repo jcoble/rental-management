@@ -281,6 +281,22 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.TenantChargeMutationResult,
     RentalCommand.Data.Payments.ReverseTenantChargeHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PostTenantCreditCommand,
+    RentalCommand.Core.Payments.TenantLedgerMutationResult,
+    RentalCommand.Data.Payments.PostTenantCreditHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PostTenantAdjustmentCommand,
+    RentalCommand.Core.Payments.TenantLedgerMutationResult,
+    RentalCommand.Data.Payments.PostTenantAdjustmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReverseTenantLedgerEntryCommand,
+    RentalCommand.Core.Payments.TenantLedgerMutationResult,
+    RentalCommand.Data.Payments.ReverseTenantLedgerEntryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RefundTenantPaymentCommand,
+    RentalCommand.Core.Payments.TenantPaymentRefundResult,
+    RentalCommand.Data.Payments.RefundTenantPaymentHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.FundSecurityDepositCommand,
     RentalCommand.Core.Payments.SecurityDepositMutationResult,
     RentalCommand.Data.Payments.FundSecurityDepositHandler>();
@@ -292,6 +308,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.RefundSecurityDepositCommand,
     RentalCommand.Core.Payments.SecurityDepositMutationResult,
     RentalCommand.Data.Payments.RefundSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReverseSecurityDepositEntryCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.ReverseSecurityDepositEntryHandler>();
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventCommand,
     RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventResult,

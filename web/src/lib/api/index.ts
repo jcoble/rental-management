@@ -6,6 +6,7 @@ export { vendors } from './endpoints/vendors';
 export { leaseManagements } from './endpoints/lease-managements';
 export { documentTemplates } from './endpoints/document-templates';
 export { payments } from './endpoints/payments';
+export { tenantAccounts } from './endpoints/tenant-accounts';
 export { expenses } from './endpoints/expenses';
 export { accounting } from './endpoints/accounting';
 export { banking } from './endpoints/banking';

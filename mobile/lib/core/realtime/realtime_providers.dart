@@ -66,8 +66,7 @@ final realtimeWatcherProvider = Provider<void>((ref) {
 /// controller has installed a different canonical access boundary.
 Future<void> resetAccessScopedClient(WidgetRef ref) async {
   ref.invalidate(activityHistoryProvider);
-  ref.invalidate(paymentsProvider);
-  ref.invalidate(paymentsPageProvider);
+  ref.invalidate(tenantLedgerEntriesPageProvider);
   ref.invalidate(accountingSummaryProvider);
   ref.invalidate(expensesPageProvider);
   ref.invalidate(expensesListProvider);
@@ -134,8 +133,7 @@ void _invalidateForEntity(Ref ref, String entityType) {
   switch (entityType) {
     case 'Payment':
     case 'TenantLedgerEntry':
-      _refreshIfAlive(ref, paymentsProvider);
-      ref.invalidate(paymentsPageProvider);
+      ref.invalidate(tenantLedgerEntriesPageProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
 
     case 'Expense':

@@ -334,7 +334,7 @@ public class AccountingServiceTests : IDisposable
         var now = new DateTime(2026, 03, 03, 12, 0, 0, DateTimeKind.Utc);
         var (_, lease) = SeedPropertyAndLease(now);
 
-        SeedPayment(lease, 1200m,
+        var receipt = SeedPayment(lease, 1200m,
             dueDate: new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
             paidInFull: true, paidDate: now);
         _db.SaveChanges();
@@ -343,6 +343,9 @@ public class AccountingServiceTests : IDisposable
 
         var receiptEntry = reports.Ledger.Single(l => l.Type == "TenantLedger");
         receiptEntry.Explanation.Should().Be("Tenant receipt posted on Mar 3, 2026.");
+        receiptEntry.TenantAccountId.Should().Be(receipt.TenantAccountId);
+        receiptEntry.SourceHref.Should().Be(
+            $"/tenant-accounts/{receipt.TenantAccountId}/entries/{receipt.Id}");
     }
 
     [Fact]

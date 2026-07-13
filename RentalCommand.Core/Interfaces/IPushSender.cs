@@ -9,7 +9,8 @@ public interface IPushSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Delivers a push to one registered device. <paramref name="data"/> carries the deep-link
-    /// payload (e.g. <c>{"actionUrl":"/payments/123","type":"RentConfirmation"}</c>) the mobile
+    /// payload (for example
+    /// <c>{"actionUrl":"/tenant-accounts/42/entries/123","type":"RentConfirmation"}</c>) the mobile
     /// client routes on when the user taps the notification.
     /// </summary>
     /// <returns>

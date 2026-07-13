@@ -399,10 +399,10 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
         return rows.Single();
     }
 
-    public async Task<AtomicLedgerAllocationSummary> ReverseChargeAllocationsAsync(
+    public async Task<AtomicLedgerAllocationSummary> ReverseEntryAllocationsAsync(
         int portfolioId,
         int tenantAccountId,
-        long debitEntryId,
+        long ledgerEntryId,
         string businessKeyPrefix,
         int createdByUserId,
         DateTime allocatedAtUtc,
@@ -410,7 +410,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tenantAccountId);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(debitEntryId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ledgerEntryId);
         ArgumentException.ThrowIfNullOrWhiteSpace(businessKeyPrefix);
 
         using var lease = _scope.BeginInternalRawDml(
@@ -429,7 +429,8 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                 FROM "TenantLedgerAllocations" AS source
                 WHERE source."PortfolioId" = {portfolioId}
                   AND source."TenantAccountId" = {tenantAccountId}
-                  AND source."DebitEntryId" = {debitEntryId}
+                  AND (source."DebitEntryId" = {ledgerEntryId}
+                       OR source."CreditEntryId" = {ledgerEntryId})
                   AND source."ReversesAllocationId" IS NULL
                   AND source."Amount" > 0
                   AND NOT EXISTS (

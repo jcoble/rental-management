@@ -45,7 +45,7 @@ import '../onboarding/getting_started_provider.dart';
 import '../onboarding/getting_started_screen.dart';
 import '../onboarding/getting_started_tasks.dart';
 import '../payments/payment_detail_screen.dart';
-import '../payments/payment_lease_labels.dart';
+import '../payments/payments_screen.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
@@ -350,6 +350,23 @@ class _HomeShellState extends ConsumerState<HomeShell>
       return true;
     }
 
+    if (segments.length == 4 &&
+        segments[0] == 'tenant-accounts' &&
+        segments[2] == 'entries') {
+      final tenantAccountId = int.tryParse(segments[1]);
+      final tenantLedgerEntryId = int.tryParse(segments[3]);
+      if (tenantAccountId == null || tenantLedgerEntryId == null) return false;
+      _openShellTab(
+        MobileShellTabId.money,
+        destination: MobileDestinationId.moneyLedger,
+        detailBuilder: (_) => PaymentDetailScreen(
+          tenantAccountId: tenantAccountId,
+          tenantLedgerEntryId: tenantLedgerEntryId,
+        ),
+      );
+      return true;
+    }
+
     if (segments.length != 2 || id == null) return false;
 
     switch (segments.first) {
@@ -359,13 +376,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
           destination: MobileDestinationId.workOrders,
           detailBuilder: (_) =>
               WorkOrderShellTargetLoaderScreen(workOrderId: id),
-        );
-        return true;
-      case 'payments':
-        _openShellTab(
-          MobileShellTabId.money,
-          destination: MobileDestinationId.moneyLedger,
-          detailBuilder: (_) => PaymentDetailScreen(paymentId: id),
         );
         return true;
       case 'expenses':
@@ -930,10 +940,11 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
   /// Tenant-account id whose autopay enroll/cancel is in flight.
   int? _busyAutopayAccountId;
 
-  AuthUser? get user => widget.user;
+  int? _selectedTenantAccountId;
+  int _chargeSkip = 0;
+  static const _chargePageSize = 20;
 
-  /// Rent items the tenant can pay online: anything not already settled.
-  static const _settledStatuses = {'Paid', 'Waived', 'Refunded', 'Cancelled'};
+  AuthUser? get user => widget.user;
 
   /// Opens [url] in an external browser. Returns true on success; on a malformed
   /// URL or when no browser/handler is available (or `launchUrl` throws), it
@@ -971,14 +982,14 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
 
   /// Starts hosted Checkout for one rent item and opens it in the browser.
   /// A 503 (Stripe off) shows a gentle, non-error message.
-  Future<void> _payNow(TenantPortalPayment payment) async {
+  Future<void> _payNow(PortalTenantCharge charge) async {
     if (_payingPaymentId != null) return;
     final messenger = ScaffoldMessenger.of(context);
-    setState(() => _payingPaymentId = payment.id);
+    setState(() => _payingPaymentId = charge.tenantLedgerEntryId);
     try {
       final url = await ref
           .read(tenantPortalRepositoryProvider)
-          .payCheckout(payment.tenantAccountId, payment.id);
+          .payCheckout(charge.tenantAccountId, charge.tenantLedgerEntryId);
       if (url.isEmpty) return;
       await _open(url);
     } on ApiException catch (e) {
@@ -1068,14 +1079,24 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
           ref.invalidate(tenantPortalSnapshotProvider);
           // Refresh autopay state too; the tenant may have just returned from
           // a hosted Checkout in the browser.
-          final tenantAccountId = ref
-              .read(tenantPortalSnapshotProvider)
-              .value
-              ?.payments
-              .firstOrNull
-              ?.tenantAccountId;
+          final snapshotValue = ref.read(tenantPortalSnapshotProvider).value;
+          final tenantAccountId =
+              _selectedTenantAccountId ??
+              (snapshotValue != null &&
+                      snapshotValue.accounts.totalCount == 1 &&
+                      snapshotValue.accounts.items.isNotEmpty
+                  ? snapshotValue.accounts.items.first.tenantAccountId
+                  : null);
           if (tenantAccountId != null) {
             ref.invalidate(tenantAutopayStatusProvider(tenantAccountId));
+            ref.invalidate(tenantPortalAccountProvider(tenantAccountId));
+            ref.invalidate(
+              tenantPortalChargesPageProvider((
+                tenantAccountId: tenantAccountId,
+                skip: _chargeSkip,
+                take: _chargePageSize,
+              )),
+            );
           }
         },
         child: snapshot.when(
@@ -1092,26 +1113,24 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
             ],
           ),
           data: (data) {
-            final openOrders = data.workOrders
-                .where(
-                  (w) => !{
-                    'Completed',
-                    'Cancelled',
-                    'Archived',
-                  }.contains(w.status),
-                )
-                .toList();
-            final unpaid =
-                data.payments
-                    .where((p) => !_settledStatuses.contains(p.status))
-                    .toList()
-                  ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
-            final nextPayment = unpaid.isEmpty ? null : unpaid.first;
-            final unreadNotifications = data.notifications
-                .where((n) => !n.isRead)
-                .length;
-            final primaryTenantAccountId =
-                data.payments.firstOrNull?.tenantAccountId;
+            final accountId =
+                _selectedTenantAccountId ??
+                (data.accounts.totalCount == 1 && data.accounts.items.isNotEmpty
+                    ? data.accounts.items.first.tenantAccountId
+                    : null);
+            final accountAsync = accountId == null
+                ? null
+                : ref.watch(tenantPortalAccountProvider(accountId));
+            final account = accountAsync?.value;
+            final chargesAsync = accountId == null
+                ? null
+                : ref.watch(
+                    tenantPortalChargesPageProvider((
+                      tenantAccountId: accountId,
+                      skip: _chargeSkip,
+                      take: _chargePageSize,
+                    )),
+                  );
 
             return ListView(
               padding: const EdgeInsets.all(20),
@@ -1123,20 +1142,48 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                if (data.accounts.totalCount > 1) ...[
+                  DropdownButtonFormField<int>(
+                    initialValue: _selectedTenantAccountId,
+                    decoration: const InputDecoration(
+                      labelText: 'Account',
+                      border: OutlineInputBorder(),
+                    ),
+                    hint: const Text('Choose an account'),
+                    items: [
+                      for (final tenantAccount in data.accounts.items)
+                        DropdownMenuItem<int>(
+                          value: tenantAccount.tenantAccountId,
+                          child: Text(
+                            '${tenantAccount.propertyName} · Unit ${tenantAccount.unitNumber}',
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() {
+                      _selectedTenantAccountId = value;
+                      _chargeSkip = 0;
+                    }),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 if (data.notifications.isNotEmpty)
                   _TenantCard(
                     icon: Icons.notifications_outlined,
                     title: 'Notifications',
-                    value: '$unreadNotifications unread',
+                    value: 'Recent update',
                     subtitle: data.notifications.first.title,
                   ),
                 _TenantCard(
                   icon: Icons.warning_amber_outlined,
                   title: 'Overdue',
-                  value: _money(data.balance.overdue),
-                  subtitle: '${data.balance.overdueCount} overdue item(s)',
+                  value: account == null
+                      ? '—'
+                      : _money(account.pastDueAmount, account.currency),
+                  subtitle: account == null
+                      ? 'Choose an account'
+                      : '${account.pastDueCount} overdue item(s)',
                 ),
-                if (data.leases.isNotEmpty)
+                if (data.accounts.items.isNotEmpty)
                   _TenantCard(
                     icon: Icons.receipt_long_outlined,
                     title: 'Account history',
@@ -1144,64 +1191,110 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                     subtitle: 'Every charge and payment, explained',
                     onTap: () => Navigator.of(context).push<void>(
                       MaterialPageRoute<void>(
-                        builder: (_) => const TenantAccountHistoryScreen(),
+                        builder: (_) => TenantAccountHistoryScreen(
+                          initialTenantAccountId: accountId,
+                        ),
                       ),
                     ),
                   ),
                 _TenantCard(
                   icon: Icons.payments_outlined,
-                  title: 'Next rent due',
-                  value: nextPayment == null
+                  title: 'Next due',
+                  value: account?.nextDueOn == null
                       ? 'None'
-                      : _dueInLabel(nextPayment.dueDate),
-                  subtitle: nextPayment == null
-                      ? 'No unpaid rent scheduled'
-                      : '${_money(nextPayment.amount)} due',
+                      : _shortDate(account!.nextDueOn!),
+                  subtitle: account?.nextDueOn == null
+                      ? (accountId == null
+                            ? 'Choose an account'
+                            : 'No upcoming charge')
+                      : '${_money(account!.nextDueAmount, account.currency)} due',
                 ),
 
-                // ── Pay rent ──────────────────────────────────────────────
-                if (unpaid.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Pay rent',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                // The API owns charge filtering, ordering and paging. The UI
+                // renders the returned page without rebuilding account state.
+                if (chargesAsync != null)
+                  chargesAsync.when(
+                    loading: () => const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                    error: (err, _) => Text("Couldn't load charges: $err"),
+                    data: (charges) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 8),
+                        Text(
+                          'Charges',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        for (final charge in charges.items)
+                          _PayItemCard(
+                            charge: charge,
+                            busy:
+                                _payingPaymentId == charge.tenantLedgerEntryId,
+                            enabled:
+                                _payingPaymentId == null ||
+                                _payingPaymentId == charge.tenantLedgerEntryId,
+                            onPay: () => _payNow(charge),
+                          ),
+                        if (charges.totalCount > _chargePageSize)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              OutlinedButton(
+                                onPressed: _chargeSkip == 0
+                                    ? null
+                                    : () => setState(
+                                        () => _chargeSkip =
+                                            _chargeSkip >= _chargePageSize
+                                            ? _chargeSkip - _chargePageSize
+                                            : 0,
+                                      ),
+                                child: const Text('Previous'),
+                              ),
+                              Text(
+                                '${_chargeSkip + 1}–${(_chargeSkip + _chargePageSize).clamp(0, charges.totalCount)} of ${charges.totalCount}',
+                              ),
+                              OutlinedButton(
+                                onPressed:
+                                    _chargeSkip + _chargePageSize >=
+                                        charges.totalCount
+                                    ? null
+                                    : () => setState(
+                                        () => _chargeSkip += _chargePageSize,
+                                      ),
+                                child: const Text('Next'),
+                              ),
+                            ],
+                          ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  for (final payment in unpaid)
-                    _PayItemCard(
-                      payment: payment,
-                      busy: _payingPaymentId == payment.id,
-                      // Disable other buttons while one Checkout is starting.
-                      enabled:
-                          _payingPaymentId == null ||
-                          _payingPaymentId == payment.id,
-                      onPay: () => _payNow(payment),
-                    ),
-                ],
 
                 // ── Autopay ───────────────────────────────────────────────
-                if (primaryTenantAccountId != null) ...[
+                if (accountId != null) ...[
                   const SizedBox(height: 8),
                   _AutopayCard(
                     statusAsync: ref.watch(
-                      tenantAutopayStatusProvider(primaryTenantAccountId),
+                      tenantAutopayStatusProvider(accountId),
                     ),
-                    busy: _busyAutopayAccountId == primaryTenantAccountId,
-                    onEnroll: () => _enrollAutopay(primaryTenantAccountId),
-                    onCancel: () => _cancelAutopay(primaryTenantAccountId),
+                    busy: _busyAutopayAccountId == accountId,
+                    onEnroll: () => _enrollAutopay(accountId),
+                    onCancel: () => _cancelAutopay(accountId),
                   ),
                 ],
 
                 const SizedBox(height: 8),
                 _TenantCard(
                   icon: Icons.build_outlined,
-                  title: 'Open maintenance',
-                  value: '${openOrders.length}',
-                  subtitle: openOrders.isEmpty
-                      ? 'No open requests'
-                      : openOrders.first.title,
+                  title: 'Maintenance',
+                  value: 'View requests',
+                  subtitle: data.workOrders.isEmpty
+                      ? 'No requests'
+                      : data.workOrders.first.title,
                 ),
               ],
             );
@@ -1212,17 +1305,16 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
   }
 }
 
-/// A single unpaid/scheduled/late rent item with a "Pay now" action that opens
-/// a hosted Stripe Checkout in the browser.
+/// One server-projected charge. Open charges expose hosted Checkout.
 class _PayItemCard extends StatelessWidget {
   const _PayItemCard({
-    required this.payment,
+    required this.charge,
     required this.busy,
     required this.enabled,
     required this.onPay,
   });
 
-  final TenantPortalPayment payment;
+  final PortalTenantCharge charge;
   final bool busy;
   final bool enabled;
   final VoidCallback onPay;
@@ -1231,10 +1323,12 @@ class _PayItemCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final isLate = payment.dueDate.isBefore(
-      DateTime.now().subtract(const Duration(days: 1)),
-    );
-    final dueLabel = isLate ? 'Past due' : 'Due ${_shortDate(payment.dueDate)}';
+    final isLate = charge.isPastDue;
+    final dueLabel = isLate
+        ? 'Past due'
+        : charge.dueOn == null
+        ? 'No due date'
+        : 'Due ${_shortDate(charge.dueOn!)}';
 
     return Card(
       child: Padding(
@@ -1251,13 +1345,13 @@ class _PayItemCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _money(payment.amount),
+                    _money(charge.openAmount, charge.currency),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   Text(
-                    '${payment.type.isEmpty ? 'Rent' : paymentTypeLabel(payment.type)} · $dueLabel',
+                    '${charge.description.isEmpty ? charge.entryType : charge.description} · $dueLabel',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: isLate ? cs.error : cs.onSurfaceVariant,
                     ),
@@ -1279,18 +1373,19 @@ class _PayItemCard extends StatelessWidget {
             // a `Flexible` flex child means Flex sizes it against the *remaining
             // bounded* width instead of infinity; `FlexFit.loose` lets it shrink
             // to its content so the "Pay now" pill keeps its natural size.
-            Flexible(
-              child: FilledButton(
-                onPressed: enabled && !busy ? onPay : null,
-                child: busy
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Pay now'),
+            if (charge.openAmount > 0)
+              Flexible(
+                child: FilledButton(
+                  onPressed: enabled && !busy ? onPay : null,
+                  child: busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Pay now'),
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -1373,7 +1468,9 @@ class _AutopayCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      status.active
+                      !status.onlinePaymentsAvailable
+                          ? "Online payments aren't available yet."
+                          : status.active
                           ? "You're set up. Rent is paid automatically each month."
                           : 'Set up autopay so rent is paid automatically each month.',
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -1407,8 +1504,14 @@ class _AutopayCard extends StatelessWidget {
                         child: const Text('Turn off'),
                       )
                     : FilledButton(
-                        onPressed: onEnroll,
-                        child: const Text('Set up'),
+                        onPressed: status.onlinePaymentsAvailable
+                            ? onEnroll
+                            : null,
+                        child: Text(
+                          status.onlinePaymentsAvailable
+                              ? 'Set up'
+                              : 'Unavailable',
+                        ),
                       ),
                 orElse: () => const SizedBox.shrink(),
               ),
@@ -1418,21 +1521,6 @@ class _AutopayCard extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Human-friendly "time until due" label for the next rent payment.
-///
-/// Past-due dates never render a negative number ("-70 days"); they read as
-/// "Past due by N days", matching how [_PayItemCard] surfaces late rent.
-String _dueInLabel(DateTime dueDate) {
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  final due = DateTime(dueDate.year, dueDate.month, dueDate.day);
-  final days = due.difference(today).inDays;
-  if (days > 0) return '$days day${days == 1 ? '' : 's'}';
-  if (days == 0) return 'Due today';
-  final overdueBy = -days;
-  return 'Past due by $overdueBy day${overdueBy == 1 ? '' : 's'}';
 }
 
 String _shortDate(DateTime date) {
@@ -1779,8 +1867,12 @@ class _TenantCard extends StatelessWidget {
   }
 }
 
-String _money(num value) =>
-    '\$${value.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}';
+String _money(num value, [String currency = 'USD']) {
+  final amount = value
+      .toStringAsFixed(2)
+      .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',');
+  return currency == 'USD' ? '\$$amount' : '$currency $amount';
+}
 
 class _HomeTab extends ConsumerWidget {
   const _HomeTab({
@@ -2801,17 +2893,10 @@ class _BulletRow extends StatelessWidget {
           detailBuilder: (_) => WorkOrderUnitAwareLoaderScreen(workOrderId: id),
         );
       case 'Payment':
-        if (id != null) {
-          return _BriefingTarget(
-            tab: MobileShellTabId.money,
-            destination: MobileDestinationId.moneyLedger,
-            detailBuilder: (_) => PaymentDetailScreen(paymentId: id),
-          );
-        }
         return _BriefingTarget(
           tab: MobileShellTabId.money,
-          destination: MobileDestinationId.moneyOverview,
-          detailBuilder: (_) => const OverdueScreen(),
+          destination: MobileDestinationId.payments,
+          detailBuilder: (_) => const PaymentsScreen(),
         );
       case 'LeaseManagement':
         if (id != null) {

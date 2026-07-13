@@ -27,7 +27,8 @@ class AppNotification {
   /// values fall back to neutral styling.
   final String severity;
 
-  /// Server-emitted deep-link path, e.g. `/payments/123`. May be absent.
+  /// Server-emitted deep-link path, for example a canonical tenant-ledger
+  /// entry route carrying both account and entry ids. May be absent.
   final String? actionUrl;
   final String? relatedEntityType;
   final int? relatedEntityId;

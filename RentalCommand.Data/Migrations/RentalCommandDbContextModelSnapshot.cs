@@ -8095,7 +8095,7 @@ namespace RentalCommand.Data.Migrations
 
                             t.HasCheckConstraint("CK_TenantLedgerEntry_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
 
-                            t.HasCheckConstraint("CK_TenantLedgerEntry_Direction", "\"Direction\" IN ('Debit','Credit') AND ((\"EntryType\" = 'OpeningBalance') OR (\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') AND \"Direction\" = 'Debit') OR (\"EntryType\" IN ('PaymentReceipt','Credit','Refund') AND \"Direction\" = 'Credit') OR (\"EntryType\" IN ('Adjustment','TransferIn','TransferOut','Reversal') AND \"Direction\" IN ('Debit','Credit')))");
+                            t.HasCheckConstraint("CK_TenantLedgerEntry_Direction", "\"Direction\" IN ('Debit','Credit') AND ((\"EntryType\" = 'OpeningBalance') OR (\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') AND \"Direction\" = 'Debit') OR (\"EntryType\" IN ('PaymentReceipt','Credit') AND \"Direction\" = 'Credit') OR (\"EntryType\" = 'Refund' AND \"Direction\" = 'Debit') OR (\"EntryType\" IN ('Adjustment','TransferIn','TransferOut','Reversal') AND \"Direction\" IN ('Debit','Credit')))");
 
                             t.HasCheckConstraint("CK_TenantLedgerEntry_DueDate", "(\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') AND \"DueOn\" IS NOT NULL) OR (\"EntryType\" IN ('PaymentReceipt','Credit','Refund','Reversal') AND \"DueOn\" IS NULL) OR (\"EntryType\" IN ('OpeningBalance','Adjustment','TransferIn','TransferOut'))");
 
@@ -8346,6 +8346,9 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<long?>("RefundsPaymentAttemptId")
+                        .HasColumnType("bigint");
+
                     b.Property<Guid>("PublicId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
@@ -8384,6 +8387,10 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique()
                         .HasFilter("\"ProviderObjectId\" IS NOT NULL");
 
+                    b.HasIndex("RefundsPaymentAttemptId")
+                        .IsUnique()
+                        .HasFilter("\"RefundsPaymentAttemptId\" IS NOT NULL");
+
                     b.HasIndex("TenantAccountId", "PortfolioId");
 
                     b.HasIndex("PortfolioId", "State", "NextAttemptAtUtc", "ClaimExpiresAtUtc", "Id");
@@ -8397,6 +8404,12 @@ namespace RentalCommand.Data.Migrations
                             t.HasCheckConstraint("CK_TenantPaymentAttempt_Claim", "(\"ClaimOwner\" IS NULL AND \"ClaimToken\" IS NULL AND \"ClaimExpiresAtUtc\" IS NULL) OR (\"ClaimOwner\" IS NOT NULL AND \"ClaimToken\" IS NOT NULL AND \"ClaimExpiresAtUtc\" IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_TenantPaymentAttempt_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
+
+                            t.HasCheckConstraint("CK_TenantPaymentAttempt_RefundPayout", "\"AttemptType\" <> 'Refund' OR (\"Provider\" = 'manual' AND NULLIF(btrim(\"ProviderObjectId\"), '') IS NOT NULL AND NULLIF(btrim(\"PaymentMethodSummary\"), '') IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_TenantPaymentAttempt_RefundProvenance", "(\"AttemptType\" = 'Refund') = (\"RefundsPaymentAttemptId\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_TenantPaymentAttempt_RefundTerminal", "\"AttemptType\" <> 'Refund' OR \"State\" = 'Succeeded'");
 
                             t.HasCheckConstraint("CK_TenantPaymentAttempt_Settlement", "(\"State\" = 'Succeeded' AND \"SettledAtUtc\" IS NOT NULL AND \"SubmittedAtUtc\" IS NOT NULL AND \"SettledAtUtc\" >= \"SubmittedAtUtc\") OR (\"State\" <> 'Succeeded' AND \"SettledAtUtc\" IS NULL)");
 
@@ -12202,9 +12215,17 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("RentalCommand.Core.Entities.TenantPaymentAttempt", "RefundsPaymentAttempt")
+                        .WithMany("RefundAttempts")
+                        .HasForeignKey("RefundsPaymentAttemptId", "TenantAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "TenantAccountId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("CreatedByUser");
 
                     b.Navigation("Portfolio");
+
+                    b.Navigation("RefundsPaymentAttempt");
 
                     b.Navigation("TenantAccount");
                 });
@@ -12907,6 +12928,8 @@ namespace RentalCommand.Data.Migrations
             modelBuilder.Entity("RentalCommand.Core.Entities.TenantPaymentAttempt", b =>
                 {
                     b.Navigation("LedgerEntry");
+
+                    b.Navigation("RefundAttempts");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Unit", b =>

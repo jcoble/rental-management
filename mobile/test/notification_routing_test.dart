@@ -23,6 +23,13 @@ void main() {
     );
   });
 
+  test('canonical tenant-ledger entry routes keep both exact ids', () {
+    expect(
+      resolveNotificationRoute('/tenant-accounts/42/entries/8'),
+      '/tenant-accounts/42/entries/8',
+    );
+  });
+
   test('server query action urls normalize to mobile detail routes', () {
     expect(
       resolveNotificationRoute('/messages?conversationId=42'),
@@ -32,7 +39,7 @@ void main() {
       resolveNotificationRoute('/work-orders?workOrderId=17'),
       '/work-orders/17',
     );
-    expect(resolveNotificationRoute('/payments?paymentId=8'), '/payments/8');
+    expect(resolveNotificationRoute('/payments?paymentId=8'), '/notifications');
   });
 
   test('unknown notification targets fall back to notifications inbox', () {

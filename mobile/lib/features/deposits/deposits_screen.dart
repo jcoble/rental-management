@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -34,14 +36,14 @@ String _fmtDate(DateTime value) {
   return '${months[value.month]} ${value.day}, ${value.year}';
 }
 
-String _location(SecurityDepositAccount account) {
-  final property = account.propertyName?.trim();
-  final unit = account.unitNumber?.trim();
-  if (property?.isNotEmpty == true && unit?.isNotEmpty == true) {
+String _location(TenantAccountDeposit account) {
+  final property = account.propertyName.trim();
+  final unit = account.unitNumber.trim();
+  if (property.isNotEmpty && unit.isNotEmpty) {
     return '$property · Unit $unit';
   }
-  if (property?.isNotEmpty == true) return property!;
-  if (unit?.isNotEmpty == true) return 'Unit $unit';
+  if (property.isNotEmpty) return property;
+  if (unit.isNotEmpty) return 'Unit $unit';
   return 'Property ${account.propertyId} · Unit ${account.unitId}';
 }
 
@@ -53,17 +55,43 @@ class DepositsScreen extends ConsumerStatefulWidget {
 }
 
 class _DepositsScreenState extends ConsumerState<DepositsScreen> {
+  final _searchController = TextEditingController();
+  Timer? _searchDebounce;
+  String? _status;
+
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(depositsProvider.notifier).load());
   }
 
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _search(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      ref.read(depositsProvider.notifier).load(search: value, status: _status);
+    });
+  }
+
+  void _filterStatus(String? status) {
+    setState(() => _status = status);
+    ref
+        .read(depositsProvider.notifier)
+        .load(search: _searchController.text, status: status);
+  }
+
   Future<void> _refresh() => ref.read(depositsProvider.notifier).refresh();
 
-  void _showFundSheet({SecurityDepositAccount? account}) {
+  void _showFundSheet({TenantAccountDeposit? account}) {
     final accounts =
-        ref.read(depositsProvider).value ?? const <SecurityDepositAccount>[];
+        ref.read(depositsProvider).value?.items ??
+        const <TenantAccountDeposit>[];
     if (accounts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -86,7 +114,7 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
     );
   }
 
-  void _showDeductionSheet(SecurityDepositAccount account) {
+  void _showDeductionSheet(TenantAccountDeposit account) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -95,7 +123,7 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
     );
   }
 
-  void _showRefundSheet(SecurityDepositAccount account) {
+  void _showRefundSheet(TenantAccountDeposit account) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -104,7 +132,20 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
     );
   }
 
-  void _showDetail(SecurityDepositAccount account) {
+  Future<void> _showDetail(TenantAccountDeposit summary) async {
+    final messenger = ScaffoldMessenger.of(context);
+    TenantAccountDeposit account;
+    try {
+      account = await ref
+          .read(depositsRepositoryProvider)
+          .getDeposit(summary.tenantAccountId);
+    } on ApiException catch (error) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      }
+      return;
+    }
+    if (!mounted) return;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -148,31 +189,122 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
-        child: state.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, _) => _ErrorBody(
-            message: error is ApiException ? error.message : error.toString(),
-            onRetry: _refresh,
-          ),
-          data: (accounts) => accounts.isEmpty
-              ? const CustomScrollView(
-                  physics: AlwaysScrollableScrollPhysics(),
-                  slivers: [SliverFillRemaining(child: _EmptyBody())],
-                )
-              : ListView.separated(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-                  itemCount: accounts.length,
-                  separatorBuilder: (_, _) => const MobileM3ListDivider(),
-                  itemBuilder: (_, index) => _DepositListItem(
-                    account: accounts[index],
-                    position: MobileM3ListItemPositionForIndex.forIndex(
-                      index,
-                      accounts.length,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: SearchBar(
+                        controller: _searchController,
+                        leading: const Icon(Icons.search),
+                        hintText: 'Search deposits',
+                        onChanged: _search,
+                      ),
                     ),
-                    onTap: () => _showDetail(accounts[index]),
+                    const SizedBox(width: 8),
+                    PopupMenuButton<String>(
+                      tooltip: 'Filter by status',
+                      icon: Icon(
+                        Icons.filter_list,
+                        color: _status == null
+                            ? null
+                            : Theme.of(context).colorScheme.primary,
+                      ),
+                      onSelected: (value) =>
+                          _filterStatus(value.isEmpty ? null : value),
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: '', child: Text('All statuses')),
+                        PopupMenuItem(
+                          value: 'NotFunded',
+                          child: Text('Not funded'),
+                        ),
+                        PopupMenuItem(value: 'Held', child: Text('Held')),
+                        PopupMenuItem(
+                          value: 'PartiallyReturned',
+                          child: Text('Partially returned'),
+                        ),
+                        PopupMenuItem(
+                          value: 'Returned',
+                          child: Text('Returned'),
+                        ),
+                        PopupMenuItem(
+                          value: 'Withheld',
+                          child: Text('Withheld'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            ...state.when(
+              loading: () => const [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ],
+              error: (error, _) => [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _ErrorBody(
+                    message: error is ApiException
+                        ? error.message
+                        : error.toString(),
+                    onRetry: _refresh,
                   ),
                 ),
+              ],
+              data: (page) {
+                final accounts = page.items;
+                if (accounts.isEmpty) {
+                  return const [
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptyBody(),
+                    ),
+                  ];
+                }
+                return [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    sliver: SliverList.separated(
+                      itemCount: accounts.length,
+                      separatorBuilder: (_, _) => const MobileM3ListDivider(),
+                      itemBuilder: (_, index) => _DepositListItem(
+                        account: accounts[index],
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          accounts.length,
+                        ),
+                        onTap: () => _showDetail(accounts[index]),
+                      ),
+                    ),
+                  ),
+                  if (page.hasMore)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
+                        child: OutlinedButton(
+                          onPressed: ref
+                              .read(depositsProvider.notifier)
+                              .loadMore,
+                          child: Text(
+                            'Load more (${page.items.length} of ${page.totalCount})',
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                ];
+              },
+            ),
+          ],
         ),
       ),
     );
@@ -186,7 +318,7 @@ class _DepositListItem extends StatelessWidget {
     required this.onTap,
   });
 
-  final SecurityDepositAccount account;
+  final TenantAccountDeposit account;
   final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
@@ -205,8 +337,8 @@ class _DepositListItem extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              account.tenantName?.trim().isNotEmpty == true
-                  ? account.tenantName!
+              account.primaryTenantName?.trim().isNotEmpty == true
+                  ? account.primaryTenantName!
                   : account.relationshipNumber,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -291,7 +423,7 @@ class _DepositDetailSheet extends ConsumerWidget {
     required this.onRefund,
   });
 
-  final SecurityDepositAccount account;
+  final TenantAccountDeposit account;
   final VoidCallback onFund;
   final VoidCallback onDeduct;
   final VoidCallback onRefund;
@@ -304,10 +436,11 @@ class _DepositDetailSheet extends ConsumerWidget {
     try {
       final bytes = await ref
           .read(depositsRepositoryProvider)
-          .moveOutStatementBytes(account.id);
+          .moveOutStatementBytes(account.tenantAccountId);
       await DocumentOpener.openBytes(
         bytes: bytes,
-        fileName: 'deposit-${account.id}-move-out-statement.pdf',
+        fileName:
+            'deposit-${account.securityDepositAccountId}-move-out-statement.pdf',
       );
       messenger.hideCurrentSnackBar();
     } on ApiException catch (error) {
@@ -323,8 +456,8 @@ class _DepositDetailSheet extends ConsumerWidget {
     final canDispose = account.heldBalance > 0;
     final canFund = const {'NotFunded', 'Held'}.contains(account.status);
     return _SheetFrame(
-      title: account.tenantName?.trim().isNotEmpty == true
-          ? account.tenantName!
+      title: account.primaryTenantName?.trim().isNotEmpty == true
+          ? account.primaryTenantName!
           : 'Security deposit',
       subtitle: _location(account),
       trailing: _StatusChip(status: account.status),
@@ -401,8 +534,8 @@ class _FundDepositSheet extends ConsumerStatefulWidget {
     required this.onSaved,
   });
 
-  final List<SecurityDepositAccount> accounts;
-  final SecurityDepositAccount? initialAccount;
+  final List<TenantAccountDeposit> accounts;
+  final TenantAccountDeposit? initialAccount;
   final Future<void> Function() onSaved;
 
   @override
@@ -424,7 +557,9 @@ class _FundDepositSheetState extends ConsumerState<_FundDepositSheet> {
   @override
   void initState() {
     super.initState();
-    _accountId = widget.initialAccount?.id ?? widget.accounts.first.id;
+    _accountId =
+        widget.initialAccount?.securityDepositAccountId ??
+        widget.accounts.first.securityDepositAccountId;
   }
 
   @override
@@ -436,8 +571,9 @@ class _FundDepositSheetState extends ConsumerState<_FundDepositSheet> {
     super.dispose();
   }
 
-  SecurityDepositAccount get _account =>
-      widget.accounts.firstWhere((account) => account.id == _accountId);
+  TenantAccountDeposit get _account => widget.accounts.firstWhere(
+    (account) => account.securityDepositAccountId == _accountId,
+  );
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
@@ -484,9 +620,9 @@ class _FundDepositSheetState extends ConsumerState<_FundDepositSheet> {
         items: widget.accounts
             .map(
               (account) => DropdownMenuItem(
-                value: account.id,
+                value: account.securityDepositAccountId,
                 child: Text(
-                  '${account.tenantName ?? account.relationshipNumber} · ${_location(account)}',
+                  '${account.primaryTenantName ?? account.relationshipNumber} · ${_location(account)}',
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -529,7 +665,7 @@ class _FundDepositSheetState extends ConsumerState<_FundDepositSheet> {
 class _DeductDepositSheet extends ConsumerStatefulWidget {
   const _DeductDepositSheet({required this.account, required this.onSaved});
 
-  final SecurityDepositAccount account;
+  final TenantAccountDeposit account;
   final Future<void> Function() onSaved;
 
   @override
@@ -587,7 +723,7 @@ class _DeductDepositSheetState extends ConsumerState<_DeductDepositSheet> {
   Widget build(BuildContext context) => _MutationSheet(
     title: 'Record deduction',
     subtitle:
-        '${widget.account.tenantName ?? widget.account.relationshipNumber} · '
+        '${widget.account.primaryTenantName ?? widget.account.relationshipNumber} · '
         '${_fmtCurrency(widget.account.heldBalance, widget.account.currency)} held',
     formKey: _formKey,
     saving: _saving,
@@ -622,7 +758,7 @@ class _DeductDepositSheetState extends ConsumerState<_DeductDepositSheet> {
 class _RefundDepositSheet extends ConsumerStatefulWidget {
   const _RefundDepositSheet({required this.account, required this.onSaved});
 
-  final SecurityDepositAccount account;
+  final TenantAccountDeposit account;
   final Future<void> Function() onSaved;
 
   @override
@@ -688,7 +824,7 @@ class _RefundDepositSheetState extends ConsumerState<_RefundDepositSheet> {
   Widget build(BuildContext context) => _MutationSheet(
     title: 'Record refund',
     subtitle:
-        '${widget.account.tenantName ?? widget.account.relationshipNumber} · '
+        '${widget.account.primaryTenantName ?? widget.account.relationshipNumber} · '
         '${_fmtCurrency(widget.account.heldBalance, widget.account.currency)} available',
     formKey: _formKey,
     saving: _saving,

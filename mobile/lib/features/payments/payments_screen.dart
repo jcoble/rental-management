@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/models.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../money/money_format.dart';
@@ -43,7 +42,7 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
   int _skip = 0;
   String? _search;
 
-  PaymentListQuery get _query => PaymentListQuery(
+  TenantLedgerEntryListQuery get _query => TenantLedgerEntryListQuery(
     skip: _skip,
     take: 20,
     search: _search,
@@ -66,7 +65,89 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pageAsync = ref.watch(paymentsPageProvider(_query));
+    final pageAsync = ref.watch(tenantLedgerEntriesPageProvider(_query));
+    final body = RefreshIndicator(
+      onRefresh: () async =>
+          ref.invalidate(tenantLedgerEntriesPageProvider(_query)),
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+        children: [
+          TextField(
+            controller: _searchController,
+            textInputAction: TextInputAction.search,
+            onSubmitted: _submitSearch,
+            decoration: InputDecoration(
+              labelText: 'Search receipts',
+              hintText: 'Tenant, account, property, or unit',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _search == null
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      onPressed: () {
+                        _searchController.clear();
+                        _submitSearch('');
+                      },
+                      icon: const Icon(Icons.close),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          pageAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+            error: (error, _) => _ErrorCard(
+              message: error is ApiException ? error.message : error.toString(),
+              onRetry: () =>
+                  ref.invalidate(tenantLedgerEntriesPageProvider(_query)),
+            ),
+            data: (page) => Column(
+              children: [
+                if (page.items.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 48),
+                    child: Text('No receipts found.'),
+                  )
+                else
+                  for (final receipt in page.items)
+                    _ReceiptCard(receipt: receipt),
+                if (page.hasPrevious || page.hasNext) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: page.hasPrevious
+                            ? () => setState(
+                                () => _skip = _skip >= page.take
+                                    ? _skip - page.take
+                                    : 0,
+                              )
+                            : null,
+                        icon: const Icon(Icons.chevron_left),
+                        label: const Text('Previous'),
+                      ),
+                      Text('${page.totalCount} receipts'),
+                      OutlinedButton.icon(
+                        onPressed: page.hasNext
+                            ? () => setState(() => _skip += page.take)
+                            : null,
+                        iconAlignment: IconAlignment.end,
+                        icon: const Icon(Icons.chevron_right),
+                        label: const Text('Next'),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('Receipts')),
       floatingActionButton: MobileQuickActionFab(
@@ -75,88 +156,7 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),
       ),
-      body: RefreshIndicator(
-        onRefresh: () async => ref.invalidate(paymentsPageProvider(_query)),
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-          children: [
-            TextField(
-              controller: _searchController,
-              textInputAction: TextInputAction.search,
-              onSubmitted: _submitSearch,
-              decoration: InputDecoration(
-                labelText: 'Search receipts',
-                hintText: 'Tenant, account, check, or reference',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _search == null
-                    ? null
-                    : IconButton(
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          _searchController.clear();
-                          _submitSearch('');
-                        },
-                        icon: const Icon(Icons.close),
-                      ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            pageAsync.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.all(32),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (error, _) => _ErrorCard(
-                message: error is ApiException
-                    ? error.message
-                    : error.toString(),
-                onRetry: () => ref.invalidate(paymentsPageProvider(_query)),
-              ),
-              data: (page) => Column(
-                children: [
-                  if (page.items.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 48),
-                      child: Text('No receipts found.'),
-                    )
-                  else
-                    for (final receipt in page.items)
-                      _ReceiptCard(receipt: receipt),
-                  if (page.hasPrevious || page.hasNext) ...[
-                    const SizedBox(height: 12),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: page.hasPrevious
-                              ? () => setState(
-                                  () => _skip = _skip >= page.take
-                                      ? _skip - page.take
-                                      : 0,
-                                )
-                              : null,
-                          icon: const Icon(Icons.chevron_left),
-                          label: const Text('Previous'),
-                        ),
-                        Text('${page.totalCount} receipts'),
-                        OutlinedButton.icon(
-                          onPressed: page.hasNext
-                              ? () => setState(() => _skip += page.take)
-                              : null,
-                          iconAlignment: IconAlignment.end,
-                          icon: const Icon(Icons.chevron_right),
-                          label: const Text('Next'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      body: body,
     );
   }
 }
@@ -164,34 +164,28 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
 class _ReceiptCard extends StatelessWidget {
   const _ReceiptCard({required this.receipt});
 
-  final PaymentReceipt receipt;
+  final StaffTenantLedgerEntry receipt;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final home = [
       receipt.propertyName,
-      if (receipt.unitNumber?.trim().isNotEmpty == true)
-        'Unit ${receipt.unitNumber}',
-    ].whereType<String>().where((value) => value.trim().isNotEmpty).join(' · ');
+      if (receipt.unitNumber.trim().isNotEmpty) 'Unit ${receipt.unitNumber}',
+    ].where((value) => value.trim().isNotEmpty).join(' · ');
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
         leading: const Icon(Icons.receipt_long_outlined),
         title: Text(
-          receipt.tenantName?.trim().isNotEmpty == true
-              ? receipt.tenantName!
+          receipt.primaryTenantName?.trim().isNotEmpty == true
+              ? receipt.primaryTenantName!
               : receipt.description,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(
-          [
-            if (home.isNotEmpty) home,
-            dateFmt(receipt.receivedOn),
-            if (receipt.paymentMethodSummary?.trim().isNotEmpty == true)
-              receipt.paymentMethodSummary!,
-          ].join(' · '),
+          [if (home.isNotEmpty) home, dateFmt(receipt.effectiveOn)].join(' · '),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -203,7 +197,10 @@ class _ReceiptCard extends StatelessWidget {
         ),
         onTap: () => Navigator.of(context).push<void>(
           MaterialPageRoute<void>(
-            builder: (_) => PaymentDetailScreen(paymentId: receipt.id),
+            builder: (_) => PaymentDetailScreen(
+              tenantAccountId: receipt.tenantAccountId,
+              tenantLedgerEntryId: receipt.tenantLedgerEntryId,
+            ),
           ),
         ),
       ),
@@ -284,10 +281,7 @@ class _RecordTenantReceiptSheetState
             ),
             operationKey: _operationKey,
           );
-      ref.invalidate(tenantAccountReceiptsProvider(widget.tenantAccountId));
-      ref.invalidate(leaseManagementReceiptsProvider(widget.leaseManagementId));
-      ref.invalidate(paymentsPageProvider);
-      ref.read(paymentsProvider.notifier).refresh();
+      ref.invalidate(tenantLedgerEntriesPageProvider);
       if (mounted) Navigator.of(context).pop(result);
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);

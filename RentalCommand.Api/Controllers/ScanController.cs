@@ -956,7 +956,7 @@ public class ScanController : ManagementControllerBase
             : "confirmed";
         return entityType switch
         {
-            "Payment" => Ok(new { receiptId = result.LedgerEntryId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Payment" => Ok(new { receiptId = result.LedgerEntryId, tenantAccountId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),

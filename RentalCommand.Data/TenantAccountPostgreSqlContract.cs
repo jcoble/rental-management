@@ -245,6 +245,7 @@ internal static class TenantAccountPostgreSqlContract
                 AND NEW."ProviderObjectId" IS DISTINCT FROM OLD."ProviderObjectId")
             OR NEW."IdempotencyKey" IS DISTINCT FROM OLD."IdempotencyKey"
             OR NEW."AttemptType" IS DISTINCT FROM OLD."AttemptType"
+            OR NEW."RefundsPaymentAttemptId" IS DISTINCT FROM OLD."RefundsPaymentAttemptId"
             OR NEW."Amount" IS DISTINCT FROM OLD."Amount"
             OR NEW."Currency" IS DISTINCT FROM OLD."Currency"
             OR NEW."PreparedAtUtc" IS DISTINCT FROM OLD."PreparedAtUtc"
@@ -441,6 +442,7 @@ internal static class TenantAccountPostgreSqlContract
         AS $function$
         DECLARE
           account_currency varchar(3);
+          original_attempt record;
         BEGIN
           SELECT account."Currency"
             INTO account_currency
@@ -451,6 +453,28 @@ internal static class TenantAccountPostgreSqlContract
           IF account_currency IS NULL OR NEW."Currency" IS DISTINCT FROM account_currency THEN
             RAISE EXCEPTION 'TenantPaymentAttempt % does not match TenantAccount scope/currency', NEW."Id"
               USING ERRCODE = '23514';
+          END IF;
+
+          IF NEW."AttemptType" = 'Refund' THEN
+            SELECT source."AttemptType", source."State", source."Amount", source."Currency",
+                   source."Provider", source."ProviderObjectId"
+              INTO original_attempt
+            FROM "TenantPaymentAttempts" AS source
+            WHERE source."Id" = NEW."RefundsPaymentAttemptId"
+              AND source."PortfolioId" = NEW."PortfolioId"
+              AND source."TenantAccountId" = NEW."TenantAccountId";
+
+            IF NOT FOUND
+               OR original_attempt."AttemptType" <> 'Charge'
+               OR original_attempt."State" <> 'Succeeded'
+               OR original_attempt."Amount" IS DISTINCT FROM NEW."Amount"
+               OR original_attempt."Currency" IS DISTINCT FROM NEW."Currency"
+               OR original_attempt."Provider" IS DISTINCT FROM NEW."Provider"
+               OR (original_attempt."Provider" <> 'manual'
+                   AND original_attempt."ProviderObjectId" IS NULL) THEN
+              RAISE EXCEPTION 'Refund TenantPaymentAttempt % lacks exact settled Charge provenance', NEW."Id"
+                USING ERRCODE = '23514';
+            END IF;
           END IF;
 
           RETURN NULL;
@@ -610,9 +634,12 @@ internal static class TenantAccountPostgreSqlContract
                      AND entry."TenantAccountId" = attempt."TenantAccountId"
                      AND entry."Amount" = attempt."Amount"
                      AND entry."Currency" = attempt."Currency"
-                     AND entry."Direction" = 'Credit'
-                     AND ((attempt."AttemptType" = 'Charge' AND entry."EntryType" = 'PaymentReceipt')
-                       OR (attempt."AttemptType" = 'Refund' AND entry."EntryType" = 'Refund')))
+                     AND ((attempt."AttemptType" = 'Charge'
+                           AND entry."EntryType" = 'PaymentReceipt'
+                           AND entry."Direction" = 'Credit')
+                       OR (attempt."AttemptType" = 'Refund'
+                           AND entry."EntryType" = 'Refund'
+                           AND entry."Direction" = 'Debit')))
             INTO linked_entry_count, matching_entry_count
           FROM "TenantLedgerEntries" AS entry
           WHERE entry."ProviderPaymentAttemptId" = attempt."Id";

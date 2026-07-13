@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { Receipt, CircleCheck, FileText } from '@lucide/svelte';
-	import { payments } from '$lib/api/endpoints/payments';
+	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
 	import { formatDateOnly } from '$lib/utils/date';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -9,19 +9,21 @@
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
 	let {
-		paymentId,
+		tenantAccountId,
+		tenantLedgerEntryId,
 		expectedUnitId,
 		onUnitMismatch,
 	}: {
-		paymentId: number;
+		tenantAccountId: number;
+		tenantLedgerEntryId: number;
 		expectedUnitId?: number;
 		onUnitMismatch?: () => void;
 	} = $props();
 
 	const paymentQuery = createQuery(() => ({
-		queryKey: ['payment-receipt', paymentId],
-		queryFn: () => payments.get(paymentId),
-		enabled: paymentId > 0
+		queryKey: ['tenant-ledger-entry', tenantAccountId, tenantLedgerEntryId],
+		queryFn: () => tenantAccounts.entry(tenantAccountId, tenantLedgerEntryId),
+		enabled: tenantAccountId > 0 && tenantLedgerEntryId > 0
 	}));
 	const receipt = $derived(paymentQuery.data);
 
@@ -58,20 +60,20 @@
 			<div>
 				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Received</p>
 				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{money(receipt.amount, receipt.currency)}</p>
-				<p class="mt-2 text-sm text-muted-foreground">{formatDateOnly(receipt.receivedOn)} · {receipt.tenantName || receipt.relationshipNumber}</p>
+				<p class="mt-2 text-sm text-muted-foreground">{formatDateOnly(receipt.effectiveOn)} · {receipt.tenantName || receipt.relationshipNumber}</p>
 			</div>
-			<p class="text-sm text-muted-foreground">Receipt #{receipt.id}</p>
+			<p class="text-sm text-muted-foreground">Ledger entry #{receipt.tenantLedgerEntryId}</p>
 		</HeroCard>
 
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Receipt" icon={Receipt} accent="success" testid="payment-card-receipt">
 				<dl class="grid gap-4 sm:grid-cols-2">
-					<div><dt class="text-xs text-muted-foreground">Date received</dt><dd class="font-medium">{formatDateOnly(receipt.receivedOn)}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Payment method</dt><dd class="font-medium">{receipt.paymentMethodSummary || 'Not specified'}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Reference</dt><dd class="font-medium">{receipt.providerReference || '—'}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Payer</dt><dd class="font-medium">{receipt.payerName || receipt.tenantName || '—'}</dd></div>
-					{#if receipt.checkNumber}<div><dt class="text-xs text-muted-foreground">Check number</dt><dd class="font-medium">{receipt.checkNumber}</dd></div>{/if}
-					{#if receipt.bankName}<div><dt class="text-xs text-muted-foreground">Bank</dt><dd class="font-medium">{receipt.bankName}</dd></div>{/if}
+					<div><dt class="text-xs text-muted-foreground">Date received</dt><dd class="font-medium">{formatDateOnly(receipt.effectiveOn)}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Payment method</dt><dd class="font-medium">{receipt.providerAttempt?.paymentMethodSummary || 'Not specified'}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Reference</dt><dd class="font-medium">{receipt.providerAttempt?.providerReference || '—'}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Payer</dt><dd class="font-medium">{receipt.providerAttempt?.payerName || receipt.tenantName || '—'}</dd></div>
+					{#if receipt.providerAttempt?.checkNumber}<div><dt class="text-xs text-muted-foreground">Check number</dt><dd class="font-medium">{receipt.providerAttempt.checkNumber}</dd></div>{/if}
+					{#if receipt.providerAttempt?.bankName}<div><dt class="text-xs text-muted-foreground">Bank</dt><dd class="font-medium">{receipt.providerAttempt.bankName}</dd></div>{/if}
 					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Description</dt><dd class="font-medium">{receipt.description}</dd></div>
 				</dl>
 			</DetailCard>
@@ -96,7 +98,7 @@
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="payment-history-section">
 			<h2 class="mb-1 text-base font-semibold">History</h2>
 			<p class="mb-3 text-sm text-muted-foreground">The append-only posting and its audit trail.</p>
-			<RecordHistory entityType="TenantLedgerEntry" entityId={paymentId} />
+			<RecordHistory entityType="TenantLedgerEntry" entityId={tenantLedgerEntryId} />
 		</div>
 	{/if}
 </div>

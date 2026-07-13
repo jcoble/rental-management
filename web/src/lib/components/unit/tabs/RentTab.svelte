@@ -2,10 +2,9 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import type { UnitDashboard, PaymentReceipt } from '$lib/types';
+	import type { UnitDashboard } from '$lib/types';
+	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
 	import { payments } from '$lib/api/endpoints/payments';
-	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
@@ -25,9 +24,7 @@
 	} = $props();
 
 	const queryClient = useQueryClient();
-	const portfolioId = $derived(getCurrentPortfolioId());
 	const tenantAccountId = $derived(dashboard.currentLease?.tenantAccountId ?? null);
-	const leaseManagementId = $derived(dashboard.currentLease?.leaseManagementId ?? null);
 	const selectedReceipt = $derived(Number(page.url.searchParams.get('payment')) || null);
 	const PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
@@ -48,42 +45,27 @@
 	}
 
 	let receiptPage = $state(1);
-	let receiptItems = $state<PaymentReceipt[]>([]);
 	const receiptsQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, { tenantAccountId, leaseManagementId }, receiptPage, PAGE_SIZE],
-		enabled: !!tenantAccountId && !!leaseManagementId && portfolioId > 0,
-		queryFn: () => payments.listPage(portfolioId, {
-			tenantAccountId: tenantAccountId ?? undefined,
-			leaseManagementId: leaseManagementId ?? undefined,
+		queryKey: ['tenant-account-entries', tenantAccountId, 'receipts', receiptPage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.accountEntriesPage(tenantAccountId as number, {
+			entryType: 'PaymentReceipt',
 			skip: (receiptPage - 1) * PAGE_SIZE,
 			take: PAGE_SIZE,
-			sort: '-receivedOn'
+			sort: '-effectiveOn'
 		})
 	}));
 
 	$effect(() => {
 		void tenantAccountId;
 		receiptPage = 1;
-		receiptItems = [];
-	});
-	$effect(() => {
-		const result = receiptsQuery.data;
-		if (!result) return;
-		if (result.skip === 0) receiptItems = result.items;
-		else {
-			const existing = untrack(() => receiptItems);
-			const ids = new Set(existing.map((item) => item.id));
-			receiptItems = [...existing, ...result.items.filter((item) => !ids.has(item.id))];
-		}
 	});
 
-	const totalReceipts = $derived(receiptsQuery.data?.totalCount ?? receiptItems.length);
-	const hasMore = $derived(receiptItems.length < totalReceipts);
+	const receiptItems = $derived(receiptsQuery.data?.items ?? []);
 
 	function invalidateMoney() {
-		receiptItems = [];
 		receiptPage = 1;
-		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['tenant-account-entries', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['accounting'] });
@@ -161,9 +143,9 @@
 </script>
 
 <div class="space-y-4" data-testid="unit-rent-tab">
-{#if selectedReceipt}
+{#if selectedReceipt && tenantAccountId}
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list"><ArrowLeft class="h-4 w-4" /> Back to receipts</Button>
-	<PaymentDetail paymentId={selectedReceipt} expectedUnitId={dashboard.unit.id} onUnitMismatch={clearSelection} />
+	<PaymentDetail tenantAccountId={tenantAccountId} tenantLedgerEntryId={selectedReceipt} expectedUnitId={dashboard.unit.id} onUnitMismatch={clearSelection} />
 {:else}
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
 		<div><p class="text-sm text-muted-foreground">Outstanding balance</p><p class="text-2xl font-bold">{money(dashboard.header.outstandingRentBalance)}</p></div>
@@ -210,11 +192,11 @@
 		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No receipts yet. Record one manually or scan a payment.</p>
 	{:else}
 		<ul class="space-y-2" data-testid="rent-payments">
-			{#each receiptItems as receipt (receipt.id)}
-				<li class="rounded-xl border bg-card"><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openReceipt(receipt.id)}><span><span class="font-medium">{formatDateOnly(receipt.receivedOn)}</span><span class="ml-2 text-muted-foreground">{receipt.paymentMethodSummary || receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
+			{#each receiptItems as receipt (receipt.tenantLedgerEntryId)}
+				<li class="rounded-xl border bg-card"><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
 			{/each}
 		</ul>
-		{#if hasMore}<div class="flex justify-center"><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptsQuery.isFetching}>{receiptsQuery.isFetching ? 'Loading…' : 'Load more'}</Button></div>{/if}
+		{#if receiptsQuery.data && receiptsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{receiptsQuery.data.totalCount} receipts</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
 	{/if}
 {/if}
 </div>

@@ -22,19 +22,20 @@
 	import { FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
-	const depositId = $derived(parseInt(page.params.id ?? '0', 10));
+	const tenantAccountId = $derived(parseInt(page.params.id ?? '0', 10));
 	const today = () => new Date().toISOString().slice(0, 10);
 
 	const depositQuery = createQuery(() => ({
-		queryKey: ['deposit', depositId],
-		queryFn: () => securityDeposits.get(depositId),
-		enabled: depositId > 0,
+		queryKey: ['deposit', tenantAccountId],
+		queryFn: () => securityDeposits.get(tenantAccountId),
+		enabled: tenantAccountId > 0,
 	}));
 
 	const deposit = $derived(depositQuery.data);
+	const securityDepositAccountId = $derived(deposit?.securityDepositAccountId ?? 0);
 
 	function invalidateDeposit() {
-		queryClient.invalidateQueries({ queryKey: ['deposit', depositId] });
+		queryClient.invalidateQueries({ queryKey: ['deposit', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['deposits'] });
 	}
 
@@ -97,7 +98,7 @@
 		if (Object.keys(errors).length > 0 || amount == null) return;
 
 		const body: FundSecurityDepositRequest = {
-			securityDepositAccountId: deposit.id,
+			securityDepositAccountId: deposit.securityDepositAccountId,
 			amount,
 			effectiveOn: fundEffectiveOn,
 			description: fundDescription.trim(),
@@ -157,7 +158,7 @@
 		if (Object.keys(errors).length > 0 || result.errors) return;
 
 		const body: DeductSecurityDepositRequest = {
-			securityDepositAccountId: deposit.id,
+			securityDepositAccountId: deposit.securityDepositAccountId,
 			amount: result.data.amount,
 			effectiveOn: deductionEffectiveOn,
 			reason: result.data.reason,
@@ -212,7 +213,7 @@
 		if (Object.keys(errors).length > 0) return;
 
 		const body: RefundSecurityDepositRequest = {
-			securityDepositAccountId: deposit.id,
+			securityDepositAccountId: deposit.securityDepositAccountId,
 			effectiveOn: refundEffectiveOn,
 			description: refundDescription.trim(),
 		};
@@ -239,7 +240,7 @@
 	async function handleStatementDownload() {
 		downloadingStatement = true;
 		try {
-			await downloadMoveOutStatement(depositId);
+			await downloadMoveOutStatement(tenantAccountId);
 		} catch {
 			showError('Could not download the move-out statement. Please try again.');
 		} finally {
@@ -249,9 +250,9 @@
 
 	const ENTITY_TYPE = 'SecurityDepositAccount';
 	const photosQuery = createQuery(() => ({
-		queryKey: ['deposit-documents', depositId],
-		queryFn: () => documents.list(ENTITY_TYPE, depositId),
-		enabled: depositId > 0,
+		queryKey: ['deposit-documents', securityDepositAccountId],
+		queryFn: () => documents.list(ENTITY_TYPE, securityDepositAccountId),
+		enabled: securityDepositAccountId > 0,
 	}));
 	const photos = $derived(photosQuery.data ?? []);
 	let thumbUrls = $state<Record<number, string>>({});
@@ -274,12 +275,12 @@
 	async function handlePhotoChange(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
-		if (!file) return;
+		if (!file || securityDepositAccountId <= 0) return;
 		uploadingPhoto = true;
 		try {
-			await documents.upload(ENTITY_TYPE, depositId, file, undefined, crypto.randomUUID());
+			await documents.upload(ENTITY_TYPE, securityDepositAccountId, file, undefined, crypto.randomUUID());
 			showSuccess(`"${file.name}" attached.`);
-			queryClient.invalidateQueries({ queryKey: ['deposit-documents', depositId] });
+			queryClient.invalidateQueries({ queryKey: ['deposit-documents', securityDepositAccountId] });
 		} catch (error) {
 			showError(apiErrorMessage(error, 'Upload failed.'));
 		} finally {
@@ -310,7 +311,7 @@
 					<h1 class="text-2xl font-bold" data-testid="deposit-detail-title">{deposit.propertyName ?? `Property #${deposit.propertyId}`}{deposit.unitNumber ? ` · Unit ${deposit.unitNumber}` : ''}</h1>
 					<StatusBadge status={deposit.status} map={depositStatusMap} />
 				</div>
-				<p class="mt-1 text-sm text-muted-foreground">{deposit.tenantName ?? 'Tenant account'} · {deposit.relationshipNumber}</p>
+				<p class="mt-1 text-sm text-muted-foreground">{deposit.primaryTenantName ?? 'Tenant account'} · {deposit.relationshipNumber}</p>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
 				<Button size="sm" onclick={openFund} disabled={deposit.status === 'Returned' || deposit.status === 'Withheld' || deposit.status === 'PartiallyReturned'}>Record funds</Button>

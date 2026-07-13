@@ -1,20 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/models/models.dart';
-import '../leases/lease_ledger_view.dart';
 import 'tenant_portal_repository.dart';
 
-/// Tenant-facing "Account history" — the transparent ledger for the tenant's
-/// lease, with a plain-English "why" on every charge and payment.
-///
-/// Resolves the tenant's lease(s) from the portal snapshot. With a single
-/// lease it shows the ledger directly; with multiple it shows a chooser first.
-class TenantAccountHistoryScreen extends ConsumerWidget {
-  const TenantAccountHistoryScreen({super.key});
+/// Tenant-facing history from the canonical, tenant-scoped account ledger.
+/// Filtering, ordering and paging stay on the server.
+class TenantAccountHistoryScreen extends ConsumerStatefulWidget {
+  const TenantAccountHistoryScreen({super.key, this.initialTenantAccountId});
+
+  final int? initialTenantAccountId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TenantAccountHistoryScreen> createState() =>
+      _TenantAccountHistoryScreenState();
+}
+
+class _TenantAccountHistoryScreenState
+    extends ConsumerState<TenantAccountHistoryScreen> {
+  static const _pageSize = 20;
+  int? _selectedAccountId;
+  int _skip = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedAccountId = widget.initialTenantAccountId;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final snapshot = ref.watch(tenantPortalSnapshotProvider);
 
@@ -39,78 +53,146 @@ class TenantAccountHistoryScreen extends ConsumerWidget {
           ),
         ),
         data: (data) {
-          final leases = data.leases;
-          if (leases.isEmpty) {
-            return RefreshIndicator(
-              onRefresh: () async =>
-                  ref.invalidate(tenantPortalSnapshotProvider),
-              child: ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  const SizedBox(height: 40),
-                  Icon(
-                    Icons.receipt_long_outlined,
-                    size: 40,
-                    color: theme.colorScheme.onSurfaceVariant,
+          if (data.accounts.totalCount == 0) {
+            return const Center(child: Text('No tenant account is available.'));
+          }
+
+          final accountId =
+              _selectedAccountId ??
+              (data.accounts.totalCount == 1 && data.accounts.items.isNotEmpty
+                  ? data.accounts.items.first.tenantAccountId
+                  : null);
+          final entries = accountId == null
+              ? null
+              : ref.watch(
+                  tenantPortalEntriesPageProvider((
+                    tenantAccountId: accountId,
+                    skip: _skip,
+                    take: _pageSize,
+                  )),
+                );
+
+          return RefreshIndicator(
+            onRefresh: () async {
+              ref.invalidate(tenantPortalSnapshotProvider);
+              if (accountId != null) {
+                ref.invalidate(
+                  tenantPortalEntriesPageProvider((
+                    tenantAccountId: accountId,
+                    skip: _skip,
+                    take: _pageSize,
+                  )),
+                );
+              }
+            },
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                if (data.accounts.totalCount > 1) ...[
+                  DropdownButtonFormField<int>(
+                    initialValue: _selectedAccountId,
+                    decoration: const InputDecoration(
+                      labelText: 'Account',
+                      border: OutlineInputBorder(),
+                    ),
+                    hint: const Text('Choose an account'),
+                    items: [
+                      for (final account in data.accounts.items)
+                        DropdownMenuItem<int>(
+                          value: account.tenantAccountId,
+                          child: Text(
+                            '${account.propertyName} · Unit ${account.unitNumber}',
+                          ),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() {
+                      _selectedAccountId = value;
+                      _skip = 0;
+                    }),
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'No lease on file yet.',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.titleMedium,
-                  ),
+                  const SizedBox(height: 16),
                 ],
-              ),
-            );
-          }
-
-          if (leases.length == 1) {
-            return LeaseLedgerView(
-              leaseManagementId: leases.first.leaseManagementId,
-            );
-          }
-
-          return _LeaseChooser(leases: leases);
+                if (accountId == null)
+                  const Text('Choose an account to view its history.')
+                else
+                  entries!.when(
+                    loading: () => const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: CircularProgressIndicator(),
+                      ),
+                    ),
+                    error: (err, _) => Text("Couldn't load entries: $err"),
+                    data: (page) => Column(
+                      children: [
+                        for (final entry in page.items)
+                          Card(
+                            child: ListTile(
+                              leading: Icon(
+                                entry.direction == 'Debit'
+                                    ? Icons.arrow_upward
+                                    : Icons.arrow_downward,
+                              ),
+                              title: Text(
+                                entry.description.isEmpty
+                                    ? entry.entryType
+                                    : entry.description,
+                              ),
+                              subtitle: Text(
+                                '${_shortDate(entry.effectiveOn)} · ${entry.direction}',
+                              ),
+                              trailing: Text(
+                                _money(entry.amount, entry.currency),
+                                style: theme.textTheme.titleSmall,
+                              ),
+                            ),
+                          ),
+                        if (page.items.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text('No account entries found.'),
+                          ),
+                        if (page.totalCount > _pageSize)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              OutlinedButton(
+                                onPressed: _skip == 0
+                                    ? null
+                                    : () => setState(
+                                        () => _skip = _skip >= _pageSize
+                                            ? _skip - _pageSize
+                                            : 0,
+                                      ),
+                                child: const Text('Previous'),
+                              ),
+                              Text(
+                                '${_skip + 1}–${(_skip + _pageSize).clamp(0, page.totalCount)} of ${page.totalCount}',
+                              ),
+                              OutlinedButton(
+                                onPressed: _skip + _pageSize >= page.totalCount
+                                    ? null
+                                    : () => setState(() => _skip += _pageSize),
+                                child: const Text('Next'),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          );
         },
       ),
     );
   }
 }
 
-class _LeaseChooser extends StatelessWidget {
-  const _LeaseChooser({required this.leases});
+String _money(double value, String currency) =>
+    '$currency ${value.toStringAsFixed(2)}';
 
-  final List<PortalLeaseRelationship> leases;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        for (final lease in leases)
-          Card(
-            child: ListTile(
-              titleAlignment: ListTileTitleAlignment.center,
-              leading: const Icon(Icons.description_outlined),
-              title: Text(lease.propertyName),
-              subtitle: Text(
-                'Unit ${lease.unitNumber}'
-                '${lease.agreement == null ? '' : ' · #${lease.agreement!.agreementNumber}'}',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push<void>(
-                MaterialPageRoute<void>(
-                  builder: (_) => Scaffold(
-                    appBar: AppBar(title: Text(lease.propertyName)),
-                    body: LeaseLedgerView(
-                      leaseManagementId: lease.leaseManagementId,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
+String _shortDate(DateTime date) {
+  if (date.year <= 1) return '';
+  return '${date.month}/${date.day}/${date.year}';
 }

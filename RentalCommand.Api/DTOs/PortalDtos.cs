@@ -1,6 +1,7 @@
 namespace RentalCommand.Api.DTOs;
 
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Enums;
 
 /// <summary>
@@ -46,46 +47,162 @@ public class PortalLeaseAgreementResponse
     public int? ExecutedStoredFileId { get; set; }
 }
 
-/// <summary>
-/// Tenant-facing balance summary derived from the signed-in tenant's canonical account and ledger.
-/// Outstanding is the open receivable; overdue is the subset whose due date has passed.
-/// </summary>
-public class PortalBalanceResponse
+public sealed class PortalTenantAccountListQuery : ListQuery
 {
-    public int TenantId { get; set; }
+    [FromQuery(Name = "lifecycle")]
+    public string? Lifecycle { get; set; }
 
-    /// <summary>Net immutable payment receipts already collected.</summary>
-    public decimal Collected { get; set; }
-
-    /// <summary>Sum of open receivables across the tenant's account relationships.</summary>
-    public decimal Outstanding { get; set; }
-
-    /// <summary>Sum of open charges that are past their due date.</summary>
-    public decimal Overdue { get; set; }
-
-    /// <summary>Count of open charges contributing to <see cref="Overdue"/>.</summary>
-    public int OverdueCount { get; set; }
-
-    /// <summary>Stable selector for frontend tests.</summary>
-    public string TestId => $"portal-balance-{TenantId}";
+    [FromQuery(Name = "closed")]
+    public bool? Closed { get; set; }
 }
 
-/// <summary>Tenant-facing projection of one immutable charge and its derived open balance.</summary>
-public class PortalPaymentResponse
+public sealed class PortalTenantLedgerEntryListQuery : ListQuery
 {
-    /// <summary>The canonical debit <c>TenantLedgerEntry.Id</c>; never a legacy Payment id.</summary>
-    public long Id { get; set; }
-    public int TenantAccountId { get; set; }
-    public int LeaseManagementId { get; set; }
-    public string PaymentType { get; set; } = string.Empty;
-    public string Status { get; set; } = string.Empty;
-    public decimal Amount { get; set; }
-    public DateTime DueDate { get; set; }
-    public DateTime? PaidDate { get; set; }
-    public string? Method { get; set; }
+    [FromQuery(Name = "entryType")]
+    public TenantLedgerEntryType? EntryType { get; set; }
 
-    /// <summary>Stable selector for frontend tests, e.g. <c>portal-payment-1</c>.</summary>
-    public string TestId => $"portal-payment-{Id}";
+    [FromQuery(Name = "direction")]
+    public TenantLedgerDirection? Direction { get; set; }
+}
+
+public sealed class PortalTenantChargeListQuery : ListQuery
+{
+    [FromQuery(Name = "entryType")]
+    public TenantLedgerEntryType? EntryType { get; set; }
+
+    [FromQuery(Name = "isPastDue")]
+    public bool? IsPastDue { get; set; }
+}
+
+public sealed class PortalTenantAccountPageResponse
+{
+    public IReadOnlyList<PortalTenantAccountResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+/// <summary>One canonical account the current portal access context may read.</summary>
+public sealed class PortalTenantAccountResponse
+{
+    public int TenantAccountId { get; init; }
+    public Guid TenantAccountPublicId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public Guid LeaseManagementPublicId { get; init; }
+    public int PropertyId { get; init; }
+    public string PropertyName { get; init; } = string.Empty;
+    public int UnitId { get; init; }
+    public string UnitNumber { get; init; } = string.Empty;
+    public string AccountNumber { get; init; } = string.Empty;
+    public string RelationshipNumber { get; init; } = string.Empty;
+    public string Lifecycle { get; init; } = string.Empty;
+    public string Currency { get; init; } = string.Empty;
+    public DateTime OpenedAtUtc { get; init; }
+    public DateTime? ClosedAtUtc { get; init; }
+    public DateTime EffectiveNowUtc { get; init; }
+    public DateOnly BusinessDate { get; init; }
+    public decimal TotalDebits { get; init; }
+    public decimal TotalCredits { get; init; }
+    public decimal ReceivableBalance { get; init; }
+    public decimal UnappliedCredit { get; init; }
+    public decimal PastDueAmount { get; init; }
+    public int PastDueCount { get; init; }
+    public DateOnly? NextDueOn { get; init; }
+    public decimal NextDueAmount { get; init; }
+    public string Condition { get; init; } = string.Empty;
+    public DateOnly? LastReceiptOn { get; init; }
+    public decimal? LastReceiptAmount { get; init; }
+    public PortalLeaseAgreementResponse? CurrentAgreement { get; init; }
+    public PortalTenantAccountDepositResponse? Deposit { get; init; }
+}
+
+public sealed class PortalTenantLedgerEntryPageResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public IReadOnlyList<PortalTenantLedgerEntryResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class PortalTenantLedgerEntryResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public long TenantLedgerEntryId { get; init; }
+    public Guid PublicId { get; init; }
+    public TenantLedgerEntryType EntryType { get; init; }
+    public TenantLedgerDirection Direction { get; init; }
+    public decimal Amount { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public DateOnly EffectiveOn { get; init; }
+    public DateOnly? DueOn { get; init; }
+    public DateTime PostedAtUtc { get; init; }
+    public string Description { get; init; } = string.Empty;
+    public string BusinessKey { get; init; } = string.Empty;
+    public Guid? TransferPublicId { get; init; }
+    public int? LeaseAgreementId { get; init; }
+    public int? LeaseAddendumId { get; init; }
+    public long? ReversesEntryId { get; init; }
+    public long? ProviderPaymentAttemptId { get; init; }
+    public int? SourceStoredFileId { get; init; }
+}
+
+public sealed class PortalTenantChargePageResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public IReadOnlyList<PortalTenantChargeResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class PortalTenantChargeResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public long TenantLedgerEntryId { get; init; }
+    public Guid PublicId { get; init; }
+    public TenantLedgerEntryType EntryType { get; init; }
+    public TenantLedgerDirection Direction { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public DateOnly EffectiveOn { get; init; }
+    public DateOnly? DueOn { get; init; }
+    public DateTime PostedAtUtc { get; init; }
+    public string Description { get; init; } = string.Empty;
+    public decimal OriginalAmount { get; init; }
+    public decimal ReversedAmount { get; init; }
+    public decimal NetAllocations { get; init; }
+    public decimal OpenAmount { get; init; }
+    public bool IsPastDue { get; init; }
+    public Guid? TransferPublicId { get; init; }
+    public int? LeaseAgreementId { get; init; }
+    public int? LeaseAddendumId { get; init; }
+    public long? ReversesEntryId { get; init; }
+    public long? ProviderPaymentAttemptId { get; init; }
+    public int? SourceStoredFileId { get; init; }
+}
+
+public sealed class PortalTenantAccountDepositResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public int SecurityDepositAccountId { get; init; }
+    public int OriginatingAgreementId { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public DateTime CreatedAtUtc { get; init; }
+    public DateTime EffectiveNowUtc { get; init; }
+    public DateOnly BusinessDate { get; init; }
+    public decimal TotalReceived { get; init; }
+    public decimal TotalDeductions { get; init; }
+    public decimal TotalRefunded { get; init; }
+    public decimal TotalTransferredIn { get; init; }
+    public decimal TotalTransferredOut { get; init; }
+    public decimal NetAdjustments { get; init; }
+    public decimal HeldBalance { get; init; }
+    public string Status { get; init; } = string.Empty;
 }
 
 /// <summary>

@@ -19,6 +19,7 @@ import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../payments/payment_detail_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
@@ -310,6 +311,18 @@ class _UnitWorkOrderQuickActionFabState
     }
   }
 
+  Future<void> _openUnitScan() {
+    final lease = widget.dashboard.currentLease;
+    return openMobileScan(
+      context,
+      propertyId: widget.dashboard.unit.propertyId,
+      unitId: widget.dashboard.unit.id,
+      leaseManagementId: lease?.leaseManagementId,
+      tenantAccountId: lease?.tenantAccountId,
+      sourceLabel: 'Unit command center',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final action = _currentAction();
@@ -325,7 +338,7 @@ class _UnitWorkOrderQuickActionFabState
       primaryAction: action,
       onChat: () => openMobileAssistant(context),
       onRecord: () => openMobileRecord(context),
-      onScan: () => openMobileScan(context),
+      onScan: _openUnitScan,
     );
   }
 }
@@ -1950,6 +1963,14 @@ class _PaymentsSection extends StatelessWidget {
             icon: Symbols.receipt_long_rounded,
             title: '${item.type} · ${_formatCurrency(item.amount)}',
             subtitle: '${item.status} · Due ${_formatDate(item.dueDate)}',
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => PaymentDetailScreen(
+                  tenantAccountId: item.tenantAccountId,
+                  tenantLedgerEntryId: item.id,
+                ),
+              ),
+            ),
           ),
       ],
     );

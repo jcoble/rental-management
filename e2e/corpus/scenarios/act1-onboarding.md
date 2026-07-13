@@ -265,39 +265,38 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
 
 ---
 
-## ONB-08 — Import CY2023–24 transaction history & mark rent Paid  ·  [PENDING GAP1]
+## ONB-08 — Import CY2023–24 tenant-account history  ·  [PENDING GAP1]
 - **Goal / exercises:** bring **2 full tax years** of transactions into the books so 2023/2024 reports are
-  reconstructable. The back-filled rent rows from `ONB-04` are `Scheduled`; income reports bucket by
-  **PaidDate year**, so each historical rent must be marked **Paid** with its historical date + method.
+  reconstructable. Each tenancy receives historical rent charges plus the corresponding append-only
+  receipts, dated in the year the money was received.
 - **Preconditions:** `ONB-04/05/06` done (leases, loans, recurring templates back-filled); clock
   2025-01-01.
 - **Actor:** Priya (spine path) / Dana (import).
-- **Surfaces:** `[SEED]` for the bulk 2-year mark-paid (justified — clicking ~500 rows through the UI is
+- **Surfaces:** `[SEED]` for the bulk 2-year posting (justified — clicking ~500 rows through the UI is
   impractical; the real path is GAP1 bulk import) **paired with a required representative `[UI]` sample** so
   the manual pay path is genuinely tested at least once (README PG-5).
 - **Steps — a required UI sample + two bulk paths:**
-  - **`[UI]` (required representative sample):** on **`/leases/[id]`** (`LeaseDetail` ledger), mark a handful
-    of back-filled **2024** rent rows **Paid** by hand via the **"Mark paid"** control — e.g. L01's 2024
-    rows — so the manual mark-paid path is exercised through the real screen; read the ledger to confirm
-    they flip Scheduled→Paid.
+  - **`[UI]` (required representative sample):** on the unit **Rent** view, record a handful of **2024**
+    receipts by hand — e.g. L01's 2024 receipts — so the real receipt path is exercised; open each exact
+    tenant-account entry detail and confirm the date, amount, method, and reference.
   - **`[PENDING GAP1]` Intended (bulk import):** use the **bulk transaction import** to load the CY2023–24
     rent payments and one-off expenses in one pass (CSV/spreadsheet keyed by lease/property, amount, date,
     method, category). `PENDING GAP1 — confirm exact import UI / file format / field mapping when the
     feature lands (Notion 390394b0689d8145a6b7db2fd605f004).`
-  - **`[SEED]` (bulk, current app):** for the remaining ~500 rows, mark each back-filled 2023–24 rent row
-    **Paid** with its historical `PaidDate` (≈ due+2, cf. `events.csv`) and the lease's `Method` — scripted
-    via `POST /api/v1/payments/{id}/mark-paid`, a **bounded seeding shortcut, not a user action**, retired
-    when GAP1 lands. Loans need no mark-paid; recurring/one-off expenses count by `IncurredAt`.
+  - **`[SEED]` (bulk, current app):** for the remaining ~500 rows, post each historical receipt to its
+    tenant account with `POST /api/v1/tenant-accounts/{tenantAccountId}/receipts`, a unique idempotency key,
+    its historical effective date (≈ due+2, cf. `events.csv`), and the lease's method. Recurring and
+    one-off expenses count by `IncurredAt`.
 - **Expected results / assertions (spot-check only — history is held-flat, not cent-exact):**
   - **CY2023 Schedule E:** income **221995.00**, total expenses **171276.20**, net **50718.80**
     (`expected/spotcheck-2023-2024.json → spotcheck.2023.scheduleE`).
   - **CY2024 Schedule E:** income **248820.00**, total expenses **197646.47**, net **51173.53**
     (`…2024.scheduleE`).
-  - The 2023/2024 rent rows now show as **Paid** in each tenant ledger (not Scheduled), dated in the
-    correct year.
-- **Worker fires:** none (mark-paid / import only).
-- **Idempotency/cleanup:** mark-paid is not re-entrant in a way that changes totals if re-applied with the
-  same date, but avoid double-marking. **GAP1 note:** when bulk import lands, this scenario's spine path is
+  - The 2023/2024 charges and receipts appear as distinct entries in each tenant-account ledger, dated
+    in the correct year, with balances matching the expected history.
+- **Worker fires:** none (receipt posting / import only).
+- **Idempotency/cleanup:** reuse the same operation key for retries so a receipt is never double-posted.
+  **GAP1 note:** when bulk import lands, this scenario's spine path is
   retired in favor of the import; the CY2023–24 corpus figures may be regenerated (`scenario.json` re-run)
   — a corpus-revision trigger, not a spine bug.
 

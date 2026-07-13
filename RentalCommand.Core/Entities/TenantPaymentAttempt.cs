@@ -12,6 +12,8 @@ public class TenantPaymentAttempt : IAuditable, IPortfolioScoped
     public int TenantAccountId { get; set; }
     public string Provider { get; set; } = string.Empty;
     public string? ProviderObjectId { get; set; }
+    /// <summary>The settled provider Charge attempt whose receipt this Refund returns.</summary>
+    public long? RefundsPaymentAttemptId { get; set; }
     public string IdempotencyKey { get; set; } = string.Empty;
     public TenantPaymentAttemptType AttemptType { get; set; }
     public TenantPaymentAttemptState State { get; set; }
@@ -38,4 +40,6 @@ public class TenantPaymentAttempt : IAuditable, IPortfolioScoped
     public TenantAccount? TenantAccount { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }
     public TenantLedgerEntry? LedgerEntry { get; set; }
+    public TenantPaymentAttempt? RefundsPaymentAttempt { get; set; }
+    public List<TenantPaymentAttempt> RefundAttempts { get; set; } = [];
 }

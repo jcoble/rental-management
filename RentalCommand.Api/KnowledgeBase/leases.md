@@ -7,7 +7,13 @@ summary: Create a lease, read the account history (ledger), and establish a carr
 keywords: lease, create lease, rent terms, ledger, account history, balance, opening balance, security deposit, late fee, rent due day, lease status
 ---
 
-A **lease** ties a tenant to a unit and sets the rent terms. It's the record everything else hangs off of — payments, deposits, and notices all reference the lease.
+A tenancy in Rental Command has three connected parts:
+
+- **Lease management** is the continuing household relationship with the unit.
+- **Lease agreements** are the immutable legal documents and signed versions for that relationship.
+- **Tenant account** is the continuing financial ledger for charges, receipts, credits, and the security deposit.
+
+A renewal or signed correction creates another agreement version without replacing the household's account history. Payments and deposits belong to the tenant account, while notices can reference the relationship, the governing agreement, or a specific ledger event depending on why they were created.
 
 ## Create a lease
 
@@ -18,15 +24,15 @@ A **lease** ties a tenant to a unit and sets the rent terms. It's the record eve
 5. Choose a **status** (usually Draft to start, then Active).
 6. Click **Save Lease**.
 
-A lease number is generated for you. You can also create a lease by **scanning a lease agreement** — see *Lease agreement and signing*.
+A relationship number and draft agreement are generated for you. You can also prepare them by **scanning a lease agreement** — see *Lease agreement and signing*.
 
-## Lease statuses
+## Agreement and tenancy status
 
-Leases move through **Draft → Active → Notice Given → Expired/Terminated**. You can change status from the lease or the list. The Dashboard highlights leases **expiring in the next 60 days** so renewals don't sneak up on you.
+Draft agreements can be prepared while another signed agreement still governs the tenancy. The governing agreement is derived from its signed dates and supersession history, so it cannot stay falsely active because a scheduled status update failed. Operational tenancy state—such as notice given, move-out underway, or ended—belongs to lease management and remains editable with an audit history.
 
 ## Account history (the ledger)
 
-Open a lease to see its **Account History** — a plain-English ledger of every charge and payment with a running balance. Each line explains *why* it's there. At the top you'll see a one-sentence summary, for example "Jane still owes $1,200" or "Paid ahead by $300 (credit on the account)."
+Open the tenancy's **Account History** — a plain-English tenant-account ledger of every charge, receipt, credit, and correction with a running balance. Each line explains *why* it's there. At the top you'll see a one-sentence summary, for example "Jane still owes $1,200" or "Paid ahead by $300 (credit on the account)."
 
 ## Opening balance
 

@@ -79,6 +79,9 @@ export interface ScanDraftResponse {
 	 * visible and the user can correct it before confirming.
 	 */
 	leaseProposal?: LeaseImportProposal | null;
+	captureContext?: {
+		tenantAccountId?: number | null;
+	} | null;
 }
 
 export interface ScanCreatedResponse {
@@ -90,6 +93,7 @@ export interface ScanCreatedResponse {
 export interface ScanConfirmResponse {
 	expenseId?: number | null;
 	receiptId?: number | null;
+	tenantAccountId?: number | null;
 	workOrderId?: number | null;
 	leaseManagementId?: number | null;
 	agreementId?: number | null;

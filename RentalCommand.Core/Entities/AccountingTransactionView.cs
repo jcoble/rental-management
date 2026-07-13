@@ -35,6 +35,9 @@ public class AccountingTransactionView
 
     public decimal Amount { get; set; }
 
+    /// <summary>Canonical account id for tenant-ledger rows; null for other source kinds.</summary>
+    public int? TenantAccountId { get; set; }
+
     /// <summary>Property id via TenantAccount/LeaseManagement or the source expense/application row.</summary>
     public int? PropertyId { get; set; }
 

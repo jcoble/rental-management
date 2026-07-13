@@ -39,7 +39,7 @@ public sealed class MoveOutStatementTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     [Fact]
-    public async Task GetMoveOutStatementAsync_UsesCanonicalFactsAndNetsDeductionReversals()
+    public async Task GetAsync_UsesCanonicalFactsAndNetsDeductionReversals()
     {
         var graph = SeedCanonicalChain();
         var carpetDeduction = AddEntry(
@@ -87,7 +87,9 @@ public sealed class MoveOutStatementTests : IDisposable
 
         var scope = SeedAdministratorScope();
         _ctx.Commands.Clear();
-        var result = await CreateSut().GetMoveOutStatementAsync(scope, graph.DepositAccount.Id);
+        var result = await CreateSut().GetAsync(
+            scope,
+            graph.DepositAccount.TenantAccountId);
 
         result.Should().Equal(CapturingPdfGenerator.PdfBytes);
         _pdf.LastData.Should().NotBeNull();
@@ -122,6 +124,18 @@ public sealed class MoveOutStatementTests : IDisposable
             .Should().Be(2, "deductions are one set query and the header computes its refund date without per-row lookups");
         _ctx.Commands.Count(sql => sql.Contains("StoredFiles", StringComparison.Ordinal))
             .Should().Be(1, "all authorized photo metadata must load in one ordered query");
+        var headerSql = _ctx.Commands[0];
+        headerSql.Should().Contain("vw_security_deposit_balances",
+            "the statement corpus must come from the canonical reversal-netted deposit view");
+        headerSql.Should().Contain("HeldBalance");
+        headerSql.Should().Contain("TotalDeductions");
+        headerSql.Should().Contain("TotalRefunded");
+        headerSql.Should().Contain("CASE",
+            "the non-negative deposit corpus must be calculated in the translated header query, not after materialization");
+        headerSql.Should().Contain("SecurityDepositAccounts");
+        headerSql.Should().Contain("TenantAccounts");
+        headerSql.Should().Contain("PortfolioId",
+            "the translated aggregate and joins must remain portfolio-scoped");
     }
 
     [Fact]
@@ -154,7 +168,9 @@ public sealed class MoveOutStatementTests : IDisposable
         _ctx.Db.Properties.Add(allowedProperty);
         _ctx.Db.SaveChanges();
         var scope = SeedSelectedPropertyManagerScope(allowedProperty.Id);
-        var controller = new SecurityDepositsController(CreateSut())
+        var controller = new TenantAccountsController(
+            Mock.Of<ITenantAccountQueryService>(),
+            CreateSut())
         {
             ControllerContext = new ControllerContext
             {
@@ -172,8 +188,8 @@ public sealed class MoveOutStatementTests : IDisposable
             DefaultExperience: WorkspaceExperience.Management);
         _ctx.Commands.Clear();
 
-        var result = await controller.MoveOutStatement(
-            decoy.DepositAccount.Id,
+        var result = await controller.DepositMoveOutStatement(
+            decoy.DepositAccount.TenantAccountId,
             CancellationToken.None);
 
         result.Should().BeOfType<NotFoundObjectResult>(
@@ -189,11 +205,11 @@ public sealed class MoveOutStatementTests : IDisposable
         _pdf.LastData.Should().BeNull();
     }
 
-    private SecurityDepositService CreateSut() => new(
+    private TenantAccountMoveOutStatementService CreateSut() => new(
         _ctx.Db,
         _storage,
         _pdf,
-        Mock.Of<ILogger<SecurityDepositService>>(),
+        Mock.Of<ILogger<TenantAccountMoveOutStatementService>>(),
         TimeProvider.System);
 
     private WorkspaceReadScope SeedAdministratorScope()

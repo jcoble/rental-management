@@ -315,7 +315,9 @@ class UnitDashboardOverview {
 class UnitPaymentSummary {
   const UnitPaymentSummary({
     required this.id,
-    required this.leaseId,
+    required this.tenantAccountId,
+    required this.leaseManagementId,
+    this.leaseAgreementId,
     required this.type,
     required this.status,
     required this.amount,
@@ -324,7 +326,11 @@ class UnitPaymentSummary {
   });
 
   final int id;
-  final int leaseId;
+  final int tenantAccountId;
+  final int leaseManagementId;
+
+  /// Immutable agreement provenance for the receipt; never an account selector.
+  final int? leaseAgreementId;
   final String type;
   final String status;
   final double amount;
@@ -334,7 +340,9 @@ class UnitPaymentSummary {
   factory UnitPaymentSummary.fromJson(Map<String, dynamic> json) {
     return UnitPaymentSummary(
       id: (json['id'] as num?)?.toInt() ?? 0,
-      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+      leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt(),
       type: json['type'] as String? ?? '',
       status: json['status'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0,

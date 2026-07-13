@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         // --- controllers-leasing-money sub-unit ---
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<ILeaseManagementQueryService, LeaseManagementQueryService>();
+        services.AddScoped<ITenantAccountQueryService, TenantAccountQueryService>();
         services.AddSingleton<IDocumentTemplateFieldCatalog, DocumentTemplateFieldCatalog>();
         services.AddScoped<IDocumentTemplateService, DocumentTemplateService>();
         services.AddScoped<ILeaseQaService, LeaseQaService>();
@@ -53,7 +54,6 @@ public static class ServiceCollectionExtensions
             RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
         services.AddScoped<RentalCommand.Api.Services.Esign.INativeSigningService,
             RentalCommand.Api.Services.Esign.NativeSigningService>();
-        services.AddScoped<IPaymentReceiptQueryService, PaymentReceiptQueryService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<ICapitalAssetService, CapitalAssetService>();
         services.AddScoped<IPropertyDispositionService, PropertyDispositionService>();
@@ -69,7 +69,8 @@ public static class ServiceCollectionExtensions
         // Reports Hub: read-only report queries over existing data (rent roll, ledger, aging, cash flow,
         // occupancy, deposits, 1099, owner distributions, work orders) + the catalog. No schema changes.
         services.AddScoped<IReportsService, ReportsService>();
-        services.AddScoped<ISecurityDepositService, SecurityDepositService>();
+        services.AddScoped<ITenantAccountMoveOutStatementService,
+            TenantAccountMoveOutStatementService>();
         // Security-deposit move-out statement PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IMoveOutStatementPdfGenerator, MoveOutStatementPdfGenerator>();
         services.AddScoped<IBankingService, BankingService>();

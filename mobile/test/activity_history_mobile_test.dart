@@ -370,7 +370,7 @@ Map<String, dynamic> _auditJson({
   'entityId': entityId,
   'actor': 'Alex Manager',
   'description': description,
-  'detailHref': '/accounting/payments/42',
+  'detailHref': '/tenant-accounts/7/entries/42',
   'timestamp': '2026-07-01T12:30:00.000Z',
   'testId': 'audit-$id',
   'changes': [

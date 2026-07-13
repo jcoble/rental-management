@@ -774,7 +774,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 : rows.OrderBy(row => row.UpdatedAtUtc).ThenBy(row => row.LeaseAddendumId),
         };
 
-    private static LedgerTransactionResponse ToLedgerResponse(
+    internal static LedgerTransactionResponse ToLedgerResponse(
         CanonicalLedgerEntryReadRow entry,
         CanonicalLedgerHeaderReadRow header,
         string? type = null) => new()
@@ -785,12 +785,13 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         Id = entry.Id,
         Description = entry.Description,
         Amount = entry.Direction == TenantLedgerDirection.Debit ? -entry.Amount : entry.Amount,
+        TenantAccountId = entry.TenantAccountId,
         PropertyId = header.PropertyId,
         PropertyName = header.PropertyName,
         Counterparty = string.IsNullOrWhiteSpace(header.TenantName) ? "Tenant" : header.TenantName,
         Category = entry.EntryType.ToString(),
         Status = "Posted",
-        SourceHref = $"/tenant-accounts/{entry.TenantAccountId}/entries?entryId={entry.Id}",
+        SourceHref = $"/tenant-accounts/{entry.TenantAccountId}/entries/{entry.Id}",
         IsProrated = entry.EntryType == TenantLedgerEntryType.RentCharge
             && entry.LeaseAgreementBaseRent.HasValue
             && entry.Amount != entry.LeaseAgreementBaseRent.Value,

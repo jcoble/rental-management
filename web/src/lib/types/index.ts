@@ -297,7 +297,9 @@ export interface UnitTenantSummary {
 
 export interface UnitPaymentSummary {
 	id: number;
-	leaseId: number;
+	tenantAccountId: number;
+	leaseManagementId: number;
+	leaseAgreementId: number | null;
 	type: string;
 	status: string;
 	amount: number;
@@ -487,35 +489,6 @@ export interface LeaseAgreementSummary {
 	voidedAtUtc?: string | null;
 	createdAtUtc: string;
 	updatedAtUtc: string;
-}
-
-/** One immutable receipt credit posted to a continuous tenant account. */
-export interface PaymentReceipt {
-	id: number;
-	publicId: string;
-	portfolioId: number;
-	tenantAccountId: number;
-	leaseManagementId: number;
-	propertyId: number;
-	unitId: number;
-	accountNumber: string;
-	relationshipNumber: string;
-	tenantName?: string | null;
-	propertyName?: string | null;
-	unitNumber?: string | null;
-	amount: number;
-	currency: string;
-	receivedOn: string;
-	postedAtUtc: string;
-	description: string;
-	provider?: string | null;
-	providerReference?: string | null;
-	providerState?: string | null;
-	paymentMethodSummary?: string | null;
-	payerName?: string | null;
-	checkNumber?: string | null;
-	bankName?: string | null;
-	sourceStoredFileId?: number | null;
 }
 
 export interface ExpenseLineItem {
@@ -753,7 +726,7 @@ export interface AccountingTransactionsResponse {
 }
 
 export interface AccountingTransaction {
-	kind: 'Payment' | 'Expense' | 'Bank';
+	kind: 'Payment' | 'TenantLedger' | 'Expense' | 'Bank' | 'ApplicationFee';
 	id: number;
 	date: string;
 	/** When the row entered the system (created). Backs the "Entered" column + default sort. */
@@ -764,6 +737,7 @@ export interface AccountingTransaction {
 	category: string;
 	status: string;
 	amount: number;
+	tenantAccountId?: number | null;
 	propertyId?: number;
 	/** Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
 	 * Lets the ledger route Payment/Expense rows into their unit's Command Center tab. */
@@ -1447,31 +1421,6 @@ export interface Dashboard {
 		unitId?: number;
 	}>;
 	recentActivity: DashboardActivity[];
-}
-
-export type SecurityDepositStatus = 'NotFunded' | 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
-
-/** Canonical security-deposit subledger account for one continuous tenant account. */
-export interface SecurityDepositAccount {
-	id: number;
-	portfolioId: number;
-	tenantAccountId: number;
-	leaseManagementId: number;
-	originatingAgreementId: number;
-	propertyId: number;
-	unitId: number;
-	accountNumber: string;
-	relationshipNumber: string;
-	tenantName?: string;
-	propertyName?: string;
-	unitNumber?: string;
-	currency: string;
-	totalReceived: number;
-	totalDeductions: number;
-	totalRefunded: number;
-	heldBalance: number;
-	status: SecurityDepositStatus;
-	createdAtUtc: string;
 }
 
 /** Matches DocumentDto from GET /api/v1/documents and POST /api/v1/documents. */

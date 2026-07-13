@@ -6,8 +6,8 @@ using RentalCommand.Api.Services.Payments;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Tenant-facing portal: read-only views of the signed-in tenant's own leases, balance, payments, work
-/// orders, and messages. Scope comes from the validated context and its effective tenant relationship,
+/// Tenant-facing portal: read-only views of the signed-in tenant's relationships, agreements, tenant
+/// accounts, work orders, and messages. Scope comes from the validated context and its effective tenant relationship,
 /// never from request parameters or a tenant-id token claim. A context without that relationship gets 403 —
 /// those users manage data through the staff-facing controllers instead.
 /// </summary>
@@ -33,6 +33,16 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     private Task<int?> GetTenantIdAsync(CancellationToken ct) =>
         _service.ResolveTenantIdAsync(GetPortfolioId(), GetAccessContextId(), ct);
 
+    private PortalTenantReadScope GetTenantReadScope()
+    {
+        var active = GetActiveAccessContext();
+        return new PortalTenantReadScope(
+            active.PortfolioId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision);
+    }
+
     [HttpGet("leases")]
     [ProducesResponseType(typeof(IReadOnlyList<PortalLeaseRelationshipResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -49,34 +59,67 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
-    [HttpGet("balance")]
-    [ProducesResponseType(typeof(PortalBalanceResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<PortalBalanceResponse>> Balance(CancellationToken ct)
-    {
-        var tenantId = await GetTenantIdAsync(ct);
-        if (tenantId == null)
-        {
-            return Forbid();
-        }
+    [HttpGet("tenant-accounts/page")]
+    [ProducesResponseType(typeof(PortalTenantAccountPageResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PortalTenantAccountPageResponse>> TenantAccountsPage(
+        [FromQuery] PortalTenantAccountListQuery query,
+        CancellationToken ct) =>
+        Ok(await _service.ListTenantAccountsPageAsync(GetTenantReadScope(), query, ct));
 
-        var balance = await _service.GetBalanceAsync(GetPortfolioId(), tenantId.Value, ct);
-        return Ok(balance);
+    [HttpGet("tenant-accounts/{id:int}")]
+    [ProducesResponseType(typeof(PortalTenantAccountResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantAccountResponse>> TenantAccount(
+        int id,
+        CancellationToken ct)
+    {
+        var account = await _service.GetTenantAccountAsync(GetTenantReadScope(), id, ct);
+        return account is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(account);
     }
 
-    [HttpGet("payments")]
-    [ProducesResponseType(typeof(IReadOnlyList<PortalPaymentResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<PortalPaymentResponse>>> Payments(CancellationToken ct)
+    [HttpGet("tenant-accounts/{id:int}/entries/page")]
+    [ProducesResponseType(typeof(PortalTenantLedgerEntryPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantLedgerEntryPageResponse>> TenantAccountEntriesPage(
+        int id,
+        [FromQuery] PortalTenantLedgerEntryListQuery query,
+        CancellationToken ct)
     {
-        var tenantId = await GetTenantIdAsync(ct);
-        if (tenantId == null)
-        {
-            return Forbid();
-        }
+        var page = await _service.ListTenantAccountEntriesPageAsync(
+            GetTenantReadScope(), id, query, ct);
+        return page is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(page);
+    }
 
-        var items = await _service.GetPaymentsAsync(GetPortfolioId(), tenantId.Value, ct);
-        return Ok(items);
+    [HttpGet("tenant-accounts/{id:int}/charges/page")]
+    [ProducesResponseType(typeof(PortalTenantChargePageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantChargePageResponse>> TenantAccountChargesPage(
+        int id,
+        [FromQuery] PortalTenantChargeListQuery query,
+        CancellationToken ct)
+    {
+        var page = await _service.ListTenantAccountChargesPageAsync(
+            GetTenantReadScope(), id, query, ct);
+        return page is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(page);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/deposit")]
+    [ProducesResponseType(typeof(PortalTenantAccountDepositResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantAccountDepositResponse>> TenantAccountDeposit(
+        int id,
+        CancellationToken ct)
+    {
+        var deposit = await _service.GetTenantAccountDepositAsync(GetTenantReadScope(), id, ct);
+        return deposit is null
+            ? NotFound(new { error = "Tenant account deposit not found" })
+            : Ok(deposit);
     }
 
     [HttpGet("appointments")]

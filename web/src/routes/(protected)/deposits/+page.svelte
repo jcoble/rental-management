@@ -2,8 +2,11 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
-	import type { SecurityDepositAccount } from '$lib/types';
+	import {
+		securityDeposits,
+		type SecurityDepositStatus,
+		type TenantAccountDeposit,
+	} from '$lib/api/endpoints/securityDeposits';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
@@ -12,6 +15,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import { Info } from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
@@ -19,6 +23,7 @@
 	const PAGE_SIZE = 20;
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
+	let statusFilter = $state(readGridParam(initialParams, 'status'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
@@ -26,6 +31,7 @@
 	let searchResetPrimed = false;
 	$effect(() => {
 		search;
+		statusFilter;
 		if (!searchResetPrimed) {
 			searchResetPrimed = true;
 			return;
@@ -34,13 +40,26 @@
 	});
 
 	$effect(() => {
-		syncGridUrl({ q: search, sort: gridSort, page: gridPage }, { page: 1 });
+		syncGridUrl(
+			{ q: search, status: statusFilter, sort: gridSort, page: gridPage },
+			{ page: 1 }
+		);
 	});
 
 	const depositsQuery = createQuery(() => ({
-		queryKey: ['deposits', portfolioId, 'page', debouncedSearch.value, gridSort, gridPage, PAGE_SIZE],
+		queryKey: [
+			'deposits',
+			portfolioId,
+			'page',
+			debouncedSearch.value,
+			statusFilter,
+			gridSort,
+			gridPage,
+			PAGE_SIZE,
+		],
 		queryFn: () => securityDeposits.listPage({
 			search: debouncedSearch.value,
+			status: statusFilter ? (statusFilter as SecurityDepositStatus) : undefined,
 			sort: gridSort || undefined,
 			skip: (gridPage - 1) * PAGE_SIZE,
 			take: PAGE_SIZE,
@@ -58,9 +77,9 @@
 		Withheld: { class: 'm3-tone-chip border m3-tone--error' },
 	};
 
-	const columns: ColumnDef<SecurityDepositAccount>[] = [
+	const columns: ColumnDef<TenantAccountDeposit>[] = [
 		{
-			key: 'account',
+			key: 'propertyName',
 			title: 'Rental / tenant',
 			sortable: true,
 			mobileRole: 'title',
@@ -68,7 +87,7 @@
 			cell: rentalCell,
 		},
 		{
-			key: 'amount',
+			key: 'heldBalance',
 			title: 'Held balance',
 			format: 'currency',
 			sortable: true,
@@ -103,22 +122,22 @@
 	];
 </script>
 
-{#snippet rentalCell(account: SecurityDepositAccount)}
+{#snippet rentalCell(account: TenantAccountDeposit)}
 	<div class="flex flex-col" data-testid="deposit-rental">
 		<span>{account.propertyName ?? `Property #${account.propertyId}`}{account.unitNumber ? ` · Unit ${account.unitNumber}` : ''}</span>
 		<span class="text-xs text-muted-foreground">
-			{account.tenantName ?? 'Tenant account'} · {account.relationshipNumber}
+			{account.primaryTenantName ?? 'Tenant account'} · {account.relationshipNumber}
 		</span>
 	</div>
 {/snippet}
 
-{#snippet statusCell(account: SecurityDepositAccount)}
+{#snippet statusCell(account: TenantAccountDeposit)}
 	<StatusBadge status={account.status} map={depositStatusMap} />
 {/snippet}
 
-{#snippet actionsCell(account: SecurityDepositAccount)}
+{#snippet actionsCell(account: TenantAccountDeposit)}
 	<div class="flex justify-end" onclick={(event) => event.stopPropagation()} role="none">
-		<Button size="sm" variant="outline" class="h-7 text-xs" onclick={() => goto(`/deposits/${account.id}`)}>
+		<Button size="sm" variant="outline" class="h-7 text-xs" onclick={() => goto(`/deposits/${account.tenantAccountId}`)}>
 			{account.status === 'NotFunded' ? 'Record funds' : 'Manage'}
 		</Button>
 	</div>
@@ -155,9 +174,9 @@
 		loading={depositsQuery.isLoading || depositsQuery.isFetching}
 		emptyMessage={search.trim() ? 'No security deposit accounts match your search.' : 'No security deposit accounts yet.'}
 		emptyDescription={search.trim() ? 'Try a tenant, property, unit, or account number.' : 'An account is created when an approved application is prepared for move-in.'}
-		getRowKey={(account) => account.id}
-		getRowTestId={(account) => `deposit-row-${account.id}`}
-		onRowClick={(account) => goto(`/deposits/${account.id}`)}
+		getRowKey={(account) => account.securityDepositAccountId}
+		getRowTestId={(account) => `deposit-row-${account.securityDepositAccountId}`}
+		onRowClick={(account) => goto(`/deposits/${account.tenantAccountId}`)}
 		data-testid="deposits-list"
 		pageSize={PAGE_SIZE}
 		page={gridPage}
@@ -168,8 +187,21 @@
 		onSortChange={(nextSort) => { gridSort = nextSort ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
-			<div class="max-w-sm flex-1">
+			<div class="flex max-w-xl flex-1 items-center gap-2">
 				<SearchInput bind:value={search} placeholder="Search deposits…" testid="deposit-search" />
+				<Select.Root type="single" bind:value={statusFilter}>
+					<Select.Trigger class="h-9 w-44 text-sm" data-testid="deposit-status-filter">
+						{statusFilter === 'NotFunded' ? 'Not funded' : statusFilter === 'PartiallyReturned' ? 'Partially returned' : statusFilter || 'All statuses'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						<Select.Item value="NotFunded" label="Not funded">Not funded</Select.Item>
+						<Select.Item value="Held" label="Held">Held</Select.Item>
+						<Select.Item value="PartiallyReturned" label="Partially returned">Partially returned</Select.Item>
+						<Select.Item value="Returned" label="Returned">Returned</Select.Item>
+						<Select.Item value="Withheld" label="Withheld">Withheld</Select.Item>
+					</Select.Content>
+				</Select.Root>
 			</div>
 		{/snippet}
 	</DataGrid>

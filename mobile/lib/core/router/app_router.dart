@@ -91,7 +91,7 @@ bool _canOpenRoute(AuthStateAuthenticated auth, String path) {
     ]);
   }
   if (path == '/money' ||
-      path.startsWith('/payments/') ||
+      path.startsWith('/tenant-accounts/') ||
       path.startsWith('/expenses/')) {
     return hasAny(const [
       'money.balances.read',
@@ -265,9 +265,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const MoneyHubScreen(),
       ),
       GoRoute(
-        path: '/payments/:id',
-        builder: (context, state) =>
-            PaymentDetailScreen(paymentId: _idParam(state)),
+        path: '/tenant-accounts/:tenantAccountId/entries/:tenantLedgerEntryId',
+        builder: (context, state) => PaymentDetailScreen(
+          tenantAccountId: _idParam(state, 'tenantAccountId'),
+          tenantLedgerEntryId: _idParam(state, 'tenantLedgerEntryId'),
+        ),
       ),
       GoRoute(
         path: '/expenses/:id',

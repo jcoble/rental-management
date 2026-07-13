@@ -2,8 +2,6 @@ import { api } from '../client';
 import type {
 	Appointment,
 	LeaseQuestionResponse,
-	PaymentStatus,
-	PaymentType,
 	WorkOrder,
 	WorkOrderDetail
 } from '$lib/types';
@@ -49,15 +47,121 @@ export interface AutopayStatus {
 }
 
 /** Tenant-facing payable charge shape. This is not the management receipt projection. */
-export interface PortalPayment {
-	id: number;
+export interface PortalTenantAccount {
+	tenantAccountId: number;
+	tenantAccountPublicId: string;
+	leaseManagementId: number;
+	leaseManagementPublicId: string;
+	propertyId: number;
+	propertyName: string;
+	unitId: number;
+	unitNumber: string;
+	accountNumber: string;
+	relationshipNumber: string;
+	lifecycle: string;
+	currency: string;
+	openedAtUtc: string;
+	closedAtUtc?: string | null;
+	effectiveNowUtc: string;
+	businessDate: string;
+	totalDebits: number;
+	totalCredits: number;
+	receivableBalance: number;
+	unappliedCredit: number;
+	pastDueAmount: number;
+	pastDueCount: number;
+	nextDueOn?: string | null;
+	nextDueAmount: number;
+	condition: string;
+	lastReceiptOn?: string | null;
+	lastReceiptAmount?: number | null;
+	currentAgreement?: PortalLeaseAgreement | null;
+	deposit?: PortalTenantAccountDeposit | null;
+}
+
+export interface PortalTenantLedgerEntry {
 	tenantAccountId: number;
 	leaseManagementId: number;
-	paymentType: PaymentType;
-	status: PaymentStatus;
+	tenantLedgerEntryId: number;
+	publicId: string;
+	entryType: string;
+	direction: string;
 	amount: number;
-	amountPaid?: number | null;
-	dueDate: string;
+	currency: string;
+	effectiveOn: string;
+	dueOn?: string | null;
+	postedAtUtc: string;
+	description: string;
+	businessKey: string;
+	transferPublicId?: string | null;
+	leaseAgreementId?: number | null;
+	leaseAddendumId?: number | null;
+	reversesEntryId?: number | null;
+	providerPaymentAttemptId?: number | null;
+	sourceStoredFileId?: number | null;
+}
+
+export interface PortalTenantCharge extends Omit<PortalTenantLedgerEntry, 'amount' | 'businessKey'> {
+	originalAmount: number;
+	reversedAmount: number;
+	netAllocations: number;
+	openAmount: number;
+	isPastDue: boolean;
+}
+
+export interface PortalTenantAccountDeposit {
+	tenantAccountId: number;
+	leaseManagementId: number;
+	securityDepositAccountId: number;
+	originatingAgreementId: number;
+	currency: string;
+	createdAtUtc: string;
+	effectiveNowUtc: string;
+	businessDate: string;
+	totalReceived: number;
+	totalDeductions: number;
+	totalRefunded: number;
+	totalTransferredIn: number;
+	totalTransferredOut: number;
+	netAdjustments: number;
+	heldBalance: number;
+	status: string;
+}
+
+export interface PortalPage<T> {
+	items: T[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
+export interface PortalAccountChildPage<T> extends PortalPage<T> {
+	tenantAccountId: number;
+	leaseManagementId: number;
+}
+
+export interface PortalListParams {
+	skip?: number;
+	take?: number;
+	search?: string;
+	sort?: string;
+	from?: string;
+	to?: string;
+}
+
+export interface PortalTenantAccountListParams extends PortalListParams {
+	lifecycle?: string;
+	closed?: boolean;
+}
+
+export interface PortalTenantLedgerEntryListParams extends PortalListParams {
+	entryType?: string;
+	direction?: string;
+}
+
+export interface PortalTenantChargeListParams extends PortalListParams {
+	entryType?: string;
+	isPastDue?: boolean;
 }
 
 export interface PortalLeaseAgreement {
@@ -95,6 +199,15 @@ export interface PortalLeaseRelationship {
 	agreement?: PortalLeaseAgreement | null;
 }
 
+function queryString(params: object): string {
+	const query = new URLSearchParams();
+	for (const [key, value] of Object.entries(params)) {
+		if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+	}
+	const text = query.toString();
+	return text ? `?${text}` : '';
+}
+
 export const portal = {
 	overview: () => api.get('/portal/overview'),
 	leases: () => api.get<PortalLeaseRelationship[]>('/portal/leases'),
@@ -108,8 +221,20 @@ export const portal = {
 			`/portal/lease/ask${leaseManagementId != null ? `?leaseManagementId=${leaseManagementId}` : ''}`,
 			{ question }
 		),
-	balance: () => api.get('/portal/balance'),
-	payments: () => api.get<PortalPayment[]>('/portal/payments'),
+	tenantAccountsPage: (params: PortalTenantAccountListParams = {}) =>
+		api.get<PortalPage<PortalTenantAccount>>(`/portal/tenant-accounts/page${queryString(params)}`),
+	tenantAccount: (tenantAccountId: number) =>
+		api.get<PortalTenantAccount>(`/portal/tenant-accounts/${tenantAccountId}`),
+	tenantAccountEntriesPage: (tenantAccountId: number, params: PortalTenantLedgerEntryListParams = {}) =>
+		api.get<PortalAccountChildPage<PortalTenantLedgerEntry>>(
+			`/portal/tenant-accounts/${tenantAccountId}/entries/page${queryString(params)}`
+		),
+	tenantAccountChargesPage: (tenantAccountId: number, params: PortalTenantChargeListParams = {}) =>
+		api.get<PortalAccountChildPage<PortalTenantCharge>>(
+			`/portal/tenant-accounts/${tenantAccountId}/charges/page${queryString(params)}`
+		),
+	tenantAccountDeposit: (tenantAccountId: number) =>
+		api.get<PortalTenantAccountDeposit>(`/portal/tenant-accounts/${tenantAccountId}/deposit`),
 	appointments: () => api.get<Appointment[]>('/portal/appointments'),
 	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */

@@ -696,7 +696,7 @@ Constraints:
 
 - `UNIQUE (Id, PortfolioId)`, `PublicId`, and `(TenantAccountId, BusinessKey)`.
 - amount positive; currency matches account.
-- debit types: opening balance may be either direction; charges are debit; payment/credit/refund are credit; reversal must be opposite its original.
+- debit types: opening balance may be either direction; charges and cash refunds paid back to the tenant are debit; payment receipts and credits are credit; reversal must be opposite its original.
 - charge types require `DueOn`; receipt/credit/refund/reversal do not.
 - addendum charge requires Addendum provenance; scheduled rent requires Agreement provenance.
 - transfer types require `TransferPublicId`; unique `(PortfolioId, TransferPublicId, EntryType)` permits exactly one `TransferOut` and one `TransferIn` for a completed carried balance.
@@ -722,7 +722,7 @@ Allocation explains which credits settle which debits without changing account b
 | `PortfolioId` | `int` | no | scope |
 | `TenantAccountId` | `int` | no | scoped FK |
 | `DebitEntryId` | `bigint` | no | charge/opening debit |
-| `CreditEntryId` | `bigint` | no | receipt/credit/refund credit |
+| `CreditEntryId` | `bigint` | no | receipt/credit credit |
 | `Amount` | `numeric(18,2)` | no | positive normal allocation; negative compensating allocation |
 | `ReversesAllocationId` | `bigint` | yes | exact prior allocation when amount is negative |
 | `AllocatedAtUtc` | `timestamptz` | no | DB clock |
@@ -732,10 +732,11 @@ Allocation explains which credits settle which debits without changing account b
 - both entries must belong to the same account and have correct directions, enforced by deferred trigger.
 - normal allocation is positive and does not over-allocate either entry after net compensating rows.
 - reversal allocation is the exact negative of its referenced allocation and is unique per original.
+- a full payment refund appends one negative compensating allocation for every allocation made by the original payment receipt, reopening those original charges without mutating either row.
 - append-only trigger rejects update/delete.
 - unique `(TenantAccountId, BusinessKey)` and index `(TenantAccountId, DebitEntryId, Id)`.
 
-The open amount per charge is calculated DB-side as debit amount minus net allocations. Partial payment is therefore data, not a mutable `PaymentStatus.Partial` flag.
+The open amount per charge is calculated DB-side as debit amount minus net allocations. Account-level unapplied credit is total credit magnitude minus returned-payment Refund debits minus net allocations, so compensating a refunded receipt reopens the original charge without inventing a credit balance. Partial payment is therefore data, not a mutable `PaymentStatus.Partial` flag.
 
 ### 5.5 Provider payment attempts
 
@@ -751,6 +752,7 @@ Replace `PaymentTransactions` and lease-based `AutopayEnrollments`:
 | `TenantAccountId` | `int` | no | scoped FK, `RESTRICT` |
 | `Provider` | `varchar(50)` | no | provider namespace |
 | `ProviderObjectId` | `varchar(200)` | yes | provider payment/refund identity |
+| `RefundsPaymentAttemptId` | `bigint` | yes | same-account/portfolio FK to the settled Charge attempt returned by this Refund; required only for Refund |
 | `IdempotencyKey` | `varchar(200)` | no | stable command/provider key |
 | `AttemptType` | `varchar(20)` | no | `Charge`, `Refund`, `Verification` |
 | `State` | `varchar(30)` | no | `Prepared`, `Submitted`, `Succeeded`, `Failed`, `Canceled`, `Unknown` |
@@ -773,10 +775,12 @@ Replace `PaymentTransactions` and lease-based `AutopayEnrollments`:
 | `NextAttemptAtUtc` | `timestamptz` | yes | retry eligibility |
 | `CreatedByUserId` | `int` | no | actor/system |
 
-- unique `(Id, TenantAccountId, PortfolioId)`, `PublicId`, `(Provider, IdempotencyKey)`, and partial `(Provider, ProviderObjectId)` when non-null;
+- unique `(Id, TenantAccountId, PortfolioId)`, `PublicId`, `(Provider, IdempotencyKey)`, partial `(Provider, ProviderObjectId)` when non-null, and partial `RefundsPaymentAttemptId` when non-null;
+- `AttemptType = Refund` exactly when `RefundsPaymentAttemptId` is present; the original attempt is a same-account/currency settled Charge, one original Charge may have only one full Refund attempt, and a Refund attempt is inserted only in terminal `Succeeded` state with provider `manual`, a non-empty external payout reference, and a non-empty payout method after an externally completed manual payout;
 - amount positive, currency equals account, and claim fields are all null or all present;
 - succeeded Charge/Refund must have exactly one `TenantLedgerEntry.ProviderPaymentAttemptId`; that ledger FK has a unique partial index, avoiding a circular attempt-to-ledger FK;
-- provider state may advance only through token-fenced reconciliation. The resulting ledger receipt/refund, audit, outbox, and terminal attempt transition commit atomically;
+- provider Charge state may advance only through token-fenced reconciliation. The resulting ledger receipt, audit, outbox, and terminal attempt transition commit atomically;
+- the supported manual/external refund command records only an already-completed payout and atomically appends its terminal Refund attempt, debit `Refund`, exact negative compensation for the original payment receipt's allocations, audit, and outbox. Provider-backed receipts return an unavailable outcome without business writes until a real provider refund workflow exists. Refund debits affect the account balance but are excluded from charge/open-item projections, so the reopened original charges remain the sole collectible items;
 - no API can edit the resulting posted ledger entry.
 
 #### `TenantAutopayEnrollments`
@@ -1156,7 +1160,8 @@ Canonical management routes:
 - `POST /api/v1/lease-agreements/{id}/issue`, `/void`, and `/execute` only through signature workflow
 - `POST /api/v1/lease-agreements/{id}/renew`, `/correct`, `/restatement`, `/month-to-month`
 - corresponding draft/issue/void routes for `/lease-addenda`
-- `GET /api/v1/tenant-accounts/{id}`, `/entries/page`, `/charges/page`, `/deposit`
+- `GET /api/v1/tenant-accounts/page` and `GET /api/v1/tenant-accounts/entries/page`
+- `GET /api/v1/tenant-accounts/{id}`, `/{id}/entries/page`, `/{id}/entries/{entryId}`, `/{id}/charges/page`, and `/{id}/deposit`
 - explicit account commands `/charges`, `/receipts`, `/credits`, `/adjustments`, `/reversals`, `/refunds`, and deposit commands.
 
 All list endpoints accept server-side search/filter/sort/page. Every response names `LeaseManagementId`, `LeaseAgreementId`, `LeaseAddendumId`, and `TenantAccountId` precisely; no ambiguous `LeaseId` remains.

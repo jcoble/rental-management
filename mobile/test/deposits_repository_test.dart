@@ -18,6 +18,12 @@ void main() {
       expect(source, contains("title: 'Record deduction'"));
       expect(source, contains("title: 'Record refund'"));
       expect(source, contains('showModalBottomSheet<void>'));
+      expect(source, contains('.getDeposit(summary.tenantAccountId)'));
+      expect(source, contains('SearchBar('));
+      expect(
+        source,
+        contains("'Load more (\${page.items.length} of \${page.totalCount})'"),
+      );
       expect(
         RegExp(
           r"_operationKey = const Uuid\(\)\.v4\(\);",
@@ -30,21 +36,40 @@ void main() {
   );
 
   test(
-    'list parses the canonical security deposit account projection',
+    'list sends canonical server-side search filters sort and paging',
     () async {
       final adapter = _DepositAdapter();
       final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
         ..httpClientAdapter = adapter;
       final repository = DepositsRepository(dio);
 
-      final accounts = await repository.listDeposits(leaseManagementId: 23);
+      final page = await repository.listDepositsPage(
+        const TenantAccountDepositQuery(
+          skip: 20,
+          take: 20,
+          search: 'jordan',
+          sort: '-heldBalance',
+          tenantAccountId: 41,
+          propertyId: 61,
+          status: 'Held',
+        ),
+      );
 
       expect(adapter.method, 'GET');
-      expect(adapter.path, '/security-deposits');
-      expect(adapter.queryParameters, {'leaseManagementId': 23});
-      expect(accounts, hasLength(1));
-      final account = accounts.single;
-      expect(account.id, 31);
+      expect(adapter.path, '/tenant-accounts/deposits/page');
+      expect(adapter.queryParameters, {
+        'skip': 20,
+        'take': 20,
+        'sort': '-heldBalance',
+        'search': 'jordan',
+        'tenantAccountId': 41,
+        'propertyId': 61,
+        'status': 'Held',
+      });
+      expect(page.totalCount, 1);
+      expect(page.items, hasLength(1));
+      final account = page.items.single;
+      expect(account.securityDepositAccountId, 31);
       expect(account.tenantAccountId, 41);
       expect(account.leaseManagementId, 23);
       expect(account.originatingAgreementId, 51);
@@ -55,8 +80,43 @@ void main() {
       expect(account.totalReceived, 1500);
       expect(account.totalDeductions, 125);
       expect(account.totalRefunded, 500);
+      expect(account.totalTransferredIn, 50);
+      expect(account.totalTransferredOut, 25);
+      expect(account.netAdjustments, -25);
       expect(account.heldBalance, 875);
       expect(account.status, 'Held');
+    },
+  );
+
+  test('detail is resolved by the exact tenant account id', () async {
+    final adapter = _DepositAdapter();
+    final repository = DepositsRepository(
+      Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter,
+    );
+
+    final account = await repository.getDeposit(41);
+
+    expect(adapter.method, 'GET');
+    expect(adapter.path, '/tenant-accounts/41/deposit');
+    expect(adapter.queryParameters, isEmpty);
+    expect(account.securityDepositAccountId, 31);
+    expect(account.primaryTenantName, 'Jordan Lee');
+  });
+
+  test(
+    'move-out statement is resolved by the exact tenant account id',
+    () async {
+      final adapter = _DepositAdapter();
+      final repository = DepositsRepository(
+        Dio(BaseOptions(baseUrl: 'https://example.test'))
+          ..httpClientAdapter = adapter,
+      );
+
+      final bytes = await repository.moveOutStatementBytes(41);
+
+      expect(adapter.path, '/tenant-accounts/41/deposit/move-out-statement');
+      expect(bytes, [1, 2, 3]);
     },
   );
 
@@ -150,8 +210,8 @@ void main() {
   );
 }
 
-final _account = SecurityDepositAccount(
-  id: 31,
+final _account = TenantAccountDeposit(
+  securityDepositAccountId: 31,
   tenantAccountId: 41,
   leaseManagementId: 23,
   originatingAgreementId: 51,
@@ -159,16 +219,21 @@ final _account = SecurityDepositAccount(
   unitId: 71,
   accountNumber: 'TA-0041',
   relationshipNumber: 'LM-0023',
-  tenantName: 'Jordan Lee',
+  primaryTenantName: 'Jordan Lee',
   propertyName: 'Mallard Point',
   unitNumber: '2B',
   currency: 'USD',
   totalReceived: 1500,
   totalDeductions: 125,
   totalRefunded: 500,
+  totalTransferredIn: 50,
+  totalTransferredOut: 25,
+  netAdjustments: -25,
   heldBalance: 875,
   status: 'Held',
   createdAtUtc: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  effectiveNowUtc: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  businessDate: '2026-07-13',
 );
 
 class _DepositAdapter implements HttpClientAdapter {
@@ -190,29 +255,25 @@ class _DepositAdapter implements HttpClientAdapter {
     headers = Map<String, dynamic>.from(options.headers);
     data = options.data;
 
+    if (options.path.endsWith('/move-out-statement')) {
+      return ResponseBody.fromBytes(
+        [1, 2, 3],
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/pdf'],
+        },
+      );
+    }
+
     final body = options.method == 'GET'
-        ? [
-            {
-              'id': 31,
-              'tenantAccountId': 41,
-              'leaseManagementId': 23,
-              'originatingAgreementId': 51,
-              'propertyId': 61,
-              'unitId': 71,
-              'accountNumber': 'TA-0041',
-              'relationshipNumber': 'LM-0023',
-              'tenantName': 'Jordan Lee',
-              'propertyName': 'Mallard Point',
-              'unitNumber': '2B',
-              'currency': 'USD',
-              'totalReceived': 1500,
-              'totalDeductions': 125,
-              'totalRefunded': 500,
-              'heldBalance': 875,
-              'status': 'Held',
-              'createdAtUtc': '2026-07-01T12:00:00Z',
-            },
-          ]
+        ? options.path.endsWith('/deposit')
+              ? _depositJson
+              : {
+                  'items': [_depositJson],
+                  'totalCount': 1,
+                  'skip': 20,
+                  'take': 20,
+                }
         : {
             'value': {'applied': true},
             'replayed': false,
@@ -229,3 +290,29 @@ class _DepositAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+final _depositJson = <String, dynamic>{
+  'securityDepositAccountId': 31,
+  'tenantAccountId': 41,
+  'leaseManagementId': 23,
+  'originatingAgreementId': 51,
+  'propertyId': 61,
+  'unitId': 71,
+  'accountNumber': 'TA-0041',
+  'relationshipNumber': 'LM-0023',
+  'primaryTenantName': 'Jordan Lee',
+  'propertyName': 'Mallard Point',
+  'unitNumber': '2B',
+  'currency': 'USD',
+  'totalReceived': 1500,
+  'totalDeductions': 125,
+  'totalRefunded': 500,
+  'totalTransferredIn': 50,
+  'totalTransferredOut': 25,
+  'netAdjustments': -25,
+  'heldBalance': 875,
+  'status': 'Held',
+  'createdAtUtc': '2026-07-01T12:00:00Z',
+  'effectiveNowUtc': '2026-07-13T12:00:00Z',
+  'businessDate': '2026-07-13',
+};

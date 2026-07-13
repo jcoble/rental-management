@@ -312,7 +312,7 @@ internal static class TenantChargeBalanceViewSql
            AND debit_allocations."TenantAccountId" = entry."TenantAccountId"
            AND debit_allocations."TenantLedgerEntryId" = entry."Id"
           WHERE entry."Direction" = 'Debit'
-            AND entry."EntryType" NOT IN ('Reversal', 'TransferOut')
+            AND entry."EntryType" NOT IN ('Refund', 'Reversal', 'TransferOut')
         )
         SELECT "PortfolioId",
                "TenantAccountId",
@@ -405,7 +405,10 @@ internal static class TenantAccountBalanceViewSql
                  COALESCE(sum(entry."NetAmount") FILTER (WHERE entry."Direction" = 'Debit'), 0::numeric)
                    AS "TotalDebits",
                  COALESCE(sum(entry."NetAmount") FILTER (WHERE entry."Direction" = 'Credit'), 0::numeric)
-                   AS "TotalCredits"
+                   AS "TotalCredits",
+                 COALESCE(sum(entry."NetAmount") FILTER (
+                   WHERE entry."EntryType" = 'Refund' AND entry."Direction" = 'Debit'
+                 ), 0::numeric) AS "ReturnedPaymentDebits"
           FROM effective_entries AS entry
           GROUP BY entry."PortfolioId", entry."TenantAccountId"
         ),
@@ -424,6 +427,7 @@ internal static class TenantAccountBalanceViewSql
            AND debit_allocations."TenantAccountId" = entry."TenantAccountId"
            AND debit_allocations."TenantLedgerEntryId" = entry."TenantLedgerEntryId"
           WHERE entry."Direction" = 'Debit'
+            AND entry."EntryType" <> 'Refund'
         ),
         charge_summary AS (
           SELECT charge."PortfolioId",
@@ -493,6 +497,7 @@ internal static class TenantAccountBalanceViewSql
                  - COALESCE(entry_totals."TotalCredits", 0::numeric) AS "ReceivableBalance",
                GREATEST(
                  COALESCE(entry_totals."TotalCredits", 0::numeric)
+                   - COALESCE(entry_totals."ReturnedPaymentDebits", 0::numeric)
                    - COALESCE(account_allocations."NetAllocations", 0::numeric),
                  0::numeric
                ) AS "UnappliedCredit",

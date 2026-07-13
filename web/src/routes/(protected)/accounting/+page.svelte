@@ -170,7 +170,11 @@
 	// A ledger row's destination: unit-tied Payment/Expense rows fold into their unit's Command Center
 	// tab (via recordHref); Bank rows (no detail page / no unit) keep the server detailHref fallback.
 	function ledgerHref(t: AccountingTransaction): string {
-		if (t.kind === 'Payment') return recordHref('payment', { id: t.id, unitId: t.unitId });
+		if (t.kind === 'Payment') return recordHref('payment', {
+			id: t.id,
+			unitId: t.unitId,
+			tenantAccountId: t.tenantAccountId
+		});
 		if (t.kind === 'Expense') return recordHref('expense', { id: t.id, unitId: t.unitId });
 		return t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`;
 	}

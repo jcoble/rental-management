@@ -31,9 +31,11 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(pageSource, /import \{ appointments \} from '\$lib\/api\/endpoints\/appointments';/);
 		assert.match(pageSource, /page\.url\.searchParams\.get\('action'\) === 'confirm-move-in'/);
 		assert.match(pageSource, /data-testid="unit-move-in-dialog"/);
-		assert.match(pageSource, /securityDeposits\.list\(lease\.leaseManagementId\)/);
+		assert.match(pageSource, /securityDeposits\.get\(lease\.tenantAccountId\)/);
 		assert.match(pageSource, /securityDeposits\.fund\(account\.tenantAccountId, operationKey/);
-		assert.match(pageSource, /securityDepositAccountId: account\.id/);
+		assert.match(pageSource, /securityDepositAccountId: account\.securityDepositAccountId/);
+		assert.doesNotMatch(pageSource, /securityDeposits\.list/);
+		assert.doesNotMatch(pageSource, /accounts\.find/);
 		assert.match(pageSource, /paymentMethodSummary: moveInDepositPaymentMethod\.trim\(\)/);
 		assert.doesNotMatch(pageSource, /securityDeposits\.create/);
 		assert.match(pageSource, /appointments\.update\(moveInAppointment\.id,\s*\{\s*status: 'Completed'\s*\}\)/s);

@@ -3770,6 +3770,7 @@ namespace RentalCommand.Data.Migrations
                     TenantAccountId = table.Column<int>(type: "integer", nullable: false),
                     Provider = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
                     ProviderObjectId = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
+                    RefundsPaymentAttemptId = table.Column<long>(type: "bigint", nullable: true),
                     IdempotencyKey = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
                     AttemptType = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     State = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
@@ -3800,6 +3801,9 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_TenantPaymentAttempt_AttemptCount", "\"AttemptCount\" >= 0");
                     table.CheckConstraint("CK_TenantPaymentAttempt_Claim", "(\"ClaimOwner\" IS NULL AND \"ClaimToken\" IS NULL AND \"ClaimExpiresAtUtc\" IS NULL) OR (\"ClaimOwner\" IS NOT NULL AND \"ClaimToken\" IS NOT NULL AND \"ClaimExpiresAtUtc\" IS NOT NULL)");
                     table.CheckConstraint("CK_TenantPaymentAttempt_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
+                    table.CheckConstraint("CK_TenantPaymentAttempt_RefundPayout", "\"AttemptType\" <> 'Refund' OR (\"Provider\" = 'manual' AND NULLIF(btrim(\"ProviderObjectId\"), '') IS NOT NULL AND NULLIF(btrim(\"PaymentMethodSummary\"), '') IS NOT NULL)");
+                    table.CheckConstraint("CK_TenantPaymentAttempt_RefundProvenance", "(\"AttemptType\" = 'Refund') = (\"RefundsPaymentAttemptId\" IS NOT NULL)");
+                    table.CheckConstraint("CK_TenantPaymentAttempt_RefundTerminal", "\"AttemptType\" <> 'Refund' OR \"State\" = 'Succeeded'");
                     table.CheckConstraint("CK_TenantPaymentAttempt_Settlement", "(\"State\" = 'Succeeded' AND \"SettledAtUtc\" IS NOT NULL AND \"SubmittedAtUtc\" IS NOT NULL AND \"SettledAtUtc\" >= \"SubmittedAtUtc\") OR (\"State\" <> 'Succeeded' AND \"SettledAtUtc\" IS NULL)");
                     table.CheckConstraint("CK_TenantPaymentAttempt_State", "\"State\" IN ('Prepared', 'Submitted', 'Succeeded', 'Failed', 'Canceled', 'Unknown')");
                     table.CheckConstraint("CK_TenantPaymentAttempt_Submission", "\"SubmittedAtUtc\" IS NULL OR \"SubmittedAtUtc\" >= \"PreparedAtUtc\"");
@@ -3821,6 +3825,12 @@ namespace RentalCommand.Data.Migrations
                         columns: x => new { x.TenantAccountId, x.PortfolioId },
                         principalTable: "TenantAccounts",
                         principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TenantPaymentAttempts_TenantPaymentAttempts_RefundsPayment~",
+                        columns: x => new { x.RefundsPaymentAttemptId, x.TenantAccountId, x.PortfolioId },
+                        principalTable: "TenantPaymentAttempts",
+                        principalColumns: new[] { "Id", "TenantAccountId", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                 });
 
@@ -4403,7 +4413,7 @@ namespace RentalCommand.Data.Migrations
                     table.UniqueConstraint("AK_TenantLedgerEntries_Id_TenantAccountId_PortfolioId", x => new { x.Id, x.TenantAccountId, x.PortfolioId });
                     table.CheckConstraint("CK_TenantLedgerEntry_Amount", "\"Amount\" > 0");
                     table.CheckConstraint("CK_TenantLedgerEntry_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
-                    table.CheckConstraint("CK_TenantLedgerEntry_Direction", "\"Direction\" IN ('Debit','Credit') AND ((\"EntryType\" = 'OpeningBalance') OR (\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') AND \"Direction\" = 'Debit') OR (\"EntryType\" IN ('PaymentReceipt','Credit','Refund') AND \"Direction\" = 'Credit') OR (\"EntryType\" IN ('Adjustment','TransferIn','TransferOut','Reversal') AND \"Direction\" IN ('Debit','Credit')))");
+                    table.CheckConstraint("CK_TenantLedgerEntry_Direction", "\"Direction\" IN ('Debit','Credit') AND ((\"EntryType\" = 'OpeningBalance') OR (\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') AND \"Direction\" = 'Debit') OR (\"EntryType\" IN ('PaymentReceipt','Credit') AND \"Direction\" = 'Credit') OR (\"EntryType\" = 'Refund' AND \"Direction\" = 'Debit') OR (\"EntryType\" IN ('Adjustment','TransferIn','TransferOut','Reversal') AND \"Direction\" IN ('Debit','Credit')))");
                     table.CheckConstraint("CK_TenantLedgerEntry_DueDate", "(\"EntryType\" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') AND \"DueOn\" IS NOT NULL) OR (\"EntryType\" IN ('PaymentReceipt','Credit','Refund','Reversal') AND \"DueOn\" IS NULL) OR (\"EntryType\" IN ('OpeningBalance','Adjustment','TransferIn','TransferOut'))");
                     table.CheckConstraint("CK_TenantLedgerEntry_Provenance", "(\"EntryType\" <> 'RentCharge' OR \"LeaseAgreementId\" IS NOT NULL) AND (\"EntryType\" <> 'AddendumCharge' OR \"LeaseAddendumId\" IS NOT NULL)");
                     table.CheckConstraint("CK_TenantLedgerEntry_ReversalReference", "(\"EntryType\" = 'Reversal') = (\"ReversesEntryId\" IS NOT NULL)");
@@ -7573,6 +7583,13 @@ namespace RentalCommand.Data.Migrations
                 table: "TenantPaymentAttempts",
                 column: "PublicId",
                 unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TenantPaymentAttempts_RefundsPaymentAttemptId",
+                table: "TenantPaymentAttempts",
+                column: "RefundsPaymentAttemptId",
+                unique: true,
+                filter: "\"RefundsPaymentAttemptId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_TenantPaymentAttempts_TenantAccountId_PortfolioId",
