@@ -437,6 +437,19 @@ public class AccountingServiceTests : IDisposable
             sql.Contains("FROM \"LoanPayments\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
             "modeled mortgage interest must be grouped and summed in SQL");
+
+        var scheduleERollupSql = _commands.Where(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LoanPayments", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("CapitalAssets", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("UNION ALL", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)).ToList();
+        scheduleERollupSql.Should().ContainSingle(
+            "expense, modeled-interest, and shared depreciation components must be combined, grouped, and ordered by one SQL statement");
+        (scheduleERollupSql[0].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         scheduleERollupSql[0].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("Schedule E category totals and counts must be aggregated in SQL");
     }
 
     [Fact]

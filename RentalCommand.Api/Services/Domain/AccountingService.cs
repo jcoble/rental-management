@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -983,71 +982,9 @@ public class AccountingService : IAccountingService
             .Select(l => l.PropertyId)
             .Distinct();
 
-        var propertyBases = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
-            .Select(p => new
-            {
-                p.Id,
-                p.PurchasePrice,
-                p.LandValue,
-                p.InServiceDate,
-                p.ManualAnnualDepreciation,
-                p.AccumulatedDepreciation,
-            })
-            .ToListAsync(ct);
+        var depreciationQuery = ScheduleEDepreciationQuery.Build(_db, portfolioId, year);
 
-        var depreciationByProperty = new Dictionary<int, decimal>();
-        foreach (var basis in propertyBases)
-        {
-            var depreciation = DepreciationCalculator.AnnualForYear(
-                new PropertyDepreciationBasis(
-                    basis.PurchasePrice,
-                    basis.LandValue,
-                    basis.InServiceDate,
-                    basis.ManualAnnualDepreciation,
-                    basis.AccumulatedDepreciation),
-                year);
-            if (depreciation.Amount > 0m)
-                depreciationByProperty[basis.Id] = depreciation.Amount;
-        }
-
-        var capitalAssets = await _db.CapitalAssets
-            .AsNoTracking()
-            .Where(a =>
-                a.PortfolioId == portfolioId &&
-                a.InServiceDate < yearEndExclusive &&
-                a.DisposedOnDate == null)
-            .Select(a => new
-            {
-                a.PropertyId,
-                a.CostBasis,
-                a.InServiceDate,
-                a.Method,
-                a.RecoveryYears,
-                a.Convention,
-                a.AccumulatedDepreciation,
-            })
-            .ToListAsync(ct);
-
-        foreach (var asset in capitalAssets)
-        {
-            var depreciation = DepreciationCalculator.AnnualForYear(
-                asset.CostBasis,
-                asset.InServiceDate,
-                asset.Method,
-                asset.RecoveryYears,
-                asset.Convention,
-                asset.AccumulatedDepreciation,
-                year);
-            if (depreciation.Amount > 0m)
-                depreciationByProperty[asset.PropertyId] =
-                    depreciationByProperty.GetValueOrDefault(asset.PropertyId) + depreciation.Amount;
-        }
-
-        var depreciationPropertyIds = depreciationByProperty.Keys.ToArray();
-
-        var expenseTotals = await _db.Expenses
+        var expenseComponents = _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
@@ -1059,65 +996,48 @@ public class AccountingService : IAccountingService
                   loanPropertyIdsQuery.Contains(e.PropertyId.Value)) &&
                 !(e.Category == ScheduleECategory.Depreciation &&
                   e.PropertyId != null &&
-                  depreciationPropertyIds.Contains(e.PropertyId.Value)))
-            .GroupBy(e => e.Category)
-            .Select(g => new
+                  depreciationQuery.Any(row => row.PropertyId == e.PropertyId.Value)))
+            .Select(e => new
             {
-                Category = g.Key,
-                Total = g.Sum(e => e.Amount),
-                Count = g.Count(),
-            })
-            .ToListAsync(ct);
+                e.Category,
+                Total = e.Amount,
+                Count = 1,
+            });
 
-        var modeledInterest = await _db.LoanPayments
+        var modeledInterestComponents = _db.LoanPayments
             .AsNoTracking()
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
                 lp.Loan != null &&
                 lp.DueDate >= yearStart &&
                 lp.DueDate < yearEndExclusive)
-            .GroupBy(_ => 1)
-            .Select(g => new
+            .Select(lp => new
             {
-                Total = g.Sum(lp => lp.InterestAmount),
-                Count = g.Count(),
-            })
-            .FirstOrDefaultAsync(ct);
+                Category = ScheduleECategory.MortgageInterest,
+                Total = lp.InterestAmount,
+                Count = 1,
+            });
 
-        var totals = new Dictionary<ScheduleECategory, (decimal Total, int Count)>();
-
-        foreach (var row in expenseTotals)
+        var depreciationComponents = depreciationQuery.Select(row => new
         {
-            totals[row.Category] = (row.Total, row.Count);
-        }
+            Category = ScheduleECategory.Depreciation,
+            Total = row.Amount,
+            Count = 1,
+        });
 
-        if ((modeledInterest?.Total ?? 0m) != 0m)
-        {
-            var existing = totals.GetValueOrDefault(ScheduleECategory.MortgageInterest);
-            totals[ScheduleECategory.MortgageInterest] = (
-                existing.Total + modeledInterest!.Total,
-                existing.Count + modeledInterest.Count);
-        }
-
-        var totalDepreciation = depreciationByProperty.Values.Sum();
-        if (totalDepreciation != 0m)
-        {
-            var existing = totals.GetValueOrDefault(ScheduleECategory.Depreciation);
-            totals[ScheduleECategory.Depreciation] = (
-                existing.Total + totalDepreciation,
-                existing.Count + depreciationByProperty.Count);
-        }
-
-        return totals
-            .OrderByDescending(kvp => kvp.Value.Total)
-            .Select(kvp => new ScheduleECategoryTotal
+        return await expenseComponents
+            .Concat(modeledInterestComponents)
+            .Concat(depreciationComponents)
+            .GroupBy(component => component.Category)
+            .Select(group => new ScheduleECategoryTotal
             {
-                Category = kvp.Key,
-                CategoryName = kvp.Key.ToString(),
-                Total = kvp.Value.Total,
-                Count = kvp.Value.Count,
+                Category = group.Key,
+                CategoryName = group.Key.ToString(),
+                Total = group.Sum(component => component.Total),
+                Count = group.Sum(component => component.Count),
             })
-            .ToList();
+            .OrderByDescending(row => row.Total)
+            .ToListAsync(ct);
     }
 
     private IQueryable<AccountingReportLedgerRow> ReportLedgerQuery(int portfolioId)
