@@ -304,6 +304,7 @@ public class SandboxServiceTests : IDisposable
         await BuildService().GoLiveAsync(1, CancellationToken.None);
 
         // Exactly one owner remains: the primary self-owner derived from the account.
+        _ctx.Db.ChangeTracker.Clear();
         var owners = await _ctx.Db.OwnerEntities.IgnoreQueryFilters()
             .Where(o => o.PortfolioId == 1).ToListAsync();
         owners.Should().ContainSingle();
@@ -367,6 +368,7 @@ public class SandboxServiceTests : IDisposable
     [Fact]
     public async Task OnboardingChoice_Sandbox_SeedsDemoData_AndFlipsToSandbox()
     {
+        SeedAdministeringUser(portfolioId: 1);
         (await _ctx.Db.Properties.CountAsync()).Should().Be(0);
 
         var state = await BuildService()
@@ -408,6 +410,7 @@ public class SandboxServiceTests : IDisposable
     [Fact]
     public async Task OnboardingChoice_IsIdempotent_SecondCallDoesNotReSeedOrWipe()
     {
+        SeedAdministeringUser(portfolioId: 1);
         var svc = BuildService();
         await svc.ApplyOnboardingChoiceAsync(1, OnboardingChoice.Sandbox, CancellationToken.None);
         var seededCount = await _ctx.Db.Properties.CountAsync();
@@ -438,6 +441,44 @@ public class SandboxServiceTests : IDisposable
         var p = _ctx.Db.Portfolios.Single(x => x.Id == portfolioId);
         p.IsSandbox = true;
         p.SandboxSeededAtUtc = seededAt;
+        _ctx.Db.SaveChanges();
+    }
+
+    private void SeedAdministeringUser(int portfolioId)
+    {
+        var now = DateTime.UtcNow;
+        var actor = new ApplicationUser
+        {
+            UserName = $"onboarding-{portfolioId}@example.test",
+            Email = $"onboarding-{portfolioId}@example.test",
+            DisplayName = "Onboarding Administrator",
+            PortfolioId = portfolioId,
+            EmailConfirmed = true,
+            CreatedAt = now,
+        };
+        _ctx.Db.Users.Add(actor);
+        _ctx.Db.SaveChanges();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.WorkspaceMemberships.Add(new WorkspaceMembership
+        {
+            AccessContextId = accessContext.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
         _ctx.Db.SaveChanges();
     }
 

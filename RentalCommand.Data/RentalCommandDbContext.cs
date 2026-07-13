@@ -882,15 +882,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => new { e.AccountingEntityMappingId, e.MappingRevision }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.CompletedAtUtc, e.Id });
-            entity.HasOne<AccountingEntityMapping>()
+            entity.HasOne(e => e.AccountingEntityMapping)
                 .WithMany()
                 .HasForeignKey(e => e.AccountingEntityMappingId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne<AccountingConnection>()
+            entity.HasOne(e => e.AccountingConnection)
                 .WithMany()
                 .HasForeignKey(e => e.AccountingConnectionId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne<Portfolio>()
+            entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);

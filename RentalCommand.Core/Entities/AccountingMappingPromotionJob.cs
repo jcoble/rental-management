@@ -14,4 +14,8 @@ public sealed class AccountingMappingPromotionJob
     public int PromotedCount { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public DateTime? CompletedAtUtc { get; set; }
+
+    public AccountingConnection? AccountingConnection { get; set; }
+    public AccountingEntityMapping? AccountingEntityMapping { get; set; }
+    public Portfolio? Portfolio { get; set; }
 }
