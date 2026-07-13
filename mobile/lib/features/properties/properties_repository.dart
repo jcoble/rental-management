@@ -19,7 +19,7 @@ class PropertyOwnerOption {
   }
 }
 
-/// Repository for properties, units, and (read-only) leases.
+/// Repository for properties, units, and read-only rental relationships.
 ///
 /// Endpoints used:
 ///   GET    /properties                       — list all properties (JWT-scoped)
@@ -30,7 +30,7 @@ class PropertyOwnerOption {
 ///   GET    /units?propertyId={id}            — list units for a property
 ///   POST   /units  (body includes propertyId) — add a unit
 ///   PATCH  /units/{id}                       — update a unit
-///   GET    /leases?propertyId={id}           — leases filtered by property
+///   GET    /lease-managements/page           — relationships by property
 ///   GET    /owner-entities?take=200          — owner selector options
 class PropertiesRepository {
   PropertiesRepository(this._dio);
@@ -198,20 +198,22 @@ class PropertiesRepository {
     }
   }
 
-  // ── Leases (read-only) ─────────────────────────────────────────────────────
+  // ── Tenant relationships (read-only) ───────────────────────────────────────
 
-  /// Returns all leases for a given property, using the server-side
-  /// `propertyId` query param (same as the web client).
-  Future<List<Lease>> listLeasesForProperty(int propertyId) async {
+  /// Returns the property's continuous tenant relationships. Filtering and
+  /// paging stay on the canonical server query.
+  Future<List<LeaseManagementSummary>> listLeaseManagementsForProperty(
+    int propertyId,
+  ) async {
     try {
-      final response = await _dio.get<List<dynamic>>(
-        '/leases',
-        queryParameters: {'propertyId': propertyId},
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/page',
+        queryParameters: {'propertyId': propertyId, 'take': 200},
       );
-      final data = response.data ?? [];
+      final data = response.data?['items'] as List<dynamic>? ?? const [];
       return data
           .whereType<Map<String, dynamic>>()
-          .map(Lease.fromJson)
+          .map(LeaseManagementSummary.fromJson)
           .toList();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -298,15 +300,16 @@ final availableForLeaseUnitsProvider = FutureProvider.autoDispose
           .listUnits(propertyId, availableForLease: true);
     });
 
-// ── Leases for a specific property ────────────────────────────────────────────
+// ── Tenant relationships for a specific property ─────────────────────────────
 
-class PropertyLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
-  PropertyLeasesNotifier(this._propertyId);
+class PropertyLeaseManagementsNotifier
+    extends Notifier<AsyncValue<List<LeaseManagementSummary>>> {
+  PropertyLeaseManagementsNotifier(this._propertyId);
 
   final int _propertyId;
 
   @override
-  AsyncValue<List<Lease>> build() {
+  AsyncValue<List<LeaseManagementSummary>> build() {
     Future.microtask(load);
     return const AsyncValue.loading();
   }
@@ -316,7 +319,7 @@ class PropertyLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
   Future<void> load() async {
     state = const AsyncValue.loading();
     try {
-      final list = await _repo.listLeasesForProperty(_propertyId);
+      final list = await _repo.listLeaseManagementsForProperty(_propertyId);
       state = AsyncValue.data(list);
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
@@ -326,12 +329,12 @@ class PropertyLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
   Future<void> refresh() => load();
 }
 
-final propertyLeasesProvider =
+final propertyLeaseManagementsProvider =
     NotifierProvider.family<
-      PropertyLeasesNotifier,
-      AsyncValue<List<Lease>>,
+      PropertyLeaseManagementsNotifier,
+      AsyncValue<List<LeaseManagementSummary>>,
       int
-    >(PropertyLeasesNotifier.new);
+    >(PropertyLeaseManagementsNotifier.new);
 
 // ── Single property (by id) ───────────────────────────────────────────────────
 

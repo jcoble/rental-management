@@ -6,22 +6,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 
 void main() {
-  test('sendForSignature posts a fresh idempotency key', () async {
+  test('successor agreement draft posts a fresh idempotency key', () async {
     final adapter = _RecordingAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
       ..httpClientAdapter = adapter;
-    final repo = LeasesRepository(dio);
+    final repo = LeaseManagementsRepository(dio);
 
-    final status = await repo.sendForSignature(44);
+    final draft = await repo.createSuccessorDraft(
+      leaseManagementId: 44,
+      sourceAgreementId: 81,
+      operation: 'renew',
+      termStartOn: DateTime(2027, 1, 1),
+      termEndOn: DateTime(2027, 12, 31),
+      governingFromOn: DateTime(2027, 1, 1),
+    );
 
     expect(adapter.method, 'POST');
-    expect(adapter.path, '/leases/44/send-for-signature');
+    expect(adapter.path, '/lease-managements/44/agreements/81/renew');
     expect(adapter.data, isA<Map<String, dynamic>>());
     final body = adapter.data! as Map<String, dynamic>;
-    expect(body.keys, ['idempotencyKey']);
-    expect(body['idempotencyKey'], matches(RegExp(r'^[0-9a-f]{32}$')));
-    expect(status.leaseId, 44);
-    expect(status.esignStatus, 'Sent');
+    expect(body['termStartOn'], '2027-01-01');
+    expect(body['termEndOn'], '2027-12-31');
+    expect(body['governingFromOn'], '2027-01-01');
+    expect(
+      adapter.headers?['Idempotency-Key'],
+      matches(RegExp(r'^[0-9a-f]{32}$')),
+    );
+    expect(draft.leaseManagementId, 44);
+    expect(draft.leaseAgreementId, 82);
   });
 }
 
@@ -29,6 +41,7 @@ class _RecordingAdapter implements HttpClientAdapter {
   String? method;
   String? path;
   Object? data;
+  Map<String, dynamic>? headers;
 
   @override
   Future<ResponseBody> fetch(
@@ -39,13 +52,14 @@ class _RecordingAdapter implements HttpClientAdapter {
     method = options.method;
     path = options.path;
     data = options.data;
+    headers = Map<String, dynamic>.from(options.headers);
 
     return ResponseBody.fromString(
       jsonEncode({
-        'leaseId': 44,
-        'esignStatus': 'Sent',
-        'leaseStatus': 'PendingSignature',
-        'hasSignedDocument': false,
+        'leaseManagementId': 44,
+        'leaseAgreementId': 82,
+        'versionNumber': 2,
+        'draftRevision': 1,
       }),
       200,
       headers: {

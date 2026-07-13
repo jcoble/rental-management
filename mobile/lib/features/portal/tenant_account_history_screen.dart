@@ -65,7 +65,9 @@ class TenantAccountHistoryScreen extends ConsumerWidget {
           }
 
           if (leases.length == 1) {
-            return LeaseLedgerView(leaseId: leases.first.id);
+            return LeaseLedgerView(
+              leaseManagementId: leases.first.leaseManagementId,
+            );
           }
 
           return _LeaseChooser(leases: leases);
@@ -78,7 +80,7 @@ class TenantAccountHistoryScreen extends ConsumerWidget {
 class _LeaseChooser extends StatelessWidget {
   const _LeaseChooser({required this.leases});
 
-  final List<Lease> leases;
+  final List<PortalLeaseRelationship> leases;
 
   @override
   Widget build(BuildContext context) {
@@ -90,22 +92,19 @@ class _LeaseChooser extends StatelessWidget {
             child: ListTile(
               titleAlignment: ListTileTitleAlignment.center,
               leading: const Icon(Icons.description_outlined),
-              title: Text(lease.propertyName ?? 'Lease #${lease.leaseNumber}'),
+              title: Text(lease.propertyName),
               subtitle: Text(
-                lease.unitNumber != null
-                    ? 'Unit ${lease.unitNumber} · #${lease.leaseNumber}'
-                    : 'Lease #${lease.leaseNumber}',
+                'Unit ${lease.unitNumber}'
+                '${lease.agreement == null ? '' : ' · #${lease.agreement!.agreementNumber}'}',
               ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
                   builder: (_) => Scaffold(
-                    appBar: AppBar(
-                      title: Text(
-                        lease.propertyName ?? 'Lease #${lease.leaseNumber}',
-                      ),
+                    appBar: AppBar(title: Text(lease.propertyName)),
+                    body: LeaseLedgerView(
+                      leaseManagementId: lease.leaseManagementId,
                     ),
-                    body: LeaseLedgerView(leaseId: lease.id),
                   ),
                 ),
               ),

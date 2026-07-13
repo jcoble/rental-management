@@ -43,7 +43,7 @@ String _formatCurrency(double amount) {
 }
 
 /// Loads a tenant by id, then shows [TenantDetailScreen]. Use this when the
-/// caller only has a tenant id (e.g. a lease's tenant link, or an approved
+/// caller only has a tenant id (e.g. a relationship's party link, or an approved
 /// application that created a tenant).
 class TenantDetailLoaderScreen extends ConsumerWidget {
   const TenantDetailLoaderScreen({super.key, required this.tenantId});
@@ -76,8 +76,8 @@ class TenantDetailLoaderScreen extends ConsumerWidget {
 
 /// Detail screen for a single tenant.
 ///
-/// Shows tenant info with an edit button and their leases, loaded from
-/// GET /leases filtered by tenantId.
+/// Shows tenant info with an edit button and their canonical relationship
+/// history, filtered server-side by tenant id.
 class TenantDetailScreen extends ConsumerStatefulWidget {
   const TenantDetailScreen({super.key, required this.tenant});
 
@@ -95,9 +95,6 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   void initState() {
     super.initState();
     _tenant = widget.tenant;
-    // tenantLeasesProvider self-loads on first watch (TenantLeasesNotifier.build
-    // calls Future.microtask(load)), so an explicit load() here just double-fetches.
-    //
     // The list endpoint omits portalAccess, so a tenant pushed from the list
     // arrives without it; pull the full record to populate the portal card.
     // (Deep-link/loader entries already carry it, so this is skipped for them.)
@@ -120,7 +117,9 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   Future<void> _refresh() async {
     await Future.wait<void>([
       ref.read(tenantDetailProvider(_tenant.id).notifier).refresh(),
-      ref.read(tenantLeasesProvider(_tenant.id).notifier).refresh(),
+      Future<void>.sync(
+        () => ref.invalidate(tenantLeaseManagementsProvider(_tenant.id)),
+      ),
     ]);
     final updated = ref.read(tenantDetailProvider(_tenant.id));
     updated.whenData((t) {
@@ -284,7 +283,7 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final leasesAsync = ref.watch(tenantLeasesProvider(_tenant.id));
+    final leasesAsync = ref.watch(tenantLeaseManagementsProvider(_tenant.id));
 
     return Scaffold(
       appBar: AppBar(
@@ -340,7 +339,7 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
 
             // ── Leases ─────────────────────────────────────────────────────
             Text(
-              'Leases',
+              'Tenant & lease history',
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -357,16 +356,16 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      'No leases for this tenant.',
+                      'No tenant relationships for this person.',
                       style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   );
                 }
-                // Active leases first, then the rest.
+                // Open relationships first, then closed history.
                 final sorted = [...leases]
                   ..sort((a, b) {
-                    final aActive = a.status.toLowerCase() == 'active' ? 0 : 1;
-                    final bActive = b.status.toLowerCase() == 'active' ? 0 : 1;
+                    final aActive = a.isOpen ? 0 : 1;
+                    final bActive = b.isOpen ? 0 : 1;
                     return aActive.compareTo(bActive);
                   });
                 return Column(
@@ -644,15 +643,15 @@ class _PortalAccessCard extends StatelessWidget {
 class _LeaseSummaryTile extends StatelessWidget {
   const _LeaseSummaryTile({required this.lease});
 
-  final Lease lease;
+  final LeaseManagementSummary lease;
 
   void _openLease(BuildContext context) {
     openUnitCommandCenter(
       context,
       unitId: lease.unitId,
       initialTab: UnitCommandCenterTab.lease,
-      lease: lease,
-      tenantId: lease.tenantId,
+      leaseManagementId: lease.id,
+      tenantId: lease.primaryTenantId,
     );
   }
 
@@ -661,7 +660,7 @@ class _LeaseSummaryTile extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    final isActive = lease.status.toLowerCase() == 'active';
+    final isActive = lease.isOpen;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -677,14 +676,14 @@ class _LeaseSummaryTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      lease.propertyName ?? 'Lease #${lease.leaseNumber}',
+                      lease.propertyName,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                   Text(
-                    _formatCurrency(lease.monthlyRent),
+                    _formatCurrency(lease.baseRentAmount ?? 0),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: colorScheme.primary,
@@ -703,8 +702,8 @@ class _LeaseSummaryTile extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
-                      '${_fmt(lease.startDate)} – ${_fmt(lease.endDate)}',
+                      'Unit ${lease.unitNumber}  ·  '
+                      '${lease.termStartOn == null ? 'Agreement not issued' : '${_fmt(lease.termStartOn!)} – ${lease.termEndOn == null ? 'Month-to-month' : _fmt(lease.termEndOn!)}'}',
                       style: TextStyle(
                         fontSize: 12,
                         color: colorScheme.onSurfaceVariant,
@@ -722,7 +721,7 @@ class _LeaseSummaryTile extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        lease.status,
+                        lease.lifecycle,
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,

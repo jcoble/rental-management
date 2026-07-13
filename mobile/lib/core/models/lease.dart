@@ -1,167 +1,339 @@
-class LeaseTenantSummary {
-  final int id;
-  final String name;
-  final String? email;
-  final String? phone;
-  final bool isPrimary;
+DateTime _date(dynamic value) =>
+    DateTime.tryParse(value as String? ?? '') ?? DateTime(0);
 
-  const LeaseTenantSummary({
+DateTime? _optionalDate(dynamic value) =>
+    DateTime.tryParse(value as String? ?? '');
+
+/// One continuous household, possession, and tenant-account relationship.
+///
+/// This is deliberately not a mutable legal contract. Agreement versions live
+/// below the relationship and may change while this identity and account stay
+/// continuous.
+class LeaseManagementSummary {
+  const LeaseManagementSummary({
     required this.id,
-    required this.name,
-    this.email,
-    this.phone,
-    this.isPrimary = false,
+    required this.publicId,
+    required this.relationshipNumber,
+    required this.propertyId,
+    required this.propertyName,
+    required this.unitId,
+    required this.unitNumber,
+    required this.lifecycle,
+    required this.currentPartyCount,
+    required this.currentResidentCount,
+    required this.hasReconciliationException,
+    required this.updatedAt,
+    this.agreementId,
+    this.agreementNumber,
+    this.agreementStatus,
+    this.termStartOn,
+    this.termEndOn,
+    this.baseRentAmount,
+    this.upcomingAgreementId,
+    this.tenantAccountId,
+    this.primaryTenantId,
+    this.primaryTenantName,
+    this.plannedPossessionAt,
+    this.possessionGivenAt,
+    this.plannedMoveOutAt,
+    this.possessionReturnedAt,
+    this.accountClosedAt,
+    this.canceledAt,
+    this.endingDisposition = 'Undecided',
   });
 
-  factory LeaseTenantSummary.fromJson(Map<String, dynamic> json) {
-    return LeaseTenantSummary(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      name: json['name'] as String? ?? '',
-      email: json['email'] as String?,
-      phone: json['phone'] as String?,
-      isPrimary: json['isPrimary'] as bool? ?? false,
+  final int id;
+  final String publicId;
+  final String relationshipNumber;
+  final int propertyId;
+  final String propertyName;
+  final int unitId;
+  final String unitNumber;
+  final String lifecycle;
+  final int? agreementId;
+  final String? agreementNumber;
+  final String? agreementStatus;
+  final DateTime? termStartOn;
+  final DateTime? termEndOn;
+  final double? baseRentAmount;
+  final int? upcomingAgreementId;
+  final int? tenantAccountId;
+  final int? primaryTenantId;
+  final String? primaryTenantName;
+  final int currentPartyCount;
+  final int currentResidentCount;
+  final bool hasReconciliationException;
+  final DateTime? plannedPossessionAt;
+  final DateTime? possessionGivenAt;
+  final DateTime? plannedMoveOutAt;
+  final DateTime? possessionReturnedAt;
+  final DateTime? accountClosedAt;
+  final DateTime? canceledAt;
+  final String endingDisposition;
+  final DateTime updatedAt;
+
+  bool get isOpen =>
+      canceledAt == null &&
+      (possessionReturnedAt == null || accountClosedAt == null);
+
+  factory LeaseManagementSummary.fromJson(Map<String, dynamic> json) {
+    return LeaseManagementSummary(
+      id: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+      publicId: json['leaseManagementPublicId'] as String? ?? '',
+      relationshipNumber: json['relationshipNumber'] as String? ?? '',
+      propertyId: (json['propertyId'] as num?)?.toInt() ?? 0,
+      propertyName: json['propertyName'] as String? ?? '',
+      unitId: (json['unitId'] as num?)?.toInt() ?? 0,
+      unitNumber: json['unitNumber'] as String? ?? '',
+      lifecycle: json['lifecycle'] as String? ?? '',
+      agreementId: (json['leaseAgreementId'] as num?)?.toInt(),
+      agreementNumber: json['agreementNumber'] as String?,
+      agreementStatus: json['agreementStatus'] as String?,
+      termStartOn: _optionalDate(json['termStartOn']),
+      termEndOn: _optionalDate(json['termEndOn']),
+      baseRentAmount: (json['baseRentAmount'] as num?)?.toDouble(),
+      upcomingAgreementId: (json['upcomingLeaseAgreementId'] as num?)?.toInt(),
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
+      primaryTenantId: (json['primaryTenantId'] as num?)?.toInt(),
+      primaryTenantName: json['primaryTenantName'] as String?,
+      currentPartyCount: (json['currentPartyCount'] as num?)?.toInt() ?? 0,
+      currentResidentCount:
+          (json['currentResidentCount'] as num?)?.toInt() ?? 0,
+      hasReconciliationException:
+          json['hasReconciliationException'] as bool? ?? false,
+      plannedPossessionAt: _optionalDate(json['plannedPossessionAtUtc']),
+      possessionGivenAt: _optionalDate(json['possessionGivenAtUtc']),
+      plannedMoveOutAt: _optionalDate(json['plannedMoveOutAtUtc']),
+      possessionReturnedAt: _optionalDate(json['possessionReturnedAtUtc']),
+      accountClosedAt: _optionalDate(json['accountClosedAtUtc']),
+      canceledAt: _optionalDate(json['canceledAtUtc']),
+      endingDisposition: json['endingDisposition'] as String? ?? 'Undecided',
+      updatedAt: _date(json['updatedAtUtc']),
     );
   }
 }
 
-class Lease {
-  final int id;
-  final int portfolioId;
-  final int propertyId;
-  final int unitId;
-  final int tenantId;
-  final List<int> tenantIds;
-  final List<LeaseTenantSummary> tenants;
-  final String leaseNumber;
-  final String status;
-  final DateTime startDate;
-  final DateTime endDate;
-  final DateTime? moveInDate;
-  final DateTime? moveOutDate;
-  final double monthlyRent;
-  final double securityDeposit;
-  final double lateFeeAmount;
-  final int rentDueDay;
-  final DateTime? rentTrackingStartDate;
-  final String? notes;
-  final String? tenantName;
-  final String? propertyName;
-  final String? unitNumber;
-  final DateTime createdAt;
-  final DateTime updatedAt;
-
-  const Lease({
+class LeaseManagementParty {
+  const LeaseManagementParty({
     required this.id,
-    required this.portfolioId,
-    required this.propertyId,
-    required this.unitId,
     required this.tenantId,
-    this.tenantIds = const [],
-    this.tenants = const [],
-    required this.leaseNumber,
-    required this.status,
-    required this.startDate,
-    required this.endDate,
-    this.moveInDate,
-    this.moveOutDate,
-    required this.monthlyRent,
-    required this.securityDeposit,
-    required this.lateFeeAmount,
-    required this.rentDueDay,
-    this.rentTrackingStartDate,
-    this.notes,
-    this.tenantName,
-    this.propertyName,
-    this.unitNumber,
-    required this.createdAt,
-    required this.updatedAt,
+    required this.tenantName,
+    required this.role,
+    required this.effectiveFrom,
+    this.email,
+    this.phone,
+    this.effectiveThrough,
   });
 
-  factory Lease.fromJson(Map<String, dynamic> json) {
-    final parsedTenants = (json['tenants'] as List<dynamic>? ?? const [])
-        .whereType<Map<String, dynamic>>()
-        .map(LeaseTenantSummary.fromJson)
-        .where((tenant) => tenant.id > 0)
-        .toList();
-    final parsedTenantIds = (json['tenantIds'] as List<dynamic>? ?? const [])
-        .whereType<num>()
-        .map((id) => id.toInt())
-        .where((id) => id > 0)
-        .toList();
-    final primaryTenantId =
-        (json['tenantId'] as num?)?.toInt() ??
-        (parsedTenantIds.isNotEmpty
-            ? parsedTenantIds.first
-            : (parsedTenants.isNotEmpty ? parsedTenants.first.id : 0));
-    final normalizedTenantIds = parsedTenantIds.isNotEmpty
-        ? parsedTenantIds
-        : <int>[if (primaryTenantId > 0) primaryTenantId];
-    final joinedTenantName = parsedTenants
-        .map((tenant) => tenant.name.trim())
-        .where((name) => name.isNotEmpty)
-        .join(', ');
+  final int id;
+  final int tenantId;
+  final String tenantName;
+  final String role;
+  final String? email;
+  final String? phone;
+  final DateTime effectiveFrom;
+  final DateTime? effectiveThrough;
 
-    return Lease(
-      id: (json['id'] as num).toInt(),
-      portfolioId: (json['portfolioId'] as num).toInt(),
-      propertyId: (json['propertyId'] as num).toInt(),
-      unitId: (json['unitId'] as num).toInt(),
-      tenantId: primaryTenantId,
-      tenantIds: normalizedTenantIds,
-      tenants: parsedTenants,
-      leaseNumber: json['leaseNumber'] as String? ?? '',
-      status: json['status'] as String? ?? '',
-      startDate:
-          DateTime.tryParse(json['startDate'] as String? ?? '') ?? DateTime(0),
-      endDate:
-          DateTime.tryParse(json['endDate'] as String? ?? '') ?? DateTime(0),
-      moveInDate: DateTime.tryParse(json['moveInDate'] as String? ?? ''),
-      moveOutDate: DateTime.tryParse(json['moveOutDate'] as String? ?? ''),
-      monthlyRent: (json['monthlyRent'] as num?)?.toDouble() ?? 0,
-      securityDeposit: (json['securityDeposit'] as num?)?.toDouble() ?? 0,
-      lateFeeAmount: (json['lateFeeAmount'] as num?)?.toDouble() ?? 0,
-      rentDueDay: (json['rentDueDay'] as num?)?.toInt() ?? 1,
-      rentTrackingStartDate: DateTime.tryParse(
-        json['rentTrackingStartDate'] as String? ?? '',
-      ),
-      notes: json['notes'] as String?,
-      tenantName:
-          json['tenantName'] as String? ??
-          (joinedTenantName.isEmpty ? null : joinedTenantName),
-      propertyName: json['propertyName'] as String?,
-      unitNumber: json['unitNumber'] as String?,
-      createdAt:
-          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt:
-          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+  factory LeaseManagementParty.fromJson(Map<String, dynamic> json) =>
+      LeaseManagementParty(
+        id: (json['leaseManagementPartyId'] as num?)?.toInt() ?? 0,
+        tenantId: (json['tenantId'] as num?)?.toInt() ?? 0,
+        tenantName: json['tenantName'] as String? ?? '',
+        role: json['role'] as String? ?? '',
+        email: json['email'] as String?,
+        phone: json['phone'] as String?,
+        effectiveFrom: _date(json['effectiveFrom']),
+        effectiveThrough: _optionalDate(json['effectiveThrough']),
+      );
+}
+
+class LeaseManagementDetail {
+  const LeaseManagementDetail({
+    required this.summary,
+    required this.parties,
+    required this.agreementCount,
+    required this.addendumCount,
+    required this.legalArtifactCount,
+  });
+
+  final LeaseManagementSummary summary;
+  final List<LeaseManagementParty> parties;
+  final int agreementCount;
+  final int addendumCount;
+  final int legalArtifactCount;
+
+  factory LeaseManagementDetail.fromJson(Map<String, dynamic> json) =>
+      LeaseManagementDetail(
+        summary: LeaseManagementSummary.fromJson(
+          (json['summary'] as Map?)?.cast<String, dynamic>() ?? const {},
+        ),
+        parties: (json['parties'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(LeaseManagementParty.fromJson)
+            .toList(),
+        agreementCount: (json['agreementCount'] as num?)?.toInt() ?? 0,
+        addendumCount: (json['addendumCount'] as num?)?.toInt() ?? 0,
+        legalArtifactCount: (json['legalArtifactCount'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class LegalArtifactSummary {
+  const LegalArtifactSummary({
+    required this.id,
+    required this.fileName,
+    required this.contentType,
+    required this.byteLength,
+  });
+
+  final int id;
+  final String fileName;
+  final String contentType;
+  final int byteLength;
+
+  factory LegalArtifactSummary.fromJson(Map<String, dynamic> json) =>
+      LegalArtifactSummary(
+        id: (json['legalDocumentArtifactId'] as num?)?.toInt() ?? 0,
+        fileName: json['fileName'] as String? ?? '',
+        contentType: json['contentType'] as String? ?? '',
+        byteLength: (json['byteLength'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class LeaseAgreementHistory {
+  const LeaseAgreementHistory({
+    required this.id,
+    required this.versionNumber,
+    required this.agreementNumber,
+    required this.changeType,
+    required this.termType,
+    required this.termStartOn,
+    required this.governingFromOn,
+    required this.baseRentAmount,
+    required this.status,
+    required this.isGoverning,
+    this.termEndOn,
+    this.issuedArtifact,
+    this.executedArtifact,
+    this.issuedAt,
+    this.fullyExecutedAt,
+    this.voidedAt,
+  });
+
+  final int id;
+  final int versionNumber;
+  final String agreementNumber;
+  final String changeType;
+  final String termType;
+  final DateTime termStartOn;
+  final DateTime? termEndOn;
+  final DateTime governingFromOn;
+  final double baseRentAmount;
+  final String status;
+  final bool isGoverning;
+  final LegalArtifactSummary? issuedArtifact;
+  final LegalArtifactSummary? executedArtifact;
+  final DateTime? issuedAt;
+  final DateTime? fullyExecutedAt;
+  final DateTime? voidedAt;
+
+  bool get isDraft => status.toLowerCase() == 'draft';
+
+  factory LeaseAgreementHistory.fromJson(Map<String, dynamic> json) {
+    LegalArtifactSummary? artifact(String key) {
+      final value = json[key];
+      return value is Map<String, dynamic>
+          ? LegalArtifactSummary.fromJson(value)
+          : null;
+    }
+
+    return LeaseAgreementHistory(
+      id: (json['leaseAgreementId'] as num?)?.toInt() ?? 0,
+      versionNumber: (json['versionNumber'] as num?)?.toInt() ?? 0,
+      agreementNumber: json['agreementNumber'] as String? ?? '',
+      changeType: json['changeType'] as String? ?? '',
+      termType: json['termType'] as String? ?? '',
+      termStartOn: _date(json['termStartOn']),
+      termEndOn: _optionalDate(json['termEndOn']),
+      governingFromOn: _date(json['governingFromOn']),
+      baseRentAmount: (json['baseRentAmount'] as num?)?.toDouble() ?? 0,
+      status: json['agreementStatus'] as String? ?? '',
+      isGoverning: json['isGoverning'] as bool? ?? false,
+      issuedArtifact: artifact('issuedArtifact'),
+      executedArtifact: artifact('executedArtifact'),
+      issuedAt: _optionalDate(json['issuedAtUtc']),
+      fullyExecutedAt: _optionalDate(json['fullyExecutedAtUtc']),
+      voidedAt: _optionalDate(json['voidedAtUtc']),
     );
   }
+}
 
-  Map<String, dynamic> toJson() {
-    final outgoingTenantIds = tenantIds.isNotEmpty ? tenantIds : [tenantId];
-    return {
-      'portfolioId': portfolioId,
-      'propertyId': propertyId,
-      'unitId': unitId,
-      'tenantId': outgoingTenantIds.first,
-      'tenantIds': outgoingTenantIds,
-      'status': status,
-      'startDate': startDate.toIso8601String().split('T').first,
-      'endDate': endDate.toIso8601String().split('T').first,
-      if (moveInDate != null)
-        'moveInDate': moveInDate!.toIso8601String().split('T').first,
-      if (moveOutDate != null)
-        'moveOutDate': moveOutDate!.toIso8601String().split('T').first,
-      'monthlyRent': monthlyRent,
-      'securityDeposit': securityDeposit,
-      'lateFeeAmount': lateFeeAmount,
-      'rentDueDay': rentDueDay,
-      if (rentTrackingStartDate != null)
-        'rentTrackingStartDate': rentTrackingStartDate!
-            .toIso8601String()
-            .split('T')
-            .first,
-      if (notes != null) 'notes': notes,
-    };
-  }
+/// Tenant-safe projection returned only from `/portal/leases`.
+class PortalLeaseRelationship {
+  const PortalLeaseRelationship({
+    required this.leaseManagementId,
+    required this.propertyName,
+    required this.unitNumber,
+    required this.lifecycle,
+    this.tenantAccountId,
+    this.agreement,
+  });
+
+  final int leaseManagementId;
+  final int? tenantAccountId;
+  final String propertyName;
+  final String unitNumber;
+  final String lifecycle;
+  final PortalLeaseAgreement? agreement;
+
+  factory PortalLeaseRelationship.fromJson(Map<String, dynamic> json) =>
+      PortalLeaseRelationship(
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
+        propertyName: json['propertyName'] as String? ?? '',
+        unitNumber: json['unitNumber'] as String? ?? '',
+        lifecycle: json['lifecycle'] as String? ?? '',
+        agreement: json['agreement'] is Map<String, dynamic>
+            ? PortalLeaseAgreement.fromJson(
+                json['agreement'] as Map<String, dynamic>,
+              )
+            : null,
+      );
+}
+
+class PortalLeaseAgreement {
+  const PortalLeaseAgreement({
+    required this.id,
+    required this.agreementNumber,
+    required this.status,
+    required this.termStartOn,
+    required this.baseRentAmount,
+    required this.securityDepositObligation,
+    required this.lateFeeAmount,
+    required this.rentDueDay,
+    this.termEndOn,
+  });
+
+  final int id;
+  final String agreementNumber;
+  final String status;
+  final DateTime termStartOn;
+  final DateTime? termEndOn;
+  final double baseRentAmount;
+  final double securityDepositObligation;
+  final double lateFeeAmount;
+  final int rentDueDay;
+
+  factory PortalLeaseAgreement.fromJson(Map<String, dynamic> json) =>
+      PortalLeaseAgreement(
+        id: (json['leaseAgreementId'] as num?)?.toInt() ?? 0,
+        agreementNumber: json['agreementNumber'] as String? ?? '',
+        status: json['agreementStatus'] as String? ?? '',
+        termStartOn: _date(json['termStartOn']),
+        termEndOn: _optionalDate(json['termEndOn']),
+        baseRentAmount: (json['baseRentAmount'] as num?)?.toDouble() ?? 0,
+        securityDepositObligation:
+            (json['securityDepositObligation'] as num?)?.toDouble() ?? 0,
+        lateFeeAmount: (json['lateFeeAmount'] as num?)?.toDouble() ?? 0,
+        rentDueDay: (json['rentDueDay'] as num?)?.toInt() ?? 1,
+      );
 }

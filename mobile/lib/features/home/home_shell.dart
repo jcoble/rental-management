@@ -927,7 +927,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
   /// Payment id currently starting a Checkout session (button shows a spinner).
   int? _payingPaymentId;
 
-  /// Lease id whose autopay enroll/cancel is in flight.
+  /// Tenant-account id whose autopay enroll/cancel is in flight.
   int? _busyAutopayAccountId;
 
   AuthUser? get user => widget.user;
@@ -2813,12 +2813,13 @@ class _BulletRow extends StatelessWidget {
           destination: MobileDestinationId.moneyOverview,
           detailBuilder: (_) => const OverdueScreen(),
         );
-      case 'Lease':
+      case 'LeaseManagement':
         if (id != null) {
           return _BriefingTarget(
             tab: MobileShellTabId.rentals,
             destination: MobileDestinationId.units,
-            detailBuilder: (_) => LeaseDetailLoaderScreen(leaseId: id),
+            detailBuilder: (_) =>
+                LeaseManagementDetailLoaderScreen(leaseManagementId: id),
           );
         }
         return _BriefingTarget(

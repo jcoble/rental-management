@@ -24,7 +24,7 @@ class RealtimeEvent {
 
   final RealtimeEventType type;
 
-  /// e.g. "Payment", "WorkOrder", "Lease", "Property", "Tenant",
+  /// e.g. "Payment", "WorkOrder", "LeaseManagement", "Property", "Tenant",
   ///      "Appointment", "ScanDraft"
   final String entityType;
 
@@ -61,8 +61,7 @@ class SignalrService {
   /// Broadcast stream of realtime events from the updates hub.
   Stream<RealtimeEvent> get events => _controller.stream;
 
-  bool get isConnected =>
-      _hub?.state == HubConnectionState.Connected;
+  bool get isConnected => _hub?.state == HubConnectionState.Connected;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -121,20 +120,19 @@ class SignalrService {
 
     final hub = HubConnectionBuilder()
         .withUrl(hubUrl, options: options)
-        .withAutomaticReconnect(retryDelays: [
-          0,
-          2000,
-          5000,
-          10000,
-          30000,
-          60000,
-        ])
+        .withAutomaticReconnect(
+          retryDelays: [0, 2000, 5000, 10000, 30000, 60000],
+        )
         .build();
 
-    hub.on('EntityUpdated', (args) =>
-        _handleEvent(RealtimeEventType.entityUpdated, args));
-    hub.on('EntityDeleted', (args) =>
-        _handleEvent(RealtimeEventType.entityDeleted, args));
+    hub.on(
+      'EntityUpdated',
+      (args) => _handleEvent(RealtimeEventType.entityUpdated, args),
+    );
+    hub.on(
+      'EntityDeleted',
+      (args) => _handleEvent(RealtimeEventType.entityDeleted, args),
+    );
 
     hub.onreconnecting(({error}) {
       debugPrint('[SignalR] reconnecting… error: $error');
@@ -161,11 +159,9 @@ class SignalrService {
     final entityId = (raw['entityId'] as num?)?.toInt() ?? 0;
     if (entityType.isEmpty) return;
 
-    _controller.add(RealtimeEvent(
-      type: type,
-      entityType: entityType,
-      entityId: entityId,
-    ));
+    _controller.add(
+      RealtimeEvent(type: type, entityType: entityType, entityId: entityId),
+    );
   }
 
   void dispose() {

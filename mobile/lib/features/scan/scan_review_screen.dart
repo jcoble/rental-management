@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
-import '../leases/leases_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
@@ -624,7 +623,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 : draft.isWorkOrder
                 ? 'Work order created!'
                 : draft.isLease
-                ? 'Lease created!'
+                ? 'Lease agreement imported!'
                 : draft.isApplication
                 ? 'Application created!'
                 : draft.isLoan
@@ -635,40 +634,35 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         ),
       );
 
-      // For a lease, jump straight to the new lease so the landlord can review
-      // it (and generate the agreement). Replace this review screen so Back
-      // returns to the scan list rather than the consumed draft.
-      final leaseId = (result?['agreementId'] as num?)?.toInt();
-      if (draft.isLease && leaseId != null) {
-        final lease = await _loadLease(leaseId);
-        if (!mounted) return;
-        if (lease != null) {
-          final shellNavigator = mobileShellNavigatorOf(context);
-          if (shellNavigator != null) {
-            shellNavigator.openTab(
-              MobileShellTabId.rentals,
-              destination: MobileDestinationId.units,
-              detailBuilder: (_) => UnitCommandCenterLoaderScreen(
-                unitId: lease.unitId,
-                initialTab: UnitCommandCenterTab.lease,
-                initialLease: lease,
-              ),
-            );
-            revealMobileShellIfDetached(context);
-            return;
-          }
-
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute<void>(
-              builder: (_) => UnitCommandCenterLoaderScreen(
-                unitId: lease.unitId,
-                initialTab: UnitCommandCenterTab.lease,
-                initialLease: lease,
-              ),
+      // For an imported agreement, jump to its Unit relationship so the
+      // landlord can review the canonical agreement history. Replace this
+      // review screen so Back returns to the scan list.
+      final agreementId = (result?['agreementId'] as num?)?.toInt();
+      final unitId = (result?['unitId'] as num?)?.toInt();
+      if (draft.isLease && agreementId != null && unitId != null) {
+        final shellNavigator = mobileShellNavigatorOf(context);
+        if (shellNavigator != null) {
+          shellNavigator.openTab(
+            MobileShellTabId.rentals,
+            destination: MobileDestinationId.units,
+            detailBuilder: (_) => UnitCommandCenterLoaderScreen(
+              unitId: unitId,
+              initialTab: UnitCommandCenterTab.lease,
             ),
           );
+          revealMobileShellIfDetached(context);
           return;
         }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) => UnitCommandCenterLoaderScreen(
+              unitId: unitId,
+              initialTab: UnitCommandCenterTab.lease,
+            ),
+          ),
+        );
+        return;
       }
       Navigator.of(context).pop();
     } on ApiException catch (e) {
@@ -679,16 +673,6 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _showError('Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _confirming = false);
-    }
-  }
-
-  /// Fetches the just-created lease for navigation; returns null on failure so
-  /// confirm falls back to simply popping (the lease still exists).
-  Future<Lease?> _loadLease(int leaseId) async {
-    try {
-      return await ref.read(leasesRepositoryProvider).getLease(leaseId);
-    } catch (_) {
-      return null;
     }
   }
 

@@ -115,7 +115,7 @@ class TenantPortalSnapshot {
   final TenantBalance balance;
   final List<TenantPortalPayment> payments;
   final List<WorkOrder> workOrders;
-  final List<Lease> leases;
+  final List<PortalLeaseRelationship> leases;
   final List<TenantNotification> notifications;
 }
 
@@ -151,7 +151,7 @@ class TenantPortalRepository {
             .toList(),
         leases: ((results[3].data as List<dynamic>?) ?? const [])
             .whereType<Map<String, dynamic>>()
-            .map(Lease.fromJson)
+            .map(PortalLeaseRelationship.fromJson)
             .toList(),
         notifications: ((results[4].data as List<dynamic>?) ?? const [])
             .whereType<Map<String, dynamic>>()
@@ -219,7 +219,10 @@ class TenantPortalRepository {
   // rather than an error. Success/cancel URLs are omitted; the API defaults
   // them server-side (the tenant just returns to the app and pulls to refresh).
 
-  Future<String> payCheckout(int tenantAccountId, int chargeLedgerEntryId) async {
+  Future<String> payCheckout(
+    int tenantAccountId,
+    int chargeLedgerEntryId,
+  ) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/portal/tenant-accounts/$tenantAccountId/charges/$chargeLedgerEntryId/checkout',
@@ -313,5 +316,7 @@ final tenantWorkOrderDetailProvider = FutureProvider.autoDispose
 /// provider (the UI does so after enroll/cancel and on pull-to-refresh).
 final tenantAutopayStatusProvider = FutureProvider.autoDispose
     .family<AutopayStatus, int>((ref, tenantAccountId) {
-      return ref.watch(tenantPortalRepositoryProvider).autopayStatus(tenantAccountId);
+      return ref
+          .watch(tenantPortalRepositoryProvider)
+          .autopayStatus(tenantAccountId);
     });
