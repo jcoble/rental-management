@@ -16,7 +16,7 @@ using Xunit;
 
 namespace RentalCommand.IntegrationTests;
 
-/// <summary>PostgreSQL coverage for the five production non-lease scan target writers.</summary>
+/// <summary>PostgreSQL coverage for the production scan target writers.</summary>
 public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
 {
     private static readonly DateTime CommandTime =
@@ -32,6 +32,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private int _unitId;
     private int _tenantId;
     private int _leaseId;
+    private int _leaseManagementId;
     private int _tenantAccountId;
     private int _vendorId;
     private int _actorUserId;
@@ -171,16 +172,11 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             PortfolioId = _portfolioId,
             RoleProfileId = 2,
             Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
             EffectiveFromUtc = CommandTime.AddDays(-1),
             CreatedAtUtc = CommandTime,
             UpdatedAtUtc = CommandTime,
         };
-        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
-        {
-            PropertyId = _propertyId,
-            PortfolioId = _portfolioId,
-        });
         var session = new AuthSession
         {
             Id = Guid.NewGuid(),
@@ -217,6 +213,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         scope.Db.TenantAccounts.Add(tenantAccount);
         await scope.Db.SaveChangesAsync();
         _tenantAccountId = tenantAccount.Id;
+        _leaseManagementId = relationship.Id;
         _authSessionId = session.Id;
         _accessContextId = accessContext.Id;
         _accessRevision = accessContext.AccessRevision;
@@ -305,6 +302,105 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await using var verify = Scope();
         (await verify.Db.Expenses.CountAsync(row => row.Description == uniqueVendor))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task SignedLeaseImport_PersistsCanonicalAgreementArtifactAndNoLegacyLeaseGraph()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Zillow signed lease import");
+        var target = LeaseTarget(
+            _propertyId,
+            _unitId,
+            _tenantId,
+            leaseManagementId: _leaseManagementId,
+            tenantAccountId: _tenantAccountId);
+        int legacyLeaseCount;
+        int legacyPartyCount;
+        int legacyPaymentCount;
+        await using (var before = Scope())
+        {
+            legacyLeaseCount = await before.Db.Leases.CountAsync();
+            legacyPartyCount = await before.Db.LeaseTenants.CountAsync();
+            legacyPaymentCount = await before.Db.Payments.CountAsync();
+        }
+
+        var outcome = await UnitOfWork.ExecuteAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, source.DraftId, "signed-zillow-import"),
+            LeaseCommand(source, target),
+            Codec);
+
+        outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        outcome.Value.TargetEntityType.Should().Be(nameof(LeaseAgreement));
+        await using var verify = Scope();
+        var agreement = await verify.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.TargetEntityId);
+        agreement.LeaseManagementId.Should().Be(_leaseManagementId);
+        agreement.IssuedArtifactId.Should().NotBeNull();
+        agreement.ExecutedArtifactId.Should().Be(agreement.IssuedArtifactId);
+        agreement.FullyExecutedAtUtc.Should().NotBeNull();
+        var artifact = await verify.Db.LegalDocumentArtifacts.AsNoTracking()
+            .SingleAsync(row => row.Id == agreement.ExecutedArtifactId);
+        artifact.ArtifactKind.Should().Be(LegalDocumentArtifactKind.ExecutedAgreement);
+        artifact.StoredFileId.Should().Be(source.StoredFileId);
+        artifact.ContentSha256.Should().Be(source.Sha256);
+        (await verify.Db.LeaseManagementParties.CountAsync(row =>
+            row.LeaseManagementId == _leaseManagementId)).Should().Be(1);
+        (await verify.Db.LeaseAgreementSigners.CountAsync(row =>
+            row.LeaseAgreementId == agreement.Id)).Should().Be(1);
+        (await verify.Db.Leases.CountAsync()).Should().Be(legacyLeaseCount);
+        (await verify.Db.LeaseTenants.CountAsync()).Should().Be(legacyPartyCount);
+        (await verify.Db.Payments.CountAsync()).Should().Be(legacyPaymentCount);
+    }
+
+    [SkippableFact]
+    public async Task EmptyPortfolioLeaseImport_BootstrapsOneCanonicalGraphAndReplaysReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Uploaded signed lease");
+        var target = LeaseTarget(
+            propertyId: 0,
+            unitId: null,
+            tenantId: null,
+            propertyName: "Maple House",
+            propertyAddress: "55 Maple Avenue",
+            propertyCity: "Akron",
+            propertyState: "OH",
+            propertyPostalCode: "44308",
+            unitNumber: null);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, source.DraftId, "empty-portfolio-bootstrap");
+        var command = LeaseCommand(source, target);
+
+        var first = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var replay = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        var agreement = await verify.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(row => row.Id == first.Value.TargetEntityId);
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == agreement.LeaseManagementId);
+        var property = await verify.Db.Properties.AsNoTracking()
+            .SingleAsync(row => row.Id == relationship.PropertyId);
+        property.AddressLine1.Should().Be("55 Maple Avenue");
+        var unit = await verify.Db.Units.AsNoTracking()
+            .SingleAsync(row => row.Id == relationship.UnitId);
+        unit.UnitNumber.Should().Be("Property");
+        (await verify.Db.TenantAccounts.CountAsync(row =>
+            row.LeaseManagementId == relationship.Id)).Should().Be(1);
+        (await verify.Db.LeaseManagementParties.CountAsync(row =>
+            row.LeaseManagementId == relationship.Id)).Should().Be(1);
+        (await verify.Db.LeaseAgreementSigners.CountAsync(row =>
+            row.LeaseAgreementId == agreement.Id)).Should().Be(1);
+        (await verify.Db.LegalDocumentArtifacts.CountAsync(row =>
+            row.Id == agreement.ExecutedArtifactId
+            && row.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement)).Should().Be(1);
+        (await verify.Db.Properties.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.AddressLine1 == "55 Maple Avenue")).Should().Be(1);
     }
 
     [SkippableFact]
@@ -404,6 +500,72 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         ExpectedAccessRevision: _accessRevision,
         DeliveryIdempotencyKey: $"scan-confirm:{_portfolioId}:{draftId}:{kind}");
 
+    private ConfirmScanDraftCommand LeaseCommand(
+        LeaseDraftSource source,
+        ScanLeaseTargetData target) => new(
+        _portfolioId,
+        source.DraftId,
+        ConfirmedByUserId: _actorUserId,
+        ConfirmedAtUtc: CommandTime,
+        ExpectedDraftFingerprint: _preparedFingerprints[source.DraftId],
+        Target: new ScanConfirmationTargetData(
+            ScanConfirmationTargetKind.LeaseAgreement,
+            LeaseAgreement: target),
+        SourceStoredFileId: source.StoredFileId,
+        AuthSessionId: _authSessionId,
+        AccessContextId: _accessContextId,
+        ExpectedAccessRevision: _accessRevision,
+        DeliveryIdempotencyKey: $"scan-confirm:{_portfolioId}:{source.DraftId}:lease-agreement",
+        SourceContentSha256: source.Sha256,
+        SourceLabel: source.SourceLabel);
+
+    private static ScanLeaseTargetData LeaseTarget(
+        int propertyId,
+        int? unitId,
+        int? tenantId,
+        int? leaseManagementId = null,
+        int? tenantAccountId = null,
+        string? propertyName = null,
+        string? propertyAddress = null,
+        string? propertyCity = null,
+        string? propertyState = null,
+        string? propertyPostalCode = null,
+        string? unitNumber = "1") => new(
+        propertyId,
+        unitId,
+        tenantId,
+        TenantName: tenantId.HasValue ? null : "Jordan Tenant",
+        TenantEmail: "jordan@example.test",
+        TenantPhone: null,
+        TenantEmergencyContact: null,
+        PropertyName: propertyName,
+        PropertyType: null,
+        PropertyAddress: propertyAddress,
+        PropertyCity: propertyCity,
+        PropertyState: propertyState,
+        PropertyPostalCode: propertyPostalCode,
+        UnitNumber: unitNumber,
+        UnitBedrooms: 2m,
+        UnitBathrooms: 1m,
+        UnitSquareFeet: 900,
+        LeaseNumber: "EXT-LEASE-1",
+        StartDate: new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+        EndDate: new DateTime(2027, 7, 31, 0, 0, 0, DateTimeKind.Utc),
+        MonthlyRent: 1_250m,
+        SecurityDeposit: 1_250m,
+        LateFee: 50m,
+        RentDueDay: 1,
+        RentTrackingStartMode: null,
+        RentTrackingStartDate: null,
+        OpeningBalanceAmount: null,
+        OpeningBalanceAsOfDate: null,
+        OpeningBalanceNote: null,
+        ReviewDisposition: LeaseScanReviewDisposition.AlreadyFullySigned,
+        LeaseManagementId: leaseManagementId,
+        TenantAccountId: tenantAccountId,
+        TermsSchemaVersion: 1,
+        TermsPayload: "{}");
+
     private static ScanLoanTargetData LoanTarget(int propertyId) => new(
         propertyId,
         "Test Bank",
@@ -455,6 +617,49 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
             draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
         return draft.Id;
+    }
+
+    private async Task<LeaseDraftSource> SeedLeaseDraftAsync(string sourceLabel)
+    {
+        await using var scope = Scope();
+        var sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"lease:{Guid.NewGuid():N}")));
+        var path = $"scan/lease-{Guid.NewGuid():N}.pdf";
+        var source = new StoredFile
+        {
+            PortfolioId = _portfolioId,
+            FileName = Path.GetFileName(path),
+            FilePath = path,
+            ContentType = "application/pdf",
+            FileSize = 1_024,
+            EntityType = nameof(ScanDraft),
+            UploadedAt = CommandTime.AddMinutes(-5),
+        };
+        var draft = new ScanDraft
+        {
+            PortfolioId = _portfolioId,
+            FilePath = path,
+            SourceStoredFile = source,
+            SourceContentSha256 = sha256,
+            SourceLabel = sourceLabel,
+            TargetEntityType = nameof(LeaseAgreement),
+            Status = "Reviewing",
+            ExtractedFields = "{}",
+            CaptureAccessContextId = _accessContextId,
+            CaptureAccessRevision = _accessRevision,
+            CreatedAt = CommandTime.AddMinutes(-5),
+        };
+        scope.Db.AddRange(source, draft);
+        await scope.Db.SaveChangesAsync();
+        _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
+            draft.TargetEntityType,
+            draft.SourceStoredFileId,
+            draft.ExtractedFields,
+            draft.SourceContentSha256,
+            draft.CaptureAccessContextId,
+            draft.CaptureAccessRevision,
+            sourceLabel: draft.SourceLabel);
+        return new LeaseDraftSource(draft.Id, source.Id, sha256, sourceLabel);
     }
 
     private static Task<bool> TargetExistsAsync(
@@ -527,6 +732,12 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         public string? ActorLabel => "integration:production-scan-writer";
         public string? IpAddress => "127.0.0.1";
     }
+
+    private sealed record LeaseDraftSource(
+        int DraftId,
+        int StoredFileId,
+        string Sha256,
+        string SourceLabel);
 
     private sealed class TestScope(AsyncServiceScope scope, RentalCommandDbContext db) : IAsyncDisposable
     {
