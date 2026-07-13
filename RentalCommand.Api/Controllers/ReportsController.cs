@@ -56,7 +56,10 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("rent-ledger")]
     [ProducesResponseType(typeof(RentLedgerResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<RentLedgerResponse>> RentLedger([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetRentLedgerAsync(GetPortfolioId(), query, ct));
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        return Ok(await _service.GetRentLedgerAsync(access, query, ct));
+    }
 
     /// <summary>
     /// Delinquency / Overdue Aging — outstanding balances bucketed by days past due

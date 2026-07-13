@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
@@ -325,148 +328,224 @@ public class ReportsService : IReportsService
 
     // ── Rent Ledger (accrual, per lease over a range) ──────────────────────────────────────────────
 
-    public async Task<RentLedgerResponse> GetRentLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<RentLedgerResponse> GetRentLedgerAsync(
+        LeaseManagementReadContext access,
+        ReportRangeQuery query,
+        CancellationToken ct = default)
     {
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
-
-        const int debitEntryKind = 0;
-        const int creditEntryKind = 1;
+        var portfolioId = access.PortfolioId;
         var fromOn = DateOnly.FromDateTime(from);
         var toOn = DateOnly.FromDateTime(to);
-
-        var activityQuery =
-            from entry in _db.TenantLedgerEntries.AsNoTracking()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { entry.PortfolioId, Id = entry.TenantAccountId }
-                equals new { account.PortfolioId, account.Id }
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { account.PortfolioId, Id = account.LeaseManagementId }
-                equals new { management.PortfolioId, management.Id }
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { management.PortfolioId, LeaseManagementId = management.Id }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            where entry.PortfolioId == portfolioId
-                && entry.EffectiveOn >= fromOn
-                && entry.EffectiveOn <= toOn
-                && (propertyFilter == null || propertyFilter.Contains(management.PropertyId))
-            select new RentLedgerQueryRow
-            {
-                LeaseId = management.Id,
-                LeaseNumber = management.RelationshipNumber,
-                PropertyId = management.PropertyId,
-                PropertyName = management.Property!.Name,
-                UnitNumber = management.Unit!.UnitNumber,
-                TenantName = lifecycle.CurrentPrimaryTenantName ?? "Tenant",
-                PaymentId = entry.Id,
-                Date = entry.EffectiveOn,
-                EntryKind = entry.Direction == TenantLedgerDirection.Debit
-                    ? debitEntryKind
-                    : creditEntryKind,
-                Amount = entry.Amount,
-                EntryType = entry.EntryType,
-            };
-
-        var activityRows = await activityQuery
-            .Select(r => new RentLedgerQueryRow
-            {
-                LeaseId = r.LeaseId,
-                LeaseNumber = r.LeaseNumber,
-                PropertyId = r.PropertyId,
-                PropertyName = r.PropertyName,
-                UnitNumber = r.UnitNumber,
-                TenantName = r.TenantName,
-                PaymentId = r.PaymentId,
-                Date = r.Date,
-                EntryKind = r.EntryKind,
-                Amount = r.Amount,
-                EntryType = r.EntryType,
-                RunningBalance = activityQuery
-                    .Where(x => x.LeaseId == r.LeaseId &&
-                                (x.Date < r.Date ||
-                                 (x.Date == r.Date && x.EntryKind < r.EntryKind) ||
-                                (x.Date == r.Date && x.EntryKind == r.EntryKind && x.PaymentId <= r.PaymentId)))
-                    .Sum(x => (decimal?)(x.EntryKind == debitEntryKind ? x.Amount : -x.Amount)) ?? 0m,
-                TotalCharged = activityQuery
-                    .Where(x => x.LeaseId == r.LeaseId && x.EntryKind == debitEntryKind)
-                    .Sum(x => (decimal?)x.Amount) ?? 0m,
-                TotalCredits = activityQuery
-                    .Where(x => x.LeaseId == r.LeaseId && x.EntryKind == creditEntryKind)
-                    .Sum(x => (decimal?)x.Amount) ?? 0m,
-                PortfolioTotalCharged = activityQuery
-                    .Where(x => x.EntryKind == debitEntryKind)
-                    .Sum(x => (decimal?)x.Amount) ?? 0m,
-                PortfolioTotalCredits = activityQuery
-                    .Where(x => x.EntryKind == creditEntryKind)
-                    .Sum(x => (decimal?)x.Amount) ?? 0m,
-            })
-            .OrderBy(r => r.PropertyName.ToLower())
-            .ThenBy(r => r.PropertyName)
-            .ThenBy(r => r.UnitNumber.ToLower())
-            .ThenBy(r => r.UnitNumber)
-            .ThenBy(r => r.LeaseId)
-            .ThenBy(r => r.Date)
-            .ThenBy(r => r.EntryKind)
-            .ThenBy(r => r.PaymentId)
-            .ToListAsync(ct);
-
-        var ledgerLeases = new List<RentLedgerLease>();
-        RentLedgerLease? currentLease = null;
-        List<RentLedgerEntry>? currentEntries = null;
-
-        foreach (var e in activityRows)
+        var requestedPropertyIds = (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is int propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
+        var parameters = new NpgsqlParameter[]
         {
-            if (currentLease is null || currentLease.LeaseId != e.LeaseId)
-            {
-                currentEntries = [];
-                currentLease = new RentLedgerLease
-                {
-                    LeaseId = e.LeaseId,
-                    LeaseNumber = e.LeaseNumber,
-                    PropertyId = e.PropertyId,
-                    PropertyName = e.PropertyName,
-                    UnitNumber = e.UnitNumber,
-                    TenantName = e.TenantName,
-                    Entries = currentEntries,
-                    TotalCharged = e.TotalCharged,
-                    TotalCredits = e.TotalCredits,
-                    Balance = e.TotalCharged - e.TotalCredits,
-                };
-                ledgerLeases.Add(currentLease);
-            }
-
-            currentEntries!.Add(e.EntryKind == debitEntryKind
-                ? new RentLedgerEntry
-                {
-                    Date = e.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-                    Type = "Charge",
-                    Description = e.EntryType.ToString(),
-                    Charge = e.Amount,
-                    Credit = 0m,
-                    Balance = e.RunningBalance,
-                }
-                : new RentLedgerEntry
-                {
-                    Date = e.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-                    Type = e.EntryType == TenantLedgerEntryType.PaymentReceipt ? "Receipt" : "Credit",
-                    Description = e.EntryType.ToString(),
-                    Charge = 0m,
-                    Credit = e.Amount,
-                    Balance = e.RunningBalance,
-                });
+            new("portfolioId", NpgsqlDbType.Integer) { Value = portfolioId },
+            new("userId", NpgsqlDbType.Integer) { Value = access.UserId },
+            new("sessionId", NpgsqlDbType.Uuid) { Value = access.SessionId },
+            new("accessContextId", NpgsqlDbType.Integer) { Value = access.AccessContextId },
+            new("accessRevision", NpgsqlDbType.Bigint) { Value = access.AccessRevision },
+            new("utcNow", NpgsqlDbType.TimestampTz) { Value = _timeProvider.UtcNow() },
+            new("fromOn", NpgsqlDbType.Date) { Value = fromOn },
+            new("toOn", NpgsqlDbType.Date) { Value = toOn },
+            new("applyPropertyFilter", NpgsqlDbType.Boolean) { Value = requestedPropertyIds.Length > 0 },
+            new("propertyIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = requestedPropertyIds },
+        };
+        var rows = await _db.Database.SqlQueryRaw<RentLedgerDatabaseRow>(RentLedgerSql, parameters)
+            .ToListAsync(ct);
+        if (rows.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"The rent-ledger query returned {rows.Count} summary rows instead of one.");
         }
+        var row = rows[0];
 
         return new RentLedgerResponse
         {
             From = from,
             To = to,
-            Leases = ledgerLeases,
-            TotalCharged = activityRows.FirstOrDefault()?.PortfolioTotalCharged ?? 0m,
-            TotalCredits = activityRows.FirstOrDefault()?.PortfolioTotalCredits ?? 0m,
-            TotalBalance = (activityRows.FirstOrDefault()?.PortfolioTotalCharged ?? 0m)
-                - (activityRows.FirstOrDefault()?.PortfolioTotalCredits ?? 0m),
+            Leases = DeserializeRentLedgerLeases(row.LeasesJson),
+            TotalCharged = row.TotalCharged,
+            TotalCredits = row.TotalCredits,
+            TotalBalance = row.TotalCharged - row.TotalCredits,
         };
     }
+
+    internal static IReadOnlyList<RentLedgerLease> DeserializeRentLedgerLeases(string json) =>
+        JsonSerializer.Deserialize<RentLedgerLease[]>(json, RentLedgerJsonOptions)
+        ?? throw new InvalidOperationException("PostgreSQL returned an invalid rent-ledger JSON aggregate.");
+
+    private static readonly JsonSerializerOptions RentLedgerJsonOptions = new(JsonSerializerDefaults.Web);
+
+    internal const string RentLedgerSql = """
+        WITH authorized_managements AS MATERIALIZED (
+            SELECT management."Id",
+                   management."PortfolioId",
+                   management."RelationshipNumber",
+                   management."PropertyId",
+                   management."UnitId"
+            FROM "LeaseManagements" AS management
+            WHERE management."PortfolioId" = @portfolioId
+              AND EXISTS (
+                  SELECT 1
+                  FROM "AuthSessions" AS session
+                  JOIN "WorkspaceAccessContexts" AS context
+                    ON context."Id" = session."ActiveAccessContextId"
+                   AND context."UserId" = session."UserId"
+                  JOIN "WorkspaceMemberships" AS membership
+                    ON membership."AccessContextId" = context."Id"
+                   AND membership."PortfolioId" = context."PortfolioId"
+                  JOIN "MembershipRoleAssignments" AS assignment
+                    ON assignment."WorkspaceMembershipId" = membership."Id"
+                   AND assignment."PortfolioId" = membership."PortfolioId"
+                  WHERE session."Id" = @sessionId
+                    AND session."UserId" = @userId
+                    AND session."ActiveAccessContextId" = @accessContextId
+                    AND session."Status" = 'Active'
+                    AND session."RevokedAtUtc" IS NULL
+                    AND session."ExpiresAtUtc" > @utcNow
+                    AND context."Id" = @accessContextId
+                    AND context."PortfolioId" = @portfolioId
+                    AND context."AccessRevision" = @accessRevision
+                    AND context."Status" = 'Active'
+                    AND context."SuspendedAtUtc" IS NULL
+                    AND context."RevokedAtUtc" IS NULL
+                    AND membership."Status" = 'Active'
+                    AND membership."SuspendedAtUtc" IS NULL
+                    AND membership."RevokedAtUtc" IS NULL
+                    AND membership."EffectiveFromUtc" <= @utcNow
+                    AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > @utcNow)
+                    AND assignment."Status" = 'Active'
+                    AND assignment."SuspendedAtUtc" IS NULL
+                    AND assignment."RevokedAtUtc" IS NULL
+                    AND assignment."EffectiveFromUtc" <= @utcNow
+                    AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > @utcNow)
+                    AND EXISTS (
+                        SELECT 1
+                        FROM "RoleProfileCapabilities" AS role_capability
+                        JOIN "CapabilityDefinitions" AS capability
+                          ON capability."Id" = role_capability."CapabilityDefinitionId"
+                        WHERE role_capability."RoleProfileId" = assignment."RoleProfileId"
+                          AND capability."Key" = 'reports.read'
+                          AND capability."AuthorizationTargetKind" = 'Property')
+                    AND EXISTS (
+                        SELECT 1
+                        FROM "RoleProfileCapabilities" AS role_capability
+                        JOIN "CapabilityDefinitions" AS capability
+                          ON capability."Id" = role_capability."CapabilityDefinitionId"
+                        WHERE role_capability."RoleProfileId" = assignment."RoleProfileId"
+                          AND capability."Key" = 'money.balances.read'
+                          AND capability."AuthorizationTargetKind" = 'Property')
+                    AND (assignment."ScopeKind" = 'AllProperties'
+                         OR (assignment."ScopeKind" = 'SelectedProperties'
+                             AND EXISTS (
+                                 SELECT 1
+                                 FROM "MembershipRoleAssignmentProperties" AS selected_property
+                                 WHERE selected_property."MembershipRoleAssignmentId" = assignment."Id"
+                                   AND selected_property."PortfolioId" = assignment."PortfolioId"
+                                   AND selected_property."PropertyId" = management."PropertyId")))
+              )
+        ),
+        activity AS MATERIALIZED (
+            SELECT management."Id" AS "LeaseManagementId",
+                   management."RelationshipNumber",
+                   management."PropertyId",
+                   property."Name" AS "PropertyName",
+                   unit."UnitNumber",
+                   COALESCE(lifecycle."CurrentPrimaryTenantName", 'Tenant') AS "TenantName",
+                   entry."Id" AS "EntryId",
+                   entry."EffectiveOn",
+                   CASE WHEN entry."Direction" = 'Debit' THEN 0 ELSE 1 END AS "EntryKind",
+                   entry."EntryType",
+                   entry."Amount",
+                   SUM(CASE WHEN entry."Direction" = 'Debit' THEN entry."Amount" ELSE -entry."Amount" END)
+                       OVER (PARTITION BY management."Id"
+                             ORDER BY entry."EffectiveOn",
+                                      CASE WHEN entry."Direction" = 'Debit' THEN 0 ELSE 1 END,
+                                      entry."Id"
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "RunningBalance"
+            FROM "TenantLedgerEntries" AS entry
+            JOIN "TenantAccounts" AS account
+              ON account."PortfolioId" = entry."PortfolioId"
+             AND account."Id" = entry."TenantAccountId"
+            JOIN authorized_managements AS management
+              ON management."PortfolioId" = account."PortfolioId"
+             AND management."Id" = account."LeaseManagementId"
+            JOIN "Properties" AS property
+              ON property."PortfolioId" = management."PortfolioId"
+             AND property."Id" = management."PropertyId"
+            JOIN "Units" AS unit
+              ON unit."PortfolioId" = management."PortfolioId"
+             AND unit."Id" = management."UnitId"
+            JOIN "vw_lease_management_lifecycle" AS lifecycle
+              ON lifecycle."PortfolioId" = management."PortfolioId"
+             AND lifecycle."LeaseManagementId" = management."Id"
+            WHERE entry."PortfolioId" = @portfolioId
+              AND management."PortfolioId" = @portfolioId
+              AND entry."EffectiveOn" >= @fromOn
+              AND entry."EffectiveOn" <= @toOn
+              AND (NOT @applyPropertyFilter OR management."PropertyId" = ANY(@propertyIds))
+        ),
+        relationship_ledgers AS MATERIALIZED (
+            SELECT activity."LeaseManagementId",
+                   activity."RelationshipNumber",
+                   activity."PropertyId",
+                   activity."PropertyName",
+                   activity."UnitNumber",
+                   activity."TenantName",
+                   COALESCE(SUM(activity."Amount") FILTER (WHERE activity."EntryKind" = 0), 0::numeric)
+                       AS "TotalCharged",
+                   COALESCE(SUM(activity."Amount") FILTER (WHERE activity."EntryKind" = 1), 0::numeric)
+                       AS "TotalCredits",
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'date', to_char(activity."EffectiveOn", 'YYYY-MM-DD') || 'T00:00:00Z',
+                           'type', CASE
+                               WHEN activity."EntryKind" = 0 THEN 'Charge'
+                               WHEN activity."EntryType" = 'PaymentReceipt' THEN 'Receipt'
+                               ELSE 'Credit'
+                           END,
+                           'description', activity."EntryType",
+                           'charge', CASE WHEN activity."EntryKind" = 0 THEN activity."Amount" ELSE 0::numeric END,
+                           'credit', CASE WHEN activity."EntryKind" = 1 THEN activity."Amount" ELSE 0::numeric END,
+                           'balance', activity."RunningBalance"
+                       )
+                       ORDER BY activity."EffectiveOn", activity."EntryKind", activity."EntryId") AS "Entries"
+            FROM activity
+            GROUP BY activity."LeaseManagementId",
+                     activity."RelationshipNumber",
+                     activity."PropertyId",
+                     activity."PropertyName",
+                     activity."UnitNumber",
+                     activity."TenantName"
+        )
+        SELECT COALESCE(
+                   jsonb_agg(
+                       jsonb_build_object(
+                           'leaseManagementId', relationship_ledgers."LeaseManagementId",
+                           'relationshipNumber', relationship_ledgers."RelationshipNumber",
+                           'propertyId', relationship_ledgers."PropertyId",
+                           'propertyName', relationship_ledgers."PropertyName",
+                           'unitNumber', relationship_ledgers."UnitNumber",
+                           'tenantName', relationship_ledgers."TenantName",
+                           'entries', relationship_ledgers."Entries",
+                           'totalCharged', relationship_ledgers."TotalCharged",
+                           'totalCredits', relationship_ledgers."TotalCredits",
+                           'balance', relationship_ledgers."TotalCharged" - relationship_ledgers."TotalCredits"
+                       )
+                       ORDER BY lower(relationship_ledgers."PropertyName"),
+                                relationship_ledgers."PropertyName",
+                                lower(relationship_ledgers."UnitNumber"),
+                                relationship_ledgers."UnitNumber",
+                                relationship_ledgers."LeaseManagementId"),
+                   '[]'::jsonb)::text AS "LeasesJson",
+               COALESCE(SUM(relationship_ledgers."TotalCharged"), 0::numeric) AS "TotalCharged",
+               COALESCE(SUM(relationship_ledgers."TotalCredits"), 0::numeric) AS "TotalCredits"
+        FROM relationship_ledgers
+        """;
 
     // ── Delinquency / Overdue Aging ────────────────────────────────────────────────────────────────
 
@@ -514,8 +593,8 @@ public class ReportsService : IReportsService
         var grouped = await owed
             .GroupBy(row => new
             {
-                LeaseId = row.Management.Id,
-                LeaseNumber = row.Management.RelationshipNumber,
+                LeaseManagementId = row.Management.Id,
+                RelationshipNumber = row.Management.RelationshipNumber,
                 row.Management.PropertyId,
                 PropertyName = row.Management.Property!.Name,
                 UnitNumber = row.Management.Unit!.UnitNumber,
@@ -565,8 +644,8 @@ public class ReportsService : IReportsService
                 return new DelinquencyRow
                 {
                     // Delinquency is lease-scoped (ForCurrentLeaseAttention requires a live lease).
-                    LeaseId = g.Key.LeaseId,
-                    LeaseNumber = g.Key.LeaseNumber,
+                    LeaseManagementId = g.Key.LeaseManagementId,
+                    RelationshipNumber = g.Key.RelationshipNumber,
                     PropertyId = g.Key.PropertyId,
                     PropertyName = g.Key.PropertyName,
                     UnitNumber = g.Key.UnitNumber,
@@ -1396,24 +1475,11 @@ public class ReportsService : IReportsService
         };
     }
 
-    private sealed class RentLedgerQueryRow
+    private sealed class RentLedgerDatabaseRow
     {
-        public int LeaseId { get; set; }
-        public string LeaseNumber { get; set; } = string.Empty;
-        public int PropertyId { get; set; }
-        public string PropertyName { get; set; } = string.Empty;
-        public string UnitNumber { get; set; } = string.Empty;
-        public string TenantName { get; set; } = string.Empty;
-        public long PaymentId { get; set; }
-        public DateOnly Date { get; set; }
-        public int EntryKind { get; set; }
-        public decimal Amount { get; set; }
-        public TenantLedgerEntryType EntryType { get; set; }
-        public decimal RunningBalance { get; set; }
+        public string LeasesJson { get; set; } = "[]";
         public decimal TotalCharged { get; set; }
         public decimal TotalCredits { get; set; }
-        public decimal PortfolioTotalCharged { get; set; }
-        public decimal PortfolioTotalCredits { get; set; }
     }
 
     private sealed class GeneralLedgerQueryRow
@@ -1471,8 +1537,8 @@ public class ReportsService : IReportsService
             .Select(h => new
             {
                 Id = h.Account.Id,
-                LeaseId = h.Management.Id,
-                LeaseNumber = h.Management.RelationshipNumber,
+                LeaseManagementId = h.Management.Id,
+                RelationshipNumber = h.Management.RelationshipNumber,
                 h.Management.PropertyId,
                 PropertyName = h.Management.Property!.Name,
                 UnitNumber = h.Management.Unit!.UnitNumber,
@@ -1504,8 +1570,8 @@ public class ReportsService : IReportsService
             .Select(h => new SecurityDepositRegisterRow
             {
                 DepositId = h.Id,
-                LeaseId = h.LeaseId,
-                LeaseNumber = h.LeaseNumber,
+                LeaseManagementId = h.LeaseManagementId,
+                RelationshipNumber = h.RelationshipNumber,
                 PropertyId = h.PropertyId,
                 PropertyName = h.PropertyName,
                 UnitNumber = h.UnitNumber,

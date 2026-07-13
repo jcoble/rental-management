@@ -23,7 +23,8 @@ public interface IReportsService
     Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Accrual rent ledger per lease over the range: charges due vs. payments received, running balance.</summary>
-    Task<RentLedgerResponse> GetRentLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<RentLedgerResponse> GetRentLedgerAsync(
+        LeaseManagementReadContext access, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Outstanding balances aged into 0-30 / 31-60 / 61-90 / 90+ buckets per lease, with totals.</summary>
     Task<DelinquencyResponse> GetDelinquencyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
