@@ -72,8 +72,11 @@ export interface ReportRequestParams {
 export type LeaseStatusName = string;
 
 export interface RentRollRow {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	agreementId: number;
+	relationshipNumber: string;
+	agreementNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitId: number;
@@ -82,9 +85,8 @@ export interface RentRollRow {
 	tenantName: string;
 	monthlyRent: number;
 	securityDeposit: number;
-	startDate: string;
-	endDate: string;
-	status: LeaseStatusName;
+	startOn: string;
+	endOn: string | null;
 	statusName: string;
 }
 
@@ -98,23 +100,23 @@ export interface RentRollResponse {
 
 export interface RentLedgerEntry {
 	date: string;
-	type: string; // "Charge" | "Payment"
+	type: string; // "Charge" | "Receipt" | "Credit"
 	description: string;
 	charge: number;
-	payment: number;
+	credit: number;
 	balance: number;
 }
 
 export interface RentLedgerLease {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	relationshipNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
 	tenantName: string;
 	entries: RentLedgerEntry[];
 	totalCharged: number;
-	totalPaid: number;
+	totalCredits: number;
 	balance: number;
 }
 
@@ -123,7 +125,7 @@ export interface RentLedgerResponse {
 	to: string;
 	leases: RentLedgerLease[];
 	totalCharged: number;
-	totalPaid: number;
+	totalCredits: number;
 	totalBalance: number;
 }
 
@@ -135,8 +137,8 @@ export interface DelinquencyBuckets {
 }
 
 export interface DelinquencyRow {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	relationshipNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
@@ -232,17 +234,18 @@ export interface OccupancyResponse {
 }
 
 export interface LeaseExpirationRow {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	agreementId: number;
+	relationshipNumber: string;
+	agreementNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
-	tenantId: number;
+	tenantId: number | null;
 	tenantName: string;
 	monthlyRent: number;
-	endDate: string;
+	endOn: string;
 	daysUntilExpiry: number;
-	status: LeaseStatusName;
 	statusName: string;
 }
 
@@ -256,8 +259,8 @@ export interface LeaseExpirationsResponse {
 
 export interface SecurityDepositRegisterRow {
 	depositId: number;
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	relationshipNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;

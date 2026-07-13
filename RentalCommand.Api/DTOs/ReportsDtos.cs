@@ -159,7 +159,8 @@ public class RentRollRow
 
 /// <summary>
 /// Accrual rent ledger across the portfolio for a date range: charges due vs. payments received,
-/// grouped by lease, with a running balance per lease. A positive balance means the tenant owes.
+/// grouped by continuous lease-management relationship, with a running balance per tenant account.
+/// A positive balance means the tenant owes.
 /// </summary>
 public class RentLedgerResponse
 {
@@ -177,11 +178,11 @@ public class RentLedgerResponse
     public decimal TotalBalance { get; set; }
 }
 
-/// <summary>One lease's ledger over the range: ordered entries plus the lease's running totals.</summary>
+/// <summary>One lease-management relationship's ordered ledger entries and running totals.</summary>
 public class RentLedgerLease
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
@@ -216,7 +217,7 @@ public class RentLedgerEntry
 
 // ── Delinquency / Overdue Aging ──────────────────────────────────────────────────────────────────
 
-/// <summary>Outstanding balances aged into 0-30 / 31-60 / 61-90 / 90+ buckets, per lease plus totals.</summary>
+/// <summary>Outstanding balances aged into buckets per lease-management relationship plus totals.</summary>
 public class DelinquencyResponse
 {
     public DateTime AsOf { get; set; }
@@ -227,11 +228,11 @@ public class DelinquencyResponse
     public decimal TotalOutstanding { get; set; }
 }
 
-/// <summary>One delinquent lease/tenant aged into buckets.</summary>
+/// <summary>One delinquent lease-management relationship/tenant aged into buckets.</summary>
 public class DelinquencyRow
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
@@ -420,7 +421,7 @@ public class LeaseExpirationRow
 
 // ── Security Deposit Register ─────────────────────────────────────────────────────────────────────
 
-/// <summary>Per-lease security-deposit holdings: held, deductions, returned, current balance + totals.</summary>
+/// <summary>Per-relationship security-deposit holdings: held, deductions, returned, current balance + totals.</summary>
 public class SecurityDepositRegisterResponse
 {
     public DateTime GeneratedAt { get; set; }
@@ -436,8 +437,8 @@ public class SecurityDepositRegisterResponse
 public class SecurityDepositRegisterRow
 {
     public int DepositId { get; set; }
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;

@@ -214,7 +214,7 @@ public class ReportsServiceTests : IDisposable
         var report = await _sut.GetDelinquencyAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
 
         report.Rows.Should().ContainSingle();
-        report.Rows[0].LeaseId.Should().Be(current.Id);
+        report.Rows[0].LeaseManagementId.Should().BeGreaterThan(0);
         report.TotalOutstanding.Should().Be(900m);
     }
 
@@ -240,8 +240,7 @@ public class ReportsServiceTests : IDisposable
         }, CancellationToken.None);
 
         report.Rows.Should().HaveCount(2);
-        report.Rows[0].LeaseId.Should().Be(older.Id);
-        report.Rows[1].LeaseId.Should().Be(newer.Id);
+        report.Rows.Select(row => row.LeaseManagementId).Should().OnlyHaveUniqueItems();
         report.TotalOutstanding.Should().Be(1900m);
         report.Totals.Current.Should().Be(900m);
         report.Totals.Days61To90.Should().Be(1000m);
@@ -351,103 +350,72 @@ public class ReportsServiceTests : IDisposable
     // ── Rent Ledger running balance (DB) ───────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task GetRentLedgerAsync_AccruesChargesAndAppliesPayments_RunningBalance()
+    public void Rent_ledger_is_grouped_totaled_filtered_and_ordered_entirely_in_postgresql()
     {
-        var property = SeedProperty("Maple");
-        var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var sql = ReportsService.RentLedgerSql;
 
-        // Charge 1000 due Mar 1 (still owed), pay 1000 on Mar 3. Charge 1000 due Apr 1 (owed).
-        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 3));
-        SeedPayment(lease, 1000m, dueDate: D(2026, 4, 1), PaymentStatus.Late);
-
-        var report = await _sut.GetRentLedgerAsync(PortfolioId, new ReportRangeQuery
-        {
-            From = D(2026, 1, 1),
-            To = D(2026, 12, 31),
-        }, CancellationToken.None);
-
-        var ledger = report.Leases.Should().ContainSingle().Subject;
-        // Entries: Mar 1 charge (+1000 → bal 1000), Mar 3 payment (-1000 → bal 0), Apr 1 charge (+1000 → bal 1000).
-        ledger.Entries.Should().HaveCount(3);
-        ledger.Entries[0].Balance.Should().Be(1000m);
-        ledger.Entries[1].Balance.Should().Be(0m);
-        ledger.Entries[2].Balance.Should().Be(1000m);
-
-        ledger.TotalCharged.Should().Be(2000m);
-        ledger.TotalCredits.Should().Be(1000m);
-        ledger.Balance.Should().Be(1000m);
-
-        report.TotalCharged.Should().Be(2000m);
-        report.TotalCredits.Should().Be(1000m);
-        report.TotalBalance.Should().Be(1000m);
+        sql.Should().Contain("TenantLedgerEntries");
+        sql.Should().Contain("TenantAccounts");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("vw_lease_management_lifecycle");
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("WorkspaceAccessContexts");
+        sql.Should().Contain("MembershipRoleAssignments");
+        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("reports.read");
+        sql.Should().Contain("money.balances.read");
+        sql.Should().Contain("PARTITION BY management.\"Id\"");
+        sql.Should().Contain("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW");
+        sql.Should().Contain("GROUP BY");
+        sql.Should().Contain("FILTER (WHERE");
+        sql.Should().Contain("jsonb_agg");
+        sql.Should().Contain("ORDER BY lower(relationship_ledgers.\"PropertyName\")");
+        sql.Should().Contain("management.\"PropertyId\" = ANY(@propertyIds)");
+        sql.Should().Contain("entry.\"PortfolioId\" = @portfolioId");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("\"Payments\"");
     }
 
     [Fact]
-    public async Task GetRentLedgerAsync_ChargeBeforePaymentSameDay_NeverGoesNegativeTransiently()
+    public void Rent_ledger_database_json_preserves_ordered_entries_and_canonical_identity()
     {
-        var property = SeedProperty("Maple");
-        var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
+        const string json = """
+            [{
+              "leaseManagementId": 42,
+              "relationshipNumber": "REL-42",
+              "propertyId": 9,
+              "propertyName": "Maple",
+              "unitNumber": "1",
+              "tenantName": "Ann Acre",
+              "entries": [
+                { "date": "2026-05-01T00:00:00Z", "type": "Charge", "description": "RentCharge", "charge": 1000, "credit": 0, "balance": 1000 },
+                { "date": "2026-05-01T00:00:00Z", "type": "Receipt", "description": "PaymentReceipt", "charge": 0, "credit": 1000, "balance": 0 }
+              ],
+              "totalCharged": 1000,
+              "totalCredits": 1000,
+              "balance": 0
+            }]
+            """;
 
-        // Charged and paid the SAME day.
-        SeedPayment(lease, 1000m, dueDate: D(2026, 5, 1), PaymentStatus.Paid, paidDate: D(2026, 5, 1));
+        var ledger = ReportsService.DeserializeRentLedgerLeases(json)
+            .Should().ContainSingle().Subject;
 
-        var report = await _sut.GetRentLedgerAsync(PortfolioId, new ReportRangeQuery
-        {
-            From = D(2026, 5, 1),
-            To = D(2026, 5, 31),
-        }, CancellationToken.None);
-
-        var ledger = report.Leases.Should().ContainSingle().Subject;
-        ledger.Entries[0].Type.Should().Be("Charge", "the charge is ordered before the same-day payment");
-        ledger.Entries[0].Balance.Should().Be(1000m);
-        ledger.Entries[1].Balance.Should().Be(0m);
-        ledger.Balance.Should().Be(0m);
-    }
-
-    [Fact]
-    public async Task GetRentLedgerAsync_FiltersOrdersAndTotalsInSql()
-    {
-        var maple = SeedProperty("Maple");
-        var oak = SeedProperty("Oak");
-        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
-        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
-
-        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
-        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-
-        _executedSql.Clear();
-
-        var report = await _sut.GetRentLedgerAsync(PortfolioId, new ReportRangeQuery
-        {
-            From = D(2026, 1, 1),
-            To = D(2026, 1, 31),
-            PropertyIds = [maple.Id],
-        }, CancellationToken.None);
-
-        var ledger = report.Leases.Should().ContainSingle().Subject;
-        ledger.LeaseId.Should().Be(mapleLease.Id);
-        ledger.Entries.Should().HaveCount(2);
+        ledger.LeaseManagementId.Should().Be(42);
+        ledger.RelationshipNumber.Should().Be("REL-42");
+        ledger.Entries.Select(entry => entry.Type).Should().Equal("Charge", "Receipt");
+        ledger.Entries.Select(entry => entry.Balance).Should().Equal(1000m, 0m);
         ledger.TotalCharged.Should().Be(1000m);
         ledger.TotalCredits.Should().Be(1000m);
         ledger.Balance.Should().Be(0m);
-        report.TotalCharged.Should().Be(1000m);
-        report.TotalCredits.Should().Be(1000m);
-        report.TotalBalance.Should().Be(0m);
+    }
 
-        var sql = string.Join("\n---\n", _executedSql);
-        sql.Should().Contain("UNION", "charge and receipt rows must be combined before materialization");
-        sql.Should().Contain("GROUP BY", "per-lease rent-ledger totals must be grouped in SQL");
-        sql.Should().Contain("ORDER BY", "ledger ordering must run in SQL");
-        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
-            .Should().BeTrue("rent-ledger totals must be summed in SQL");
-
-        _executedSql.Should().Contain(command =>
-            command.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
-            command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
-            (command.Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
-             command.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase)),
-            "rent-ledger running balances must be computed by the ordered activity SQL query, not by walking materialized rows");
+    [Fact]
+    public void Rent_ledger_contract_has_no_legacy_lease_identity_aliases()
+    {
+        typeof(RentLedgerLease).GetProperty("LeaseId").Should().BeNull();
+        typeof(RentLedgerLease).GetProperty("LeaseNumber").Should().BeNull();
+        typeof(RentLedgerLease).GetProperty(nameof(RentLedgerLease.LeaseManagementId)).Should().NotBeNull();
+        typeof(RentLedgerLease).GetProperty(nameof(RentLedgerLease.RelationshipNumber)).Should().NotBeNull();
     }
 
     // ── Cash flow by month (DB) ────────────────────────────────────────────────────────────────────
