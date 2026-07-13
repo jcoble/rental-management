@@ -222,7 +222,6 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         {
             var actor = new ApplicationUser
             {
-                PortfolioId = portfolioId,
                 UserName = $"accounting-pull-{portfolioId}@rentalcommand.local",
                 NormalizedUserName = $"ACCOUNTING-PULL-{portfolioId}@RENTALCOMMAND.LOCAL",
                 Email = $"accounting-pull-{portfolioId}@rentalcommand.local",

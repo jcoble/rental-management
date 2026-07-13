@@ -37,12 +37,6 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
     public TenantPortalAccessLoginTests()
     {
         _userManager = CreateUserManager(_ctx.Db);
-        _ctx.Db.Roles.Add(new IdentityRole<int>
-        {
-            Name = nameof(UserRole.Tenant),
-            NormalizedName = nameof(UserRole.Tenant).ToUpperInvariant(),
-        });
-        _ctx.Db.SaveChanges();
         _provisioning = new TenantPortalProvisioningService(
             _userManager, _ctx.Db, Options.Create(new SeedSettings()),
             TimeProvider.System,
@@ -56,7 +50,7 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
     }
 
     [Fact]
-    public async Task LegacyTenantRoleLogin_DoesNotBypassCanonicalAccessContext()
+    public async Task TenantLogin_RequiresCanonicalAccessContext()
     {
         var tenant = SeedTenant(Email);
         (await _provisioning.EnsurePortalAccountForTenantAsync(tenant.Id, PortfolioId)).Status
@@ -146,7 +140,7 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {
-        var store = new UserStore<ApplicationUser, IdentityRole<int>, RentalCommandDbContext, int>(db);
+        var store = new UserOnlyStore<ApplicationUser, RentalCommandDbContext, int>(db);
         return new UserManager<ApplicationUser>(
             store,
             Options.Create(new IdentityOptions()),

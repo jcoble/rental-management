@@ -167,7 +167,6 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
                 Email = email,
                 EmailConfirmed = true,
                 DisplayName = displayName,
-                PortfolioId = portfolioId,
                 CreatedAt = now,
             };
 
@@ -186,12 +185,6 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
         else
         {
             var changed = false;
-            if (!identityUser.PortfolioId.HasValue)
-            {
-                identityUser.PortfolioId = portfolioId;
-                changed = true;
-            }
-
             if (!identityUser.EmailConfirmed)
             {
                 identityUser.EmailConfirmed = true;

@@ -30,7 +30,6 @@ public class SelfOwnerProvisionerTests : IDisposable
             UserName = email,
             Email = email,
             DisplayName = displayName,
-            PortfolioId = portfolioId,
             EmailConfirmed = true,
             CreatedAt = DateTime.UtcNow,
         };

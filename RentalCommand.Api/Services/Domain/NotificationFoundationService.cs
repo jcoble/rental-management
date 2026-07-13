@@ -28,8 +28,10 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         int portfolioId, int userId, UpdateMyAlertsRequest request, CancellationToken ct)
     {
         var now = _clock.GetUtcNow().UtcDateTime;
-        var belongsToWorkspace = await _db.Users.AsNoTracking()
-            .AnyAsync(user => user.Id == userId && user.PortfolioId == portfolioId, ct);
+        var belongsToWorkspace = await _db.WorkspaceAccessContexts.AsNoTracking()
+            .AnyAsync(context => context.UserId == userId && context.PortfolioId == portfolioId
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null, ct);
         if (!belongsToWorkspace) throw new KeyNotFoundException("User is not in the selected workspace.");
 
         var row = await _db.UserAlertPreferences
@@ -59,7 +61,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             from user in _db.Users.AsNoTracking()
             join context in _db.WorkspaceAccessContexts.AsNoTracking() on user.Id equals context.UserId
             join membership in _db.WorkspaceMemberships.AsNoTracking() on context.Id equals membership.AccessContextId
-            where requestedUserIds.Contains(user.Id) && user.PortfolioId == portfolioId
+            where requestedUserIds.Contains(user.Id)
                 && context.PortfolioId == portfolioId && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
                 && membership.PortfolioId == portfolioId && membership.Status == WorkspaceMembershipStatus.Active
@@ -108,7 +110,19 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             from recipient in _db.TeamRoutingRuleRecipients.AsNoTracking()
             join rule in _db.TeamRoutingRules.AsNoTracking() on recipient.TeamRoutingRuleId equals rule.Id
             join user in _db.Users.AsNoTracking() on recipient.UserId equals user.Id
-            where rule.Id == ruleId && rule.PortfolioId == portfolioId && user.PortfolioId == portfolioId
+            join context in _db.WorkspaceAccessContexts.AsNoTracking()
+                on new { UserId = user.Id, PortfolioId = portfolioId }
+                equals new { context.UserId, context.PortfolioId }
+            join membership in _db.WorkspaceMemberships.AsNoTracking()
+                on new { AccessContextId = context.Id, context.PortfolioId }
+                equals new { membership.AccessContextId, membership.PortfolioId }
+            where rule.Id == ruleId && rule.PortfolioId == portfolioId
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
+                && membership.Status == WorkspaceMembershipStatus.Active
+                && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
+                && membership.EffectiveFromUtc <= now
+                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
             select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, rule.PropertyId,
                 rule.PropertyId == null ? "All properties" : "Selected property", recipient.Reason, false);
 
@@ -340,7 +354,11 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
 
     private IQueryable<MyAlertsResponse> MyAlertsQuery(int portfolioId, int userId) =>
         from user in _db.Users.AsNoTracking()
-        where user.Id == userId && user.PortfolioId == portfolioId
+        join context in _db.WorkspaceAccessContexts.AsNoTracking()
+            on new { UserId = user.Id, PortfolioId = portfolioId }
+            equals new { context.UserId, context.PortfolioId }
+        where user.Id == userId && context.Status == WorkspaceAccessContextStatus.Active
+            && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
         join saved in _db.UserAlertPreferences.AsNoTracking()
             on new { PortfolioId = portfolioId, UserId = userId } equals new { saved.PortfolioId, saved.UserId } into preferences
         from preference in preferences.DefaultIfEmpty()

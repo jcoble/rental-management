@@ -92,7 +92,6 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         db.Users.Add(new ApplicationUser
         {
             Id = 1,
-            PortfolioId = 1,
             UserName = "scan-worker@example.test",
             NormalizedUserName = "SCAN-WORKER@EXAMPLE.TEST",
             Email = "scan-worker@example.test",

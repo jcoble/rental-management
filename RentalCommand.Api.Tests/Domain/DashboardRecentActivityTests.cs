@@ -151,7 +151,6 @@ public class DashboardRecentActivityTests : IDisposable
         var tenant3 = Tenant("Noah", "Lessee", baseTime);
         var actor = new ApplicationUser
         {
-            PortfolioId = PortfolioId,
             UserName = "activity@example.test",
             NormalizedUserName = "ACTIVITY@EXAMPLE.TEST",
             Email = "activity@example.test",

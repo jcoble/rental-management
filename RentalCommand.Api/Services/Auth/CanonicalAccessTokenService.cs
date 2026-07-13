@@ -7,6 +7,14 @@ using RentalCommand.Core.Configuration;
 
 namespace RentalCommand.Api.Services.Auth;
 
+public class TokenResult
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public string RefreshToken { get; set; } = string.Empty;
+    public DateTime AccessTokenExpiration { get; set; }
+    public DateTime RefreshTokenExpiration { get; set; }
+}
+
 public sealed record CanonicalAccessCoordinates(
     int UserId,
     Guid SessionId,

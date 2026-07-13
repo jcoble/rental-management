@@ -465,7 +465,6 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         db.Users.Add(new ApplicationUser
         {
             Id = 701,
-            PortfolioId = _portfolioId,
             UserName = "accounting-test@rentalcommand.local",
             NormalizedUserName = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
             Email = "accounting-test@rentalcommand.local",

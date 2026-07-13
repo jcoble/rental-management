@@ -125,24 +125,18 @@ public class AuthControllerCookieTests
     }
 
     [Fact]
-    public async Task Logout_never_calls_the_removed_legacy_refresh_token_store()
+    public async Task Logout_clears_the_namespaced_refresh_cookie()
     {
-        var tokenService = new Mock<IJwtTokenService>();
-
-        var controller = CreateController(Mock.Of<IAuthService>(), tokenService);
+        var controller = CreateController(Mock.Of<IAuthService>());
         controller.Request.Headers.Cookie = "rc_refresh_token=presented-refresh-token";
 
         var result = await controller.Logout();
 
         result.Should().BeOfType<OkObjectResult>();
-        tokenService.Verify(t => t.RevokeRefreshTokenAsync(It.IsAny<string>()), Times.Never);
-        tokenService.Verify(t => t.RevokeRefreshTokenFamilyAsync(It.IsAny<string>()), Times.Never);
+        controller.Response.Headers.SetCookie.ToString().Should().Contain("rc_refresh_token=");
     }
 
     private static AuthController CreateController(IAuthService authService)
-        => CreateController(authService, new Mock<IJwtTokenService>());
-
-    private static AuthController CreateController(IAuthService authService, Mock<IJwtTokenService> tokenService)
     {
         var googleAuthService = new Mock<IGoogleAuthService>();
         var googleOptions = Options.Create(new GoogleAuthOptions());
@@ -152,7 +146,6 @@ public class AuthControllerCookieTests
 
         return new AuthController(
             authService,
-            tokenService.Object,
             googleAuthService.Object,
             googleOptions,
             environment.Object,
@@ -192,7 +185,6 @@ public class AuthControllerCookieTests
             Id = 1,
             Email = "admin@rentalcommand.local",
             DisplayName = "Rental Command Admin",
-            Roles = ["Admin"],
             EmailVerified = true
         }
     };

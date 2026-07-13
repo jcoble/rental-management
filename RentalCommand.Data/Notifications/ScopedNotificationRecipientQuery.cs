@@ -13,8 +13,32 @@ namespace RentalCommand.Data.Notifications;
 /// Keeping capability and scope on the same assignment prevents authority from being assembled across
 /// unrelated assignments. Every method remains IQueryable so the caller executes one SQL query.
 /// </summary>
-internal static class ScopedNotificationRecipientQuery
+public static class ScopedNotificationRecipientQuery
 {
+    public static IQueryable<int> ForWorkspaceMembership(
+        RentalCommandDbContext db,
+        int portfolioId,
+        DateTime utcNow)
+    {
+        return (
+            from context in db.WorkspaceAccessContexts.AsNoTracking()
+            join membership in db.WorkspaceMemberships.AsNoTracking()
+                on new { AccessContextId = context.Id, context.PortfolioId }
+                equals new { membership.AccessContextId, membership.PortfolioId }
+            where context.PortfolioId == portfolioId
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null
+                && context.RevokedAtUtc == null
+                && membership.Status == WorkspaceMembershipStatus.Active
+                && membership.SuspendedAtUtc == null
+                && membership.RevokedAtUtc == null
+                && membership.EffectiveFromUtc <= utcNow
+                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > utcNow)
+            select context.UserId)
+            .Distinct()
+            .TagWith("ScopedNotificationRecipients: active workspace membership");
+    }
+
     public static IQueryable<int> ForProperty(
         IAtomicWriteAttempt attempt,
         int portfolioId,
@@ -27,15 +51,14 @@ internal static class ScopedNotificationRecipientQuery
         return (
             from user in attempt.Persistence.Query<ApplicationUser>()
             join context in attempt.Persistence.Query<WorkspaceAccessContext>()
-                on new { UserId = user.Id, PortfolioId = user.PortfolioId!.Value }
-                equals new { context.UserId, context.PortfolioId }
+                on user.Id equals context.UserId
             join membership in attempt.Persistence.Query<WorkspaceMembership>()
                 on new { AccessContextId = context.Id, context.PortfolioId }
                 equals new { membership.AccessContextId, membership.PortfolioId }
             join assignment in attempt.Persistence.Query<MembershipRoleAssignment>()
                 on new { WorkspaceMembershipId = membership.Id, membership.PortfolioId }
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
-            where user.PortfolioId == portfolioId
+            where context.PortfolioId == portfolioId
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null
@@ -78,15 +101,14 @@ internal static class ScopedNotificationRecipientQuery
         return (
             from user in attempt.Persistence.Query<ApplicationUser>()
             join context in attempt.Persistence.Query<WorkspaceAccessContext>()
-                on new { UserId = user.Id, PortfolioId = user.PortfolioId!.Value }
-                equals new { context.UserId, context.PortfolioId }
+                on user.Id equals context.UserId
             join membership in attempt.Persistence.Query<WorkspaceMembership>()
                 on new { AccessContextId = context.Id, context.PortfolioId }
                 equals new { membership.AccessContextId, membership.PortfolioId }
             join assignment in attempt.Persistence.Query<MembershipRoleAssignment>()
                 on new { WorkspaceMembershipId = membership.Id, membership.PortfolioId }
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
-            where user.PortfolioId == portfolioId
+            where context.PortfolioId == portfolioId
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null

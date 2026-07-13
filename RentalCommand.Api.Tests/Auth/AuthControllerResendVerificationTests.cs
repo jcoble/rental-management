@@ -67,7 +67,6 @@ public class AuthControllerResendVerificationTests
 
     private static AuthController CreateController(IAuthService authService)
     {
-        var tokenService = new Mock<IJwtTokenService>();
         var googleAuthService = new Mock<IGoogleAuthService>();
         var googleOptions = Options.Create(new GoogleAuthOptions());
         var environment = new Mock<IWebHostEnvironment>();
@@ -76,7 +75,6 @@ public class AuthControllerResendVerificationTests
 
         return new AuthController(
             authService,
-            tokenService.Object,
             googleAuthService.Object,
             googleOptions,
             environment.Object,

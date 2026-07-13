@@ -17,7 +17,6 @@ public sealed class CanonicalAccessTokenServiceTests
             Issuer = "tests",
             Audience = "tests",
             AccessTokenExpirationMinutes = 15,
-            RefreshTokenExpirationDays = 7,
         });
         var sessionId = Guid.NewGuid();
         var sut = new CanonicalAccessTokenService(settings, TimeProvider.System);

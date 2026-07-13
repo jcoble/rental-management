@@ -62,7 +62,6 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             Email = "agreement-documents@example.test",
             NormalizedEmail = "AGREEMENT-DOCUMENTS@EXAMPLE.TEST",
             DisplayName = "Agreement Document Test User",
-            PortfolioId = PortfolioId,
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = now,

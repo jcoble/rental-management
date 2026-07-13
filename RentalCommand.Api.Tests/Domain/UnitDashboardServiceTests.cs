@@ -50,7 +50,6 @@ public class UnitDashboardServiceTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = ActorUserId,
-            PortfolioId = PortfolioId,
             UserName = "dashboard-test@rentalcommand.local",
             NormalizedUserName = "DASHBOARD-TEST@RENTALCOMMAND.LOCAL",
             Email = "dashboard-test@rentalcommand.local",

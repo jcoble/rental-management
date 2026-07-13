@@ -166,7 +166,6 @@ public class PortalServiceBalanceTests : IDisposable
             actor = new ApplicationUser
             {
                 Id = 1,
-                PortfolioId = PortfolioId,
                 UserName = "portal-balance@example.test",
                 NormalizedUserName = "PORTAL-BALANCE@EXAMPLE.TEST",
                 Email = "portal-balance@example.test",

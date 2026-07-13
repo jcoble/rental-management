@@ -17,7 +17,7 @@ namespace RentalCommand.Api.Services.Domain;
 ///
 /// Every method is idempotent and self-contained so it can run at the three moments a portfolio first
 /// has (or regains) a real, empty owner list — registration, Google sign-in, and Go-Live (which wipes
-/// the demo owners) — as well as a one-off backfill, without ever creating a duplicate.
+/// the demo owners) — without ever creating a duplicate.
 /// </summary>
 public interface ISelfOwnerProvisioner
 {

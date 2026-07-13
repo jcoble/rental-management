@@ -168,17 +168,6 @@ public class SandboxServiceTests : IDisposable
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
             });
-        _ctx.Db.UserAccounts.Add(new UserAccount
-        {
-            PortfolioId = 1,
-            Email = "operator@example.test",
-            DisplayName = "Portfolio operator",
-            PasswordHash = "not-used-by-this-test",
-            Role = UserRole.Admin,
-            IsActive = true,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
         await _ctx.Db.SaveChangesAsync();
 
         var accountingConnection = new AccountingConnection
@@ -251,8 +240,6 @@ public class SandboxServiceTests : IDisposable
             .Should().Equal("tenant.fullName");
         (await _ctx.Db.StoredFiles.IgnoreQueryFilters().Select(file => file.FileName).ToListAsync())
             .Should().Equal("landlord-lease.pdf");
-        (await _ctx.Db.UserAccounts.IgnoreQueryFilters().Select(account => account.Email).ToListAsync())
-            .Should().Equal("operator@example.test");
         (await _ctx.Db.TeamRoutingRules.IgnoreQueryFilters().Select(rule => new { rule.Topic, rule.PropertyId }).ToListAsync())
             .Should().ContainSingle()
             .Which.Should().BeEquivalentTo(new { Topic = TeamRoutingTopic.WorkOrders, PropertyId = (int?)null });
@@ -453,7 +440,6 @@ public class SandboxServiceTests : IDisposable
             UserName = $"onboarding-{portfolioId}@example.test",
             Email = $"onboarding-{portfolioId}@example.test",
             DisplayName = "Onboarding Administrator",
-            PortfolioId = portfolioId,
             EmailConfirmed = true,
             CreatedAt = now,
         };
@@ -565,7 +551,6 @@ public class SandboxServiceTests : IDisposable
             UserName = actorEmail,
             Email = actorEmail,
             DisplayName = actorDisplayName,
-            PortfolioId = portfolioId,
             EmailConfirmed = true,
             CreatedAt = now,
         };

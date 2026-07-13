@@ -35,7 +35,6 @@ public class UnitServiceListTests : IDisposable
         _ctx.Db.Users.Add(new ApplicationUser
         {
             Id = ActorUserId,
-            PortfolioId = PortfolioId,
             UserName = "unit-tests@rentalcommand.local",
             NormalizedUserName = "UNIT-TESTS@RENTALCOMMAND.LOCAL",
             Email = "unit-tests@rentalcommand.local",

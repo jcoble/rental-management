@@ -163,7 +163,6 @@ public class ScanControllerTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = 7,
-            PortfolioId = 42,
             UserName = "scan-controller@example.test",
             NormalizedUserName = "SCAN-CONTROLLER@EXAMPLE.TEST",
             Email = "scan-controller@example.test",

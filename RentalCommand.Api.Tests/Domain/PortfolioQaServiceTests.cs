@@ -46,7 +46,6 @@ public sealed class PortfolioQaServiceTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = 1,
-            PortfolioId = PortfolioId,
             UserName = "portfolio-qa@example.test",
             NormalizedUserName = "PORTFOLIO-QA@EXAMPLE.TEST",
             Email = "portfolio-qa@example.test",

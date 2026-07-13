@@ -29,7 +29,6 @@ public class TenantPortalProvisioningServiceTests : IDisposable
 
         result.Status.Should().Be(PortalAccountStatus.NoEmail);
         userManager.Verify(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()), Times.Never);
-        _ctx.Db.UserAccounts.Should().BeEmpty();
     }
 
     [Fact]
@@ -87,14 +86,12 @@ public class TenantPortalProvisioningServiceTests : IDisposable
 
         created.Should().NotBeNull();
         created!.Email.Should().Be("new.tenant@example.local");
-        created.PortfolioId.Should().Be(PortfolioId);
         created.EmailConfirmed.Should().BeTrue();
         password.Should().Be(new SeedSettings().TenantPassword);
         _ctx.Db.WorkspaceAccessContexts.Should().ContainSingle(context =>
             context.UserId == created.Id && context.PortfolioId == PortfolioId);
         _ctx.Db.TenantUserAccesses.Should().BeEmpty(
             "portal authority begins only when an effective lease party exists");
-        _ctx.Db.UserAccounts.Should().BeEmpty();
     }
 
     [Fact]
@@ -108,7 +105,6 @@ public class TenantPortalProvisioningServiceTests : IDisposable
             Email = "has.login@example.local",
             EmailConfirmed = true,
             DisplayName = "Has Login",
-            PortfolioId = PortfolioId,
         };
         _ctx.Db.Users.Add(existing);
         _ctx.Db.SaveChanges();

@@ -376,7 +376,6 @@ public class VendorDispatchServiceTests : IDisposable
         var user = new ApplicationUser
         {
             Id = userId,
-            PortfolioId = PortfolioId,
             UserName = $"manager-{userId}@example.test",
             NormalizedUserName = $"MANAGER-{userId}@EXAMPLE.TEST",
             Email = $"manager-{userId}@example.test",

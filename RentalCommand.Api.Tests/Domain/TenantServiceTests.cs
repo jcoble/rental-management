@@ -54,7 +54,6 @@ public class TenantServiceTests : IDisposable
         _ctx.Db.Users.Add(new ApplicationUser
         {
             Id = ActorUserId,
-            PortfolioId = PortfolioId,
             UserName = "tenant-tests@rentalcommand.local",
             NormalizedUserName = "TENANT-TESTS@RENTALCOMMAND.LOCAL",
             Email = "tenant-tests@rentalcommand.local",
@@ -131,10 +130,8 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateAsync_WithEmail_ProvisionsTenantRoleIdentityUserLinkedToTenant()
+    public async Task CreateAsync_WithEmail_ProvisionsRoleFreeIdentityUser()
     {
-        SeedTenantRole();
-
         var response = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
         {
             FirstName = "Portal",
@@ -144,9 +141,7 @@ public class TenantServiceTests : IDisposable
 
         var identityUser = await _userManager.FindByEmailAsync("portal.tenant@example.local");
         identityUser.Should().NotBeNull("creating a tenant with an email provisions their portal login");
-        identityUser!.PortfolioId.Should().Be(PortfolioId);
-        identityUser.EmailConfirmed.Should().BeTrue();
-        (await _userManager.GetRolesAsync(identityUser)).Should().BeEmpty();
+        identityUser!.EmailConfirmed.Should().BeTrue();
         _ctx.Db.TenantUserAccesses.Should().BeEmpty(
             "a tenant record alone is not an effective lease-party relationship");
     }
@@ -154,8 +149,6 @@ public class TenantServiceTests : IDisposable
     [Fact]
     public async Task CreateAsync_WithoutEmail_DoesNotProvisionAndDoesNotThrow()
     {
-        SeedTenantRole();
-
         var response = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
         {
             FirstName = "NoEmail",
@@ -165,14 +158,11 @@ public class TenantServiceTests : IDisposable
 
         response.Id.Should().BeGreaterThan(0, "tenant creation still succeeds without an email");
         _ctx.Db.Users.Should().BeEmpty("a tenant with no email gets no Identity login");
-        _ctx.Db.UserAccounts.Should().BeEmpty();
     }
 
     [Fact]
     public async Task GetAsync_ReportsPortalAccessState()
     {
-        SeedTenantRole();
-
         // A tenant with an email is auto-provisioned on create → active.
         var active = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
         {
@@ -199,20 +189,9 @@ public class TenantServiceTests : IDisposable
         (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("active");
     }
 
-    private void SeedTenantRole()
-    {
-        // The Identity store throws if the Tenant role row is missing when AddToRoleAsync runs.
-        _ctx.Db.Roles.Add(new IdentityRole<int>
-        {
-            Name = nameof(UserRole.Tenant),
-            NormalizedName = nameof(UserRole.Tenant).ToUpperInvariant(),
-        });
-        _ctx.Db.SaveChanges();
-    }
-
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {
-        var store = new UserStore<ApplicationUser, IdentityRole<int>, RentalCommandDbContext, int>(db);
+        var store = new UserOnlyStore<ApplicationUser, RentalCommandDbContext, int>(db);
         return new UserManager<ApplicationUser>(
             store,
             Options.Create(new IdentityOptions()),

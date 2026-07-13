@@ -460,13 +460,6 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         db.Portfolios.AddRange(firstPortfolio, otherPortfolio);
         await db.SaveChangesAsync();
 
-        var adminRole = new IdentityRole<int>(nameof(UserRole.Admin))
-        {
-            NormalizedName = nameof(UserRole.Admin).ToUpperInvariant(),
-        };
-        db.Roles.Add(adminRole);
-        await db.SaveChangesAsync();
-
         var tenant = new Tenant
         {
             PortfolioId = firstPortfolio.Id,
@@ -488,7 +481,6 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
 
         var admin = new ApplicationUser
         {
-            PortfolioId = firstPortfolio.Id,
             UserName = "admin@example.test",
             NormalizedUserName = "ADMIN@EXAMPLE.TEST",
             Email = "admin@example.test",
@@ -498,7 +490,6 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         };
         var decoyUser = new ApplicationUser
         {
-            PortfolioId = firstPortfolio.Id,
             UserName = "decoy-admin@example.test",
             NormalizedUserName = "DECOY-ADMIN@EXAMPLE.TEST",
             Email = "decoy-admin@example.test",
@@ -508,10 +499,6 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         };
         db.Users.AddRange(admin, decoyUser);
         await db.SaveChangesAsync();
-        db.UserRoles.AddRange(
-            new IdentityUserRole<int> { UserId = admin.Id, RoleId = adminRole.Id },
-            new IdentityUserRole<int> { UserId = decoyUser.Id, RoleId = adminRole.Id });
-
         var property = NewProperty(firstPortfolio.Id, "Primary property");
         var samePortfolioDecoyProperty = NewProperty(firstPortfolio.Id, "Unrelated same-portfolio property");
         var vendor = NewVendor(firstPortfolio.Id, "Primary vendor", "+1 (614) 555-0199");

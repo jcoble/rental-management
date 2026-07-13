@@ -132,7 +132,6 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         var user = new ApplicationUser
         {
             Id = 1,
-            PortfolioId = portfolio.Id,
             UserName = "claims@example.test",
             NormalizedUserName = "CLAIMS@EXAMPLE.TEST",
             Email = "claims@example.test",
