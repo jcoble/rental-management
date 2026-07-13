@@ -358,6 +358,13 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { agreement.PortfolioId, agreement.LeaseManagementId }
             join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                .Select(projection => new
+                {
+                    projection.PortfolioId,
+                    projection.AgreementId,
+                    AgreementStatus = (string?)projection.AgreementStatus,
+                    IsGoverning = (bool?)projection.IsGoverning,
+                })
                 on new { agreement.PortfolioId, AgreementId = agreement.Id }
                 equals new { status.PortfolioId, status.AgreementId }
                 into statusRows
@@ -379,8 +386,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 GoverningFromOn = agreement.GoverningFromOn,
                 SupersededEffectiveOn = agreement.SupersededEffectiveOn,
                 BaseRentAmount = agreement.BaseRentAmount,
-                AgreementStatus = status == null ? "Unknown" : status.AgreementStatus,
-                IsGoverning = status != null && status.IsGoverning,
+                AgreementStatus = status.AgreementStatus ?? "Unknown",
+                IsGoverning = status.IsGoverning ?? false,
                 SignerCount = _db.LeaseAgreementSigners.Count(signer =>
                     signer.PortfolioId == access.PortfolioId
                     && signer.LeaseAgreementId == agreement.Id),
@@ -437,6 +444,13 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { addendum.PortfolioId, addendum.LeaseManagementId }
             join status in _db.LeaseAddendumStatusProjections.AsNoTracking()
+                .Select(projection => new
+                {
+                    projection.PortfolioId,
+                    projection.LeaseAddendumId,
+                    AddendumStatus = (string?)projection.AddendumStatus,
+                    FinancialEffectCount = (int?)projection.FinancialEffectCount,
+                })
                 on new { addendum.PortfolioId, LeaseAddendumId = addendum.Id }
                 equals new { status.PortfolioId, status.LeaseAddendumId }
                 into statusRows
@@ -456,8 +470,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 EffectiveFromOn = addendum.EffectiveFromOn,
                 EffectiveThroughOn = addendum.EffectiveThroughOn,
                 SupersededEffectiveOn = addendum.SupersededEffectiveOn,
-                AddendumStatus = status == null ? "Unknown" : status.AddendumStatus,
-                FinancialEffectCount = status == null ? 0 : status.FinancialEffectCount,
+                AddendumStatus = status.AddendumStatus ?? "Unknown",
+                FinancialEffectCount = status.FinancialEffectCount ?? 0,
                 RecurringRentDelta = _db.LeaseAddendumFinancialEffects
                     .Where(effect => effect.PortfolioId == access.PortfolioId
                         && effect.LeaseAddendumId == addendum.Id

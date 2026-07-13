@@ -63,6 +63,11 @@ public class PortalService : IPortalService
         from agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
             .Where(status => status.PortfolioId == access.PortfolioId
                 && status.AgreementId == selectedAgreementId)
+            .Select(status => new
+            {
+                AgreementStatus = (string?)status.AgreementStatus,
+                IsGoverning = (bool?)status.IsGoverning,
+            })
             .DefaultIfEmpty()
         orderby (DateOnly?)agreement!.TermStartOn descending,
             management.Id descending
@@ -87,10 +92,8 @@ public class PortalService : IPortalService
                     LeaseAgreementId = agreement.Id,
                     VersionNumber = agreement.VersionNumber,
                     AgreementNumber = agreement.AgreementNumber,
-                    AgreementStatus = agreementStatus == null
-                        ? string.Empty
-                        : agreementStatus.AgreementStatus,
-                    IsGoverning = agreementStatus != null && agreementStatus.IsGoverning,
+                    AgreementStatus = agreementStatus.AgreementStatus ?? string.Empty,
+                    IsGoverning = agreementStatus.IsGoverning ?? false,
                     ChangeType = agreement.ChangeType,
                     TermType = agreement.TermType,
                     TermStartOn = agreement.TermStartOn,
