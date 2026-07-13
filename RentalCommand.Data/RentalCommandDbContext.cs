@@ -145,6 +145,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<EffectiveOwnerAccessProjection> EffectiveOwnerAccess => Set<EffectiveOwnerAccessProjection>();
     public DbSet<EffectiveTenantAccessProjection> EffectiveTenantAccess => Set<EffectiveTenantAccessProjection>();
     public DbSet<WorkspaceMembership> WorkspaceMemberships => Set<WorkspaceMembership>();
+    public DbSet<WorkspaceInvitation> WorkspaceInvitations => Set<WorkspaceInvitation>();
     public DbSet<RoleProfile> RoleProfiles => Set<RoleProfile>();
     public DbSet<CapabilityDefinition> CapabilityDefinitions => Set<CapabilityDefinition>();
     public DbSet<RoleProfileCapability> RoleProfileCapabilities => Set<RoleProfileCapability>();

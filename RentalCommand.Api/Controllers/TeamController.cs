@@ -30,17 +30,20 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
+    private readonly string _webBaseUrl;
 
     public TeamController(
         RentalCommandDbContext db,
         IWorkspaceAuthorizationEvaluator authorization,
         IAtomicUnitOfWork atomic,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IConfiguration configuration)
     {
         _db = db;
         _authorization = authorization;
         _atomic = atomic;
         _timeProvider = timeProvider;
+        _webBaseUrl = configuration["App:WebBaseUrl"] ?? "https://localhost:5667";
     }
 
     [HttpGet("members")]
@@ -191,7 +194,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             envelope.AccessContextId, envelope.AccessRevision,
             request.Email, request.DisplayName, request.RoleProfileKey, request.ScopeKind,
             request.SelectedPropertyIds.Distinct().Order().ToArray(),
-            request.EffectiveFromUtc);
+            request.EffectiveFromUtc, _webBaseUrl);
         return await Execute("workspace-team.membership.create", envelope.KeyDigest,
             command, CreateCodec, StatusCodes.Status201Created, ct);
     }

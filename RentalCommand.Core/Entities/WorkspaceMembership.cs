@@ -23,4 +23,6 @@ public sealed class WorkspaceMembership
     public WorkspaceAccessContext? AccessContext { get; set; }
     public ICollection<MembershipRoleAssignment> RoleAssignments { get; set; } =
         new List<MembershipRoleAssignment>();
+    public ICollection<WorkspaceInvitation> Invitations { get; set; } =
+        new List<WorkspaceInvitation>();
 }
