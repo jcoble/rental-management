@@ -8322,6 +8322,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("TenantNoticePolicyId")
                         .HasColumnType("integer");
 
+                    b.Property<long?>("TenantLedgerEntryId")
+                        .HasColumnType("bigint");
+
                     b.HasKey("Id");
 
                     b.HasIndex("BusinessKey")
