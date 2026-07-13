@@ -686,7 +686,7 @@ public class ScanController : ManagementControllerBase
     private async Task<int?> ResolveCreatedUnitIdAsync(
         int portfolioId,
         string? entityType,
-        int? entityId,
+        long? entityId,
         CancellationToken ct)
     {
         if (entityId is not > 0 || string.IsNullOrWhiteSpace(entityType))
