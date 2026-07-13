@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
