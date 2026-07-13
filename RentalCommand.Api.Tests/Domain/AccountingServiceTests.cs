@@ -123,31 +123,9 @@ public class AccountingServiceTests : IDisposable
         var (property, lease) = SeedPropertyAndLease(now);
 
         // Collected this month: $1,200 rent paid.
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = inMonth,
-            PaidDate = inMonth,
-            Method = "Check",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(lease, 1200m, dueDate: inMonth, paidInFull: true, paidDate: inMonth);
         // Past due: $1,200 rent overdue (due yesterday, still scheduled) on the same lease.
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200m,
-            DueDate = now.AddDays(-1),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(lease, 1200m, dueDate: now.AddDays(-1), paidInFull: false);
         _db.SaveChanges();
 
         // Spent this month: $456.88 in repairs paid.
@@ -180,33 +158,8 @@ public class AccountingServiceTests : IDisposable
         var now = DateTime.UtcNow;
         var (_, lease) = SeedPropertyAndLease(now);
 
-        _db.Payments.AddRange(
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = lease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Paid,
-                Amount = 1200m,
-                DueDate = now,
-                PaidDate = now,
-                Method = "Check",
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = lease,
-                PaymentType = PaymentType.SecurityDeposit,
-                Status = PaymentStatus.Paid,
-                Amount = 1200m,
-                DueDate = now,
-                PaidDate = now,
-                Method = "Check",
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
+                SeedPayment(lease, 1200m, dueDate: now, paidInFull: true, paidDate: now);
+        SeedPayment(lease, 1200m, dueDate: now, paidInFull: true, paidDate: now, entryType: TenantLedgerEntryType.DepositCharge);
         _db.SaveChanges();
 
         var summary = await _sut.GetSummaryAsync(PortfolioId, CancellationToken.None);
@@ -232,67 +185,16 @@ public class AccountingServiceTests : IDisposable
 
         // Lease A: two past-due payments ($1,000 + $200) → still ONE behind tenant.
         var (_, leaseA) = SeedPropertyAndLease(now);
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = leaseA,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1000m,
-            DueDate = now.AddDays(-10),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = leaseA,
-            PaymentType = PaymentType.LateFee,
-            Status = PaymentStatus.Late,
-            Amount = 200m,
-            DueDate = now.AddDays(-3),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(leaseA, 1000m, dueDate: now.AddDays(-10), paidInFull: false);
+                SeedPayment(leaseA, 200m, dueDate: now.AddDays(-3), paidInFull: false, entryType: TenantLedgerEntryType.LateFeeCharge);
 
         // Lease B: one past-due payment ($800) → a second behind tenant.
         var (_, leaseB) = SeedPropertyAndLease(now);
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = leaseB,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 800m,
-            DueDate = now.AddDays(-1),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(leaseB, 800m, dueDate: now.AddDays(-1), paidInFull: false);
 
         // Lease B also has a paid payment and a future-scheduled one — neither is "behind".
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = leaseB,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 800m,
-            DueDate = now.AddDays(-31),
-            PaidDate = now.AddDays(-30),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = leaseB,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 800m,
-            DueDate = now.AddDays(15),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(leaseB, 800m, dueDate: now.AddDays(-31), paidInFull: true, paidDate: now.AddDays(-30));
+                SeedPayment(leaseB, 800m, dueDate: now.AddDays(15), paidInFull: false);
         _db.SaveChanges();
 
         _commands.Clear();
@@ -329,47 +231,25 @@ public class AccountingServiceTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var (_, lease) = SeedPropertyAndLease(now);
-        lease.Tenant!.Phone = "614-555-0130";
+        lease.LeaseManagement!.Parties.Single().Tenant!.Phone = "614-555-0130";
 
-        var oldest = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 900m,
-            DueDate = now.AddDays(-20),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var partial = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Partial,
-            Amount = 500m,
-            AmountPaid = 125m,
-            DueDate = now.AddDays(-5),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Payments.AddRange(oldest, partial);
+        var oldest = SeedPayment(lease, 900m, dueDate: now.AddDays(-20), paidInFull: false);
+        var partial = SeedPayment(lease, 500m, dueDate: now.AddDays(-5), paidInFull: false, amountPaid: 125m);
         _db.SaveChanges();
         _commands.Clear();
 
         var pastDue = await _sut.GetPastDueAsync(PortfolioId, CancellationToken.None);
 
         var row = pastDue.Items.Should().ContainSingle().Subject;
-        row.LeaseManagementId.Should().Be(lease.Id);
+        row.LeaseManagementId.Should().Be(lease.LeaseManagementId);
         row.TenantName.Should().Be("Maria Tenant");
         row.TenantPhone.Should().Be("614-555-0130");
         row.RelationshipNumber.Should().Be("L-001");
         row.PropertyName.Should().Be("General");
         row.UnitNumber.Should().Be("12");
-        row.UnitId.Should().Be(lease.UnitId, "the row carries the lease's unit so the oldest-payment link folds into the unit's Rent tab");
+        row.UnitId.Should().Be(lease.LeaseManagement.UnitId, "the row carries the relationship's unit so the oldest charge link folds into the unit's Rent tab");
         row.OldestLedgerEntryId.Should().Be(oldest.Id);
-        row.OldestDueOn.Should().Be(DateOnly.FromDateTime(oldest.DueDate));
+        row.OldestDueOn.Should().Be(oldest.DueOn);
         row.PastDueAmount.Should().Be(1275m);
         row.OverduePaymentCount.Should().Be(2);
 
@@ -391,34 +271,14 @@ public class AccountingServiceTests : IDisposable
         var now = DateTime.UtcNow;
 
         var (_, endedLease) = SeedPropertyAndLease(now);
-        endedLease.LeaseNumber = "L-ENDED";
-        endedLease.StartDate = now.AddYears(-2);
-        endedLease.EndDate = now.AddMonths(-1);
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = endedLease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 925m,
-            DueDate = now.AddMonths(-6),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        endedLease.AgreementNumber = "L-ENDED";
+        endedLease.TermStartOn = DateOnly.FromDateTime(now.AddYears(-2));
+        endedLease.TermEndOn = DateOnly.FromDateTime(now.AddMonths(-1));
+                SeedPayment(endedLease, 925m, dueDate: now.AddMonths(-6), paidInFull: false);
 
         var (_, currentLease) = SeedPropertyAndLease(now);
-        currentLease.LeaseNumber = "L-CURRENT";
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = currentLease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 975m,
-            DueDate = now.AddDays(-5),
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        currentLease.AgreementNumber = "L-CURRENT";
+                SeedPayment(currentLease, 975m, dueDate: now.AddDays(-5), paidInFull: false);
         await _db.SaveChangesAsync();
 
         var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
@@ -428,8 +288,8 @@ public class AccountingServiceTests : IDisposable
         snapshot.PastDueAmount.Should().Be(975m);
         pastDue.TotalCount.Should().Be(1);
         pastDue.TotalPastDueAmount.Should().Be(975m);
-        pastDue.Items.Should().ContainSingle(i => i.LeaseManagementId == currentLease.Id);
-        pastDue.Items.Should().NotContain(i => i.LeaseManagementId == endedLease.Id,
+        pastDue.Items.Should().ContainSingle(i => i.LeaseManagementId == currentLease.LeaseManagementId);
+        pastDue.Items.Should().NotContain(i => i.LeaseManagementId == endedLease.LeaseManagementId,
             "an ended fixed-term lease can keep historical ledger rows, but it should not be an active dashboard/Money TODO");
     }
 
@@ -439,19 +299,9 @@ public class AccountingServiceTests : IDisposable
         var now = new DateTime(2026, 03, 03, 12, 0, 0, DateTimeKind.Utc);
         var (_, lease) = SeedPropertyAndLease(now);
 
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
-            PaidDate = now,
-            Method = "Check",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        SeedPayment(lease, 1200m,
+            dueDate: new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
+            paidInFull: true, paidDate: now);
         _db.SaveChanges();
 
         var reports = await _sut.GetReportsAsync(PortfolioId, CancellationToken.None);
@@ -470,18 +320,7 @@ public class AccountingServiceTests : IDisposable
         property.LandValue = 60_000m;
         property.InServiceDate = new DateTime(2020, 01, 01, 0, 0, 0, DateTimeKind.Utc);
 
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1_200m,
-            DueDate = now,
-            PaidDate = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(lease, 1_200m, dueDate: now, paidInFull: true, paidDate: now);
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
@@ -606,19 +445,7 @@ public class AccountingServiceTests : IDisposable
         var now = new DateTime(2026, 03, 03, 12, 0, 0, 0, DateTimeKind.Utc);
         var (property, lease) = SeedPropertyAndLease(now);
 
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = now.AddDays(-2),
-            PaidDate = now,
-            Method = "Check",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+                SeedPayment(lease, 1200m, dueDate: now.AddDays(-2), paidInFull: true, paidDate: now);
 
         var vendor = new Vendor
         {
@@ -660,7 +487,10 @@ public class AccountingServiceTests : IDisposable
             postedAt: now.AddDays(-2),
             category: "Deposit",
             matchStatus: "Matched",
-            matchedPaymentId: _db.Payments.Select(p => p.Id).Single());
+            matchedPaymentId: _db.TenantLedgerEntries
+                .Where(entry => entry.EntryType == TenantLedgerEntryType.PaymentReceipt)
+                .Select(entry => entry.Id)
+                .Single());
 
         _commands.Clear();
 
@@ -791,7 +621,7 @@ public class AccountingServiceTests : IDisposable
         snapshot.Collected.Should().Be(300m);
     }
 
-    private (Property Property, Lease Lease) SeedPropertyAndLease(DateTime now)
+    private (Property Property, LeaseAgreement Agreement) SeedPropertyAndLease(DateTime now)
     {
         var property = new Property
         {
@@ -820,85 +650,94 @@ public class AccountingServiceTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-001",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            LateFeeAmount = 50m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Leases.Add(lease);
+        _db.AddRange(property, unit, tenant);
         _db.SaveChanges();
-        return (property, lease);
+        var management = new LeaseManagement
+        {
+            PortfolioId = PortfolioId, PropertyId = property.Id, UnitId = unit.Id,
+            RelationshipNumber = "L-001", PlannedPossessionAtUtc = now.AddMonths(-1),
+            PossessionGivenAtUtc = now.AddMonths(-1), CreatedAtUtc = now, UpdatedAtUtc = now,
+            CreatedByUserId = 1, RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagements.Add(management);
+        _db.SaveChanges();
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}", Currency = "USD", OpenedAtUtc = now.AddMonths(-1),
+            CreatedAtUtc = now, CreatedByUserId = 1,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id, TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant, EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Accounting test", CreatedAtUtc = now, CreatedByUserId = 1,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id, VersionNumber = 1,
+            AgreementNumber = "L-001", ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 1200m, RentDueDay = 1, SecurityDepositObligation = 1200m,
+            LateFeeAmount = 50m, GracePeriodDays = 5, Currency = "USD",
+            TermsSchemaVersion = 1, TermsPayload = "{}", FullyExecutedAtUtc = now,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = 1,
+            LeaseManagement = management,
+        };
+        management.TenantAccount = account;
+        management.Parties.Add(party);
+        _db.AddRange(account, party, agreement);
+        _db.SaveChanges();
+        return (property, agreement);
     }
 
     private Property SeedPropertyLeaseAndPayment(DateTime now)
     {
-        var property = new Property
+        var (property, agreement) = SeedPropertyAndLease(now);
+        SeedPayment(agreement, 1200m, dueDate: now.AddDays(-1), paidInFull: false);
+        return property;
+    }
+
+    private TenantLedgerEntry SeedPayment(
+        LeaseAgreement agreement, decimal amount, DateTime dueDate, bool paidInFull,
+        DateTime? paidDate = null,
+        TenantLedgerEntryType entryType = TenantLedgerEntryType.RentCharge,
+        decimal? amountPaid = null)
+    {
+        var account = agreement.LeaseManagement!.TenantAccount!;
+        var charge = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId,
-            Name = "General",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
+            PortfolioId = PortfolioId, TenantAccountId = account.Id, EntryType = entryType,
+            Direction = TenantLedgerDirection.Debit, Amount = amount, Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueDate), DueOn = DateOnly.FromDateTime(dueDate),
+            PostedAtUtc = dueDate, Description = entryType.ToString(), BusinessKey = $"charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = agreement.Id, CreatedByUserId = 1,
         };
-        var unit = new Unit
+        _db.TenantLedgerEntries.Add(charge);
+        _db.SaveChanges();
+        var paid = paidInFull ? amount : amountPaid ?? 0m;
+        if (paid <= 0m) return charge;
+        var receipt = new TenantLedgerEntry
         {
-            Property = property,
-            UnitNumber = "12",
-            MarketRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
+            Amount = paid, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate ?? dueDate),
+            PostedAtUtc = paidDate ?? dueDate, Description = "Payment received by check",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}", CreatedByUserId = 1,
         };
-        var tenant = new Tenant
+        _db.TenantLedgerEntries.Add(receipt);
+        _db.SaveChanges();
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
         {
-            PortfolioId = PortfolioId,
-            FirstName = "Maria",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-001",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            LateFeeAmount = 50m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200m,
-            DueDate = now.AddDays(-1),
-            CreatedAt = now,
-            UpdatedAt = now,
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            DebitEntryId = charge.Id, CreditEntryId = receipt.Id, Amount = paid,
+            AllocatedAtUtc = paidDate ?? dueDate, BusinessKey = $"allocation:{Guid.NewGuid():N}", CreatedByUserId = 1,
         });
         _db.SaveChanges();
-        return property;
+        return receipt;
     }
 
     private Expense SeedExpense(
@@ -934,7 +773,7 @@ public class AccountingServiceTests : IDisposable
         DateTime postedAt,
         string category,
         string matchStatus,
-        int? matchedPaymentId = null,
+        long? matchedPaymentId = null,
         int? matchedExpenseId = null)
     {
         var connection = _db.BankConnections.FirstOrDefault() ?? new BankConnection
@@ -971,7 +810,6 @@ public class AccountingServiceTests : IDisposable
         return transaction;
     }
 }
-
 internal sealed class AccountingServiceTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public AccountingServiceTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
