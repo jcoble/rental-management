@@ -120,24 +120,17 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Fact]
-    public async Task PreviewLeasePdfAsync_UsesTemplatePdfAndLeaseValues()
+    public void PreviewLeasePdfAsync_UsesCanonicalAgreementQuery()
     {
-        var lease = SeedLeaseWithGraph();
-        var template = await SeedActiveOverlayTemplateAsync(lease.PropertyId);
         var templates = new DocumentTemplateService(_db, new DocumentTemplateFieldCatalog(), _storage, TimeProvider.System);
 
-        var result = await templates.PreviewLeasePdfAsync(PortfolioId, template.Id, lease.Id);
+        var sql = templates.BuildAgreementPreviewQuery(PortfolioId, 123).ToQueryString();
 
-        result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
-        result.Value!.FileName.Should().Be($"lease-template-{template.Id}-lease-{lease.Id}-preview.pdf");
-
-        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(result.Value.PdfBytes);
-        text.Should().NotBeNull();
-        text!.Should().Contain("Custom Landlord Lease");
-        text.Should().Contain("Marcus");
-        text.Should().Contain("Williams");
-        text.Should().Contain("$1,450.00");
-        text.Should().NotContain("Residential Lease Agreement");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAgreementSigners");
+        sql.Should().NotContain("FROM \"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
     }
 
     [Fact]

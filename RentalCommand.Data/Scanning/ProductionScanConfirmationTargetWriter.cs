@@ -424,27 +424,21 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        var tenants = persistence.Query<Tenant>()
-            .Where(tenant => tenant.Id == tenantId && tenant.PortfolioId == portfolioId);
-        return unitId is int selectedUnitId
-            ? tenants.AnyAsync(tenant =>
-                tenant.Leases.Any(lease => lease.PortfolioId == portfolioId
-                    && lease.UnitId == selectedUnitId
-                    && (lease.Status == LeaseStatus.Active || lease.Status == LeaseStatus.NoticeGiven)) ||
-                tenant.LeaseTenants.Any(link => link.PortfolioId == portfolioId
-                    && link.Lease != null
-                    && link.Lease.PortfolioId == portfolioId
-                    && link.Lease.UnitId == selectedUnitId
-                    && (link.Lease.Status == LeaseStatus.Active || link.Lease.Status == LeaseStatus.NoticeGiven)), ct)
-            : tenants.AnyAsync(tenant =>
-                tenant.Leases.Any(lease => lease.PortfolioId == portfolioId
-                    && lease.PropertyId == propertyId
-                    && (lease.Status == LeaseStatus.Active || lease.Status == LeaseStatus.NoticeGiven)) ||
-                tenant.LeaseTenants.Any(link => link.PortfolioId == portfolioId
-                    && link.Lease != null
-                    && link.Lease.PortfolioId == portfolioId
-                    && link.Lease.PropertyId == propertyId
-                    && (link.Lease.Status == LeaseStatus.Active || link.Lease.Status == LeaseStatus.NoticeGiven)), ct);
+        var currentParties =
+            from party in persistence.Query<LeaseManagementParty>()
+            join lifecycle in persistence.Query<LeaseManagementLifecycleProjection>()
+                on new { party.PortfolioId, party.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            where party.PortfolioId == portfolioId
+                && party.TenantId == tenantId
+                && party.EffectiveFrom <= lifecycle.BusinessDate
+                && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
+                && lifecycle.Lifecycle != "Canceled"
+                && lifecycle.Lifecycle != "Closed"
+                && lifecycle.PropertyId == propertyId
+                && (unitId == null || lifecycle.UnitId == unitId)
+            select party.Id;
+        return currentParties.AnyAsync(ct);
     }
 
     private static async Task<int?> ResolveOrCreateVendorAsync(

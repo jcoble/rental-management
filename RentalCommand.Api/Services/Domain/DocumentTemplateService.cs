@@ -416,7 +416,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     public async Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
         int portfolioId,
         int templateId,
-        int leaseId,
+        int leaseAgreementId,
         CancellationToken ct = default)
     {
         var template = await _db.DocumentTemplates
@@ -437,26 +437,19 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
                 "Only uploaded lease PDF templates can be previewed against a lease.");
         }
 
-        var lease = await _db.Leases
-            .AsNoTracking()
-            .Include(l => l.Tenant)
-            .Include(l => l.Unit)
-            .Include(l => l.Property)
-            .FirstOrDefaultAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
-        if (lease is null)
+        var agreement = await BuildAgreementPreviewQuery(portfolioId, leaseAgreementId)
+            .SingleOrDefaultAsync(ct);
+        if (agreement is null)
         {
-            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.NotFound("Lease not found");
+            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.NotFound(
+                "Lease agreement not found");
         }
 
-        if (template.PropertyId.HasValue && template.PropertyId.Value != lease.PropertyId)
+        if (template.PropertyId.HasValue && template.PropertyId.Value != agreement.PropertyId)
         {
             return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Invalid(
                 "Choose a lease from the property this template is assigned to.");
         }
-
-        var portfolio = await _db.Portfolios
-            .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
 
         byte[] originalBytes;
         try
@@ -469,9 +462,9 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
                 "Template source PDF is unavailable.");
         }
 
-        var data = BuildLeaseAgreementData(lease, portfolio);
+        var data = BuildLeaseAgreementData(agreement);
         var previewBytes = LeaseAgreementRenderer.RenderOverlayPreview(originalBytes, template.Fields, data);
-        var fileName = $"lease-template-{template.Id}-lease-{lease.Id}-preview.pdf";
+        var fileName = $"lease-template-{template.Id}-agreement-{agreement.LeaseAgreementId}-preview.pdf";
 
         return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Success(
             new DocumentTemplatePreviewResult(previewBytes, fileName));
@@ -515,45 +508,110 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         return ms.ToArray();
     }
 
-    private static LeaseAgreementRenderData BuildLeaseAgreementData(Lease lease, Portfolio? portfolio)
+    internal IQueryable<LeaseAgreementPreviewReadRow> BuildAgreementPreviewQuery(
+        int portfolioId,
+        int leaseAgreementId) =>
+        from agreement in _db.LeaseAgreements.AsNoTracking()
+        join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            on new { agreement.PortfolioId, AgreementId = agreement.Id }
+            equals new { status.PortfolioId, AgreementId = status.AgreementId }
+        where agreement.PortfolioId == portfolioId
+            && agreement.Id == leaseAgreementId
+            && agreement.DraftCanceledAtUtc == null
+            && agreement.VoidedAtUtc == null
+        select new LeaseAgreementPreviewReadRow
+        {
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementId = agreement.LeaseManagementId,
+            AgreementNumber = agreement.AgreementNumber,
+            AgreementStatus = status.AgreementStatus,
+            TermStartOn = agreement.TermStartOn,
+            TermEndOn = agreement.TermEndOn,
+            BaseRentAmount = agreement.BaseRentAmount,
+            SecurityDepositObligation = agreement.SecurityDepositObligation,
+            LateFeeAmount = agreement.LateFeeAmount,
+            RentDueDay = agreement.RentDueDay,
+            PropertyId = agreement.LeaseManagement!.PropertyId,
+            PropertyName = agreement.LeaseManagement.Property!.Name,
+            AddressLine1 = agreement.LeaseManagement.Property.AddressLine1,
+            AddressLine2 = agreement.LeaseManagement.Property.AddressLine2,
+            City = agreement.LeaseManagement.Property.City,
+            State = agreement.LeaseManagement.Property.State,
+            PostalCode = agreement.LeaseManagement.Property.PostalCode,
+            YearBuilt = agreement.LeaseManagement.Property.YearBuilt,
+            UnitNumber = agreement.LeaseManagement.Unit!.UnitNumber,
+            LandlordName = agreement.LeaseManagement.Portfolio!.ManagementCompanyName,
+            PortfolioName = agreement.LeaseManagement.Portfolio.Name,
+            TenantName = agreement.Signers
+                .Where(signer => signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
+                .OrderBy(signer => signer.SigningOrder)
+                .Select(signer => signer.NameSnapshot)
+                .FirstOrDefault(),
+            TenantEmail = agreement.Signers
+                .Where(signer => signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
+                .OrderBy(signer => signer.SigningOrder)
+                .Select(signer => signer.EmailSnapshot)
+                .FirstOrDefault(),
+        };
+
+    private static LeaseAgreementRenderData BuildLeaseAgreementData(LeaseAgreementPreviewReadRow agreement)
     {
-        var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
-            ? portfolio!.ManagementCompanyName
-            : portfolio?.Name ?? "Landlord";
-
-        var tenantName = lease.Tenant == null
-            ? string.Empty
-            : $"{lease.Tenant.FirstName} {lease.Tenant.LastName}".Trim();
-
-        var property = lease.Property;
-        var propertyAddress = property == null
-            ? string.Empty
-            : string.Join(", ", new[]
+        var landlordName = !string.IsNullOrWhiteSpace(agreement.LandlordName)
+            ? agreement.LandlordName
+            : agreement.PortfolioName;
+        var propertyAddress = string.Join(", ", new[]
             {
-                property.AddressLine1,
-                property.AddressLine2,
-                $"{property.City}, {property.State} {property.PostalCode}".Trim(),
+                agreement.AddressLine1,
+                agreement.AddressLine2,
+                $"{agreement.City}, {agreement.State} {agreement.PostalCode}".Trim(),
             }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
         return new LeaseAgreementRenderData
         {
-            PropertyId = lease.PropertyId,
-            AgreementNumber = lease.LeaseNumber,
-            TermStartOn = DateOnly.FromDateTime(lease.StartDate),
-            TermEndOn = DateOnly.FromDateTime(lease.EndDate),
-            BaseRentAmount = lease.MonthlyRent,
-            SecurityDepositObligation = lease.SecurityDeposit,
-            LateFeeAmount = lease.LateFeeAmount,
-            RentDueDay = lease.RentDueDay,
+            PropertyId = agreement.PropertyId,
+            AgreementNumber = agreement.AgreementNumber,
+            TermStartOn = agreement.TermStartOn,
+            TermEndOn = agreement.TermEndOn,
+            BaseRentAmount = agreement.BaseRentAmount,
+            SecurityDepositObligation = agreement.SecurityDepositObligation,
+            LateFeeAmount = agreement.LateFeeAmount,
+            RentDueDay = agreement.RentDueDay,
             LandlordName = landlordName,
-            TenantName = tenantName,
-            TenantEmail = lease.Tenant?.Email ?? string.Empty,
-            PropertyName = property?.Name ?? string.Empty,
+            TenantName = agreement.TenantName ?? string.Empty,
+            TenantEmail = agreement.TenantEmail ?? string.Empty,
+            PropertyName = agreement.PropertyName,
             PropertyAddress = propertyAddress,
-            UnitNumber = lease.Unit?.UnitNumber,
-            State = property?.State ?? string.Empty,
-            YearBuilt = property?.YearBuilt,
+            UnitNumber = agreement.UnitNumber,
+            State = agreement.State,
+            YearBuilt = agreement.YearBuilt,
         };
+    }
+
+    internal sealed class LeaseAgreementPreviewReadRow
+    {
+        public int LeaseAgreementId { get; init; }
+        public int LeaseManagementId { get; init; }
+        public string AgreementNumber { get; init; } = string.Empty;
+        public string AgreementStatus { get; init; } = string.Empty;
+        public DateOnly TermStartOn { get; init; }
+        public DateOnly? TermEndOn { get; init; }
+        public decimal BaseRentAmount { get; init; }
+        public decimal SecurityDepositObligation { get; init; }
+        public decimal LateFeeAmount { get; init; }
+        public short RentDueDay { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public string AddressLine1 { get; init; } = string.Empty;
+        public string? AddressLine2 { get; init; }
+        public string City { get; init; } = string.Empty;
+        public string State { get; init; } = string.Empty;
+        public string PostalCode { get; init; } = string.Empty;
+        public int? YearBuilt { get; init; }
+        public string? UnitNumber { get; init; }
+        public string? LandlordName { get; init; }
+        public string PortfolioName { get; init; } = string.Empty;
+        public string? TenantName { get; init; }
+        public string? TenantEmail { get; init; }
     }
 
     private Task ClearOtherDefaultsAsync(

@@ -41,7 +41,7 @@ public interface IDocumentTemplateService
         int portfolioId, int templateId, int fieldId, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
-        int portfolioId, int templateId, int leaseId, CancellationToken ct = default);
+        int portfolioId, int templateId, int leaseAgreementId, CancellationToken ct = default);
 }
 
 public sealed record DocumentTemplatePreviewResult(byte[] PdfBytes, string FileName);

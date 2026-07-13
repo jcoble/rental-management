@@ -292,10 +292,10 @@ public class ScanProcessingWorker : EngineWorkerBase
     private const int GroundingCap = 150;
 
     /// <summary>
-    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants, leases } — of the
+    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants, leaseManagements } — of the
     /// portfolio's known records so the LLM can normalise extracted names to the exact records on
     /// file AND return their primary-key ids for auto-fill. Each entry is an {id, name} pair (units
-    /// also carry {unitNumber, propertyId}, leases carry {leaseNumber, propertyId, unitId, tenantId}) so the model can hand back a real id that downstream
+    /// also carry canonical relationship/agreement ids) so the model can hand back a real id that downstream
     /// code validates against this same set before trusting it. Active (non-soft-deleted) rows only,
     /// capped per list, read no-tracking. Returns null when the portfolio has no records to ground
     /// against (keeps the prompt unchanged in that case).
@@ -338,27 +338,37 @@ public class ScanProcessingWorker : EngineWorkerBase
             .Take(GroundingCap)
             .ToListAsync(ct);
 
-        var leases = await db.Leases.AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId
-                        && l.DeletedAt == null
-                        && l.Status != LeaseStatus.Terminated
-                        && l.Status != LeaseStatus.Void)
-            .OrderByDescending(l => l.UpdatedAt)
-            .Select(l => new
+        var leaseManagements = await (
+            from lifecycle in db.LeaseManagementLifecycleProjections.AsNoTracking()
+            join management in db.LeaseManagements.AsNoTracking()
+                on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            join agreement in db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, AgreementId = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, AgreementId = (int?)agreement.Id }
+            where lifecycle.PortfolioId == portfolioId
+                && lifecycle.Lifecycle != "Canceled"
+                && lifecycle.Lifecycle != "Closed"
+            orderby management.UpdatedAtUtc descending
+            select new
             {
-                id = l.Id,
-                leaseNumber = l.LeaseNumber,
-                propertyId = l.PropertyId,
-                unitId = l.UnitId,
-                tenantId = l.TenantId,
+                id = management.Id,
+                leaseManagementId = management.Id,
+                leaseAgreementId = agreement.Id,
+                relationshipNumber = management.RelationshipNumber,
+                agreementNumber = agreement.AgreementNumber,
+                propertyId = management.PropertyId,
+                unitId = management.UnitId,
+                tenantId = lifecycle.CurrentPrimaryTenantId,
+                tenantName = lifecycle.CurrentPrimaryTenantName,
             })
             .Take(GroundingCap)
             .ToListAsync(ct);
 
-        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0 && leases.Count == 0)
+        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0 && leaseManagements.Count == 0)
             return null;
 
-        return JsonSerializer.Serialize(new { vendors, properties, units, tenants, leases });
+        return JsonSerializer.Serialize(new { vendors, properties, units, tenants, leaseManagements });
     }
 
     /// <summary>

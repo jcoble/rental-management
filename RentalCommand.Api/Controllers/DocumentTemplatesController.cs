@@ -72,13 +72,13 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         return template is null ? NotFound(new { error = "Document template not found" }) : Ok(template);
     }
 
-    [HttpGet("{id:int}/preview/leases/{leaseId:int}")]
+    [HttpGet("{id:int}/preview/lease-agreements/{leaseAgreementId:int}")]
     [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, "application/pdf")]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> PreviewLeasePdf(int id, int leaseId, CancellationToken ct)
+    public async Task<IActionResult> PreviewLeasePdf(int id, int leaseAgreementId, CancellationToken ct)
     {
-        var result = await _service.PreviewLeasePdfAsync(GetPortfolioId(), id, leaseId, ct);
+        var result = await _service.PreviewLeasePdfAsync(GetPortfolioId(), id, leaseAgreementId, ct);
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => File(
