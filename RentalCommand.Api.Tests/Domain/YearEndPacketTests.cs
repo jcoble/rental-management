@@ -20,6 +20,7 @@ public class YearEndPacketTests : IDisposable
 {
     private const int PortfolioId = 1;
     private const int Year = 2025;
+    private const int ActorUserId = 1;
 
     private readonly SqliteConnection _conn;
     private readonly List<string> _commands = [];
@@ -40,7 +41,7 @@ public class YearEndPacketTests : IDisposable
             .AddInterceptors(new YearEndPacketRecordingCommandInterceptor(_commands))
             .Options;
 
-        _db = new AccountingServiceTestDbContext(options);
+        _db = new YearEndPacketFixtureDbContext(options);
         _db.Database.EnsureCreated();
 
         _db.Portfolios.Add(new Portfolio
@@ -51,6 +52,17 @@ public class YearEndPacketTests : IDisposable
             TimeZone = "UTC",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = ActorUserId,
+            PortfolioId = PortfolioId,
+            UserName = "year-end-test@rentalcommand.local",
+            NormalizedUserName = "YEAR-END-TEST@RENTALCOMMAND.LOCAL",
+            Email = "year-end-test@rentalcommand.local",
+            NormalizedEmail = "YEAR-END-TEST@RENTALCOMMAND.LOCAL",
+            DisplayName = "Year End Test Actor",
+            CreatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
 
@@ -129,7 +141,7 @@ public class YearEndPacketTests : IDisposable
         packet.CashFlowMoneyOut.Should().Be(2_600m);
         packet.CashFlowNet.Should().Be(11_800m);
 
-        // Rent roll: the single active lease, with a $1,200 past-due balance.
+        // Rent roll: the single occupied relationship, with a $1,200 past-due balance.
         packet.RentRoll.Should().HaveCount(1);
         var row = packet.RentRoll[0];
         row.TenantName.Should().Be("Maria Tenant");
@@ -147,23 +159,14 @@ public class YearEndPacketTests : IDisposable
     [Fact]
     public async Task GetYearEndPacketData_ExcludesSecurityDepositsFromCashFlowMoneyIn()
     {
-        SeedYear(Year);
-        var lease = _db.Leases.Single();
+        var graph = SeedYear(Year);
         var paid = new DateTime(Year, 1, 2, 0, 0, 0, DateTimeKind.Utc);
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.SecurityDeposit,
-            Status = PaymentStatus.Paid,
-            Amount = 1_200m,
-            DueDate = paid,
-            PaidDate = paid,
-            Method = "Check",
-            CreatedAt = paid,
-            UpdatedAt = paid,
-        });
-        _db.SaveChanges();
+        SeedSettledLedgerPair(
+            graph,
+            TenantLedgerEntryType.DepositCharge,
+            1_200m,
+            DateOnly.FromDateTime(paid),
+            "security-deposit");
 
         var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
 
@@ -173,7 +176,7 @@ public class YearEndPacketTests : IDisposable
     }
 
     [Fact]
-    public async Task GetYearEndPacketData_ProjectsRentRollPastDueWithLeaseRowsInSql()
+    public async Task GetYearEndPacketData_ProjectsRentRollPastDueWithRelationshipRowsInSql()
     {
         SeedYear(Year);
         _commands.Clear();
@@ -182,9 +185,12 @@ public class YearEndPacketTests : IDisposable
 
         packet.RentRoll.Should().ContainSingle();
         packet.RentRoll[0].PastDueBalance.Should().Be(1_200m);
-        _commands.Where(IsStandalonePastDueByLeaseAggregate)
-            .Should()
-            .BeEmpty("the packet rent roll should not materialize a grouped payment query and join it to lease rows in memory");
+        var rentRollSql = _commands.Single(sql =>
+            sql.Contains("YearEndTestAccountBalances", StringComparison.Ordinal));
+        rentRollSql.Should().Contain("LeaseManagements");
+        rentRollSql.Should().Contain("LeaseAgreements");
+        rentRollSql.Should().Contain("YearEndTestAgreementStatus");
+        rentRollSql.Should().Contain("ORDER BY");
     }
 
     [Fact]
@@ -202,19 +208,23 @@ public class YearEndPacketTests : IDisposable
         pnl.TotalExpenses.Should().Be(2_600m);
         pnl.Net.Should().Be(11_800m);
 
-        _commands.Where(IsStandaloneIncomeByPropertyAggregate)
-            .Should()
-            .BeEmpty("packet property income should be projected with each property row instead of joined from a materialized aggregate dictionary");
+        var propertyPnlSql = _commands.Single(sql =>
+            sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal) &&
+            sql.Contains("FROM \"Properties\"", StringComparison.Ordinal));
+        propertyPnlSql.Should().Contain("TenantLedgerEntries");
+        (propertyPnlSql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         propertyPnlSql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("property income must be summed in the database query");
         _commands.Where(IsStandaloneExpenseTotalByPropertyAggregate)
             .Should()
             .BeEmpty("packet property expense totals should be projected with each property row instead of joined from a materialized aggregate dictionary");
     }
 
     /// <summary>
-    /// Seeds one property/unit/tenant/active lease, 12 monthly $1,200 rent payments (paid in-year),
-    /// a $2,000 repair and $600 insurance expense (in-year), and one past-due scheduled rent payment.
+    /// Seeds one canonical property/unit/tenant relationship, 12 settled $1,200 rent charges,
+    /// a $2,000 repair and $600 insurance expense, and one open past-due rent charge.
     /// </summary>
-    private void SeedYear(int year)
+    private CanonicalYearGraph SeedYear(int year)
     {
         var anchor = new DateTime(year, 1, 1, 12, 0, 0, DateTimeKind.Utc);
 
@@ -245,54 +255,157 @@ public class YearEndPacketTests : IDisposable
             CreatedAt = anchor,
             UpdatedAt = anchor,
         };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-100",
-            Status = LeaseStatus.Active,
-            StartDate = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            MonthlyRent = 1_200m,
-            SecurityDeposit = 1_200m,
-            CreatedAt = anchor,
-            UpdatedAt = anchor,
-        };
-        _db.Leases.Add(lease);
+        _db.AddRange(property, unit, tenant);
         _db.SaveChanges();
 
-        // 12 paid monthly rent payments in the year.
-        for (var month = 1; month <= 12; month++)
+        var management = new LeaseManagement
         {
-            var paid = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
-            _db.Payments.Add(new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = lease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Paid,
-                Amount = 1_200m,
-                DueDate = paid,
-                PaidDate = paid,
-                Method = "Check",
-                CreatedAt = paid,
-                UpdatedAt = paid,
-            });
-        }
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = "REL-YEAR-END-100",
+            PlannedPossessionAtUtc = anchor,
+            PossessionGivenAtUtc = anchor,
+            CreatedAtUtc = anchor,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = anchor,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagements.Add(management);
+        _db.SaveChanges();
 
-        // One past-due scheduled rent payment (drives the rent-roll past-due balance).
-        _db.Payments.Add(new Payment
+        var termStart = new DateOnly(year, 1, 1);
+        var termEnd = new DateOnly(year, 12, 31);
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-100",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = termStart,
+            TermEndOn = termEnd,
+            GoverningFromOn = termStart,
+            BaseRentAmount = 1_200m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_200m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            IssuedAtUtc = anchor,
+            FullyExecutedAtUtc = anchor,
+            CreatedAtUtc = anchor,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = anchor,
+        };
+        var party = new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = termStart,
+            ChangeReason = "Canonical year-end fixture",
+            CreatedAtUtc = anchor,
+            CreatedByUserId = ActorUserId,
+        };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = "TA-YEAR-END-100",
+            Currency = "USD",
+            OpenedAtUtc = anchor,
+            CreatedAtUtc = anchor,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.AddRange(agreement, party, account);
+        _db.SaveChanges();
+
+        _db.LeaseManagementLifecycleProjections.Add(new LeaseManagementLifecycleProjection
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            LeaseManagementId = management.Id,
+            EffectiveNowUtc = anchor,
+            BusinessDate = termStart,
+            Lifecycle = "Occupied",
+            CurrentAgreementId = agreement.Id,
+            CurrentPartyCount = 1,
+            CurrentResidentCount = 1,
+            CurrentFinanciallyResponsiblePartyCount = 1,
+            CurrentPrimaryPartyId = party.Id,
+            CurrentPrimaryTenantId = tenant.Id,
+            CurrentPrimaryTenantName = "Maria Tenant",
+            TenantAccountId = account.Id,
+        });
+        _db.LeaseAgreementStatusProjections.Add(new LeaseAgreementStatusProjection
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AgreementId = agreement.Id,
+            BusinessDate = termStart,
+            GoverningFromOn = termStart,
+            GoverningThroughExclusiveOn = termEnd.AddDays(1),
+            AgreementStatus = "Active",
+            IsGoverning = true,
+        });
+        _db.SaveChanges();
+
+        var graph = new CanonicalYearGraph(property, unit, tenant, management, agreement, party, account);
+
+        // 12 settled monthly rent charges in the year.
+        for (var month = 1; month <= 12; month++)
+        {
+            SeedSettledLedgerPair(
+                graph,
+                TenantLedgerEntryType.RentCharge,
+                1_200m,
+                new DateOnly(year, month, 1),
+                $"rent-{month}");
+        }
+
+        // One open past-due rent charge drives the rent-roll balance projection.
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
             Amount = 1_200m,
-            DueDate = new DateTime(year, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            CreatedAt = anchor,
-            UpdatedAt = anchor,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(year, 6, 1),
+            DueOn = new DateOnly(year, 6, 1),
+            PostedAtUtc = anchor,
+            Description = "Open rent charge",
+            BusinessKey = "year-end:open-rent",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = ActorUserId,
+        });
+        _db.TenantAccountBalanceProjections.Add(new TenantAccountBalanceProjection
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantAccountId = account.Id,
+            EffectiveNowUtc = anchor,
+            BusinessDate = termStart,
+            Currency = "USD",
+            TotalDebits = 15_600m,
+            TotalCredits = 14_400m,
+            ReceivableBalance = 1_200m,
+            PastDueAmount = 1_200m,
+            PastDueCount = 1,
+            Condition = "PastDue",
+            LastReceiptOn = new DateOnly(year, 12, 1),
+            LastReceiptAmount = 1_200m,
         });
 
         // Expenses in-year.
@@ -323,23 +436,102 @@ public class YearEndPacketTests : IDisposable
             UpdatedAt = anchor,
         });
         _db.SaveChanges();
+        return graph;
     }
 
-    private static bool IsStandalonePastDueByLeaseAggregate(string sql) =>
-        sql.TrimStart().StartsWith("SELECT \"p\".\"LeaseId\"", StringComparison.Ordinal) &&
-        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
-        sql.Contains("GROUP BY \"p\".\"LeaseId\"", StringComparison.Ordinal);
+    private void SeedSettledLedgerPair(
+        CanonicalYearGraph graph,
+        TenantLedgerEntryType chargeType,
+        decimal amount,
+        DateOnly effectiveOn,
+        string businessKey)
+    {
+        var postedAt = effectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var charge = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.Account.Id,
+            EntryType = chargeType,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = effectiveOn,
+            DueOn = effectiveOn,
+            PostedAtUtc = postedAt,
+            Description = chargeType.ToString(),
+            BusinessKey = $"year-end:{businessKey}:charge",
+            LeaseAgreementId = graph.Agreement.Id,
+            CreatedByUserId = ActorUserId,
+        };
+        var receipt = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.Account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = effectiveOn,
+            PostedAtUtc = postedAt,
+            Description = "Payment receipt",
+            BusinessKey = $"year-end:{businessKey}:receipt",
+            CreatedByUserId = ActorUserId,
+        };
+        _db.TenantLedgerEntries.AddRange(charge, receipt);
+        _db.SaveChanges();
 
-    private static bool IsStandaloneIncomeByPropertyAggregate(string sql) =>
-        sql.TrimStart().StartsWith("SELECT \"l0\".\"PropertyId\"", StringComparison.Ordinal) &&
-        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
-        sql.Contains("GROUP BY \"l0\".\"PropertyId\"", StringComparison.Ordinal);
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.Account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = amount,
+            AllocatedAtUtc = postedAt,
+            BusinessKey = $"year-end:{businessKey}:allocation",
+            CreatedByUserId = ActorUserId,
+        });
+        _db.SaveChanges();
+    }
 
     private static bool IsStandaloneExpenseTotalByPropertyAggregate(string sql) =>
         sql.TrimStart().StartsWith("SELECT \"e\".\"PropertyId\"", StringComparison.Ordinal) &&
         sql.Contains("FROM \"Expenses\" AS \"e\"", StringComparison.Ordinal) &&
         sql.Contains("GROUP BY \"e\".\"PropertyId\"", StringComparison.Ordinal) &&
         !sql.Contains("\"e\".\"Category\"", StringComparison.Ordinal);
+
+    private sealed record CanonicalYearGraph(
+        Property Property,
+        Unit Unit,
+        Tenant Tenant,
+        LeaseManagement Management,
+        LeaseAgreement Agreement,
+        LeaseManagementParty Party,
+        TenantAccount Account);
+}
+
+internal sealed class YearEndPacketFixtureDbContext(DbContextOptions<RentalCommandDbContext> options)
+    : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
+{
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<LeaseManagementLifecycleProjection>()
+            .HasKey(row => new { row.PortfolioId, row.LeaseManagementId });
+        modelBuilder.Entity<LeaseManagementLifecycleProjection>()
+            .ToTable("YearEndTestLeaseLifecycle");
+        modelBuilder.Entity<LeaseAgreementStatusProjection>()
+            .HasKey(row => new { row.PortfolioId, row.AgreementId });
+        modelBuilder.Entity<LeaseAgreementStatusProjection>()
+            .ToTable("YearEndTestAgreementStatus");
+        modelBuilder.Entity<TenantAccountBalanceProjection>()
+            .HasKey(row => new { row.PortfolioId, row.TenantAccountId });
+        modelBuilder.Entity<TenantAccountBalanceProjection>()
+            .ToTable("YearEndTestAccountBalances");
+    }
 }
 
 internal sealed class YearEndPacketRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
