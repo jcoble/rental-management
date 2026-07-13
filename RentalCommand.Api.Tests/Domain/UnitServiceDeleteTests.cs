@@ -142,7 +142,6 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
             CreatedByUserId = 1,
             UpdatedAtUtc = now,
             RowVersion = Guid.NewGuid(),
-            PossessionReturnedAtUtc = now.AddYears(-1),
         });
         _ctx.Db.SaveChanges();
     }

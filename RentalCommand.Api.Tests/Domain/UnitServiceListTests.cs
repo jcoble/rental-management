@@ -213,7 +213,7 @@ public class UnitServiceListTests : IAsyncLifetime
         var now = DateTime.UtcNow;
         var (property, unit) = SeedUnitShell("2A", "Maple Heights", now);
         var tenant = SeedTenant(now);
-        var relationship = SeedRelationship(property, unit, tenant, now, now.AddMonths(10));
+        SeedRelationship(property, unit, tenant, now, now.AddMonths(10));
         var workOrder = new WorkOrder
         {
             PortfolioId = PortfolioId,
@@ -263,36 +263,13 @@ public class UnitServiceListTests : IAsyncLifetime
         _ctx.Db.AddRange(workOrder, directExpense, workOrderExpense, inspection);
         _ctx.Db.SaveChanges();
 
-        var agreementFile = StoredFile("LeaseAgreement", relationship.Agreement.Id, "lease.pdf", now);
         _ctx.Db.StoredFiles.AddRange(
             StoredFile("Unit", unit.Id, "unit-photo.jpg", now),
-            agreementFile,
             StoredFile("Expense", directExpense.Id, "unit-receipt.jpg", now),
             StoredFile("Expense", workOrderExpense.Id, "repair-receipt.jpg", now),
             StoredFile("WorkOrder", workOrder.Id, "repair-photo.jpg", now),
             StoredFile("Inspection", inspection.Id, "inspection.pdf", now),
             StoredFile("Tenant", tenant.Id, "tenant-only.pdf", now));
-        _ctx.Db.SaveChanges();
-        var artifact = new LegalDocumentArtifact
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = PortfolioId,
-            StoredFileId = agreementFile.Id,
-            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
-            StorageKey = agreementFile.FilePath,
-            FileName = agreementFile.FileName,
-            ContentType = agreementFile.ContentType,
-            ByteLength = agreementFile.FileSize,
-            ContentSha256 = new string('a', 64),
-            CreatedAtUtc = now,
-            CreatedByUserId = ActorUserId,
-        };
-        _ctx.Db.LegalDocumentArtifacts.Add(artifact);
-        _ctx.Db.SaveChanges();
-        relationship.Agreement.IssuedArtifactId = artifact.Id;
-        relationship.Agreement.IssuedAtUtc = now;
-        relationship.Agreement.ExecutedArtifactId = artifact.Id;
-        relationship.Agreement.FullyExecutedAtUtc = now;
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
@@ -303,7 +280,7 @@ public class UnitServiceListTests : IAsyncLifetime
 
         var row = list.Items.Should().ContainSingle().Subject;
         dashboard.Should().NotBeNull();
-        row.DocsNeedingReviewCount.Should().Be(6);
+        row.DocsNeedingReviewCount.Should().Be(7);
         row.DocsNeedingReviewCount.Should().Be(dashboard!.Header.DocsNeedingReviewCount);
         listSql.Should().Contain(sql =>
             sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase) &&
@@ -376,7 +353,6 @@ public class UnitServiceListTests : IAsyncLifetime
         _ctx.Db.LeaseManagements.Add(relationship);
         _ctx.Db.SaveChanges();
 
-        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, now);
         var startOn = DateOnly.FromDateTime(now.AddMonths(-2));
         var agreement = new LeaseAgreement
         {
@@ -400,27 +376,54 @@ public class UnitServiceListTests : IAsyncLifetime
             TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, ActorUserId, now),
-            IssuedArtifactId = issuedArtifact.Id,
-            IssuedAtUtc = now,
-            ExecutedArtifactId = executedArtifact.Id,
-            FullyExecutedAtUtc = now,
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,
         };
-        _ctx.Db.AddRange(
-            agreement,
-            new LeaseManagementParty
-            {
-                PortfolioId = PortfolioId,
-                LeaseManagementId = relationship.Id,
-                TenantId = tenant.Id,
-                Role = LeaseManagementPartyRole.PrimaryTenant,
-                EffectiveFrom = startOn,
-                ChangeReason = "Unit list fixture",
-                CreatedAtUtc = now,
-                CreatedByUserId = ActorUserId,
-            });
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = startOn,
+            ChangeReason = "Unit list fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = relationship.Id,
+            AccountNumber = $"TA-{Guid.NewGuid():N}"[..12],
+            Currency = "USD",
+            OpenedAtUtc = now.AddMonths(-2),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _ctx.Db.AddRange(agreement, party, account);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = tenant.Email!,
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _ctx.Db.SaveChanges();
+
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, now);
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
         _ctx.Db.SaveChanges();
         return (relationship, agreement);
     }
@@ -506,6 +509,7 @@ public class UnitServiceListTests : IAsyncLifetime
             PortfolioId = PortfolioId,
             FirstName = "Jordan",
             LastName = "Smith",
+            Email = "jordan.smith@example.test",
             CreatedAt = now,
             UpdatedAt = now,
         };
