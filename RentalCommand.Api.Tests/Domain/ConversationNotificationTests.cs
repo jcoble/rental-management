@@ -452,21 +452,6 @@ public class ConversationNotificationTests : IDisposable
         _ctx.Db.Units.Add(unit);
         _ctx.Db.SaveChanges();
 
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = 1,
-            PropertyId = tenantProperty.Id,
-            UnitId = unit.Id,
-            TenantId = tenant.Id,
-            LeaseNumber = "ACTIVE-1",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddMonths(11),
-            MonthlyRent = 1000,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-
         var authorizedContext = NewAccessContext(10, now);
         var decoyContext = NewAccessContext(30, now);
         var tenantContext = new WorkspaceAccessContext

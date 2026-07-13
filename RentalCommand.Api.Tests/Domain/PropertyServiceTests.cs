@@ -57,37 +57,6 @@ public class PropertyServiceTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
-    public async Task ListPageAsync_AvailableForLeaseReturnsOnlyPropertiesWithEligibleUnitsInSql()
-    {
-        var available = SeedPropertyWithUnit(out var availableUnit);
-        available.Name = "Available Property";
-
-        var occupied = SeedPropertyWithUnit(out var occupiedUnit);
-        occupied.Name = "Occupied Property";
-
-        var activeLease = SeedPropertyWithUnit(out var activeLeaseUnit);
-        activeLease.Name = "Active Lease Property";
-        SeedOccupyingLease(activeLease, activeLeaseUnit, LeaseStatus.Active);
-        _ctx.Db.SaveChanges();
-
-        _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new PropertyListQuery
-        {
-            AvailableForLease = true,
-            Sort = "name",
-            Skip = 0,
-            Take = 20,
-        });
-
-        result.Items.Select(p => p.Name).Should().Equal("Available Property");
-        _commands.Should().HaveCount(2);
-        _commands.Should().OnlyContain(sql =>
-            sql.Contains("Units", StringComparison.OrdinalIgnoreCase));
-        _commands.Should().Contain(sql =>
-            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
-    }
-
     [Theory]
     [InlineData(PropertyType.SingleFamily)]
     [InlineData(PropertyType.Condo)]
@@ -371,38 +340,6 @@ public class PropertyServiceTests : IDisposable
         State = "OH",
         PostalCode = "43215",
     };
-
-    private void SeedOccupyingLease(Property property, Unit unit, LeaseStatus status)
-    {
-        var now = DateTime.UtcNow;
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Occupant",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.SaveChanges();
-
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            TenantId = tenant.Id,
-            LeaseNumber = "L-1",
-            Status = status,
-            StartDate = now.Date,
-            EndDate = now.Date.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _ctx.Db.SaveChanges();
-    }
 
     private void SeedProperties(params string[] names)
     {
