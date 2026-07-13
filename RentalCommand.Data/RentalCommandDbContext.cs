@@ -172,7 +172,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ScanBatch> ScanBatches => Set<ScanBatch>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
     public DbSet<SecurityDepositHolding> SecurityDepositHoldings => Set<SecurityDepositHolding>();
-    public DbSet<OpeningBalance> OpeningBalances => Set<OpeningBalance>();
 
     // Stripe payment groundwork
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
@@ -2333,25 +2332,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<OpeningBalance>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Amount).HasPrecision(18, 2);
-            entity.Property(e => e.Note).HasMaxLength(2000);
-            entity.HasIndex(e => e.PortfolioId);
-            // One opening balance per lease (within a portfolio). The lease id alone is globally unique,
-            // but keying on (portfolio, lease) keeps the guarantee scoped and matches the tenant model.
-            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId }).IsUnique();
-            entity.HasOne(e => e.Portfolio)
-                .WithMany()
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
-                .WithMany()
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
         // --- Stripe payment groundwork ---
 
         modelBuilder.Entity<PaymentTransaction>(entity =>
@@ -2471,7 +2451,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // no-match (soft-deleted) side `l."DeletedAt" IS NULL` is true, which would resurface those payments.
         modelBuilder.Entity<Payment>().HasQueryFilter(e => e.LeaseId == null || e.Lease != null);
         modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
-        modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<SecurityDepositHolding>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
 
         // Dependent of Loan (Loan has its own `DeletedAt == null`). The amortization rows disappear

@@ -3,7 +3,7 @@ title: Creating and Managing Leases
 category: Tenants & Leases
 slug: leases
 order: 2
-summary: Create a lease, read the account history (ledger), and set an opening balance carried over from before.
+summary: Create a lease, read the account history (ledger), and establish a carried-over opening balance during move-in.
 keywords: lease, create lease, rent terms, ledger, account history, balance, opening balance, security deposit, late fee, rent due day, lease status
 ---
 
@@ -30,8 +30,10 @@ Open a lease to see its **Account History** — a plain-English ledger of every 
 
 ## Opening balance
 
-If a tenant already owed you money (or had a credit) **before** you started using Rental Command, record it as an **opening balance** on the lease:
+If a tenant already owed you money (or had a credit) **before** you started using Rental Command, establish an **opening balance** while preparing move-in:
 
-1. Open the lease and choose to add an opening balance.
-2. Pick the direction — **tenant owed** or **credit** — and enter the amount and an "as of" date.
-3. Save. It appears as the first "Opening" entry in the Account History so the running balance is correct from day one.
+1. In the lease setup flow, choose **Use opening balance** for rent tracking.
+2. Enter the signed amount, the "as of" date, and an optional note.
+3. Complete move-in. Rental Command posts one immutable **Opening balance** entry to the tenant account ledger, so the running balance is correct from day one.
+
+The opening balance is part of account history, not a separate editable lease record. If it was entered incorrectly, post an explicit account adjustment so both the original entry and the correction remain visible.
