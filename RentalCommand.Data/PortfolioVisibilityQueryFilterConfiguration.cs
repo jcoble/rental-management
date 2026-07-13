@@ -28,6 +28,8 @@ internal static class PortfolioVisibilityQueryFilterConfiguration
     {
         modelBuilder.Entity<AccountingMappingPromotionJob>()
             .HasQueryFilter(row => row.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<PlaidTokenExchangeAttempt>()
+            .HasQueryFilter(row => row.Portfolio!.DeletedAt == null);
     }
 
     private static void ConfigureApplicationFinance(ModelBuilder modelBuilder)
