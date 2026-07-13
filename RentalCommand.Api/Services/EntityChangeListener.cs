@@ -112,7 +112,8 @@ public sealed class EntityChangeListener : BackgroundService
         {
             await conn.OpenAsync(stoppingToken);
 
-            await using (var cmd = new NpgsqlCommand($"LISTEN {DataUpdateNotification.ChannelName}", conn))
+            await using (var cmd = new NpgsqlCommand(
+                $"SET ROLE rentalcommand_api; LISTEN {DataUpdateNotification.ChannelName}", conn))
             {
                 await cmd.ExecuteNonQueryAsync(stoppingToken);
             }

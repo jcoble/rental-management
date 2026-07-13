@@ -138,6 +138,7 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:8080
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__MigratorConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
       # ── Auth / JWT ─────────────────────────────────────────────────────────
       - Jwt__SecretKey=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - Jwt__Issuer=${JWT_ISSUER:-RentalCommand}
@@ -235,6 +236,7 @@ services:
     environment:
       - DOTNET_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__MigratorConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
       - App__TimeZone=${APP_TIMEZONE:-America/New_York}
       # Shared with the API: scan processing reads the same upload store + DP keys.
       - Upload__BasePath=/var/lib/rentalcommand/uploads

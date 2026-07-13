@@ -233,6 +233,36 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             "an admin context bypasses RLS via app.is_admin=true; both portfolios visible");
     }
 
+    [SkippableFact]
+    public async Task Rls_DurableDelete_AcceptsOnlySandboxGraduationReason()
+    {
+        SkipIfNoDocker();
+
+        await using var conn = await OpenAsApiRoleAsync(_portfolioA);
+        var deleteSql = $"DELETE FROM \"TenantLedgerEntries\" WHERE \"PortfolioId\" = {_portfolioA}";
+
+        // A normal portfolio session can read its ledger, but DELETE sees no eligible rows.
+        (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
+
+        // Generic worker/admin bypass remains deliberately insufficient for destructive graduation.
+        await ExecAsync(conn,
+            "SET app.current_portfolio_id = '0'; SET app.is_admin = 'true'; " +
+            "SET app.rls_bypass_reason = 'BackgroundWorker';");
+        (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
+
+        await ExecAsync(conn, "SET app.rls_bypass_reason = 'PlatformOperation';");
+        (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
+
+        // Only the dedicated reason admits the set-based wipe.
+        await ExecAsync(conn, "SET app.rls_bypass_reason = 'SandboxGraduation';");
+        (await ExecAffectedAsync(conn, deleteSql)).Should().BeGreaterThan(0);
+
+        // The command remains explicitly scoped; the other portfolio's durable ledger survives.
+        await using var owner = NewContext(_ownerConnString);
+        (await owner.TenantLedgerEntries.CountAsync(row => row.PortfolioId == _portfolioB))
+            .Should().BeGreaterThan(0);
+    }
+
     // ----- helpers -----
 
     private void SkipIfNoDocker() =>
@@ -262,6 +292,13 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<int> ExecAffectedAsync(NpgsqlConnection conn, string sql)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        return await cmd.ExecuteNonQueryAsync();
     }
 
     private static async Task<int> SeedPortfolioWithOverdueChargeAsync(

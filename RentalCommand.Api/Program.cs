@@ -130,7 +130,10 @@ JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment
 // --- Database ---
 // The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
 // (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Missing connection string 'DefaultConnection'.");
+var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection")
+    ?? connectionString;
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<RentalCommand.Api.Data.IRlsExecutionContext,
@@ -660,9 +663,14 @@ using (var scope = app.Services.CreateScope())
     using var rlsBypass = scope.ServiceProvider
         .GetRequiredService<RentalCommand.Api.Data.IRlsExecutionContext>()
         .BeginBypass(RentalCommand.Api.Data.RlsBypassReason.StartupMigrationAndSeed);
-    var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
     // Advisory-locked so the API and Engine (both self-migrate on startup) don't race on a fresh batch.
-    await DatabaseMigrator.MigrateWithLockAsync(db);
+    var migrationOptions = new DbContextOptionsBuilder<RentalCommandDbContext>()
+        .UseNpgsql(migratorConnectionString)
+        .Options;
+    await using (var migrationDb = new RentalCommandDbContext(migrationOptions))
+    {
+        await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
+    }
 
     var seeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
     await seeder.SeedAsync();

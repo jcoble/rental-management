@@ -35,6 +35,8 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException(
         "Missing connection string 'DefaultConnection'. Set it in appsettings.json or via configuration.");
+var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection")
+    ?? connectionString;
 
 // Unified audit trail: the Engine has no HttpContext, so it attributes audit rows to "system".
 // The scoped interceptor is resolved from the same scope as the DbContext (the (sp, options)
@@ -291,10 +293,12 @@ var host = builder.Build();
     {
         try
         {
-            using var scope = host.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var migrationOptions = new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(migratorConnectionString)
+                .Options;
+            await using var migrationDb = new RentalCommandDbContext(migrationOptions);
             // Advisory-locked so the Engine and API don't apply a fresh migration batch concurrently.
-            await DatabaseMigrator.MigrateWithLockAsync(db);
+            await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
             migrateLogger.LogInformation("Engine applied database migrations (or none pending).");
             break;
         }
@@ -308,11 +312,9 @@ var host = builder.Build();
     }
 }
 
-// --- Single-instance safety: PostgreSQL advisory lock TAKEOVER ---
-// A new Engine instance KILLS any existing holder and wins the lock, so a restart/redeploy
-// always succeeds rather than getting stuck behind a zombie process. The dedicated, non-pooled
-// connection is held open for the host's lifetime; AdvisoryLockWatcherService monitors it and
-// triggers graceful shutdown if a still-newer Engine later terminates it.
+// --- Single-instance safety: PostgreSQL advisory lock ---
+// The dedicated non-pooled connection assumes the Engine runtime role before issuing SQL. A new
+// Engine waits for the prior holder instead of retaining owner authority merely to terminate it.
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
 var lockConnString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ToString();
@@ -327,6 +329,11 @@ for (var attempt = 1; attempt <= maxDbAttempts; attempt++)
     {
         lockConnection = new NpgsqlConnection(lockConnString);
         await lockConnection.OpenAsync();
+        await using (var roleCmd = lockConnection.CreateCommand())
+        {
+            roleCmd.CommandText = "SET ROLE rentalcommand_engine";
+            await roleCmd.ExecuteNonQueryAsync();
+        }
         break;
     }
     catch (Exception ex) when (attempt < maxDbAttempts)
@@ -344,29 +351,20 @@ if (lockConnection is null)
     return;
 }
 
-// If another Engine currently holds the advisory lock, terminate its backend so we can take over.
-await using (var checkCmd = lockConnection.CreateCommand())
+var acquiredImmediately = false;
+await using (var tryLockCmd = lockConnection.CreateCommand())
 {
-    checkCmd.CommandText =
-        $"SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 0 " +
-        $"AND objid = {Program.AdvisoryLockKey} AND granted = true";
-    var existingPid = await checkCmd.ExecuteScalarAsync();
-    if (existingPid != null)
-    {
-        logger.LogWarning(
-            "Another Engine instance detected (DB PID {Pid}). Terminating it to take over the advisory lock…",
-            existingPid);
-        await using var killCmd = lockConnection.CreateCommand();
-        killCmd.CommandText = $"SELECT pg_terminate_backend({existingPid})";
-        await killCmd.ExecuteScalarAsync();
-        await Task.Delay(1000); // give the old backend time to die and release the lock
-        Program.LockContested = true;
-    }
+    tryLockCmd.CommandText = $"SELECT pg_try_advisory_lock({Program.AdvisoryLockKey})";
+    acquiredImmediately = (bool?)await tryLockCmd.ExecuteScalarAsync() == true;
 }
 
-// Acquire the advisory lock (blocking — succeeds now that any prior holder is gone).
-await using (var lockCmd = lockConnection.CreateCommand())
+if (!acquiredImmediately)
 {
+    Program.LockContested = true;
+    logger.LogWarning(
+        "Another Engine holds advisory lock {LockKey}; waiting for it to stop.",
+        Program.AdvisoryLockKey);
+    await using var lockCmd = lockConnection.CreateCommand();
     lockCmd.CommandText = $"SELECT pg_advisory_lock({Program.AdvisoryLockKey})";
     await lockCmd.ExecuteScalarAsync();
 }
@@ -422,7 +420,7 @@ public partial class Program
         set => _advisoryLockHeld = value;
     }
 
-    /// <summary>True if this instance had to terminate a prior holder to take over.</summary>
+    /// <summary>True if this instance encountered and waited for a prior lock holder.</summary>
     internal static bool LockContested
     {
         get => _lockContested;

@@ -10,15 +10,15 @@ namespace RentalCommand.Engine.Data;
 /// <c>tenant_isolation</c> policies' admin branch match and gives the worker unfiltered access — the
 /// same model EdiPlatform's Engine uses.
 ///
-/// <para>This sets the session variables on the worker's pooled connections via the same GUC names
-/// the API interceptor and the policies use, so behaviour is identical whether the Engine connects
-/// as the dedicated <c>rentalcommand_api</c> role or as the table-owner/superuser. (As a superuser
-/// the policies are bypassed regardless; setting <c>is_admin</c> keeps the contract explicit and
-/// correct if the Engine is ever pointed at a non-superuser role.)</para>
+/// <para>Each pooled connection first assumes the NOLOGIN <c>rentalcommand_engine</c> role, then
+/// sets the session variables used by the RLS policies. The configured login credential therefore
+/// retains owner authority only for the separate startup migration context.</para>
 /// </summary>
 public sealed class EngineRlsInterceptor : DbConnectionInterceptor
 {
-    private const string Sql = "SET app.current_portfolio_id = '0'; SET app.is_admin = 'true';";
+    internal const string RuntimeRole = "rentalcommand_engine";
+    internal const string SessionInitializationSql =
+        "SET ROLE rentalcommand_engine; SET app.current_portfolio_id = '0'; SET app.is_admin = 'true';";
 
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
         => SetAdminSession(connection);
@@ -30,14 +30,14 @@ public sealed class EngineRlsInterceptor : DbConnectionInterceptor
     private static void SetAdminSession(DbConnection connection)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = Sql;
+        cmd.CommandText = SessionInitializationSql;
         cmd.ExecuteNonQuery();
     }
 
     private static async Task SetAdminSessionAsync(DbConnection connection, CancellationToken cancellationToken)
     {
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = Sql;
+        cmd.CommandText = SessionInitializationSql;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 }

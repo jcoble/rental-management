@@ -48,8 +48,9 @@ public sealed class RlsConnectionInterceptorTests
 
         using (execution.BeginBypass(RlsBypassReason.BackgroundWorker))
         {
-            RlsConnectionInterceptor.ResolveSessionState(null, execution.IsBypassActive)
-                .Should().Be(new RlsSessionState(0, true));
+            RlsConnectionInterceptor.ResolveSessionState(
+                    null, execution.IsBypassActive, execution.ActiveBypassReason)
+                .Should().Be(new RlsSessionState(0, true, RlsBypassReason.BackgroundWorker));
         }
     }
 
@@ -67,6 +68,48 @@ public sealed class RlsConnectionInterceptorTests
 
         act.Should().Throw<InvalidOperationException>();
         execution.IsBypassActive.Should().BeFalse();
+    }
+
+    [Fact]
+    public void SessionInitialization_AssumesApiRoleBeforeSettingRlsState()
+    {
+        var sql = RlsConnectionInterceptor.BuildSql(new RlsSessionState(17, false));
+
+        sql.Should().StartWith("SET ROLE rentalcommand_api;");
+        sql.Should().Contain("SET app.current_portfolio_id = '17';");
+        sql.Should().Contain("SET app.is_admin = 'false';");
+    }
+
+    [Fact]
+    public void StartupMigrationAndSeed_RetainsMigratorAuthority()
+    {
+        var sql = RlsConnectionInterceptor.BuildSql(
+            new RlsSessionState(0, true, RlsBypassReason.StartupMigrationAndSeed));
+
+        sql.Should().StartWith("RESET ROLE;");
+        sql.Should().NotContain("SET ROLE rentalcommand_api;",
+            "startup catalog seeding runs through the explicit migrator-only lease");
+    }
+
+    [Fact]
+    public void ActiveBypassWithoutReason_FailsClosed()
+    {
+        var act = () => RlsConnectionInterceptor.ResolveSessionState(
+            null, bypassActive: true, bypassReason: null);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void SessionSql_EmitsAndClearsReasonGuc()
+    {
+        RlsConnectionInterceptor.BuildSql(
+                new RlsSessionState(0, true, RlsBypassReason.SandboxGraduation))
+            .Should().Contain("SET app.rls_bypass_reason = 'SandboxGraduation';");
+
+        RlsConnectionInterceptor.BuildSql(new RlsSessionState(17, false))
+            .Should().Contain("SET app.rls_bypass_reason = '';",
+                "a pooled connection must not retain a prior destructive bypass reason");
     }
 
     private static ActiveAccessContext Active(int portfolioId) =>

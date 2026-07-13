@@ -166,7 +166,8 @@ fi
 ensure_database_exists
 
 # ─── .NET environment ────────────────────────────────────────────────────────
-# The DB connection comes from .NET User Secrets in Development — do NOT export
+# The owner/migrator DB credential comes from .NET User Secrets in Development. Runtime
+# connections immediately SET ROLE to their NOLOGIN API/Engine role. Do NOT export
 # ConnectionStrings__DefaultConnection here or it would override the secret. Set
 # it once with:
 #   dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api
@@ -185,6 +186,7 @@ unset_if_blank() {
     fi
 }
 unset_if_blank ConnectionStrings__DefaultConnection
+unset_if_blank ConnectionStrings__MigratorConnection
 unset_if_blank Notifications__SendGrid__ApiKey
 unset_if_blank Notifications__SendGrid__FromEmail
 unset_if_blank Notifications__SendGrid__FromName

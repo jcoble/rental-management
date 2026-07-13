@@ -268,6 +268,26 @@ internal static class FoundationBaselinePostgreSql
         "OAuthStates", "TeamRoutingRuleRecipients",
     };
 
+    // Exact set-based delete inventory in SandboxService.WipePortfolioDataAsync. Tables absent from
+    // ApiDeleteTables are durable canonical/history surfaces whose DELETE policy accepts only the
+    // dedicated SandboxGraduation bypass reason.
+    internal static readonly IReadOnlySet<string> SandboxGraduationDeleteTables =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
+            "Appointments", "AuditLogs", "BankConnections", "BankTransactions",
+            "ConversationMessages", "Conversations", "Expenses", "InspectionItems", "Inspections",
+            "LeaseAddenda", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
+            "LeaseAgreements", "LeaseAgreementSigners", "LeaseManagementParties",
+            "LeaseManagements", "LeaseRenewalAddendumDecisions", "NoticeDrafts", "OwnerEntities",
+            "Owners", "Properties", "RecurringMaintenanceTasks", "RentalApplications", "ScanBatches",
+            "ScanDrafts", "SecurityDepositAccounts", "SecurityDepositEntries", "StoredFiles",
+            "TenantAccountConditionPeriods", "TenantAccounts", "TenantAutopayEnrollments",
+            "TenantLedgerAllocations", "TenantLedgerEntries", "TenantPaymentAttempts",
+            "TenantUserAccesses", "Tenants", "UnitOperationalPeriods", "Units", "VendorDispatches",
+            "VendorRatings", "Vendors", "WorkOrders", "WorkOrderStatusEvents",
+        };
+
     private static readonly HashSet<string> ApiMutableTables = new(StringComparer.Ordinal)
     {
         "AccountingEntityMappings", "AccountingMappingPromotionJobs", "AccountingSyncMaps",
@@ -399,6 +419,7 @@ internal static class FoundationBaselinePostgreSql
             """,
             "DO $grant$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO rentalcommand_api', current_database()); END $grant$;",
             "DO $grant$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO rentalcommand_engine', current_database()); END $grant$;",
+            "DO $grant$ BEGIN EXECUTE format('GRANT rentalcommand_api, rentalcommand_engine TO %I', current_user); END $grant$;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_api;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_engine;",
         };
@@ -431,6 +452,7 @@ internal static class FoundationBaselinePostgreSql
         statements.Add(BuildSequenceGrantSql(EngineRole, MappedTables.Where(table => EngineOperations(table).HasFlag(TableOperation.Insert)), revoke: true));
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_api;");
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_engine;");
+        statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE rentalcommand_api, rentalcommand_engine FROM %I', current_user); END $revoke$;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_api', current_database()); END $revoke$;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_engine', current_database()); END $revoke$;");
 
@@ -441,11 +463,16 @@ internal static class FoundationBaselinePostgreSql
     private static string BuildCreateRlsSql()
     {
         var statements = new List<string>();
-        statements.AddRange(DirectPortfolioTables.Select(table => CreatePolicySql(table, PortfolioPredicate)));
+        statements.AddRange(DirectPortfolioTables.Select(table =>
+            RequiresSandboxGraduationDelete(table)
+                ? CreateSandboxGraduationDeletePolicySql(table, PortfolioPredicate)
+                : CreatePolicySql(table, PortfolioPredicate)));
         statements.Add(CreatePolicySql("Portfolios", PortfolioSelfPredicate));
         statements.Add(BuildInspectionTemplatePoliciesSql());
         statements.AddRange(ChildPortfolioTables.Where(policy => policy.Table != "InspectionTemplateItems")
-            .Select(policy => CreatePolicySql(policy.Table, ChildPredicate(policy))));
+            .Select(policy => RequiresSandboxGraduationDelete(policy.Table)
+                ? CreateSandboxGraduationDeletePolicySql(policy.Table, ChildPredicate(policy))
+                : CreatePolicySql(policy.Table, ChildPredicate(policy))));
         statements.Add(BuildInspectionTemplateItemPoliciesSql());
         return string.Join(Environment.NewLine, statements);
     }
@@ -476,6 +503,24 @@ internal static class FoundationBaselinePostgreSql
           USING {predicate}
           WITH CHECK {predicate};
         """;
+
+    private static string CreateSandboxGraduationDeletePolicySql(string table, string predicate) => $"""
+        ALTER TABLE {Quote(table)} ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE {Quote(table)} FORCE ROW LEVEL SECURITY;
+        DROP POLICY IF EXISTS tenant_isolation ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_select ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_insert ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_update ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_delete ON {Quote(table)};
+        CREATE POLICY tenant_select ON {Quote(table)} FOR SELECT USING {predicate};
+        CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK {predicate};
+        CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING {predicate} WITH CHECK {predicate};
+        CREATE POLICY tenant_delete ON {Quote(table)} FOR DELETE USING
+          (current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation');
+        """;
+
+    private static bool RequiresSandboxGraduationDelete(string table) =>
+        SandboxGraduationDeleteTables.Contains(table) && !ApiDeleteTables.Contains(table);
 
     private const string PortfolioPredicate =
         "(\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
@@ -544,11 +589,20 @@ internal static class FoundationBaselinePostgreSql
 
     private static TableOperation ApiOperations(string table)
     {
-        if (ApiReadOnlyTables.Contains(table)) return TableOperation.Select;
-        if (AppendOnlyTables.Contains(table)) return TableOperation.Select | TableOperation.Insert;
-        if (ApiDeleteTables.Contains(table)) return TableOperation.All;
-        if (ApiMutableTables.Contains(table)) return TableOperation.Select | TableOperation.Insert | TableOperation.Update;
-        throw new InvalidOperationException($"Mapped table {table} has no explicit API grant classification.");
+        var baseOperations = ApiReadOnlyTables.Contains(table)
+            ? TableOperation.Select
+            : AppendOnlyTables.Contains(table)
+                ? TableOperation.Select | TableOperation.Insert
+                : ApiDeleteTables.Contains(table)
+                    ? TableOperation.All
+                    : ApiMutableTables.Contains(table)
+                        ? TableOperation.Select | TableOperation.Insert | TableOperation.Update
+                        : throw new InvalidOperationException(
+                            $"Mapped table {table} has no explicit API grant classification.");
+
+        return SandboxGraduationDeleteTables.Contains(table)
+            ? baseOperations | TableOperation.Delete
+            : baseOperations;
     }
 
     private static TableOperation EngineOperations(string table)

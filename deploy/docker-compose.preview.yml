@@ -26,6 +26,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__MigratorConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
       Jwt__SecretKey: ${JWT_SECRET_KEY}
       Jwt__Issuer: RentalCommandPreview
       Jwt__Audience: RentalCommandWeb
@@ -60,6 +61,7 @@ services:
     environment:
       DOTNET_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__MigratorConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
       Upload__BasePath: /var/lib/rentalcommand/uploads
       DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
       Assistant__ApiKey: ""
