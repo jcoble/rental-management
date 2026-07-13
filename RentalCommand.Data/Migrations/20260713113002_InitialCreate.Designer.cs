@@ -2909,9 +2909,6 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
-                    b.Property<long?>("TenantLedgerEntryId")
-                        .HasColumnType("bigint");
-
                     b.Property<Guid>("PublicId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
