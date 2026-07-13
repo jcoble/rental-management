@@ -21,25 +21,17 @@ internal static class CanonicalLeaseScanConfirmationWriter
         CancellationToken ct)
     {
         Validate(command, target);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, target.UnitId!.Value, ct);
+        // Different lease scans for the same empty portfolio must not create duplicate physical
+        // inventory. This transaction-scoped lock serializes matching/creation before Unit locking.
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var home = await ResolveHomeAsync(command, target, attempt, now, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, home.UnitId, ct);
         if (target.LeaseManagementId is > 0)
         {
             await attempt.Locking.AcquireAsync(
                 AtomicLockResource.LeaseManagement, target.LeaseManagementId.Value, ct);
         }
-
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var home = await AuthorizedHomes(command, target, attempt.Persistence, now)
-            .Select(unit => new HomeFacts(
-                unit.Id,
-                unit.PropertyId,
-                unit.Property!.Portfolio!.Currency,
-                unit.LeaseManagements.Any(relationship =>
-                    relationship.CanceledAtUtc == null
-                    && relationship.PossessionReturnedAtUtc == null)))
-            .SingleOrDefaultAsync(ct)
-            ?? throw new UnauthorizedAccessException(
-                "Lease import is outside the caller's current property scope or capability.");
 
         if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned)
         {
@@ -50,8 +42,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
                     equals new { ArtifactId = existingAgreement.ExecutedArtifactId!.Value, existingAgreement.PortfolioId }
                 where artifact.PortfolioId == command.PortfolioId
                     && artifact.ContentSha256 == command.SourceContentSha256
-                    && existingAgreement.LeaseManagement!.PropertyId == target.PropertyId
-                    && existingAgreement.LeaseManagement.UnitId == target.UnitId
+                    && existingAgreement.LeaseManagement!.PropertyId == home.PropertyId
+                    && existingAgreement.LeaseManagement.UnitId == home.UnitId
                 select new ScanConfirmationTargetWriteResult(
                     existingAgreement.Id,
                     existingAgreement.LeaseManagement!.UnitId,
@@ -235,10 +227,18 @@ internal static class CanonicalLeaseScanConfirmationWriter
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        if (command.Target.LeaseAgreement is not { UnitId: > 0 } target)
-            throw new UnauthorizedAccessException("Lease import has no authorized Unit scope.");
+        if (command.Target.LeaseAgreement is not { } target)
+            throw new UnauthorizedAccessException("Lease import has no authorized rental scope.");
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedHomes(command, target, persistence, now).AnyAsync(ct))
+        var authorized = target.PropertyId > 0 && target.UnitId is > 0
+            ? await AuthorizedHomes(
+                    command, target.PropertyId, target.UnitId.Value, persistence, now)
+                .AnyAsync(ct)
+            : target.PropertyId > 0
+                ? await AuthorizedProperties(command, target.PropertyId, persistence, now)
+                    .AnyAsync(ct)
+            : await CanBootstrapHome(command, persistence, now).AnyAsync(ct);
+        if (!authorized)
             throw new UnauthorizedAccessException("Lease import is outside the caller's current access scope.");
     }
 
@@ -247,7 +247,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
     private static IQueryable<Unit> AuthorizedHomes(
         ConfirmScanDraftCommand command,
-        ScanLeaseTargetData target,
+        int propertyId,
+        int unitId,
         IAtomicPersistenceSession persistence,
         DateTime now)
     {
@@ -257,7 +258,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             && assignment.EffectiveFromUtc <= now
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
         return persistence.Query<Unit>().Where(unit =>
-            unit.Id == target.UnitId && unit.PropertyId == target.PropertyId
+            unit.Id == unitId && unit.PropertyId == propertyId
             && unit.PortfolioId == command.PortfolioId
             && unit.Property != null && unit.Property.PortfolioId == command.PortfolioId
             && persistence.Query<AuthSession>().Any(session =>
@@ -290,6 +291,251 @@ internal static class CanonicalLeaseScanConfirmationWriter
                             capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
                         || assignment.RoleProfile.Capabilities.Any(capability =>
                             capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare)))));
+    }
+
+    private static IQueryable<WorkspaceMembership> CanBootstrapHome(
+        ConfirmScanDraftCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now)
+    {
+        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
+        return persistence.Query<WorkspaceMembership>().Where(membership =>
+            membership.AccessContextId == command.AccessContextId
+            && membership.PortfolioId == command.PortfolioId
+            && membership.Status == WorkspaceMembershipStatus.Active
+            && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
+            && membership.EffectiveFromUtc <= now
+            && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
+            && persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
+                && session.ActiveAccessContextId == command.AccessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                context.Id == command.AccessContextId && context.UserId == command.ConfirmedByUserId
+                && context.PortfolioId == command.PortfolioId
+                && context.AccessRevision == command.ExpectedAccessRevision
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
+            && assignments.Any(assignment =>
+                assignment.WorkspaceMembershipId == membership.Id
+                && assignment.PortfolioId == command.PortfolioId
+                && assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                && assignment.RoleProfile!.Capabilities.Any(capability =>
+                    capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)));
+    }
+
+    private static IQueryable<Property> AuthorizedProperties(
+        ConfirmScanDraftCommand command,
+        int propertyId,
+        IAtomicPersistenceSession persistence,
+        DateTime now)
+    {
+        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
+        return persistence.Query<Property>().Where(property =>
+            property.Id == propertyId && property.PortfolioId == command.PortfolioId
+            && property.DeletedAt == null
+            && persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
+                && session.ActiveAccessContextId == command.AccessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                context.Id == command.AccessContextId && context.UserId == command.ConfirmedByUserId
+                && context.PortfolioId == command.PortfolioId
+                && context.AccessRevision == command.ExpectedAccessRevision
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
+            && persistence.Query<WorkspaceMembership>().Any(membership =>
+                membership.AccessContextId == command.AccessContextId
+                && membership.PortfolioId == command.PortfolioId
+                && membership.Status == WorkspaceMembershipStatus.Active
+                && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
+                && membership.EffectiveFromUtc <= now
+                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
+                && assignments.Any(assignment =>
+                    assignment.WorkspaceMembershipId == membership.Id
+                    && assignment.PortfolioId == command.PortfolioId
+                    && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                        || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                        && assignment.SelectedProperties.Any(scope =>
+                            scope.PropertyId == property.Id
+                            && scope.PortfolioId == command.PortfolioId))
+                    && assignment.RoleProfile!.Capabilities.Any(capability =>
+                        capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage))));
+    }
+
+    private static async Task<HomeFacts> ResolveHomeAsync(
+        ConfirmScanDraftCommand command,
+        ScanLeaseTargetData target,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (target.UnitId is > 0)
+        {
+            if (target.PropertyId <= 0)
+                throw new ScanConfirmationValidationException(
+                    "A selected Unit must include its Property.");
+            return await AuthorizedHomes(
+                    command, target.PropertyId, target.UnitId.Value, attempt.Persistence, now)
+                .Select(unit => new HomeFacts(
+                    unit.Id,
+                    unit.PropertyId,
+                    unit.Property!.Portfolio!.Currency,
+                    unit.LeaseManagements.Any(relationship =>
+                        relationship.CanceledAtUtc == null
+                        && relationship.PossessionReturnedAtUtc == null)))
+                .SingleOrDefaultAsync(ct)
+                ?? throw new UnauthorizedAccessException(
+                    "Lease import is outside the caller's current property scope or capability.");
+        }
+
+        Property property;
+        if (target.PropertyId > 0)
+        {
+            property = await AuthorizedProperties(
+                    command, target.PropertyId, attempt.Persistence, now)
+                .SingleOrDefaultAsync(ct)
+                ?? throw new UnauthorizedAccessException(
+                    "Creating a Unit from this lease scan is outside the caller's Property scope.");
+        }
+        else
+        {
+            if (!await CanBootstrapHome(command, attempt.Persistence, now).AnyAsync(ct))
+                throw new UnauthorizedAccessException(
+                    "Creating a Property and Unit from a lease scan requires all-property rental-management authority.");
+
+            var address = RequireHomeText(target.PropertyAddress, "Property street address");
+            var city = RequireHomeText(target.PropertyCity, "Property city");
+            var state = RequireHomeText(target.PropertyState, "Property state");
+            var postalCode = RequireHomeText(target.PropertyPostalCode, "Property postal code");
+            var addressKey = address.ToLowerInvariant();
+            var cityKey = city.ToLowerInvariant();
+            var stateKey = state.ToLowerInvariant();
+            var postalKey = postalCode.ToLowerInvariant();
+            var propertyMatch = await attempt.Persistence.Query<Property>()
+                .Where(candidate => candidate.PortfolioId == command.PortfolioId
+                    && candidate.DeletedAt == null
+                    && candidate.AddressLine1.Trim().ToLower() == addressKey
+                    && candidate.City.Trim().ToLower() == cityKey
+                    && candidate.State.Trim().ToLower() == stateKey
+                    && candidate.PostalCode.Trim().ToLower() == postalKey)
+                .GroupBy(_ => 1)
+                .Select(group => new { Count = group.Count(), Id = group.Min(candidate => candidate.Id) })
+                .SingleOrDefaultAsync(ct);
+            if (propertyMatch?.Count > 1)
+                throw new ScanConfirmationValidationException(
+                    "More than one Property matches the reviewed address. Select the intended Property explicitly.");
+            if (propertyMatch is not null)
+            {
+                property = await attempt.Persistence.Query<Property>()
+                    .SingleAsync(candidate => candidate.Id == propertyMatch.Id
+                        && candidate.PortfolioId == command.PortfolioId, ct);
+            }
+            else
+            {
+                property = new Property
+                {
+                    PortfolioId = command.PortfolioId,
+                    Name = string.IsNullOrWhiteSpace(target.PropertyName)
+                        ? address
+                        : target.PropertyName.Trim(),
+                    PropertyType = ParsePropertyType(target.PropertyType, target.UnitNumber),
+                    Status = PropertyStatus.Active,
+                    AddressLine1 = address,
+                    City = city,
+                    State = state,
+                    PostalCode = postalCode,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                attempt.Persistence.Add(property);
+                attempt.BindSemanticAudit(property, Created(command, nameof(Property),
+                    "Created physical Property from reviewed lease scan."));
+                await attempt.FlushBusinessAsync(ct);
+            }
+        }
+
+        var unitNumber = string.IsNullOrWhiteSpace(target.UnitNumber)
+            ? "Property"
+            : target.UnitNumber.Trim();
+        var unitKey = unitNumber.ToLowerInvariant();
+        var unitMatch = await attempt.Persistence.Query<Unit>()
+            .Where(unit => unit.PortfolioId == command.PortfolioId
+                && unit.PropertyId == property.Id && unit.DeletedAt == null
+                && unit.UnitNumber.Trim().ToLower() == unitKey)
+            .GroupBy(_ => 1)
+            .Select(group => new { Count = group.Count(), Id = group.Min(unit => unit.Id) })
+            .SingleOrDefaultAsync(ct);
+        if (unitMatch?.Count > 1)
+            throw new ScanConfirmationValidationException(
+                "More than one Unit matches the reviewed Unit number. Select the intended Unit explicitly.");
+
+        Unit unit;
+        if (unitMatch is not null)
+        {
+            unit = await attempt.Persistence.Query<Unit>()
+                .SingleAsync(candidate => candidate.Id == unitMatch.Id
+                    && candidate.PortfolioId == command.PortfolioId
+                    && candidate.PropertyId == property.Id, ct);
+        }
+        else
+        {
+            unit = new Unit
+            {
+                PortfolioId = command.PortfolioId,
+                PropertyId = property.Id,
+                UnitNumber = unitNumber,
+                Bedrooms = target.UnitBedrooms ?? 0m,
+                Bathrooms = target.UnitBathrooms ?? 0m,
+                SquareFeet = target.UnitSquareFeet,
+                MarketRent = target.MonthlyRent ?? 0m,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            attempt.Persistence.Add(unit);
+            attempt.BindSemanticAudit(unit, Created(command, nameof(Unit),
+                "Created physical Unit from reviewed lease scan."));
+            await attempt.FlushBusinessAsync(ct);
+        }
+
+        var currency = await attempt.Persistence.Query<Portfolio>()
+            .Where(portfolio => portfolio.Id == command.PortfolioId)
+            .Select(portfolio => portfolio.Currency)
+            .SingleAsync(ct);
+        var hasOpenRelationship = await attempt.Persistence.Query<LeaseManagement>()
+            .AnyAsync(relationship => relationship.PortfolioId == command.PortfolioId
+                && relationship.UnitId == unit.Id
+                && relationship.CanceledAtUtc == null
+                && relationship.PossessionReturnedAtUtc == null, ct);
+        return new HomeFacts(unit.Id, property.Id, currency, hasOpenRelationship);
+    }
+
+    private static string RequireHomeText(string? value, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ScanConfirmationValidationException(
+                $"{fieldName} is required before creating rental inventory from this scan.");
+        return value.Trim();
+    }
+
+    private static PropertyType ParsePropertyType(string? value, string? unitNumber)
+    {
+        if (!string.IsNullOrWhiteSpace(value)
+            && Enum.TryParse<PropertyType>(value.Replace(" ", string.Empty), true, out var parsed))
+            return parsed;
+        return string.IsNullOrWhiteSpace(unitNumber)
+            ? PropertyType.SingleFamily
+            : PropertyType.MultiFamily;
     }
 
     private static async Task<Tenant> ResolveTenantAsync(
@@ -421,13 +667,13 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
     private static void Validate(ConfirmScanDraftCommand command, ScanLeaseTargetData target)
     {
-        if (target.ReviewDisposition is null || target.PropertyId <= 0 || target.UnitId is not > 0
-            || target.StartDate is null || target.MonthlyRent is null or < 0
+        if (target.ReviewDisposition is null || target.StartDate is null
+            || target.MonthlyRent is null or < 0
             || target.RentDueDay is not (>= 1 and <= 31)
             || target.SecurityDeposit is < 0 || target.LateFee is < 0
             || target.GracePeriodDays is < 0 or > 31 || target.TermsSchemaVersion <= 0)
             throw new ScanConfirmationValidationException(
-                "Lease review requires its disposition, property, Unit, term start, rent, and rent due day.");
+                "Lease review requires its disposition, term start, rent, and rent due day.");
         if (target.EndDate.HasValue && target.EndDate.Value.Date < target.StartDate.Value.Date)
             throw new ScanConfirmationValidationException("Lease end date cannot precede its start date.");
         if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned

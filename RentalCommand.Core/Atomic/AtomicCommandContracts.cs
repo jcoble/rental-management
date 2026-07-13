@@ -291,6 +291,7 @@ public enum AtomicLockResource
     RentalApplication = 16,
     WorkspaceAccessContext = 17,
     Property = 18,
+    Portfolio = 19,
 }
 
 public enum AtomicScanDraftClaimOutcome
