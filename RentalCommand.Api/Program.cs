@@ -141,6 +141,10 @@ builder.Services.AddSingleton<RentalCommand.Api.Data.IRlsExecutionContext,
 // admitted atomic attempt is active, and the atomic interceptors are inert for unconverted paths.
 builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
+    RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
+    RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();
+builder.Services.AddAtomicCommandHandler<
     ChangeWorkspaceAssignmentScopeCommand,
     WorkspaceAccessMutationResult,
     ChangeWorkspaceAssignmentScopeHandler>();
