@@ -410,21 +410,30 @@ public class WorkOrderStatusTimelineTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _db.Tenants.Add(tenant);
-        _db.Leases.Add(new Lease
+        _db.AddRange(unit, tenant);
+        _db.SaveChanges();
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = "Portal-work-order",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagementParties.Add(new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "Portal-work-order",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-1),
-            EndDate = now.Date.AddMonths(11),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            LeaseManagement = relationship,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Portal work-order test fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
         });
         _db.SaveChanges();
         return (property, tenant);
@@ -466,23 +475,31 @@ public class WorkOrderStatusTimelineTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _db.Tenants.Add(tenant);
-        _db.Leases.Add(new Lease
+        _db.AddRange(property, occupiedUnit, otherUnit, tenant);
+        _db.SaveChanges();
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = occupiedUnit.Id,
+            RelationshipNumber = "WO-tenant-scope",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagementParties.Add(new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
-            Property = property,
-            Unit = occupiedUnit,
-            Tenant = tenant,
-            LeaseNumber = "WO-tenant-scope",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-1),
-            EndDate = now.Date.AddMonths(11),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            LeaseManagement = relationship,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Tenant-scoped work-order fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
         });
-        _db.Units.Add(otherUnit);
         _db.SaveChanges();
         return (property, occupiedUnit, otherUnit, tenant);
     }

@@ -20,7 +20,7 @@ namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
 /// Covers the inbound SMS clean replacement: only one uniquely matched vendor DONE can mutate state.
-/// Tenant YES and ambiguous vendor events are acknowledged without touching rent or work orders.
+/// Tenant YES and ambiguous vendor events are acknowledged without touching work orders.
 /// </summary>
 public class SmsInboundRouterTests : IDisposable
 {
@@ -68,11 +68,9 @@ public class SmsInboundRouterTests : IDisposable
         var vendor = SeedVendor("+16145550199");
         var workOrder = SeedWorkOrder(property);
 
-        // An unpaid rent item for a tenant who shares the SAME phone as the vendor — the router must
-        // still prefer the vendor-DONE path because there is an open dispatch + DONE keyword.
-        var tenant = SeedTenant("+16145550199");
-        var lease = SeedLease(property, tenant);
-        var rent = SeedRent(lease);
+        // An unrelated tenant shares the SAME phone as the vendor. The router must still prefer the
+        // vendor-DONE path because there is an open dispatch + DONE keyword.
+        SeedTenant("+16145550199");
         await _ctx.Db.SaveChangesAsync();
 
         // Seed the already-dispatched state; dispatch command atomicity has its own focused suite.
@@ -97,18 +95,12 @@ public class SmsInboundRouterTests : IDisposable
         var reloadedWo = await _ctx.Db.WorkOrders.FindAsync(workOrder.Id);
         reloadedWo!.Status.Should().Be(WorkOrderStatus.Completed);
 
-        // Rent was NOT touched by the vendor path.
-        var reloadedRent = await _ctx.Db.Payments.FindAsync(rent.Id);
-        reloadedRent!.Status.Should().Be(PaymentStatus.Scheduled);
     }
 
     [Fact]
-    public async Task Route_TenantYes_IsNoOpAndDoesNotMutateRent()
+    public async Task Route_TenantYes_IsNoOpAndStoresReceipt()
     {
-        var property = SeedProperty();
-        var tenant = SeedTenant("+16145550123");
-        var lease = SeedLease(property, tenant);
-        var rent = SeedRent(lease);
+        SeedTenant("+16145550123");
         await _ctx.Db.SaveChangesAsync();
 
         var reply = await CreateRouter().RouteAsync(
@@ -116,9 +108,6 @@ public class SmsInboundRouterTests : IDisposable
 
         reply.Should().Contain("Reply DONE");
 
-        var reloadedRent = await _ctx.Db.Payments.FindAsync(rent.Id);
-        reloadedRent!.Status.Should().Be(PaymentStatus.Scheduled);
-        reloadedRent.PaidDate.Should().BeNull();
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "sms.vendor-done")).Should().Be(1);
     }
@@ -231,55 +220,4 @@ public class SmsInboundRouterTests : IDisposable
         return tenant;
     }
 
-    private Lease SeedLease(Property property, Tenant tenant)
-    {
-        var now = DateTime.UtcNow;
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "1A",
-            Bedrooms = 2,
-            Bathrooms = 1,
-            MarketRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L2026-001",
-            Status = LeaseStatus.Active,
-            StartDate = new DateTime(2026, 01, 01, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc),
-            MonthlyRent = 1200m,
-            RentDueDay = 1,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Leases.Add(lease);
-        _ctx.Db.SaveChanges();
-        return lease;
-    }
-
-    private Payment SeedRent(Lease lease)
-    {
-        var now = DateTime.UtcNow;
-        var payment = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 1200m,
-            DueDate = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Payments.Add(payment);
-        _ctx.Db.SaveChanges();
-        return payment;
-    }
 }
