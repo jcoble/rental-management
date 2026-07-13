@@ -346,7 +346,7 @@ public class UnitDashboardService : IUnitDashboardService
             HeldDepositBalance = (decimal?)deposit.HeldBalance ?? 0m,
         };
 
-    private static UnitLifecycleStage ResolveCanonicalStage(
+    private static UnitDashboardStage ResolveCanonicalStage(
         UnitDashboardReadRow row,
         bool hasDraftOrPendingAgreement,
         bool hasOpenApplication,
@@ -356,12 +356,12 @@ public class UnitDashboardService : IUnitDashboardService
     {
         if (row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold)
         {
-            return UnitLifecycleStage.Turnover;
+            return UnitDashboardStage.Turnover;
         }
 
         if (row.IsOccupied && row.Lifecycle == "Ending")
         {
-            return UnitLifecycleStage.MoveOut;
+            return UnitDashboardStage.MoveOut;
         }
 
         if (row.IsOccupied)
@@ -369,59 +369,59 @@ public class UnitDashboardService : IUnitDashboardService
             return row.AgreementEndOn is { } end
                 && end >= row.BusinessDate
                 && end <= row.BusinessDate.AddDays(90)
-                ? UnitLifecycleStage.Renewal
-                : UnitLifecycleStage.Active;
+                ? UnitDashboardStage.Renewal
+                : UnitDashboardStage.Active;
         }
 
         if ((row.HasScheduledMoveIn || hasUpcomingMoveInAppointment)
             && row.AgreementStatus is "Active" or "Upcoming")
         {
-            return UnitLifecycleStage.MoveIn;
+            return UnitDashboardStage.MoveIn;
         }
 
         if (hasDraftOrPendingAgreement || row.HasScheduledMoveIn || row.Lifecycle is "Upcoming" or "Preparing")
         {
-            return UnitLifecycleStage.Lease;
+            return UnitDashboardStage.Lease;
         }
 
         if (hasOpenApplication)
         {
-            return UnitLifecycleStage.Applicant;
+            return UnitDashboardStage.Applicant;
         }
 
         if (recentMoveOutSignal)
         {
-            return UnitLifecycleStage.Turnover;
+            return UnitDashboardStage.Turnover;
         }
 
-        return hasUpcomingShowing ? UnitLifecycleStage.Listed : UnitLifecycleStage.Ready;
+        return hasUpcomingShowing ? UnitDashboardStage.Listed : UnitDashboardStage.Ready;
     }
 
     private static string NextBestActionLabel(
-        UnitLifecycleStage stage,
+        UnitDashboardStage stage,
         decimal outstanding,
         DateOnly? agreementEndOn,
         DateOnly businessDate) => stage switch
         {
-            UnitLifecycleStage.Ready => "List this unit",
-            UnitLifecycleStage.Listed => "Review applicants / schedule showing",
-            UnitLifecycleStage.Applicant => "Screen & decide on the applicant",
-            UnitLifecycleStage.Lease => "Finish and send the agreement",
-            UnitLifecycleStage.MoveIn => "Confirm possession / collect deposit",
-            UnitLifecycleStage.Active when outstanding > 0m => $"Collect {outstanding:C}",
-            UnitLifecycleStage.Active => "Rent on track",
-            UnitLifecycleStage.Renewal when agreementEndOn is { } end =>
+            UnitDashboardStage.Ready => "List this unit",
+            UnitDashboardStage.Listed => "Review applicants / schedule showing",
+            UnitDashboardStage.Applicant => "Screen & decide on the applicant",
+            UnitDashboardStage.Lease => "Finish and send the agreement",
+            UnitDashboardStage.MoveIn => "Confirm possession / collect deposit",
+            UnitDashboardStage.Active when outstanding > 0m => $"Collect {outstanding:C}",
+            UnitDashboardStage.Active => "Rent on track",
+            UnitDashboardStage.Renewal when agreementEndOn is { } end =>
                 $"Prepare renewal — agreement ends in {Math.Max(0, end.DayNumber - businessDate.DayNumber)} days",
-            UnitLifecycleStage.Renewal => "Prepare renewal",
-            UnitLifecycleStage.MoveOut => "Schedule move-out inspection",
-            UnitLifecycleStage.Turnover => "Track make-ready / mark rent-ready",
+            UnitDashboardStage.Renewal => "Prepare renewal",
+            UnitDashboardStage.MoveOut => "Schedule move-out inspection",
+            UnitDashboardStage.Turnover => "Track make-ready / mark rent-ready",
             _ => "Open unit",
         };
 
     private async Task<UnitTurnoverSummary> BuildTurnoverSummaryAsync(
         int portfolioId,
         int unitId,
-        UnitLifecycleStage lifecycleStage,
+        UnitDashboardStage lifecycleStage,
         DateTime now,
         CancellationToken ct)
     {
@@ -653,26 +653,26 @@ public class UnitDashboardService : IUnitDashboardService
     }
 
     /// <summary>Deep link for a stage's next-best-action: the relevant unit tab (drawer flows attach there).</summary>
-    private static string NextBestActionHref(UnitLifecycleStage stage, int unitId, int propertyId, int? tenantId) => stage switch
+    private static string NextBestActionHref(UnitDashboardStage stage, int unitId, int propertyId, int? tenantId) => stage switch
     {
-        UnitLifecycleStage.Ready => $"/units/{unitId}?tab=listing",
-        UnitLifecycleStage.Listed => $"/units/{unitId}?tab=overview",
-        UnitLifecycleStage.Applicant => $"/units/{unitId}?tab=overview",
-        UnitLifecycleStage.Lease => $"/units/{unitId}?tab=lease",
-        UnitLifecycleStage.MoveIn => $"/units/{unitId}?tab=lease&action=confirm-move-in",
-        UnitLifecycleStage.Active => $"/units/{unitId}?tab=ledger&ledger=rent",
-        UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=lease-renewal-offer",
-        UnitLifecycleStage.Renewal => $"/units/{unitId}?tab=lease",
-        UnitLifecycleStage.MoveOut => $"/units/{unitId}?tab=turnover",
-        UnitLifecycleStage.Turnover => $"/units/{unitId}?tab=turnover",
+        UnitDashboardStage.Ready => $"/units/{unitId}?tab=listing",
+        UnitDashboardStage.Listed => $"/units/{unitId}?tab=overview",
+        UnitDashboardStage.Applicant => $"/units/{unitId}?tab=overview",
+        UnitDashboardStage.Lease => $"/units/{unitId}?tab=lease",
+        UnitDashboardStage.MoveIn => $"/units/{unitId}?tab=lease&action=confirm-move-in",
+        UnitDashboardStage.Active => $"/units/{unitId}?tab=ledger&ledger=rent",
+        UnitDashboardStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=lease-renewal-offer",
+        UnitDashboardStage.Renewal => $"/units/{unitId}?tab=lease",
+        UnitDashboardStage.MoveOut => $"/units/{unitId}?tab=turnover",
+        UnitDashboardStage.Turnover => $"/units/{unitId}?tab=turnover",
         _ => $"/units/{unitId}",
     };
 
-    private static string TurnoverStatus(UnitLifecycleStage lifecycleStage, int totalTasks, int openTasks)
+    private static string TurnoverStatus(UnitDashboardStage lifecycleStage, int totalTasks, int openTasks)
     {
         if (openTasks > 0)
         {
-            return lifecycleStage == UnitLifecycleStage.MoveOut ? "MoveOut" : "InProgress";
+            return lifecycleStage == UnitDashboardStage.MoveOut ? "MoveOut" : "InProgress";
         }
 
         if (totalTasks > 0)
@@ -680,9 +680,26 @@ public class UnitDashboardService : IUnitDashboardService
             return "RentReady";
         }
 
-        return lifecycleStage is UnitLifecycleStage.MoveOut or UnitLifecycleStage.Turnover
+        return lifecycleStage is UnitDashboardStage.MoveOut or UnitDashboardStage.Turnover
             ? "AwaitingVacancy"
             : "NotStarted";
+    }
+
+    /// <summary>
+    /// Presentation stages for the unit command center. Canonical occupancy and agreement lifecycle
+    /// remain sourced from the database projections; these values only select dashboard copy and routes.
+    /// </summary>
+    private enum UnitDashboardStage
+    {
+        Ready,
+        Listed,
+        Applicant,
+        Lease,
+        MoveIn,
+        Active,
+        Renewal,
+        MoveOut,
+        Turnover,
     }
 
     private static DateTime? MaxDate(DateTime? first, DateTime? second)
