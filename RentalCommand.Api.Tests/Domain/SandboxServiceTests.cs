@@ -63,8 +63,8 @@ public class SandboxServiceTests : IDisposable
 
         // Sanity: data is present before go-live.
         (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
-        (await _ctx.Db.Payments.CountAsync()).Should().BeGreaterThan(0);
-        (await _ctx.Db.PaymentTransactions.CountAsync()).Should().BeGreaterThan(0);
+        (await _ctx.Db.LeaseManagements.CountAsync()).Should().BeGreaterThan(0);
+        (await _ctx.Db.TenantLedgerEntries.CountAsync()).Should().BeGreaterThan(0);
         (await _ctx.Db.Conversations.CountAsync()).Should().BeGreaterThan(0);
 
         var state = await BuildService().GoLiveAsync(1, CancellationToken.None);
@@ -81,16 +81,17 @@ public class SandboxServiceTests : IDisposable
         // ...and every portfolio-scoped row was wiped (the Portfolio row itself survives).
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.Units.IgnoreQueryFilters().CountAsync()).Should().Be(0);
-        (await _ctx.Db.Leases.IgnoreQueryFilters().CountAsync()).Should().Be(0);
-        (await _ctx.Db.Payments.CountAsync()).Should().Be(0);
-        (await _ctx.Db.PaymentTransactions.CountAsync()).Should().Be(0);
+        (await _ctx.Db.LeaseManagements.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.LeaseAgreements.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.TenantAccounts.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.TenantLedgerEntries.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.Expenses.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.Tenants.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.Vendors.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.WorkOrders.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.Conversations.CountAsync()).Should().Be(0);
         (await _ctx.Db.ConversationMessages.CountAsync()).Should().Be(0);
-        (await _ctx.Db.SecurityDepositHoldings.CountAsync()).Should().Be(0);
+        (await _ctx.Db.NoticeDrafts.CountAsync()).Should().Be(0);
         (await _ctx.Db.Portfolios.CountAsync()).Should().Be(1);
     }
 
@@ -122,7 +123,7 @@ public class SandboxServiceTests : IDisposable
         // C-4: the wipe removes the demo owners, so the fresh Live portfolio must be re-seeded with the
         // landlord's own primary owner — otherwise the getting-started "owner" step blocks "add property".
         MarkSandbox(portfolioId: 1, DateTime.UtcNow);
-        SeedRichGraph(portfolioId: 1);
+        SeedRichGraph(portfolioId: 1, actorDisplayName: "Pat Owner", actorEmail: "owner@example.com");
         // Demo owner that the wipe should remove.
         _ctx.Db.OwnerEntities.Add(new OwnerEntity
         {
@@ -133,18 +134,6 @@ public class SandboxServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
-        // The administering landlord account (kept by the wipe).
-        _ctx.Db.Users.Add(new ApplicationUser
-        {
-            UserName = "owner@example.com",
-            Email = "owner@example.com",
-            DisplayName = "Pat Owner",
-            PortfolioId = 1,
-            EmailConfirmed = true,
-            CreatedAt = DateTime.UtcNow,
-        });
-        _ctx.Db.SaveChanges();
-
         await BuildService().GoLiveAsync(1, CancellationToken.None);
 
         // Exactly one owner remains: the primary self-owner derived from the account.
@@ -191,7 +180,7 @@ public class SandboxServiceTests : IDisposable
         var p2 = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 2);
         p2.IsSandbox.Should().BeTrue();
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2)).Should().Be(p2PropsBefore);
-        (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
+        (await _ctx.Db.TenantLedgerEntries.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
         (await _ctx.Db.Conversations.CountAsync(c => c.PortfolioId == 2)).Should().BeGreaterThan(0);
     }
 
@@ -285,12 +274,50 @@ public class SandboxServiceTests : IDisposable
 
     /// <summary>
     /// Seeds a small but FK-rich graph for a portfolio so the wipe ordering is exercised across the
-    /// tricky constraints: PaymentTransaction→Payment (RESTRICT), Conversation→Tenant (RESTRICT),
-    /// Unit (no PortfolioId), ConversationMessage (no PortfolioId), and the work-order/expense chain.
+    /// tricky constraints: NoticeDraft→canonical account/ledger/relationship (RESTRICT),
+    /// Conversation→Tenant (RESTRICT), Unit (no PortfolioId), ConversationMessage (no PortfolioId),
+    /// and the work-order/expense chain.
     /// </summary>
-    private void SeedRichGraph(int portfolioId)
+    private void SeedRichGraph(
+        int portfolioId,
+        string actorDisplayName = "Sandbox Fixture",
+        string? actorEmail = null)
     {
         var now = DateTime.UtcNow;
+        actorEmail ??= $"sandbox-{portfolioId}@example.test";
+
+        var actor = new ApplicationUser
+        {
+            UserName = actorEmail,
+            Email = actorEmail,
+            DisplayName = actorDisplayName,
+            PortfolioId = portfolioId,
+            EmailConfirmed = true,
+            CreatedAt = now,
+        };
+        _ctx.Db.Users.Add(actor);
+        _ctx.Db.SaveChanges();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.WorkspaceMemberships.Add(new WorkspaceMembership
+        {
+            AccessContextId = accessContext.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
 
         // Ensure the portfolio exists (portfolio 1 is pre-seeded; others are added by the caller).
         var property = new Property
@@ -306,7 +333,14 @@ public class SandboxServiceTests : IDisposable
         };
         _ctx.Db.Properties.Add(property);
 
-        var unit = new Unit { Property = property, UnitNumber = $"U{portfolioId}", CreatedAt = now, UpdatedAt = now };
+        var unit = new Unit
+        {
+            PortfolioId = portfolioId,
+            Property = property,
+            UnitNumber = $"U{portfolioId}",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
         _ctx.Db.Units.Add(unit);
 
         var tenant = new Tenant
@@ -330,62 +364,109 @@ public class SandboxServiceTests : IDisposable
         _ctx.Db.Vendors.Add(vendor);
         _ctx.Db.SaveChanges();
 
-        var lease = new Lease
+        var relationship = new LeaseManagement
         {
             PortfolioId = portfolioId,
             PropertyId = property.Id,
             UnitId = unit.Id,
+            PublicId = Guid.NewGuid(),
+            RelationshipNumber = $"LM-{portfolioId}",
+            PlannedPossessionAtUtc = now.AddMonths(-6),
+            PossessionGivenAtUtc = now.AddMonths(-6),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+            RowVersion = Guid.NewGuid(),
+        };
+        _ctx.Db.LeaseManagements.Add(relationship);
+        _ctx.Db.SaveChanges();
+
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = portfolioId,
+            LeaseManagementId = relationship.Id,
             TenantId = tenant.Id,
-            LeaseNumber = $"L-{portfolioId}",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-6),
-            EndDate = now.AddMonths(6),
-            MonthlyRent = 1000m,
-            SecurityDeposit = 1000m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-6)),
+            ChangeReason = "Sandbox canonical fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
         };
-        _ctx.Db.Leases.Add(lease);
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagementId = relationship.Id,
+            AccountNumber = $"TA-{portfolioId}",
+            Currency = "USD",
+            OpenedAtUtc = now.AddMonths(-6),
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        _ctx.Db.AddRange(party, account);
         _ctx.Db.SaveChanges();
 
-        var payment = new Payment
+        var agreement = new LeaseAgreement
         {
+            PublicId = Guid.NewGuid(),
             PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1000m,
-            DueDate = now.Date,
-            PaidDate = now.Date,
-            PeriodKey = now.ToString("yyyy-MM"),
-            CreatedAt = now,
-            UpdatedAt = now,
+            LeaseManagementId = relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{portfolioId}-V1",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-6)),
+            TermEndOn = DateOnly.FromDateTime(now.AddMonths(6)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-6)),
+            BaseRentAmount = 1000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1000m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
         };
-        _ctx.Db.Payments.Add(payment);
+        _ctx.Db.LeaseAgreements.Add(agreement);
         _ctx.Db.SaveChanges();
 
-        // PaymentTransaction RESTRICTs Payment — must be deleted before the payment in the wipe.
-        _ctx.Db.PaymentTransactions.Add(new PaymentTransaction
+        var rentCharge = new TenantLedgerEntry
         {
+            PublicId = Guid.NewGuid(),
             PortfolioId = portfolioId,
-            PaymentId = payment.Id,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
             Amount = 1000m,
-            Currency = "usd",
-            Provider = "stripe",
-            ProviderPaymentIntentId = $"pi_{portfolioId}",
-            Status = PaymentTransactionStatus.Succeeded,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            DueOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Sandbox rent charge",
+            BusinessKey = $"sandbox-rent:{portfolioId}",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = actor.Id,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(rentCharge);
+        _ctx.Db.SaveChanges();
 
-        _ctx.Db.SecurityDepositHoldings.Add(new SecurityDepositHolding
+        _ctx.Db.NoticeDrafts.Add(new NoticeDraft
         {
             PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            Amount = 1000m,
-            Status = SecurityDepositStatus.Held,
-            HeldAt = now,
-            DeductionsJson = "[]",
+            LeaseManagementId = relationship.Id,
+            TenantAccountId = account.Id,
+            TenantLedgerEntryId = rentCharge.Id,
+            RecipientTenantId = tenant.Id,
+            PropertyId = property.Id,
+            NoticeType = "RentReminder",
+            Status = "Draft",
+            Subject = "Rent reminder",
+            Body = "Sandbox notice",
+            Reason = "Sandbox canonical fixture",
+            TriggerDate = now,
             CreatedAt = now,
             UpdatedAt = now,
         });
