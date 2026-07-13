@@ -74,6 +74,98 @@ public sealed class LeaseManagementDetailResponse
     public string? CancellationReasonCode { get; init; }
     public string? CancellationNote { get; init; }
     public IReadOnlyList<LeaseManagementPartyResponse> Parties { get; init; } = [];
+    public int AgreementCount { get; init; }
+    public int AddendumCount { get; init; }
+    public int LegalArtifactCount { get; init; }
+}
+
+public sealed class LeaseLegalHistoryQuery : ListQuery
+{
+    [FromQuery(Name = "status")]
+    public string? Status { get; set; }
+}
+
+public sealed class LeaseAgreementHistoryPageResponse
+{
+    public IReadOnlyList<LeaseAgreementHistoryResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class LeaseAgreementHistoryResponse
+{
+    public int LeaseManagementId { get; init; }
+    public int LeaseAgreementId { get; init; }
+    public Guid PublicId { get; init; }
+    public int VersionNumber { get; init; }
+    public string AgreementNumber { get; init; } = string.Empty;
+    public LeaseAgreementChangeType ChangeType { get; init; }
+    public int? ReplacesAgreementId { get; init; }
+    public int? RenewsAgreementId { get; init; }
+    public LeaseAgreementTermType TermType { get; init; }
+    public DateOnly TermStartOn { get; init; }
+    public DateOnly? TermEndOn { get; init; }
+    public DateOnly GoverningFromOn { get; init; }
+    public DateOnly? SupersededEffectiveOn { get; init; }
+    public decimal BaseRentAmount { get; init; }
+    public string AgreementStatus { get; init; } = string.Empty;
+    public bool IsGoverning { get; init; }
+    public int SignerCount { get; init; }
+    public LegalArtifactSummaryResponse? IssuedArtifact { get; init; }
+    public LegalArtifactSummaryResponse? ExecutedArtifact { get; init; }
+    public DateTime? IssuedAtUtc { get; init; }
+    public DateTime? FullyExecutedAtUtc { get; init; }
+    public DateTime? VoidedAtUtc { get; init; }
+    public DateTime CreatedAtUtc { get; init; }
+    public DateTime UpdatedAtUtc { get; init; }
+}
+
+public sealed class LeaseAddendumHistoryPageResponse
+{
+    public IReadOnlyList<LeaseAddendumHistoryResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class LeaseAddendumHistoryResponse
+{
+    public int LeaseManagementId { get; init; }
+    public int LeaseAddendumId { get; init; }
+    public Guid PublicId { get; init; }
+    public Guid SeriesPublicId { get; init; }
+    public int BaseAgreementId { get; init; }
+    public int VersionNumber { get; init; }
+    public string AddendumNumber { get; init; } = string.Empty;
+    public LeaseAddendumPurpose Purpose { get; init; }
+    public int? ReplacesAddendumId { get; init; }
+    public DateOnly EffectiveFromOn { get; init; }
+    public DateOnly? EffectiveThroughOn { get; init; }
+    public DateOnly? SupersededEffectiveOn { get; init; }
+    public string AddendumStatus { get; init; } = string.Empty;
+    public int FinancialEffectCount { get; init; }
+    public decimal RecurringRentDelta { get; init; }
+    public int SignerCount { get; init; }
+    public LegalArtifactSummaryResponse? IssuedArtifact { get; init; }
+    public LegalArtifactSummaryResponse? ExecutedArtifact { get; init; }
+    public DateTime? IssuedAtUtc { get; init; }
+    public DateTime? FullyExecutedAtUtc { get; init; }
+    public DateTime? VoidedAtUtc { get; init; }
+    public DateTime CreatedAtUtc { get; init; }
+    public DateTime UpdatedAtUtc { get; init; }
+}
+
+public sealed class LegalArtifactSummaryResponse
+{
+    public int LegalDocumentArtifactId { get; init; }
+    public Guid PublicId { get; init; }
+    public LegalDocumentArtifactKind ArtifactKind { get; init; }
+    public string FileName { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public long ByteLength { get; init; }
+    public string ContentSha256 { get; init; } = string.Empty;
+    public DateTime CreatedAtUtc { get; init; }
 }
 
 public sealed class LeaseManagementPartyResponse

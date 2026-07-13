@@ -284,6 +284,125 @@ public sealed class CanonicalLeaseReaderSqlTests
     }
 
     [Fact]
+    public void Agreement_history_authorizes_filters_sorts_and_pages_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+        var query = new LeaseLegalHistoryQuery
+        {
+            Status = "Active",
+            Search = "A-2026",
+            Skip = 10,
+            Take = 20,
+        };
+
+        var sql = service.BuildAgreementHistoryQuery(ReadAccess(), 42, query)
+            .OrderByDescending(row => row.VersionNumber)
+            .ThenByDescending(row => row.LeaseAgreementId)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("vw_lease_agreement_status");
+        sql.Should().Contain("LeaseAgreementSigners");
+        sql.Should().Contain("LegalDocumentArtifacts");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+    }
+
+    [Fact]
+    public void Addendum_history_authorizes_filters_sorts_and_pages_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+        var query = new LeaseLegalHistoryQuery
+        {
+            Status = "Executed",
+            Search = "PET",
+            Skip = 5,
+            Take = 15,
+        };
+
+        var sql = service.BuildAddendumHistoryQuery(ReadAccess(), 42, query)
+            .OrderByDescending(row => row.EffectiveFromOn)
+            .ThenByDescending(row => row.LeaseAddendumId)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAddenda");
+        sql.Should().Contain("vw_lease_addendum_status");
+        sql.Should().Contain("LeaseAddendumFinancialEffects");
+        sql.Should().Contain("LeaseAddendumSigners");
+        sql.Should().Contain("LegalDocumentArtifacts");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
+        sql.Should().NotContain("\"Leases\"");
+    }
+
+    [Fact]
+    public void Legal_artifact_download_resolves_exact_management_agreement_and_file_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var agreementSql = service.BuildAgreementArtifactFileQuery(ReadAccess(), 42, 73, 91)
+            .ToQueryString();
+        var addendumSql = service.BuildAddendumArtifactFileQuery(ReadAccess(), 42, 74, 92)
+            .ToQueryString();
+
+        foreach (var sql in new[] { agreementSql, addendumSql })
+        {
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("rentals.read");
+            sql.Should().Contain("LeaseManagements");
+            sql.Should().Contain("LegalDocumentArtifacts");
+            sql.Should().Contain("StoredFiles");
+            sql.Should().NotContain("EntityType");
+            sql.Should().NotContain("\"Leases\"");
+        }
+        agreementSql.Should().Contain("LeaseAgreements");
+        addendumSql.Should().Contain("LeaseAddenda");
+    }
+
+    [Fact]
+    public void Agreement_source_scan_uses_the_typed_stored_file_authority_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildAgreementSourceScanFileQuery(ReadAccess(), 42, 73)
+            .OrderByDescending(row => row.UploadedAtUtc)
+            .Take(1)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("StoredFiles");
+        sql.Should().Contain("LeaseAgreement");
+        sql.Should().Contain("EntityType");
+        sql.Should().Contain("EntityId");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().NotContain("\"Leases\"");
+    }
+
+    [Fact]
     public void Scan_originated_tenant_money_activity_resolves_account_label_and_unit_canonically()
     {
         using var db = NewContext();

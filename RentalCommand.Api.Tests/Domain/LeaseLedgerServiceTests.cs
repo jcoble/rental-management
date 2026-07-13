@@ -23,11 +23,30 @@ public sealed class LeaseLedgerServiceTests
             .GetCustomAttribute<HttpGetAttribute>()!.Template
             .Should().Be("{leaseManagementId:int}/ledger");
 
-        typeof(LeaseController).GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .SelectMany(method => method.GetCustomAttributes<HttpGetAttribute>())
-            .Select(attribute => attribute.Template)
-            .Should().NotContain(template =>
-                template != null && template.Contains("ledger", StringComparison.OrdinalIgnoreCase));
+        typeof(LeaseManagementController).Assembly
+            .GetType("RentalCommand.Api.Controllers.LeaseController")
+            .Should().BeNull("the mutable legacy /api/v1/leases surface is deleted, not wrapped");
+    }
+
+    [Fact]
+    public void Canonical_legal_history_artifacts_and_questions_have_precise_routes()
+    {
+        typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.Ask))!
+            .GetCustomAttribute<HttpPostAttribute>()!.Template
+            .Should().Be("{leaseManagementId:int}/ask");
+        typeof(LeaseAgreementController).GetMethod(nameof(LeaseAgreementController.ListPage))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("page");
+        typeof(LeaseAgreementController).GetMethod(nameof(LeaseAgreementController.DownloadArtifact))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseAgreementId:int}/artifacts/{artifactId:int}");
+        typeof(LeaseAgreementController).GetMethod(nameof(LeaseAgreementController.DownloadSourceScan))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseAgreementId:int}/source-scan");
+        typeof(LeaseAddendumController).GetMethod(nameof(LeaseAddendumController.ListPage))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("page");
+        typeof(LeaseAddendumController).GetMethod(nameof(LeaseAddendumController.DownloadArtifact))!
+            .GetCustomAttribute<HttpGetAttribute>()!.Template
+            .Should().Be("{leaseAddendumId:int}/artifacts/{artifactId:int}");
     }
 
     [Fact]

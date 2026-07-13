@@ -5,9 +5,11 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Esign;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
 
@@ -26,13 +28,69 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         new("lease-addendum.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
+    private readonly ILeaseManagementQueryService _queryService;
+    private readonly IFileStorage _files;
     private readonly string _webBaseUrl;
 
-    public LeaseAddendumController(IAtomicUnitOfWork atomic, RentalCommandDbContext db, IConfiguration configuration)
+    public LeaseAddendumController(
+        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        ILeaseManagementQueryService queryService,
+        IFileStorage files,
+        IConfiguration configuration)
     {
         _atomic = atomic;
         _db = db;
+        _queryService = queryService;
+        _files = files;
         _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
+    }
+
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(LeaseAddendumHistoryPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAddendumHistoryPageResponse>> ListPage(
+        int leaseManagementId,
+        [FromQuery] LeaseLegalHistoryQuery query,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var page = await _queryService.ListAddendumHistoryPageAsync(access, leaseManagementId, query, ct);
+        return page is null
+            ? NotFound(new { error = "Lease management relationship not found" })
+            : Ok(page);
+    }
+
+    [HttpGet("{leaseAddendumId:int}/artifacts/{artifactId:int}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadArtifact(
+        int leaseManagementId,
+        int leaseAddendumId,
+        int artifactId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var reference = await _queryService.GetAddendumArtifactAsync(
+            access, leaseManagementId, leaseAddendumId, artifactId, ct);
+        if (reference is null) return NotFound(new { error = "Addendum artifact not found" });
+
+        Stream stream;
+        try
+        {
+            stream = await _files.DownloadAsync(reference.StorageKey, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return NotFound(new { error = "Addendum artifact file not found on storage" });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(stream, reference.ContentType, reference.FileName, enableRangeProcessing: true);
     }
 
     [HttpPost]
