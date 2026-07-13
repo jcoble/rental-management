@@ -67,7 +67,8 @@ public sealed class AccountingTokenServiceTests : IAsyncLifetime
 
         var saved = await _ctx.Db.AccountingConnections.AsNoTracking().SingleAsync(c => c.Id == conn.Id);
         saved.Status.Should().Be(AccountingConnectionStatus.Connected);
-        saved.TokenExpiresAt.Should().Be(newExpiry);
+        saved.TokenExpiresAt.Should().BeCloseTo(newExpiry, TimeSpan.FromMicroseconds(1),
+            "PostgreSQL timestamps have microsecond precision while DateTime has 100 ns ticks");
         saved.TokenGeneration.Should().Be(1);
 
         // BOTH tokens rotated and are stored ONLY as cipher text (not plaintext), and decrypt to the new pair.

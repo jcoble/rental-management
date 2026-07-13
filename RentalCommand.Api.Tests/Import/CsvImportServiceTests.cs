@@ -25,6 +25,18 @@ public class CsvImportServiceTests : IDisposable
     public CsvImportServiceTests()
     {
         _ctx = new SqliteTestContext();
+        _ctx.Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
+        _ctx.Db.Users.Add(new ApplicationUser
+        {
+            Id = 1,
+            UserName = "csv-import-tests@example.test",
+            NormalizedUserName = "CSV-IMPORT-TESTS@EXAMPLE.TEST",
+            Email = "csv-import-tests@example.test",
+            NormalizedEmail = "CSV-IMPORT-TESTS@EXAMPLE.TEST",
+            DisplayName = "CSV Import Test Actor",
+            CreatedAt = DateTime.UtcNow,
+        });
+        _ctx.Db.SaveChanges();
         var noop = new NoopDataUpdateService();
         _sut = new CsvImportService(
             _ctx.Db,
@@ -333,6 +345,7 @@ public class CsvImportServiceTests : IDisposable
         var property = SeedProperty("Maple Court");
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "101",
             MarketRent = 1200m,

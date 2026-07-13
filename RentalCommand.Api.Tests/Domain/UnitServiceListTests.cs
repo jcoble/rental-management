@@ -1,11 +1,11 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -14,19 +14,26 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class UnitServiceListTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class UnitServiceListTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
-    private const int ActorUserId = 9002;
+    private const int ActorUserId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly UnitService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private UnitService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public UnitServiceListTests()
+    public UnitServiceListTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = SeedCanonicalLeaseReadModel();
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
     }
@@ -34,75 +41,7 @@ public class UnitServiceListTests : IDisposable
     private WorkspaceReadScope SeedCanonicalLeaseReadModel()
     {
         var now = DateTime.UtcNow;
-        var user = new ApplicationUser
-        {
-            Id = ActorUserId,
-            UserName = "unit-tests@rentalcommand.local",
-            NormalizedUserName = "UNIT-TESTS@RENTALCOMMAND.LOCAL",
-            Email = "unit-tests@rentalcommand.local",
-            NormalizedEmail = "UNIT-TESTS@RENTALCOMMAND.LOCAL",
-            DisplayName = "Unit Test Actor",
-            CreatedAt = now,
-        };
-        _ctx.Db.Users.Add(user);
-        _ctx.Db.SaveChanges();
-
-        _ctx.Db.Database.ExecuteSqlRaw("""
-            CREATE VIEW "vw_unit_occupancy" AS
-            SELECT
-                u."PortfolioId",
-                u."PropertyId",
-                u."Id" AS "UnitId",
-                CURRENT_TIMESTAMP AS "EffectiveNowUtc",
-                CASE WHEN lm."Id" IS NULL THEN 0 ELSE 1 END AS "IsOccupied",
-                lm."Id" AS "CurrentLeaseManagementId",
-                0 AS "HasScheduledMoveIn",
-                NULL AS "NextPlannedPossessionAtUtc",
-                NULL AS "PlannedLeaseManagementId",
-                0 AS "IsInTurnover",
-                0 AS "IsOutOfService",
-                0 AS "IsOnManagementHold",
-                0 AS "HasGoverningAgreementWithoutPossession",
-                0 AS "HasPossessionWithoutGoverningAgreement",
-                NULL AS "OccupancyExceptionCode"
-            FROM "Units" u
-            LEFT JOIN "LeaseManagements" lm
-              ON lm."PortfolioId" = u."PortfolioId"
-             AND lm."UnitId" = u."Id"
-             AND lm."PossessionGivenAtUtc" IS NOT NULL
-             AND lm."PossessionReturnedAtUtc" IS NULL
-             AND lm."CanceledAtUtc" IS NULL;
-
-            CREATE VIEW "vw_lease_management_lifecycle" AS
-            SELECT
-                lm."PortfolioId",
-                lm."PropertyId",
-                lm."UnitId",
-                lm."Id" AS "LeaseManagementId",
-                CURRENT_TIMESTAMP AS "EffectiveNowUtc",
-                date('now') AS "BusinessDate",
-                CASE WHEN lm."NoticeGivenAtUtc" IS NOT NULL THEN 'Ending' ELSE 'Occupied' END AS "Lifecycle",
-                (SELECT la."Id" FROM "LeaseAgreements" la
-                  WHERE la."PortfolioId" = lm."PortfolioId"
-                    AND la."LeaseManagementId" = lm."Id"
-                  ORDER BY la."VersionNumber" DESC LIMIT 1) AS "CurrentAgreementId",
-                NULL AS "UpcomingAgreementId",
-                0 AS "CurrentPartyCount",
-                0 AS "CurrentResidentCount",
-                0 AS "CurrentFinanciallyResponsiblePartyCount",
-                NULL AS "CurrentPrimaryPartyId",
-                NULL AS "CurrentPrimaryTenantId",
-                NULL AS "CurrentPrimaryTenantName",
-                NULL AS "TenantAccountId",
-                0 AS "HasMissingTenantAccount",
-                0 AS "HasMultipleGoverningAgreements",
-                0 AS "HasMultipleCurrentPrimaryTenants",
-                0 AS "HasAccountCloseMismatch",
-                0 AS "HasGoverningAgreementWithoutPossession",
-                0 AS "HasPossessionWithoutGoverningAgreement",
-                0 AS "HasReconciliationException"
-            FROM "LeaseManagements" lm;
-            """);
+        var user = _ctx.Db.Users.Single(candidate => candidate.Id == ActorUserId);
 
         var accessContext = new WorkspaceAccessContext
         {
@@ -152,7 +91,7 @@ public class UnitServiceListTests : IDisposable
             PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListWithHealthPageAsync_ReturnsSqlCountAndRequestedWindow()
@@ -437,6 +376,7 @@ public class UnitServiceListTests : IDisposable
         _ctx.Db.LeaseManagements.Add(relationship);
         _ctx.Db.SaveChanges();
 
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, now);
         var startOn = DateOnly.FromDateTime(now.AddMonths(-2));
         var agreement = new LeaseAgreement
         {
@@ -460,6 +400,10 @@ public class UnitServiceListTests : IDisposable
             TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, ActorUserId, now),
+            IssuedArtifactId = issuedArtifact.Id,
+            IssuedAtUtc = now,
+            ExecutedArtifactId = executedArtifact.Id,
+            FullyExecutedAtUtc = now,
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,
@@ -479,6 +423,49 @@ public class UnitServiceListTests : IDisposable
             });
         _ctx.Db.SaveChanges();
         return (relationship, agreement);
+    }
+
+    private (LegalDocumentArtifact Issued, LegalDocumentArtifact Executed) SeedAgreementArtifacts(
+        int relationshipId,
+        DateTime now)
+    {
+        var issuedFile = StoredFile(null, null, $"agreement-{relationshipId}-issued.pdf", now);
+        var executedFile = StoredFile(null, null, $"agreement-{relationshipId}-executed.pdf", now);
+        _ctx.Db.StoredFiles.AddRange(issuedFile, executedFile);
+        _ctx.Db.SaveChanges();
+
+        var issuedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = issuedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = issuedFile.FilePath,
+            FileName = issuedFile.FileName,
+            ContentType = issuedFile.ContentType,
+            ByteLength = issuedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var executedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = executedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+            StorageKey = executedFile.FilePath,
+            FileName = executedFile.FileName,
+            ContentType = executedFile.ContentType,
+            ByteLength = executedFile.FileSize,
+            ContentSha256 = new string('c', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _ctx.Db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _ctx.Db.SaveChanges();
+        return (issuedArtifact, executedArtifact);
     }
 
     private (Property Property, Unit Unit) SeedUnitShell(
@@ -527,7 +514,7 @@ public class UnitServiceListTests : IDisposable
         return tenant;
     }
 
-    private static StoredFile StoredFile(string entityType, int entityId, string fileName, DateTime now) => new()
+    private static StoredFile StoredFile(string? entityType, long? entityId, string fileName, DateTime now) => new()
     {
         PortfolioId = PortfolioId,
         EntityType = entityType,

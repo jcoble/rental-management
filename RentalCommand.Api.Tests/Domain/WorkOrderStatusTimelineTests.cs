@@ -40,14 +40,25 @@ public class WorkOrderStatusTimelineTests : IDisposable
         _db = new AccountingServiceTestDbContext(options);
         _db.Database.EnsureCreated();
 
+        var now = DateTime.UtcNow;
         _db.Portfolios.Add(new Portfolio
         {
             Id = PortfolioId,
             Name = "Test Portfolio",
             ManagementCompanyName = "Test Co",
             TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 1,
+            UserName = "work-order-tests@example.test",
+            NormalizedUserName = "WORK-ORDER-TESTS@EXAMPLE.TEST",
+            Email = "work-order-tests@example.test",
+            NormalizedEmail = "WORK-ORDER-TESTS@EXAMPLE.TEST",
+            DisplayName = "Work Order Test Actor",
+            CreatedAt = now,
         });
         _db.SaveChanges();
 
@@ -397,6 +408,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         var now = DateTime.UtcNow;
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = "1A",
             CreatedAt = now,
@@ -419,6 +431,9 @@ public class WorkOrderStatusTimelineTests : IDisposable
             PropertyId = property.Id,
             UnitId = unit.Id,
             RelationshipNumber = "Portal-work-order",
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            PossessionAgreementExceptionReason = "Work-order fixture has no legal-document artifact.",
+            PossessionAgreementExceptionAuthorizedByUserId = 1,
             CreatedAtUtc = now,
             CreatedByUserId = 1,
             UpdatedAtUtc = now,
@@ -455,6 +470,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         };
         var occupiedUnit = new Unit
         {
+            PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = "1A",
             CreatedAt = now,
@@ -462,6 +478,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         };
         var otherUnit = new Unit
         {
+            PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = "2B",
             CreatedAt = now,
@@ -484,6 +501,9 @@ public class WorkOrderStatusTimelineTests : IDisposable
             PropertyId = property.Id,
             UnitId = occupiedUnit.Id,
             RelationshipNumber = "WO-tenant-scope",
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            PossessionAgreementExceptionReason = "Work-order fixture has no legal-document artifact.",
+            PossessionAgreementExceptionAuthorizedByUserId = 1,
             CreatedAtUtc = now,
             CreatedByUserId = 1,
             UpdatedAtUtc = now,

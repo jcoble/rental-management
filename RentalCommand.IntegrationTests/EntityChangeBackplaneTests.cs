@@ -1,11 +1,13 @@
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using RentalCommand.Api.Services;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -47,7 +49,17 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
         catch
         {
             _dockerAvailable = false;
+            return;
         }
+
+        // The production listener and publisher deliberately SET ROLE before LISTEN/NOTIFY.
+        // Apply the canonical foundation so this isolated database has those runtime roles and
+        // grants instead of silently exercising a pre-role-boundary environment.
+        await using var db = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_connString)
+                .Options);
+        await db.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()

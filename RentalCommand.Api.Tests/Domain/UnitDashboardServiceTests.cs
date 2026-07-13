@@ -1,8 +1,7 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -11,63 +10,34 @@ using RentalCommand.TestCommon;
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Focused Unit Command Center tests. PostgreSQL owns the canonical read models in production;
-/// this SQLite fixture maps those read-model shapes to test-only tables and populates them from
-/// canonical LeaseManagement, Agreement, Party, Account, ledger, and operational-period facts.
+/// Focused Unit Command Center tests against the migrated PostgreSQL schema and its canonical
+/// LeaseManagement, Agreement, Party, Account, ledger, and operational-period read models.
 /// </summary>
-public class UnitDashboardServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class UnitDashboardServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int ActorUserId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly UnitDashboardService _sut;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private UnitDashboardService _sut = null!;
 
-    public UnitDashboardServiceTests()
+    public UnitDashboardServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new UnitDashboardFixtureDbContext(options);
-        _db.Database.EnsureCreated();
-
-        var now = DateTime.UtcNow;
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = ActorUserId,
-            UserName = "dashboard-test@rentalcommand.local",
-            NormalizedUserName = "DASHBOARD-TEST@RENTALCOMMAND.LOCAL",
-            Email = "dashboard-test@rentalcommand.local",
-            NormalizedEmail = "DASHBOARD-TEST@RENTALCOMMAND.LOCAL",
-            DisplayName = "Dashboard Test Actor",
-            CreatedAt = now,
-        });
-        _db.SaveChanges();
-
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
         _sut = new UnitDashboardService(_db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System);
     }
 
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task GetTimelineAsync_ScopesCanonicalChildAuditRowsInSqlWithoutPreloadingIds()
@@ -148,9 +118,15 @@ public class UnitDashboardServiceTests : IDisposable
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, seeded.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.Header.DocsNeedingReviewCount.Should().Be(3);
+        dashboard!.Header.DocsNeedingReviewCount.Should().Be(5);
         dashboard.Overview.PendingDocs.Select(document => document.FileName)
-            .Should().BeEquivalentTo(["work-order-receipt.pdf", "direct-unit-receipt.png", "rent-check.png"]);
+            .Should().BeEquivalentTo([
+                $"agreement-{seeded.Relationship.Id}-issued.pdf",
+                $"agreement-{seeded.Relationship.Id}-executed.pdf",
+                "work-order-receipt.pdf",
+                "direct-unit-receipt.png",
+                "rent-check.png",
+            ]);
         dashboard.Overview.PendingDocs.Should().NotContain(document => document.FileName == "foreign-unit-receipt.pdf");
 
         var documentSql = _executedSql
@@ -205,7 +181,6 @@ public class UnitDashboardServiceTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var (_, unit) = SeedPropertyUnit("Oak Ridge", "3B", 975m, now);
-        SeedVacantOccupancy(unit, now);
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
@@ -236,7 +211,7 @@ public class UnitDashboardServiceTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var graph = SeedCanonicalRelationship("Maple Heights", "2A", "Morgan", "Movein", 1200m,
-            now, plannedPossessionAtUtc: now.AddDays(3), agreementStatus: "Upcoming", lifecycle: "Upcoming");
+            now, plannedPossessionAtUtc: now.AddDays(3));
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
@@ -268,11 +243,6 @@ public class UnitDashboardServiceTests : IDisposable
         var now = DateTime.UtcNow;
         var graph = SeedCanonicalRelationship("Birch Lane", "101", "Quincy", "Tenant", 1000m,
             now, possessionGivenAtUtc: now.AddMonths(-1), receivableBalance: 300m, pastDueAmount: 300m);
-        AddLedgerEntry(graph.Account, TenantLedgerEntryType.RentCharge, TenantLedgerDirection.Debit, 1000m,
-            "rent-charge", DateOnly.FromDateTime(now.AddDays(-1)));
-        AddLedgerEntry(graph.Account, TenantLedgerEntryType.PaymentReceipt, TenantLedgerDirection.Credit, 700m,
-            "partial-payment", DateOnly.FromDateTime(now.AddDays(-1)));
-        _db.SaveChanges();
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
@@ -310,7 +280,6 @@ public class UnitDashboardServiceTests : IDisposable
         var ended = SeedHistoricalRelationship(property, unit, "Former", "Resident", 1100m,
             now.AddYears(-1), now.AddMonths(-1));
         SeedBalance(ended, 1100m, 1100m, DateOnly.FromDateTime(now.AddMonths(-2)));
-        SeedVacantOccupancy(unit, now);
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
@@ -332,16 +301,14 @@ public class UnitDashboardServiceTests : IDisposable
         DateTime? possessionGivenAtUtc = null,
         DateTime? plannedPossessionAtUtc = null,
         DateOnly? agreementEndOn = null,
-        string agreementStatus = "Active",
-        string lifecycle = "PossessionActive",
         decimal receivableBalance = 0m,
         decimal pastDueAmount = 0m,
         DateOnly? nextDueOn = null)
     {
         var (property, unit) = SeedPropertyUnit(propertyName, unitNumber, rent, now);
         return SeedRelationshipOnExistingUnit(property, unit, firstName, lastName, rent, now,
-            possessionGivenAtUtc, plannedPossessionAtUtc, agreementEndOn, agreementStatus, lifecycle,
-            receivableBalance, pastDueAmount, nextDueOn);
+            possessionGivenAtUtc, plannedPossessionAtUtc, agreementEndOn, receivableBalance,
+            pastDueAmount, nextDueOn);
     }
 
     private CanonicalGraph SeedRelationshipOnExistingUnit(
@@ -354,8 +321,6 @@ public class UnitDashboardServiceTests : IDisposable
         DateTime? possessionGivenAtUtc = null,
         DateTime? plannedPossessionAtUtc = null,
         DateOnly? agreementEndOn = null,
-        string agreementStatus = "Active",
-        string lifecycle = "PossessionActive",
         decimal receivableBalance = 0m,
         decimal pastDueAmount = 0m,
         DateOnly? nextDueOn = null)
@@ -368,73 +333,28 @@ public class UnitDashboardServiceTests : IDisposable
         _db.LeaseManagements.Add(relationship);
         _db.SaveChanges();
 
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, now);
         var startOn = DateOnly.FromDateTime(possessionGivenAtUtc ?? plannedPossessionAtUtc ?? now);
-        var agreement = Agreement(relationship, rent, startOn, agreementEndOn ?? startOn.AddYears(1), now);
+        var agreement = Agreement(
+            relationship,
+            rent,
+            startOn,
+            agreementEndOn ?? startOn.AddYears(1),
+            issuedArtifact.Id,
+            executedArtifact.Id,
+            now);
         var party = Party(relationship, tenant, startOn, now);
         var account = Account(relationship, now);
         _db.AddRange(agreement, party, account);
         _db.SaveChanges();
 
-        _db.UnitOccupancyProjections.Add(new UnitOccupancyProjection
+        var graph = new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
+        if (receivableBalance != 0m || pastDueAmount != 0m)
         {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            EffectiveNowUtc = now,
-            IsOccupied = possessionGivenAtUtc is not null,
-            CurrentLeaseManagementId = possessionGivenAtUtc is not null ? relationship.Id : null,
-            HasScheduledMoveIn = possessionGivenAtUtc is null && plannedPossessionAtUtc is not null,
-            NextPlannedPossessionAtUtc = possessionGivenAtUtc is null ? plannedPossessionAtUtc : null,
-            PlannedLeaseManagementId = possessionGivenAtUtc is null ? relationship.Id : null,
-        });
-        _db.LeaseManagementLifecycleProjections.Add(new LeaseManagementLifecycleProjection
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            LeaseManagementId = relationship.Id,
-            EffectiveNowUtc = now,
-            BusinessDate = DateOnly.FromDateTime(now),
-            Lifecycle = lifecycle,
-            CurrentAgreementId = agreement.Id,
-            CurrentPartyCount = 1,
-            CurrentResidentCount = 1,
-            CurrentFinanciallyResponsiblePartyCount = 1,
-            CurrentPrimaryPartyId = party.Id,
-            CurrentPrimaryTenantId = tenant.Id,
-            CurrentPrimaryTenantName = $"{firstName} {lastName}",
-            TenantAccountId = account.Id,
-        });
-        _db.LeaseAgreementStatusProjections.Add(new LeaseAgreementStatusProjection
-        {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = relationship.Id,
-            AgreementId = agreement.Id,
-            BusinessDate = DateOnly.FromDateTime(now),
-            GoverningFromOn = agreement.GoverningFromOn,
-            GoverningThroughExclusiveOn = agreement.TermEndOn?.AddDays(1),
-            AgreementStatus = agreementStatus,
-            IsGoverning = agreementStatus == "Active",
-        });
-        _db.TenantAccountBalanceProjections.Add(new TenantAccountBalanceProjection
-        {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = relationship.Id,
-            TenantAccountId = account.Id,
-            EffectiveNowUtc = now,
-            BusinessDate = DateOnly.FromDateTime(now),
-            Currency = "USD",
-            TotalDebits = receivableBalance,
-            ReceivableBalance = receivableBalance,
-            PastDueAmount = pastDueAmount,
-            PastDueCount = pastDueAmount > 0m ? 1 : 0,
-            NextDueOn = nextDueOn,
-            NextDueAmount = nextDueOn is null ? 0m : receivableBalance,
-            Condition = pastDueAmount > 0m ? "PastDue" : "Current",
-        });
-        _db.SaveChanges();
+            SeedBalance(graph, receivableBalance, pastDueAmount, nextDueOn);
+        }
 
-        return new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
+        return graph;
     }
 
     private CanonicalGraph SeedHistoricalRelationship(
@@ -454,8 +374,16 @@ public class UnitDashboardServiceTests : IDisposable
         relationship.AccountClosedAtUtc = possessionReturnedAtUtc;
         _db.LeaseManagements.Add(relationship);
         _db.SaveChanges();
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, possessionGivenAtUtc);
         var startOn = DateOnly.FromDateTime(possessionGivenAtUtc);
-        var agreement = Agreement(relationship, rent, startOn, DateOnly.FromDateTime(possessionReturnedAtUtc), possessionGivenAtUtc);
+        var agreement = Agreement(
+            relationship,
+            rent,
+            startOn,
+            DateOnly.FromDateTime(possessionReturnedAtUtc),
+            issuedArtifact.Id,
+            executedArtifact.Id,
+            possessionGivenAtUtc);
         var party = Party(relationship, tenant, startOn, possessionGivenAtUtc);
         party.EffectiveThrough = DateOnly.FromDateTime(possessionReturnedAtUtc);
         var account = Account(relationship, possessionGivenAtUtc);
@@ -465,24 +393,74 @@ public class UnitDashboardServiceTests : IDisposable
         return new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
     }
 
+    private (LegalDocumentArtifact Issued, LegalDocumentArtifact Executed) SeedAgreementArtifacts(
+        int relationshipId,
+        DateTime now)
+    {
+        var issuedFile = File(null, null, $"agreement-{relationshipId}-issued.pdf", now);
+        var executedFile = File(null, null, $"agreement-{relationshipId}-executed.pdf", now);
+        _db.StoredFiles.AddRange(issuedFile, executedFile);
+        _db.SaveChanges();
+
+        var issuedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = issuedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = issuedFile.FilePath,
+            FileName = issuedFile.FileName,
+            ContentType = issuedFile.ContentType,
+            ByteLength = issuedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var executedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = executedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+            StorageKey = executedFile.FilePath,
+            FileName = executedFile.FileName,
+            ContentType = executedFile.ContentType,
+            ByteLength = executedFile.FileSize,
+            ContentSha256 = new string('c', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _db.SaveChanges();
+        return (issuedArtifact, executedArtifact);
+    }
+
     private void SeedBalance(CanonicalGraph graph, decimal receivable, decimal pastDue, DateOnly? nextDueOn)
     {
-        _db.TenantAccountBalanceProjections.Add(new TenantAccountBalanceProjection
+        if (pastDue > 0m)
         {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = graph.Relationship.Id,
-            TenantAccountId = graph.Account.Id,
-            EffectiveNowUtc = DateTime.UtcNow,
-            BusinessDate = DateOnly.FromDateTime(DateTime.UtcNow),
-            Currency = "USD",
-            TotalDebits = receivable,
-            ReceivableBalance = receivable,
-            PastDueAmount = pastDue,
-            PastDueCount = pastDue > 0m ? 1 : 0,
-            NextDueOn = nextDueOn,
-            NextDueAmount = nextDueOn is null ? 0m : receivable,
-            Condition = pastDue > 0m ? "PastDue" : "Current",
-        });
+            AddLedgerEntry(
+                graph.Account,
+                TenantLedgerEntryType.RentCharge,
+                TenantLedgerDirection.Debit,
+                pastDue,
+                $"dashboard-past-due-{Guid.NewGuid():N}",
+                DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)));
+        }
+
+        var remainingReceivable = receivable - pastDue;
+        if (remainingReceivable > 0m)
+        {
+            AddLedgerEntry(
+                graph.Account,
+                TenantLedgerEntryType.RentCharge,
+                TenantLedgerDirection.Debit,
+                remainingReceivable,
+                $"dashboard-current-due-{Guid.NewGuid():N}",
+                nextDueOn ?? DateOnly.FromDateTime(DateTime.UtcNow));
+        }
+
         _db.SaveChanges();
     }
 
@@ -513,18 +491,6 @@ public class UnitDashboardServiceTests : IDisposable
         return (property, unit);
     }
 
-    private void SeedVacantOccupancy(Unit unit, DateTime now)
-    {
-        _db.UnitOccupancyProjections.Add(new UnitOccupancyProjection
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = unit.PropertyId,
-            UnitId = unit.Id,
-            EffectiveNowUtc = now,
-        });
-        _db.SaveChanges();
-    }
-
     private void SeedOperationalState(Unit unit, UnitOperationalPeriodType type, DateTime startedAtUtc)
     {
         _db.UnitOperationalPeriods.Add(new UnitOperationalPeriod
@@ -537,16 +503,6 @@ public class UnitDashboardServiceTests : IDisposable
             Reason = "Canonical dashboard fixture",
             CreatedAtUtc = startedAtUtc,
             CreatedByUserId = ActorUserId,
-        });
-        _db.UnitOccupancyProjections.Add(new UnitOccupancyProjection
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = unit.PropertyId,
-            UnitId = unit.Id,
-            EffectiveNowUtc = DateTime.UtcNow,
-            IsInTurnover = type == UnitOperationalPeriodType.Turnover,
-            IsOutOfService = type == UnitOperationalPeriodType.OutOfService,
-            IsOnManagementHold = type == UnitOperationalPeriodType.ManagementHold,
         });
         _db.SaveChanges();
     }
@@ -603,6 +559,8 @@ public class UnitDashboardServiceTests : IDisposable
         decimal rent,
         DateOnly startOn,
         DateOnly endOn,
+        int issuedArtifactId,
+        int executedArtifactId,
         DateTime now) => new()
     {
         PublicId = Guid.NewGuid(),
@@ -625,7 +583,9 @@ public class UnitDashboardServiceTests : IDisposable
         TermsPayload = "{}",
         DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
             PortfolioId, ActorUserId, now),
+        IssuedArtifactId = issuedArtifactId,
         IssuedAtUtc = now,
+        ExecutedArtifactId = executedArtifactId,
         FullyExecutedAtUtc = now,
         CreatedAtUtc = now,
         CreatedByUserId = ActorUserId,
@@ -740,7 +700,7 @@ public class UnitDashboardServiceTests : IDisposable
         Timestamp = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-minutesAgo),
     };
 
-    private static StoredFile File(string entityType, int entityId, string fileName, DateTime uploadedAt) => new()
+    private static StoredFile File(string? entityType, long? entityId, string fileName, DateTime uploadedAt) => new()
     {
         PortfolioId = PortfolioId,
         EntityType = entityType,
@@ -788,33 +748,4 @@ public class UnitDashboardServiceTests : IDisposable
         Unit ForeignUnit,
         LeaseManagement ForeignRelationship);
 
-    private sealed class UnitDashboardFixtureDbContext(DbContextOptions<RentalCommandDbContext> options)
-        : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
-    {
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-
-            modelBuilder.Entity<UnitOccupancyProjection>()
-                .HasKey(row => new { row.PortfolioId, row.UnitId });
-            modelBuilder.Entity<UnitOccupancyProjection>()
-                .ToTable("UnitDashboardTestOccupancy");
-            modelBuilder.Entity<LeaseManagementLifecycleProjection>()
-                .HasKey(row => new { row.PortfolioId, row.LeaseManagementId });
-            modelBuilder.Entity<LeaseManagementLifecycleProjection>()
-                .ToTable("UnitDashboardTestLifecycle");
-            modelBuilder.Entity<LeaseAgreementStatusProjection>()
-                .HasKey(row => new { row.PortfolioId, row.AgreementId });
-            modelBuilder.Entity<LeaseAgreementStatusProjection>()
-                .ToTable("UnitDashboardTestAgreementStatus");
-            modelBuilder.Entity<TenantAccountBalanceProjection>()
-                .HasKey(row => new { row.PortfolioId, row.TenantAccountId });
-            modelBuilder.Entity<TenantAccountBalanceProjection>()
-                .ToTable("UnitDashboardTestAccountBalance");
-            modelBuilder.Entity<SecurityDepositBalanceProjection>()
-                .HasKey(row => new { row.PortfolioId, row.SecurityDepositAccountId });
-            modelBuilder.Entity<SecurityDepositBalanceProjection>()
-                .ToTable("UnitDashboardTestDepositBalance");
-        }
-    }
 }

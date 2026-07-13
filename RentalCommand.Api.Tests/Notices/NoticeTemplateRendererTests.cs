@@ -50,7 +50,7 @@ public class NoticeTemplateRendererTests
     [Fact]
     public void ForType_returns_late_rent_fields()
     {
-        var fields = NoticeMergeFields.ForType("LateRentNotice");
+        var fields = NoticeMergeFields.ForType("late-rent-late-fee");
         Assert.Contains("overdue_amount", fields);
         Assert.Contains("tenant_name", fields);
     }

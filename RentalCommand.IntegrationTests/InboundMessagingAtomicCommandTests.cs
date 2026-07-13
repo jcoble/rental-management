@@ -116,7 +116,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             ConversationId = first.Value.ConversationId,
             Subject = string.Empty,
             Body = "It is getting worse.",
-            OccurredAtUtc = _now.AddMinutes(2),
+            CreatedAtUtc = _now.AddMinutes(2),
         };
         await Atomic.ExecuteAsync(postIdentity, post, ConversationCodec);
         await Atomic.ExecuteAsync(postIdentity, post, ConversationCodec);
