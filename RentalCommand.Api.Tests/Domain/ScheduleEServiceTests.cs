@@ -89,49 +89,12 @@ public class ScheduleEServiceTests : IDisposable
         _db.Tenants.Add(tenant);
         _db.SaveChanges();
 
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            TenantId = tenant.Id,
-            LeaseNumber = "L-1",
-            Status = LeaseStatus.Active,
-            StartDate = D(2025, 1, 1),
-            EndDate = D(2026, 1, 1),
-            MonthlyRent = 1_000m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-        _db.Leases.Add(lease);
-        _db.SaveChanges();
+        var agreement = SeedAgreement(property, unit, tenant, "L-1", 1_000m, D(2025, 1, 1), D(2026, 1, 1));
 
         // Income: 12,000 rent (paid) + a 1,500 deposit (EXCLUDED).
         for (var m = 1; m <= 12; m++)
-            _db.Payments.Add(new Payment
-            {
-                PortfolioId = PortfolioId,
-                LeaseId = lease.Id,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Paid,
-                Amount = 1_000m,
-                DueDate = D(Year, m, 1),
-                PaidDate = D(Year, m, 1),
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            });
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.SecurityDeposit,
-            Status = PaymentStatus.Paid,
-            Amount = 1_500m,
-            DueDate = D(Year, 1, 1),
-            PaidDate = D(Year, 1, 1),
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
+            SeedChargeAndReceipt(agreement, TenantLedgerEntryType.RentCharge, 1_000m, D(Year, m, 1), 1_000m);
+        SeedChargeAndReceipt(agreement, TenantLedgerEntryType.DepositCharge, 1_500m, D(Year, 1, 1), 1_500m);
 
         // Expenses: 1,000 repairs (counts) + a 5,000 manual MortgageInterest + 3,000 manual Depreciation
         // — both must be EXCLUDED because the property has a modeled loan + computed depreciation.
@@ -195,12 +158,11 @@ public class ScheduleEServiceTests : IDisposable
         var unit = new Unit { PropertyId = property.Id, UnitNumber = "1", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         var tenant = new Tenant { PortfolioId = PortfolioId, FirstName = "Bo", LastName = "Birch", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         _db.Units.Add(unit); _db.Tenants.Add(tenant); _db.SaveChanges();
-        var lease = new Lease { PortfolioId = PortfolioId, PropertyId = property.Id, UnitId = unit.Id, TenantId = tenant.Id, LeaseNumber = "L-2", Status = LeaseStatus.Active, StartDate = D(2025, 1, 1), EndDate = D(2026, 1, 1), MonthlyRent = 1_000m, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
-        _db.Leases.Add(lease); _db.SaveChanges();
+        var agreement = SeedAgreement(property, unit, tenant, "L-2", 1_000m, D(2025, 1, 1), D(2026, 1, 1));
 
         // 1,000 paid + a partial paying 250 of 1,000 → taxable income 1,250 (not 2,000).
-        _db.Payments.Add(new Payment { PortfolioId = PortfolioId, LeaseId = lease.Id, PaymentType = PaymentType.Rent, Status = PaymentStatus.Paid, Amount = 1_000m, DueDate = D(Year, 1, 1), PaidDate = D(Year, 1, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
-        _db.Payments.Add(new Payment { PortfolioId = PortfolioId, LeaseId = lease.Id, PaymentType = PaymentType.Rent, Status = PaymentStatus.Partial, Amount = 1_000m, AmountPaid = 250m, DueDate = D(Year, 2, 1), PaidDate = D(Year, 2, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        SeedChargeAndReceipt(agreement, TenantLedgerEntryType.RentCharge, 1_000m, D(Year, 1, 1), 1_000m);
+        SeedChargeAndReceipt(agreement, TenantLedgerEntryType.RentCharge, 1_000m, D(Year, 2, 1), 250m);
         _db.SaveChanges();
 
         _commands.Clear();
@@ -316,35 +278,8 @@ public class ScheduleEServiceTests : IDisposable
         _db.Tenants.Add(tenant);
         _db.SaveChanges();
 
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            TenantId = tenant.Id,
-            LeaseNumber = "L-3",
-            Status = LeaseStatus.Active,
-            StartDate = D(Year, 1, 1),
-            EndDate = D(Year + 1, 1, 1),
-            MonthlyRent = 1_000m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-        _db.Leases.Add(lease);
-        _db.SaveChanges();
-
-        _db.Payments.Add(new Payment
-        {
-            PortfolioId = PortfolioId,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1_000m,
-            DueDate = D(Year, 1, 1),
-            PaidDate = D(Year, 1, 5),
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
+        var agreement = SeedAgreement(property, unit, tenant, "L-3", 1_000m, D(Year, 1, 1), D(Year + 1, 1, 1));
+        SeedChargeAndReceipt(agreement, TenantLedgerEntryType.RentCharge, 1_000m, D(Year, 1, 1), 1_000m, D(Year, 1, 5));
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
@@ -414,9 +349,9 @@ public class ScheduleEServiceTests : IDisposable
     }
 
     private static bool IsStandaloneIncomeByPropertyAggregate(string sql) =>
-        sql.TrimStart().StartsWith("SELECT \"s\".\"Key\" AS \"PropertyId\"", StringComparison.Ordinal) &&
-        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
-        sql.Contains("GROUP BY \"s\".\"Key\"", StringComparison.Ordinal);
+        sql.Contains("FROM \"TenantLedgerAllocations\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY", StringComparison.Ordinal) &&
+        !sql.Contains("FROM \"Properties\"", StringComparison.Ordinal);
 
     private static bool IsStandaloneInterestByPropertyAggregate(string sql) =>
         sql.TrimStart().StartsWith("SELECT \"l1\".\"PropertyId\"", StringComparison.Ordinal) &&
@@ -432,6 +367,143 @@ public class ScheduleEServiceTests : IDisposable
     private static bool IsStandaloneLoanPropertyIdScan(string sql) =>
         sql.TrimStart().StartsWith("SELECT DISTINCT \"l\".\"PropertyId\"", StringComparison.Ordinal) &&
         sql.Contains("FROM \"Loans\" AS \"l\"", StringComparison.Ordinal);
+
+    private LeaseAgreement SeedAgreement(
+        Property property,
+        Unit unit,
+        Tenant tenant,
+        string number,
+        decimal monthlyRent,
+        DateTime start,
+        DateTime end)
+    {
+        var now = DateTime.UtcNow;
+        var management = new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = number,
+            PlannedPossessionAtUtc = start,
+            PossessionGivenAtUtc = start,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagements.Add(management);
+        _db.SaveChanges();
+
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{number}",
+            Currency = "USD",
+            OpenedAtUtc = start,
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(start),
+            ChangeReason = "Schedule E test",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = number,
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(start),
+            TermEndOn = DateOnly.FromDateTime(end),
+            GoverningFromOn = DateOnly.FromDateTime(start),
+            BaseRentAmount = monthlyRent,
+            RentDueDay = 1,
+            SecurityDepositObligation = monthlyRent,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            FullyExecutedAtUtc = start,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
+            LeaseManagement = management,
+        };
+        management.TenantAccount = account;
+        _db.AddRange(account, party, agreement);
+        _db.SaveChanges();
+        return agreement;
+    }
+
+    private void SeedChargeAndReceipt(
+        LeaseAgreement agreement,
+        TenantLedgerEntryType chargeType,
+        decimal chargeAmount,
+        DateTime dueDate,
+        decimal amountReceived,
+        DateTime? receivedDate = null)
+    {
+        var account = agreement.LeaseManagement!.TenantAccount!;
+        var charge = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = chargeType,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = chargeAmount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueDate),
+            DueOn = DateOnly.FromDateTime(dueDate),
+            PostedAtUtc = dueDate,
+            Description = chargeType.ToString(),
+            BusinessKey = $"charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(charge);
+        _db.SaveChanges();
+        if (amountReceived <= 0m)
+            return;
+
+        var receivedAt = receivedDate ?? dueDate;
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amountReceived,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(receivedAt),
+            PostedAtUtc = receivedAt,
+            Description = "Payment received",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(receipt);
+        _db.SaveChanges();
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = amountReceived,
+            AllocatedAtUtc = receivedAt,
+            BusinessKey = $"allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        });
+        _db.SaveChanges();
+    }
 }
 
 internal sealed class ScheduleERecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
