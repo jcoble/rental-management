@@ -10,8 +10,8 @@ namespace RentalCommand.Api.Services.Auth;
 
 /// <summary>
 /// Idempotent demo-data seeder. Creates a rich interlinked dataset (properties, units, tenants,
-/// leases, 12 months of payments, expenses, work orders, appointments, inspections, and canonical
-/// tenant/deposit ledger facts) for a given portfolio so every report and analytics screen has realistic data.
+/// canonical lease relationships, agreement drafts, tenant/deposit ledgers, expenses, work orders,
+/// appointments, and inspections) for a given portfolio so every report and analytics screen has realistic data.
 ///
 /// Two callers: startup (seeds portfolio 1 = the dev admin when <c>Seed:DemoData=true</c>), and new
 /// signups (each new portfolio is seeded as a Sandbox to explore). Every row is parameterized on the
@@ -292,7 +292,8 @@ public class DemoDataSeeder
         await _db.SaveChangesAsync(ct);   // get unit IDs
 
         // ── 4. Tenants ────────────────────────────────────────────────────────────────
-        // 22 tenants; first 19 will be on active leases, last 3 on expired leases.
+        // 22 tenants: 17 primary tenants and 2 co-tenants in current relationships, plus
+        // 3 past tenants in ended relationships on currently vacant units.
         var tenantData = new (string first, string last, string email, string phone)[]
         {
             ("Marcus",   "Williams",  "marcus.williams@email.example",  "614-555-1001"),
@@ -334,387 +335,10 @@ public class DemoDataSeeder
         _db.Tenants.AddRange(tenants);
         await _db.SaveChangesAsync(ct);
 
-        // ── 5. Leases ─────────────────────────────────────────────────────────────────
-        // Collect occupied units (non-vacant) in order. We have 19 occupied units to match
-        // 19 active-lease tenants.
-        // Rent amounts per occupied unit index (deterministic, varied $900-$2500)
-        static decimal RentForUnit(Unit u) => u.MarketRent; // use the market rent we already set
-
-        // Active lease start dates: stagger over last 18 months so payment histories vary
-        static DateTime ActiveStart(int idx, DateTime @base) =>
-            @base.AddMonths(-(18 - idx % 12)).Date;
-
-        var leases = new List<Lease>();
-
-        for (int i = 0; i < occupiedUnits.Count && i < 19; i++)
-        {
-            var unit   = occupiedUnits[i];
-            var prop   = properties.First(p => p.Id == unit.PropertyId);
-            var tenant = tenants[i];
-            var rent   = RentForUnit(unit);
-            var deposit = rent; // 1 month deposit
-            var start  = ActiveStart(i, now);
-            var end    = start.AddMonths(12);
-
-            var lease = new Lease
-            {
-                PortfolioId     = portfolioId,
-                PropertyId      = prop.Id,
-                UnitId          = unit.Id,
-                TenantId        = tenant.Id,
-                LeaseNumber     = $"L{2024 + i / 12:D4}-{i + 1:D3}",
-                Status          = LeaseStatus.Active,
-                StartDate       = start,
-                EndDate         = end,
-                MoveInDate      = start,
-                MonthlyRent     = rent,
-                SecurityDeposit = deposit,
-                LateFeeAmount   = Math.Round(rent * 0.05m, 2),
-                RentDueDay      = 1,
-                CreatedAt       = start.AddDays(-14),
-                UpdatedAt       = now
-            };
-
-            // A couple of active leases simulate a lease document captured via the scan→draft→confirm
-            // flow — populate the ExtractedData JSONB superset so demo data exercises the scan
-            // persistence schema for the Lease record type too.
-            if (i < 2)
-            {
-                lease.ExtractedData = JsonSerializer.Serialize(new
-                {
-                    documentKind    = "Lease",
-                    tenantName      = $"{tenant.FirstName} {tenant.LastName}",
-                    monthlyRent     = rent,
-                    securityDeposit = deposit,
-                    startDate       = start.ToString("yyyy-MM-dd"),
-                    endDate         = end.ToString("yyyy-MM-dd"),
-                    termMonths      = 12,
-                    source          = "demo-seed",
-                });
-            }
-
-            leases.Add(lease);
-        }
-
-        // 3 expired leases for the last 3 tenants on vacant units that were previously occupied.
-        // Use the first 3 vacant units.
-        for (int i = 0; i < 3 && i < vacantUnits.Count; i++)
-        {
-            var unit   = vacantUnits[i];
-            var prop   = properties.First(p => p.Id == unit.PropertyId);
-            var tenant = tenants[19 + i]; // tenants 19-21
-            var rent   = unit.MarketRent;
-            var expiredEnd  = now.AddMonths(-(3 + i));
-            var expiredStart = expiredEnd.AddMonths(-12);
-
-            var expiredLease = new Lease
-            {
-                PortfolioId     = portfolioId,
-                PropertyId      = prop.Id,
-                UnitId          = unit.Id,
-                TenantId        = tenant.Id,
-                LeaseNumber     = $"L{2023}-EXP-{i + 1:D3}",
-                Status          = LeaseStatus.Expired,
-                StartDate       = expiredStart,
-                EndDate         = expiredEnd,
-                MoveInDate      = expiredStart,
-                MoveOutDate     = expiredEnd,
-                MonthlyRent     = rent,
-                SecurityDeposit = rent,
-                LateFeeAmount   = Math.Round(rent * 0.05m, 2),
-                RentDueDay      = 1,
-                CreatedAt       = expiredStart.AddDays(-14),
-                UpdatedAt       = now
-            };
-            leases.Add(expiredLease);
-        }
-
-        _db.Leases.AddRange(leases);
-        await _db.SaveChangesAsync(ct);
-
-        // ── 6. Payments ───────────────────────────────────────────────────────────────
-        // For each active lease: ~12 months of Rent history + 1 upcoming Scheduled,
-        // a few Late, one SecurityDeposit, and one LateFee per lease (some).
-        // For expired leases: 12 months of Rent history (all Paid).
-        var payments = new List<Payment>();
-        var activeLeasesForPayments = leases.Where(l => l.Status == LeaseStatus.Active).ToList();
-
-        // Deterministic payment pattern: leases at index % 5 == 2 get one Late month,
-        // index % 7 == 4 get two late months.
-        for (int li = 0; li < activeLeasesForPayments.Count; li++)
-        {
-            var lease     = activeLeasesForPayments[li];
-            var leaseStart = lease.StartDate;
-
-            // Security deposit — paid at move-in
-            var depositPayment = new Payment
-            {
-                PortfolioId  = portfolioId,
-                LeaseId      = lease.Id,
-                PaymentType  = PaymentType.SecurityDeposit,
-                Status       = PaymentStatus.Paid,
-                Amount       = lease.SecurityDeposit,
-                DueDate      = leaseStart,
-                PaidDate     = leaseStart,
-                Method       = "Check",
-                PeriodKey    = null, // one-off / manual
-                CreatedAt    = leaseStart,
-                UpdatedAt    = leaseStart
-            };
-
-            // The first few deposit checks simulate a paper check captured via the scan→draft→confirm
-            // flow — populate the check-specific typed columns (PayerName/CheckNumber/BankName) plus the
-            // ExtractedData JSONB superset, so demo data exercises the scan schema for the Payment type.
-            if (li < 3)
-            {
-                var depTenant = tenants[li];
-                depositPayment.PayerName   = $"{depTenant.FirstName} {depTenant.LastName}";
-                depositPayment.CheckNumber = (1040 + li * 7).ToString();
-                depositPayment.BankName    = (li % 3) switch
-                {
-                    0 => "Huntington National Bank",
-                    1 => "Chase Bank",
-                    _ => "PNC Bank",
-                };
-                depositPayment.ExtractedData = JsonSerializer.Serialize(new
-                {
-                    documentKind = "Check",
-                    payerName    = depositPayment.PayerName,
-                    checkNumber  = depositPayment.CheckNumber,
-                    bankName     = depositPayment.BankName,
-                    amount       = depositPayment.Amount,
-                    memo         = "Security deposit",
-                    source       = "demo-seed",
-                });
-            }
-
-            payments.Add(depositPayment);
-
-            // Generate rent rows for each month from lease start through the current month.
-            // "now" is at start of the month for DueDate purposes.
-            var currentMonthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-            var monthCursor       = new DateTime(leaseStart.Year, leaseStart.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-            int monthsGenerated   = 0;
-
-            while (monthCursor <= currentMonthStart && monthsGenerated < 13)
-            {
-                var periodKey  = monthCursor.ToString("yyyy-MM");
-                var dueDate    = new DateTime(monthCursor.Year, monthCursor.Month, lease.RentDueDay, 0, 0, 0, DateTimeKind.Utc);
-                bool isUpcoming = monthCursor == currentMonthStart;
-
-                PaymentStatus status;
-                DateTime?     paidDate;
-
-                if (isUpcoming)
-                {
-                    status   = PaymentStatus.Scheduled;
-                    paidDate = null;
-                }
-                else if (li % 5 == 2 && monthsGenerated == 3)
-                {
-                    // One late payment
-                    status   = PaymentStatus.Late;
-                    paidDate = dueDate.AddDays(12);
-                }
-                else if (li % 7 == 4 && monthsGenerated == 7)
-                {
-                    // Another late payment
-                    status   = PaymentStatus.Late;
-                    paidDate = dueDate.AddDays(8);
-                }
-                else
-                {
-                    status   = PaymentStatus.Paid;
-                    paidDate = dueDate.AddDays(-(li % 3)); // paid 0-2 days early
-                }
-
-                payments.Add(new Payment
-                {
-                    PortfolioId  = portfolioId,
-                    LeaseId      = lease.Id,
-                    PaymentType  = PaymentType.Rent,
-                    Status       = status,
-                    Amount       = lease.MonthlyRent,
-                    DueDate      = dueDate,
-                    PaidDate     = paidDate,
-                    Method       = status == PaymentStatus.Scheduled ? null : ((li % 3) switch { 0 => "ACH", 1 => "Check", _ => "Zelle" }),
-                    PeriodKey    = periodKey,
-                    CreatedAt    = dueDate.AddDays(-1),
-                    UpdatedAt    = paidDate ?? dueDate
-                });
-
-                monthsGenerated++;
-                monthCursor = monthCursor.AddMonths(1);
-            }
-
-            // Late fee for leases that had a Late payment
-            if (li % 5 == 2 || li % 7 == 4)
-            {
-                var latePeriod = li % 5 == 2
-                    ? new DateTime(leaseStart.Year, leaseStart.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(3).ToString("yyyy-MM")
-                    : new DateTime(leaseStart.Year, leaseStart.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(7).ToString("yyyy-MM");
-
-                payments.Add(new Payment
-                {
-                    PortfolioId  = portfolioId,
-                    LeaseId      = lease.Id,
-                    PaymentType  = PaymentType.LateFee,
-                    Status       = PaymentStatus.Paid,
-                    Amount       = lease.LateFeeAmount,
-                    DueDate      = DateTime.SpecifyKind(DateTime.ParseExact(latePeriod, "yyyy-MM", null), DateTimeKind.Utc).AddDays(5),
-                    PaidDate     = DateTime.SpecifyKind(DateTime.ParseExact(latePeriod, "yyyy-MM", null), DateTimeKind.Utc).AddDays(12),
-                    Method       = "Check",
-                    PeriodKey    = latePeriod,
-                    CreatedAt    = now.AddMonths(-6),
-                    UpdatedAt    = now.AddMonths(-6)
-                });
-            }
-        }
-
-        // Expired lease payments — all Paid, monthly for 12 months
-        var expiredLeases = leases.Where(l => l.Status == LeaseStatus.Expired).ToList();
-        foreach (var lease in expiredLeases)
-        {
-            var monthCursor = new DateTime(lease.StartDate.Year, lease.StartDate.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-            var endMonth    = new DateTime(lease.EndDate.Year, lease.EndDate.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-            int cnt = 0;
-
-            while (monthCursor <= endMonth && cnt < 12)
-            {
-                var periodKey = monthCursor.ToString("yyyy-MM");
-                var dueDate   = new DateTime(monthCursor.Year, monthCursor.Month, lease.RentDueDay, 0, 0, 0, DateTimeKind.Utc);
-                payments.Add(new Payment
-                {
-                    PortfolioId  = portfolioId,
-                    LeaseId      = lease.Id,
-                    PaymentType  = PaymentType.Rent,
-                    Status       = PaymentStatus.Paid,
-                    Amount       = lease.MonthlyRent,
-                    DueDate      = dueDate,
-                    PaidDate     = dueDate.AddDays(1),
-                    Method       = "Check",
-                    PeriodKey    = periodKey,
-                    CreatedAt    = dueDate.AddDays(-1),
-                    UpdatedAt    = dueDate.AddDays(1)
-                });
-                cnt++;
-                monthCursor = monthCursor.AddMonths(1);
-            }
-        }
-
-        _db.Payments.AddRange(payments);
-        await _db.SaveChangesAsync(ct);
-
-        // ── 7. SecurityDepositHoldings ────────────────────────────────────────────────
-        var demoLeaseTemplate = new DocumentTemplate
-        {
-            PortfolioId = portfolioId,
-            Kind = DocumentTemplateKind.Lease,
-            Status = DocumentTemplateStatus.Active,
-            RenderMode = DocumentTemplateRenderMode.Restyle,
-            Name = "Demo lease template",
-            Description = "Seed-only template backing canonical demo agreements.",
-            DraftHtml = "<p>Demo lease agreement</p>",
-            Version = 1,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        _db.DocumentTemplates.Add(demoLeaseTemplate);
-
-        var securityDepositAccountsSeeded = 0;
-        var canonicalManagementByLegacyLeaseId = new Dictionary<int, LeaseManagement>();
-        foreach (var lease in activeLeasesForPayments.Where(candidate => candidate.SecurityDeposit > 0m))
-        {
-            var effectiveOn = DateOnly.FromDateTime(lease.StartDate);
-            var management = new LeaseManagement
-            {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, PropertyId = lease.PropertyId,
-                UnitId = lease.UnitId, RelationshipNumber = $"DEMO-LM-{lease.Id:D8}",
-                PlannedPossessionAtUtc = lease.MoveInDate ?? lease.StartDate,
-                PossessionGivenAtUtc = lease.MoveInDate ?? lease.StartDate,
-                PossessionAgreementExceptionReason = "Canonical demo relationship seeded from fixture.",
-                PossessionAgreementExceptionAuthorizedByUserId = actorUserId,
-                CreatedAtUtc = lease.CreatedAt, CreatedByUserId = actorUserId,
-                UpdatedAtUtc = now, RowVersion = Guid.NewGuid(),
-            };
-            var account = new TenantAccount
-            {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, LeaseManagement = management,
-                AccountNumber = $"DEMO-TA-{lease.Id:D8}", Currency = currency,
-                OpenedAtUtc = lease.StartDate, CreatedAtUtc = lease.CreatedAt,
-                CreatedByUserId = actorUserId,
-            };
-            var agreement = new LeaseAgreement
-            {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, LeaseManagement = management,
-                VersionNumber = 1, AgreementNumber = $"DEMO-AGR-{lease.Id:D8}-V1",
-                ChangeType = LeaseAgreementChangeType.Initial, TermType = LeaseAgreementTermType.FixedTerm,
-                TermStartOn = effectiveOn, TermEndOn = DateOnly.FromDateTime(lease.EndDate),
-                GoverningFromOn = effectiveOn, BaseRentAmount = lease.MonthlyRent,
-                RentDueDay = checked((short)lease.RentDueDay), SecurityDepositObligation = lease.SecurityDeposit,
-                LateFeeAmount = lease.LateFeeAmount, GracePeriodDays = 0, Currency = currency,
-                TermsSchemaVersion = 1,
-                TermsPayload = JsonSerializer.Serialize(new { source = "demo-seed", legacyLeaseId = lease.Id }),
-                DocumentTemplate = demoLeaseTemplate, DocumentTemplateVersion = 1,
-                CreatedAtUtc = lease.CreatedAt, CreatedByUserId = actorUserId, UpdatedAtUtc = now,
-            };
-            var party = new LeaseManagementParty
-            {
-                PortfolioId = portfolioId, LeaseManagement = management, TenantId = lease.TenantId,
-                Role = LeaseManagementPartyRole.PrimaryTenant, EffectiveFrom = effectiveOn,
-                ChangeReason = "Canonical demo household seeded from lease fixture.",
-                CreatedAtUtc = lease.CreatedAt, CreatedByUserId = actorUserId,
-            };
-            var depositAccount = new SecurityDepositAccount
-            {
-                PortfolioId = portfolioId, TenantAccount = account, OriginatingAgreement = agreement,
-                Currency = currency, CreatedAtUtc = lease.StartDate, CreatedByUserId = actorUserId,
-            };
-            var depositCharge = new TenantLedgerEntry
-            {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, TenantAccount = account,
-                EntryType = TenantLedgerEntryType.DepositCharge, Direction = TenantLedgerDirection.Debit,
-                Amount = lease.SecurityDeposit, Currency = currency, EffectiveOn = effectiveOn, DueOn = effectiveOn,
-                PostedAtUtc = lease.StartDate, Description = "Security deposit due",
-                BusinessKey = $"demo:{lease.Id}:deposit-charge", LeaseAgreement = agreement,
-                CreatedByUserId = actorUserId,
-            };
-            var depositReceipt = new TenantLedgerEntry
-            {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, TenantAccount = account,
-                EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
-                Amount = lease.SecurityDeposit, Currency = currency, EffectiveOn = effectiveOn,
-                PostedAtUtc = lease.StartDate, Description = "Security deposit received",
-                BusinessKey = $"demo:{lease.Id}:deposit-receipt", CreatedByUserId = actorUserId,
-            };
-            var allocation = new TenantLedgerAllocation
-            {
-                PortfolioId = portfolioId, TenantAccount = account, DebitEntry = depositCharge,
-                CreditEntry = depositReceipt, Amount = lease.SecurityDeposit, AllocatedAtUtc = lease.StartDate,
-                BusinessKey = $"demo:{lease.Id}:deposit-allocation", CreatedByUserId = actorUserId,
-            };
-            var depositEntry = new SecurityDepositEntry
-            {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolioId, SecurityDepositAccount = depositAccount,
-                EntryType = SecurityDepositEntryType.Receipt, Direction = SecurityDepositDirection.Increase,
-                Amount = lease.SecurityDeposit, Currency = currency, EffectiveOn = effectiveOn,
-                PostedAtUtc = lease.StartDate, BusinessKey = $"demo:{lease.Id}:deposit-fund",
-                Description = "Security deposit funded", LeaseAgreement = agreement,
-                TenantLedgerEntry = depositReceipt, CreatedByUserId = actorUserId,
-            };
-
-            _db.LeaseManagements.Add(management);
-            canonicalManagementByLegacyLeaseId[lease.Id] = management;
-            _db.TenantAccounts.Add(account);
-            _db.LeaseAgreements.Add(agreement);
-            _db.LeaseManagementParties.Add(party);
-            _db.SecurityDepositAccounts.Add(depositAccount);
-            _db.TenantLedgerEntries.AddRange(depositCharge, depositReceipt);
-            _db.TenantLedgerAllocations.Add(allocation);
-            _db.SecurityDepositEntries.Add(depositEntry);
-            securityDepositAccountsSeeded++;
-        }
-        await _db.SaveChangesAsync(ct);
+        // ── 5. Canonical lease, agreement, account, and ledger graph ──────────────────
+        var leaseSeed = await CanonicalDemoLeaseSeeder.SeedAsync(
+            _db, portfolioId, actorUserId, currency, now, occupiedUnits, vacantUnits, tenants, ct);
+        var activeLeaseManagements = leaseSeed.ActiveManagements;
 
         // ── 8. Expenses (~35) ─────────────────────────────────────────────────────────
         // Spread across properties and categories, varied dates over the past 12 months.
@@ -915,12 +539,12 @@ public class DemoDataSeeder
                 ? propUnits[wd.unitIdx.Value % propUnits.Count]
                 : null;
 
-            // Pick tenant/lease if specified
-            Lease?  lease  = null;
+            // Pick tenant/canonical lease relationship if specified.
+            LeaseManagement? leaseManagement = null;
             Tenant? tenant = null;
-            if (wd.tenantLeaseIdx.HasValue && wd.tenantLeaseIdx.Value < activeLeasesForPayments.Count)
+            if (wd.tenantLeaseIdx.HasValue && wd.tenantLeaseIdx.Value < activeLeaseManagements.Count)
             {
-                lease  = activeLeasesForPayments[wd.tenantLeaseIdx.Value];
+                leaseManagement = activeLeaseManagements[wd.tenantLeaseIdx.Value];
                 tenant = tenants[wd.tenantLeaseIdx.Value];
             }
 
@@ -932,9 +556,7 @@ public class DemoDataSeeder
                 UnitId        = unit?.Id,
                 VendorId      = vendor.Id,
                 TenantId      = tenant?.Id,
-                LeaseManagementId = lease is not null && canonicalManagementByLegacyLeaseId.TryGetValue(lease.Id, out var workOrderManagement)
-                    ? workOrderManagement.Id
-                    : null,
+                LeaseManagementId = leaseManagement?.Id,
                 Title         = wd.title,
                 Description   = wd.desc,
                 Category      = wd.category,
@@ -996,9 +618,9 @@ public class DemoDataSeeder
             var propUnits2 = unitsList.Where(u => u.PropertyId == prop.Id).ToList();
 
             Tenant?  apptTenant = ad.tenantIdx.HasValue ? tenants[ad.tenantIdx.Value] : null;
-            Lease?   apptLease  = null;
-            if (ad.tenantIdx.HasValue && ad.tenantIdx.Value < activeLeasesForPayments.Count)
-                apptLease = activeLeasesForPayments[ad.tenantIdx.Value];
+            LeaseManagement? apptLeaseManagement = null;
+            if (ad.tenantIdx.HasValue && ad.tenantIdx.Value < activeLeaseManagements.Count)
+                apptLeaseManagement = activeLeaseManagements[ad.tenantIdx.Value];
 
             var scheduledStart = now.AddDays(ad.daysOffset).Date.AddHours(10 + i % 4);
             appts.Add(new Appointment
@@ -1007,9 +629,7 @@ public class DemoDataSeeder
                 PropertyId     = prop.Id,
                 UnitId         = propUnits2.Count > 0 ? propUnits2[i % propUnits2.Count].Id : null,
                 TenantId       = apptTenant?.Id,
-                LeaseManagementId = apptLease is not null && canonicalManagementByLegacyLeaseId.TryGetValue(apptLease.Id, out var appointmentManagement)
-                    ? appointmentManagement.Id
-                    : null,
+                LeaseManagementId = apptLeaseManagement?.Id,
                 Title          = ad.title,
                 Type           = ad.type,
                 Status         = ad.status,
@@ -1067,9 +687,9 @@ public class DemoDataSeeder
             var prop = properties[id.propIdx];
             var propUnits3 = unitsList.Where(u => u.PropertyId == prop.Id).ToList();
 
-            Lease? inspLease = null;
-            if (id.tenantIdx.HasValue && id.tenantIdx.Value < activeLeasesForPayments.Count)
-                inspLease = activeLeasesForPayments[id.tenantIdx.Value];
+            LeaseManagement? inspectionLeaseManagement = null;
+            if (id.tenantIdx.HasValue && id.tenantIdx.Value < activeLeaseManagements.Count)
+                inspectionLeaseManagement = activeLeaseManagements[id.tenantIdx.Value];
 
             var scheduled = now.AddDays(id.daysOffset).Date.AddHours(9);
             var template  = TemplateForType(id.type);
@@ -1080,9 +700,7 @@ public class DemoDataSeeder
                 PortfolioId  = portfolioId,
                 PropertyId   = prop.Id,
                 UnitId       = propUnits3.Count > 0 ? propUnits3[i % propUnits3.Count].Id : null,
-                LeaseManagementId = inspLease is not null && canonicalManagementByLegacyLeaseId.TryGetValue(inspLease.Id, out var inspectionManagement)
-                    ? inspectionManagement.Id
-                    : null,
+                LeaseManagementId = inspectionLeaseManagement?.Id,
                 Type         = id.type,
                 Status       = id.status,
                 ScheduledFor = scheduled,
@@ -1126,8 +744,9 @@ public class DemoDataSeeder
         _logger.LogInformation(
             "Demo data seeded for portfolio {PortfolioId}: " +
             "{OwnerEntities} ownerEntities, {Vendors} vendors, {Properties} properties, " +
-            "{Units} units, {Tenants} tenants, {Leases} leases ({Active} active / {Expired} expired), " +
-            "{Payments} payments, {Holdings} security deposit holdings, " +
+            "{Units} units, {Tenants} tenants, {Relationships} lease relationships " +
+            "({Active} current / {Expired} ended), {LedgerEntries} tenant ledger entries, " +
+            "{DepositAccounts} security deposit accounts, " +
             "{Expenses} expenses, {WorkOrders} work orders, {Appointments} appointments, {Inspections} inspections.",
             portfolioId,
             ownerEntities.Count,
@@ -1135,11 +754,11 @@ public class DemoDataSeeder
             properties.Count,
             unitsList.Count,
             tenants.Count,
-            leases.Count,
-            activeLeasesForPayments.Count,
-            expiredLeases.Count,
-            payments.Count,
-            securityDepositAccountsSeeded,
+            leaseSeed.ActiveManagements.Count + leaseSeed.ExpiredManagementCount,
+            leaseSeed.ActiveManagements.Count,
+            leaseSeed.ExpiredManagementCount,
+            leaseSeed.LedgerEntryCount,
+            leaseSeed.SecurityDepositAccountCount,
             expenses.Count,
             woList.Count,
             appts.Count,
