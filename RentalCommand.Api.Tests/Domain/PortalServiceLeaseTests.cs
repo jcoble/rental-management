@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
