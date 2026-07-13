@@ -47,7 +47,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 select new ScanConfirmationTargetWriteResult(
                     existingAgreement.Id,
                     existingAgreement.LeaseManagement!.UnitId,
-                    nameof(LeaseAgreement)))
+                    nameof(LeaseAgreement),
+                    LeaseManagementId: existingAgreement.LeaseManagementId))
                 .SingleOrDefaultAsync(ct);
             if (existing is not null)
                 return existing;
@@ -219,7 +220,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         await attempt.FlushBusinessAsync(ct);
 
         return new ScanConfirmationTargetWriteResult(
-            agreement.Id, home.UnitId, nameof(LeaseAgreement));
+            agreement.Id, home.UnitId, nameof(LeaseAgreement), LeaseManagementId: leaseManagement.Id);
     }
 
     internal static async Task AuthorizeAsync(

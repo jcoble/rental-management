@@ -411,41 +411,103 @@ export interface Tenant {
 	updatedAt: string;
 }
 
-export interface Lease {
-	id: number;
-	portfolioId: number;
+export interface LeaseManagementSummary {
+	leaseManagementId: number;
+	leaseManagementPublicId: string;
+	relationshipNumber: string;
 	propertyId: number;
+	propertyName: string;
 	unitId: number;
-	tenantId: number;
-	tenantIds?: number[];
-	leaseNumber: string;
-	status: LeaseStatus;
-	startDate: string;
-	endDate: string;
-	moveInDate?: string;
-	moveOutDate?: string;
-	monthlyRent: number;
-	securityDeposit: number;
-	lateFeeAmount: number;
-	rentDueDay: number;
-	rentTrackingStartDate?: string | null;
-	notes?: string;
-	tenantName?: string;
-	tenants?: LeaseTenantSummary[];
-	propertyName?: string;
-	unitNumber?: string;
-	hasScan?: boolean;
-	scanIsImage?: boolean;
-	createdAt: string;
-	updatedAt: string;
+	unitNumber: string;
+	lifecycle: string;
+	leaseAgreementId?: number | null;
+	agreementNumber?: string | null;
+	agreementStatus?: string | null;
+	termStartOn?: string | null;
+	termEndOn?: string | null;
+	baseRentAmount?: number | null;
+	upcomingLeaseAgreementId?: number | null;
+	tenantAccountId?: number | null;
+	primaryTenantId?: number | null;
+	primaryTenantName?: string | null;
+	currentPartyCount: number;
+	currentResidentCount: number;
+	currentFinanciallyResponsiblePartyCount: number;
+	hasReconciliationException: boolean;
+	plannedPossessionAtUtc?: string | null;
+	possessionGivenAtUtc?: string | null;
+	plannedMoveOutAtUtc?: string | null;
+	possessionReturnedAtUtc?: string | null;
+	accountClosedAtUtc?: string | null;
+	canceledAtUtc?: string | null;
+	endingDisposition: string;
+	noticeGivenAtUtc?: string | null;
+	cancellationReasonCode?: string | null;
+	cancellationNote?: string | null;
+	updatedAtUtc: string;
 }
 
-export interface LeaseTenantSummary {
-	id: number;
-	name: string;
+export interface LeaseManagementParty {
+	leaseManagementPartyId: number;
+	leaseManagementId: number;
+	tenantId: number;
+	tenantName: string;
 	email?: string;
 	phone?: string;
-	isPrimary: boolean;
+	role: 'PrimaryTenant' | 'CoTenant' | 'Guarantor' | 'Occupant' | string;
+	effectiveFrom: string;
+	effectiveThrough?: string | null;
+	guarantorLegalNoticeEligible: boolean;
+}
+
+export interface LeaseManagementDetail {
+	summary: LeaseManagementSummary;
+	endingDisposition: string;
+	noticeGivenAtUtc?: string | null;
+	cancellationReasonCode?: string | null;
+	cancellationNote?: string | null;
+	parties: LeaseManagementParty[];
+	agreementCount: number;
+	addendumCount: number;
+	legalArtifactCount: number;
+}
+
+export interface LegalDocumentArtifactSummary {
+	legalDocumentArtifactId: number;
+	publicId: string;
+	artifactKind: string;
+	fileName: string;
+	contentType: string;
+	byteLength: number;
+	contentSha256: string;
+	createdAtUtc: string;
+}
+
+export interface LeaseAgreementSummary {
+	leaseManagementId: number;
+	leaseAgreementId: number;
+	publicId: string;
+	versionNumber: number;
+	agreementNumber: string;
+	changeType: string;
+	replacesAgreementId?: number | null;
+	renewsAgreementId?: number | null;
+	termType: string;
+	termStartOn: string;
+	termEndOn?: string | null;
+	governingFromOn: string;
+	supersededEffectiveOn?: string | null;
+	baseRentAmount: number;
+	agreementStatus: string;
+	isGoverning: boolean;
+	signerCount: number;
+	issuedArtifact?: LegalDocumentArtifactSummary | null;
+	executedArtifact?: LegalDocumentArtifactSummary | null;
+	issuedAtUtc?: string | null;
+	fullyExecutedAtUtc?: string | null;
+	voidedAtUtc?: string | null;
+	createdAtUtc: string;
+	updatedAtUtc: string;
 }
 
 /** One immutable receipt credit posted to a continuous tenant account. */
@@ -1404,12 +1466,7 @@ export interface AuthUser {
 	lastLoginAt?: string;
 }
 
-export type SecurityDepositStatus =
-	| 'NotFunded'
-	| 'Held'
-	| 'PartiallyReturned'
-	| 'Returned'
-	| 'Withheld';
+export type SecurityDepositStatus = 'NotFunded' | 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
 
 /** Canonical security-deposit subledger account for one continuous tenant account. */
 export interface SecurityDepositAccount {

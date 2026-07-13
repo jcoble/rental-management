@@ -28,7 +28,7 @@
 		/** Keep the standalone scan page reloadable/bookmarkable while avoiding URL churn in embedded onboarding. */
 		syncDraftToUrl?: boolean;
 		/** Called on a SUCCESSFUL scan.confirm. The parent decides where to navigate. */
-		oncomplete: (result: { leaseId?: number | null; propertyId?: number | null; unitId?: number | null; tenantId?: number | null }) => void;
+		oncomplete: (result: { leaseManagementId?: number | null; agreementId?: number | null; propertyId?: number | null; unitId?: number | null; tenantId?: number | null }) => void;
 		/** Called when an embedded parent wants to close the capture flow without saving. */
 		oncancel?: () => void;
 	}
@@ -393,7 +393,7 @@
 			// A linked existing unit has an id in scope; a freshly created unit (unitChoice === CREATE)
 			// does not, so we hand the parent null and it falls back to /leases/{id}.
 			const unitId = unitChoice !== CREATE ? Number(unitChoice) : null;
-			oncomplete({ leaseId: res.agreementId, propertyId: null, unitId, tenantId: null });
+			oncomplete({ leaseManagementId: res.leaseManagementId, agreementId: res.agreementId, propertyId: null, unitId, tenantId: null });
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not create the rental. Check the details and try again.'))
 	}));

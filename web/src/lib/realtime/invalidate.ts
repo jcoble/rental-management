@@ -2,7 +2,7 @@
  * Bridge SignalR data-update events to TanStack Query cache invalidation.
  *
  * The backend broadcasts `EntityUpdated` / `EntityDeleted` keyed by an
- * `entityType` string (Property, Tenant, Lease, ...). This maps each type to
+ * `entityType` string (Property, Tenant, LeaseManagement, ...). This maps each type to
  * the query-key prefixes that depend on it and invalidates them so the UI
  * refetches. On delete we also `removeQueries` for the detail key of the gone
  * entity to drop its stale cache entry.
@@ -29,9 +29,7 @@ export { invalidateQueriesForDataUpdate } from './invalidate-keys';
  * owns the connection lifecycle; this only listens.
  */
 export function useInvalidateOnSignalR(queryClient: QueryClient): () => void {
-	return signalRService.subscribe(
-		(event: DataUpdateEvent, payload: EntityUpdatePayload | EntityDeletePayload) => {
-			invalidateQueriesForDataUpdate(queryClient, event, payload);
-		}
-	);
+	return signalRService.subscribe((event: DataUpdateEvent, payload: EntityUpdatePayload | EntityDeletePayload) => {
+		invalidateQueriesForDataUpdate(queryClient, event, payload);
+	});
 }

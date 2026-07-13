@@ -2,19 +2,12 @@ import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 
-const INLINE_SAFE = new Set([
-	'image/jpeg',
-	'image/png',
-	'image/webp',
-	'image/gif',
-	'image/heic',
-	'application/pdf'
-]);
+const INLINE_SAFE = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'application/pdf']);
 
 /**
  * Same-origin, cookie-authenticated proxy for a specific StoredFile row.
  * Unit document lists can contain several files attached to the same lease/work-order,
- * so record-level proxies such as /lease-file/{leaseId} cannot identify the selected file.
+ * so a record-specific proxy cannot identify the selected stored file.
  */
 export const GET: RequestHandler = async ({ params, locals, url }) => {
 	const token = locals.accessToken;

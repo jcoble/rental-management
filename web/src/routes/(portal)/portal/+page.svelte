@@ -106,7 +106,7 @@
 	);
 	const upcomingAppointments = $derived(appointments);
 	const nextRentDays = $derived(nextPayment ? daysUntil(nextPayment.dueDate) : null);
-	const activeLease = $derived(leases.find((l) => l.status === 'Active') ?? leases[0] ?? null);
+	const activeLease = $derived(leases.find((relationship) => relationship.lifecycle === 'Occupied') ?? leases[0] ?? null);
 
 	const APPOINTMENT_TYPE_LABELS: Record<string, string> = {
 		Showing: 'Showing',
@@ -326,11 +326,11 @@
 				</div>
 				{#if activeLease}
 					<div class="space-y-3 text-sm">
-						<p class="font-medium">{activeLease.leaseNumber}</p>
-						<p class="text-muted-foreground">{activeLease.propertyName ?? activeLease.property} {activeLease.unitNumber ? `Unit ${activeLease.unitNumber}` : ''}</p>
+						<p class="font-medium">{activeLease.agreement?.agreementNumber ?? activeLease.relationshipNumber}</p>
+						<p class="text-muted-foreground">{activeLease.propertyName} {activeLease.unitNumber ? `Unit ${activeLease.unitNumber}` : ''}</p>
 						<div class="grid grid-cols-2 gap-3">
-							<div><p class="text-xs text-muted-foreground">Rent</p><p>{money(activeLease.monthlyRent)}</p></div>
-							<div><p class="text-xs text-muted-foreground">Ends</p><p>{date(activeLease.endDate)}</p></div>
+							<div><p class="text-xs text-muted-foreground">Rent</p><p>{money(activeLease.agreement?.baseRentAmount)}</p></div>
+							<div><p class="text-xs text-muted-foreground">Ends</p><p>{activeLease.agreement?.termEndOn ? date(activeLease.agreement.termEndOn) : 'Month-to-month'}</p></div>
 						</div>
 					</div>
 				{:else}

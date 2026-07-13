@@ -20,7 +20,7 @@ describe('invalidateQueriesAfterScanConfirm', () => {
 
 		assert.deepEqual(invalidated, [
 			['scans'],
-			['leases'],
+			['lease-managements'],
 			['properties'],
 			['tenants'],
 			['units'],

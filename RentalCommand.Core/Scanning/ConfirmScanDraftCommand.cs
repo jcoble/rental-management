@@ -355,14 +355,16 @@ public sealed record ConfirmScanDraftResult(
     int? TargetEntityId,
     int? UnitId = null,
     string? Error = null,
-    long? LedgerEntryId = null) : IAtomicResultData;
+    long? LedgerEntryId = null,
+    int? LeaseManagementId = null) : IAtomicResultData;
 
 /// <summary>Internal writer result; the handler turns it into the stable receipt result contract.</summary>
 public sealed record ScanConfirmationTargetWriteResult(
     int EntityId,
     int? UnitId = null,
     string? CanonicalEntityType = null,
-    long? LedgerEntryId = null);
+    long? LedgerEntryId = null,
+    int? LeaseManagementId = null);
 
 /// <summary>
 /// Transaction-only target seam. Implementations must be sealed, data/persistence-only atomic

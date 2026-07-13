@@ -48,8 +48,8 @@
 				return 'workOrder';
 			case 'Payment':
 				return 'payment';
-			case 'Lease':
-				return 'lease';
+			case 'LeaseManagement':
+				return 'leaseManagement';
 			case 'Expense':
 				return 'expense';
 			case 'RentalApplication':

@@ -91,6 +91,7 @@ export interface ScanConfirmResponse {
 	expenseId?: number | null;
 	receiptId?: number | null;
 	workOrderId?: number | null;
+	leaseManagementId?: number | null;
 	agreementId?: number | null;
 	applicationId?: number | null;
 	loanId?: number | null;
@@ -176,9 +177,7 @@ export const scan = {
 		api.get<ScanDraftResponse[]>(`/scans${status ? `?status=${encodeURIComponent(status)}` : ''}`),
 
 	listPage: (status?: string, params?: ListParams): Promise<ScanDraftListResponse> =>
-		api.get<ScanDraftListResponse>(
-			`/scans/page${buildListQuery(params, { status: status || undefined })}`
-		),
+		api.get<ScanDraftListResponse>(`/scans/page${buildListQuery(params, { status: status || undefined })}`),
 
 	get: (id: number): Promise<ScanDraftResponse> => api.get<ScanDraftResponse>(`/scans/${id}`),
 
@@ -215,8 +214,7 @@ export const scan = {
 		return response;
 	},
 
-	retry: (id: number): Promise<unknown> =>
-		api.post(`/scans/${id}/retry`, {}),
+	retry: (id: number): Promise<unknown> => api.post(`/scans/${id}/retry`, {}),
 
 	createVoiceDraft: (audio: Blob, mimeType?: string): Promise<ScanDraftResponse> => {
 		const fd = new FormData();
@@ -227,16 +225,12 @@ export const scan = {
 		return api.upload<ScanDraftResponse>('/voice/drafts', fd);
 	},
 
-	reject: (id: number, reason: string): Promise<unknown> =>
-		api.post(`/scans/${id}/reject`, { reason }),
+	reject: (id: number, reason: string): Promise<unknown> => api.post(`/scans/${id}/reject`, { reason }),
 
 	// ---- Bulk batch helpers ----
 
 	/** Upload many files as one batch of scan drafts (defaults to LeaseAgreement). */
-	uploadBatch: (
-		files: File[],
-		options: UploadBatchOptions = {}
-	): Promise<ScanBatchCreatedResponse> => {
+	uploadBatch: (files: File[], options: UploadBatchOptions = {}): Promise<ScanBatchCreatedResponse> => {
 		const operationId = scanBatchUploadOperationIds.get(files) ?? crypto.randomUUID();
 		scanBatchUploadOperationIds.set(files, operationId);
 		const fd = new FormData();
@@ -252,9 +246,7 @@ export const scan = {
 		});
 	},
 
-	listBatches: (): Promise<ScanBatchSummary[]> =>
-		api.get<ScanBatchSummary[]>('/scans/batches'),
+	listBatches: (): Promise<ScanBatchSummary[]> => api.get<ScanBatchSummary[]>('/scans/batches'),
 
-	getBatch: (id: number): Promise<ScanBatchDetail> =>
-		api.get<ScanBatchDetail>(`/scans/batches/${id}`)
+	getBatch: (id: number): Promise<ScanBatchDetail> => api.get<ScanBatchDetail>(`/scans/batches/${id}`)
 };
