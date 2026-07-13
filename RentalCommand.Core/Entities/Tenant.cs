@@ -20,8 +20,6 @@ public class Tenant : IAuditable, IPortfolioScoped
     public DateTime? DeletedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
-    public List<Lease> Leases { get; set; } = [];
-    public List<LeaseTenant> LeaseTenants { get; set; } = [];
     public List<LeaseManagementParty> LeaseManagementParties { get; set; } = [];
     public List<LeaseAgreementSigner> AgreementSignerSnapshots { get; set; } = [];
     public List<LeaseAddendumSigner> AddendumSignerSnapshots { get; set; } = [];

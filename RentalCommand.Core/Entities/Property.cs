@@ -53,7 +53,6 @@ public class Property : IAuditable, IPortfolioScoped
     public Owner? Owner { get; set; }
     public OwnerEntity? OwnerEntity { get; set; }
     public List<Unit> Units { get; set; } = [];
-    public List<Lease> Leases { get; set; } = [];
     public List<LeaseManagement> LeaseManagements { get; set; } = [];
     public List<UnitOperationalPeriod> UnitOperationalPeriods { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];

@@ -42,7 +42,7 @@ public class ScheduleECategoryTotal
 /// <summary>Rent/payment collection status rolled up for a portfolio.</summary>
 public class PaymentRollup
 {
-    /// <summary>Sum of payments marked <see cref="PaymentStatus.Paid"/>.</summary>
+    /// <summary>Sum of posted tenant-account payment receipts.</summary>
     public decimal Collected { get; set; }
 
     /// <summary>Sum of payments still owed (Scheduled, Partial, or Late, due now or in the future).</summary>

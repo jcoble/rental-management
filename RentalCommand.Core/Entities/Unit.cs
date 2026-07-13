@@ -21,7 +21,6 @@ public class Unit : IPortfolioScoped
     public DateTime? DeletedAt { get; set; }
 
     public Property? Property { get; set; }
-    public List<Lease> Leases { get; set; } = [];
     public List<RentalListing> RentalListings { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
