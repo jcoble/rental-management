@@ -221,10 +221,6 @@ public class UnitDashboardService : IUnitDashboardService
             ? Math.Max(0, end.DayNumber - unitRow.BusinessDate.DayNumber)
             : null;
 
-        var tenantName = currentTenants.Count == 0
-            ? null
-            : string.Join(", ", currentTenants.Select(t => t.Name));
-
         return new UnitDashboardResponse
         {
             Unit = unitRow.Unit,
@@ -238,7 +234,7 @@ public class UnitDashboardService : IUnitDashboardService
                 OpenWorkOrderCount = openWorkOrderCount,
                 LeaseEndsInDays = leaseEndsInDays,
                 DocsNeedingReviewCount = docsCount,
-                CurrentTenantName = tenantName,
+                CurrentTenantName = unitRow.CurrentPrimaryTenantName,
             },
             CurrentLease = unitRow.AgreementId is not int agreementId ? null : new UnitLeaseSummary
             {
@@ -336,6 +332,7 @@ public class UnitDashboardService : IUnitDashboardService
             Lifecycle = lifecycle.Lifecycle,
             TenantAccountId = lifecycle.TenantAccountId,
             CurrentPrimaryTenantId = lifecycle.CurrentPrimaryTenantId,
+            CurrentPrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
             AgreementId = agreement == null ? null : agreement.Id,
             AgreementNumber = agreement == null ? null : agreement.AgreementNumber,
             AgreementStatus = agreementStatus.AgreementStatus,
@@ -687,6 +684,7 @@ public class UnitDashboardService : IUnitDashboardService
         public string? Lifecycle { get; init; }
         public int? TenantAccountId { get; init; }
         public int? CurrentPrimaryTenantId { get; init; }
+        public string? CurrentPrimaryTenantName { get; init; }
         public int? AgreementId { get; init; }
         public string? AgreementNumber { get; init; }
         public string? AgreementStatus { get; init; }
