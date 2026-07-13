@@ -688,7 +688,7 @@ public class ReportsServiceTests : IDisposable
         property.InServiceDate = D(2020, 1, 1);
         var unit = SeedUnit("1", property.Id);
         var lease = SeedLease(property, unit, SeedTenant("Ann", "Acre"), rent: 1_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), );
+            start: D(2025, 1, 1), end: D(2026, 1, 1));
         _db.SaveChanges();
 
         // 12,000 rent collected in 2025.
@@ -733,9 +733,9 @@ public class ReportsServiceTests : IDisposable
         var maple = SeedProperty("Maple");
         var oak = SeedProperty("Oak");
         var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), );
+            start: D(2025, 1, 1), end: D(2026, 1, 1));
         var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), );
+            start: D(2025, 1, 1), end: D(2026, 1, 1));
 
         SeedPayment(mapleLease, 1_000m, dueDate: D(2025, 1, 1), paidInFull: true, paidDate: D(2025, 1, 5));
         SeedPayment(oakLease, 2_000m, dueDate: D(2025, 1, 1), paidInFull: true, paidDate: D(2025, 1, 5));
@@ -762,7 +762,7 @@ public class ReportsServiceTests : IDisposable
         var now = DateTime.UtcNow;
         var maple = SeedProperty("Maple");
         var behind = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), );
+            start: D(2025, 1, 1), end: D(2026, 1, 1));
         var current = SeedLease(maple, SeedUnit("2", maple.Id), SeedTenant("Bob", "Birch"), rent: 900m,
             start: D(2025, 1, 1), end: D(2026, 1, 1), noticeGiven: true);
 
