@@ -184,7 +184,7 @@ public class UnitDashboardServiceTests : IDisposable
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Turnover.ToString());
+        dashboard!.LifecycleStage.Should().Be("Turnover");
         dashboard.Turnover.Status.Should().Be("InProgress");
         dashboard.Turnover.TotalTaskCount.Should().Be(2);
         dashboard.Turnover.OpenTaskCount.Should().Be(1);
@@ -210,7 +210,7 @@ public class UnitDashboardServiceTests : IDisposable
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Ready.ToString());
+        dashboard!.LifecycleStage.Should().Be("Ready");
         dashboard.NextBestAction.Label.Should().Be("List this unit");
         dashboard.NextBestAction.Href.Should().Be($"/units/{unit.Id}?tab=listing");
     }
@@ -225,7 +225,7 @@ public class UnitDashboardServiceTests : IDisposable
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
+        dashboard!.LifecycleStage.Should().Be("Renewal");
         dashboard.NextBestAction.Label.Should().StartWith("Prepare renewal");
         dashboard.NextBestAction.Href.Should()
             .Be($"/tenants/{graph.Tenant.Id}?action=create-notice&noticeType=lease-renewal-offer");
@@ -241,7 +241,7 @@ public class UnitDashboardServiceTests : IDisposable
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.MoveIn.ToString());
+        dashboard!.LifecycleStage.Should().Be("MoveIn");
         dashboard.NextBestAction.Label.Should().Be("Confirm possession / collect deposit");
         dashboard.NextBestAction.Href.Should()
             .Be($"/units/{graph.Unit.Id}?tab=lease&action=confirm-move-in");
@@ -257,7 +257,7 @@ public class UnitDashboardServiceTests : IDisposable
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Active.ToString());
+        dashboard!.LifecycleStage.Should().Be("Active");
         dashboard.NextBestAction.Label.Should().Be("Rent on track");
         dashboard.Header.CurrentTenantName.Should().Be("Morgan Movein");
     }
