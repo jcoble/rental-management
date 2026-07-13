@@ -293,7 +293,7 @@ public class DailyBriefingServiceTests : IDisposable
             TermEndOn = endOn,
             GoverningFromOn = startOn,
             BaseRentAmount = 1_200m,
-            RentDueDay = today.Day,
+            RentDueDay = checked((short)today.Day),
             SecurityDepositObligation = 1_200m,
             LateFeeAmount = 50m,
             GracePeriodDays = 5,
