@@ -8,6 +8,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
@@ -98,6 +99,14 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
                 assignments.Count(assignment =>
                     assignment.WorkspaceMembershipId == row.membership.Id &&
                     assignment.PortfolioId == portfolioId),
+                string.Join(", ", assignments
+                    .Where(assignment =>
+                        assignment.WorkspaceMembershipId == row.membership.Id &&
+                        assignment.PortfolioId == portfolioId &&
+                        assignment.Status == MembershipRoleAssignmentStatus.Active)
+                    .OrderBy(assignment => assignment.RoleProfile!.DisplayName)
+                    .ThenBy(assignment => assignment.Id)
+                    .Select(assignment => assignment.RoleProfile!.DisplayName)),
                 row.context.CreatedAtUtc))
             .ToListAsync(ct);
         return Ok(new TeamMemberPageDto(items, total, query.NormalizedSkip, query.NormalizedTake));
