@@ -19,40 +19,76 @@
 	const initial = page.url.searchParams;
 	let search = $state(readGridParam(initial, 'q'));
 	let lifecycle = $state(readGridParam(initial, 'lifecycle'));
-	let gridSort = $state(readGridParam(initial, 'sort', '-updatedAtUtc'));
+	let gridSort = $state(readGridParam(initial, 'sort') || '-updatedAtUtc');
 	let gridPage = $state(readGridParam(initial, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
 
-	$effect(() => syncGridUrl({ q: search, lifecycle, sort: gridSort, page: gridPage }, { page: 1 }));
+	$effect(() => {
+		syncGridUrl(
+			{ q: search, lifecycle, sort: gridSort, page: gridPage },
+			{ sort: '-updatedAtUtc', page: 1 }
+		);
+	});
 
 	const relationshipsQuery = createQuery(() => ({
 		queryKey: ['lease-managements', 'page', debouncedSearch.value, lifecycle, gridSort, gridPage],
-		queryFn: () => leaseManagements.listPage({
-			search: debouncedSearch.value || undefined,
-			lifecycle: lifecycle || undefined,
-			sort: gridSort || undefined,
-			skip: (gridPage - 1) * PAGE_SIZE,
-			take: PAGE_SIZE
-		})
+		queryFn: () =>
+			leaseManagements.listPage({
+				search: debouncedSearch.value || undefined,
+				lifecycle: lifecycle || undefined,
+				sort: gridSort || undefined,
+				skip: (gridPage - 1) * PAGE_SIZE,
+				take: PAGE_SIZE
+			})
 	}));
 
 	const columns: ColumnDef<LeaseManagementSummary>[] = [
-		{ key: 'primaryTenantName', title: 'Household', accessor: (item) => item.primaryTenantName ?? 'No primary tenant', mobileRole: 'title' },
-		{ key: 'propertyName', title: 'Rental', accessor: (item) => `${item.propertyName}${item.unitNumber ? ` · ${item.unitNumber}` : ''}`, mobileRole: 'subtitle' },
-		{ key: 'lifecycle', title: 'Relationship', mobileRole: 'badge' },
-		{ key: 'agreementStatus', title: 'Agreement', accessor: (item) => item.agreementStatus ?? 'No agreement' },
+		{
+			key: 'tenantName',
+			title: 'Household',
+			accessor: (item) => item.primaryTenantName ?? 'No primary tenant',
+			sortable: true,
+			mobileRole: 'title'
+		},
+		{
+			key: 'propertyName',
+			title: 'Rental',
+			accessor: (item) => `${item.propertyName}${item.unitNumber ? ` · ${item.unitNumber}` : ''}`,
+			sortable: true,
+			mobileRole: 'subtitle'
+		},
+		{
+			key: 'lifecycle',
+			title: 'Relationship',
+			sortable: true,
+			mobileRole: 'badge'
+		},
+		{
+			key: 'agreementStatus',
+			title: 'Agreement',
+			accessor: (item) => item.agreementStatus ?? 'No agreement'
+		},
 		{ key: 'termEndOn', title: 'Term ends', format: 'date' },
-		{ key: 'baseRentAmount', title: 'Base rent', format: 'currency', mobileRole: 'metric' }
+		{
+			key: 'rent',
+			title: 'Base rent',
+			accessor: (item) => item.baseRentAmount,
+			format: 'currency',
+			sortable: true,
+			mobileRole: 'metric'
+		}
 	];
 </script>
 
 <div class="space-y-6">
 	<PageHeader
 		title="Leases"
-		subtitle="Find a tenant relationship, its governing agreement, upcoming agreement, and account context."
+		description="Find a tenant relationship, its governing agreement, upcoming agreement, and account context."
 	>
 		{#snippet actions()}
-			<Button href="/scan" variant="outline" class="gap-2"><ScanLine class="h-4 w-4" /> Import agreement</Button>
+			<Button href="/scan" variant="outline" class="gap-2"
+				><ScanLine class="h-4 w-4" /> Import agreement</Button
+			>
 			<Button href="/applications" class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button>
 		{/snippet}
 	</PageHeader>
@@ -71,13 +107,20 @@
 		totalCount={relationshipsQuery.data?.totalCount ?? 0}
 		sort={gridSort}
 		onPageChange={(next) => (gridPage = next)}
-		onSortChange={(next) => { gridSort = next ?? ''; gridPage = 1; }}
+		onSortChange={(next) => {
+			gridSort = next ?? '';
+			gridPage = 1;
+		}}
 	>
 		{#snippet toolbar()}
 			<div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
-				<SearchInput bind:value={search} placeholder="Search household, rental, or agreement…" class="sm:max-w-md" />
+				<div class="w-full sm:max-w-md">
+					<SearchInput bind:value={search} placeholder="Search household, rental, or agreement…" />
+				</div>
 				<Select.Root type="single" bind:value={lifecycle} onValueChange={() => (gridPage = 1)}>
-					<Select.Trigger class="w-full sm:w-52"><Select.Value placeholder="All relationships" /></Select.Trigger>
+					<Select.Trigger class="w-full sm:w-52"
+						><Select.Value placeholder="All relationships" /></Select.Trigger
+					>
 					<Select.Content>
 						<Select.Item value="">All relationships</Select.Item>
 						<Select.Item value="Planned">Planned</Select.Item>
