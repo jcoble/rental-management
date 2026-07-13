@@ -154,7 +154,7 @@
 				placeholder="Search by name or email"
 				value={search}
 				oninput={(event) => {
-					search = event.currentTarget.value;
+					search = (event.currentTarget as HTMLInputElement).value;
 					skip = 0;
 				}}
 			/>
