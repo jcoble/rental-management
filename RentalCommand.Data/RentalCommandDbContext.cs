@@ -51,8 +51,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ListingPublication> ListingPublications => Set<ListingPublication>();
     public DbSet<ExternalListingSignal> ExternalListingSignals => Set<ExternalListingSignal>();
     public DbSet<Tenant> Tenants => Set<Tenant>();
-    public DbSet<Lease> Leases => Set<Lease>();
-    public DbSet<LeaseTenant> LeaseTenants => Set<LeaseTenant>();
     public DbSet<LeaseManagement> LeaseManagements => Set<LeaseManagement>();
     public DbSet<LeaseManagementParty> LeaseManagementParties => Set<LeaseManagementParty>();
     public DbSet<TenantUserAccess> TenantUserAccesses => Set<TenantUserAccess>();
@@ -92,7 +90,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<SecurityDepositEntry> SecurityDepositEntries => Set<SecurityDepositEntry>();
     public DbSet<DocumentTemplate> DocumentTemplates => Set<DocumentTemplate>();
     public DbSet<DocumentTemplateField> DocumentTemplateFields => Set<DocumentTemplateField>();
-    public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<ExpenseLineItem> ExpenseLineItems => Set<ExpenseLineItem>();
     public DbSet<CapitalAsset> CapitalAssets => Set<CapitalAsset>();
@@ -171,12 +168,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ScanDraft> ScanDrafts => Set<ScanDraft>();
     public DbSet<ScanBatch> ScanBatches => Set<ScanBatch>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
-    public DbSet<SecurityDepositHolding> SecurityDepositHoldings => Set<SecurityDepositHolding>();
-
-    // Stripe payment groundwork
-    public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
     public DbSet<ProviderInboxEvent> ProviderInboxEvents => Set<ProviderInboxEvent>();
-    public DbSet<AutopayEnrollment> AutopayEnrollments => Set<AutopayEnrollment>();
 
     // Mortgages / debt service + recurring costs (true cash-flow + year-end picture)
     public DbSet<Loan> Loans => Set<Loan>();
@@ -1475,141 +1467,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<Lease>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.LeaseNumber).IsRequired().HasMaxLength(100);
-            entity.Property(e => e.MonthlyRent).HasPrecision(18, 2);
-            entity.Property(e => e.SecurityDeposit).HasPrecision(18, 2);
-            entity.Property(e => e.LateFeeAmount).HasPrecision(18, 2);
-            entity.Property(e => e.Notes).HasMaxLength(2000);
-            entity.Property(e => e.Status).HasConversion<int>();
-            // E-sign workflow state. Status stored as int to match Lease.Status; the envelope id is
-            // indexed because the anonymous webhook resolves the lease by it.
-            entity.Property(e => e.EsignStatus).HasConversion<int>();
-            entity.Property(e => e.EsignEnvelopeId).HasMaxLength(200);
-            // Full scan-extraction superset for leases imported from a scanned PDF (Postgres jsonb).
-            entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.PropertyId);
-            entity.HasIndex(e => e.UnitId);
-            entity.HasIndex(e => e.TenantId);
-            entity.HasIndex(e => e.Status);
-            entity.HasIndex(e => e.EsignEnvelopeId);
-            entity.HasIndex(e => e.DocumentTemplateId);
-            // #6 Lease-expiry sweep (LeaseExpiryReminderService, CROSS-portfolio): WHERE Status=Active
-            // AND ExpiryReminderSentAt IS NULL AND EndDate >= today. A partial index over the unsent rows,
-            // keyed by (Status, EndDate), matches the predicate without a full scan and without a leading
-            // PortfolioId the cross-portfolio sweep doesn't filter on.
-            entity.HasIndex(e => new { e.Status, e.EndDate })
-                  .HasDatabaseName("IX_Leases_ExpirySweep")
-                  .HasFilter("\"ExpiryReminderSentAt\" IS NULL");
-            entity.HasQueryFilter(e => e.DeletedAt == null);
-            // StartDate must precede EndDate, and RentDueDay must be a valid day of month.
-            entity.ToTable(t =>
-            {
-                t.HasCheckConstraint("CK_Lease_StartBeforeEnd", "\"StartDate\" < \"EndDate\"");
-                t.HasCheckConstraint("CK_Lease_RentDueDay", "\"RentDueDay\" >= 1 AND \"RentDueDay\" <= 31");
-            });
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.Leases)
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Property)
-                .WithMany(p => p.Leases)
-                .HasForeignKey(e => e.PropertyId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Unit)
-                .WithMany(u => u.Leases)
-                .HasForeignKey(e => e.UnitId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Tenant)
-                .WithMany(t => t.Leases)
-                .HasForeignKey(e => e.TenantId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.DocumentTemplate)
-                .WithMany()
-                .HasForeignKey(e => e.DocumentTemplateId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
-
-        modelBuilder.Entity<LeaseTenant>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.LeaseId);
-            entity.HasIndex(e => e.TenantId);
-            entity.HasIndex(e => new { e.LeaseId, e.TenantId }).IsUnique();
-            entity.HasQueryFilter(e => e.Lease!.DeletedAt == null);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.LeaseTenants)
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
-                .WithMany(l => l.LeaseTenants)
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Tenant)
-                .WithMany(t => t.LeaseTenants)
-                .HasForeignKey(e => e.TenantId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<Payment>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Amount).HasPrecision(18, 2);
-            entity.Property(e => e.AmountPaid).HasPrecision(18, 2);
-            entity.Property(e => e.Method).HasMaxLength(100);
-            entity.Property(e => e.ExternalReference).HasMaxLength(200);
-            entity.Property(e => e.Notes).HasMaxLength(2000);
-            entity.Property(e => e.PaymentType).HasConversion<int>();
-            entity.Property(e => e.Status).HasConversion<int>();
-            entity.Property(p => p.PeriodKey).HasMaxLength(7);
-            // Promoted scan-check fields + full extraction superset (Postgres jsonb).
-            entity.Property(e => e.PayerName).HasMaxLength(200);
-            entity.Property(e => e.CheckNumber).HasMaxLength(100);
-            entity.Property(e => e.BankName).HasMaxLength(200);
-            entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
-            // Idempotency: at most one auto-generated payment per (lease, type, period). Manual payments
-            // (PeriodKey == null) are excluded by the filter, so they never collide.
-            entity.HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
-                  .IsUnique()
-                  .HasFilter("\"PeriodKey\" IS NOT NULL");
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.LeaseId);
-            entity.HasIndex(e => e.Status);
-            // LateFee daily sweep (LateFeeService.AssessAsync) scans ALL portfolios:
-            // WHERE PaymentType = Rent AND PeriodKey IS NOT NULL AND Status IN (Scheduled/Late/Partial)
-            // AND DueDate < today. None of the single-column indexes above cover that, so it degraded
-            // to a sequential scan of the unbounded Payments table. This composite, filtered to the
-            // auto-generated rent rows (PeriodKey IS NOT NULL), covers the predicate.
-            entity.HasIndex(e => new { e.PaymentType, e.Status, e.DueDate })
-                  .HasDatabaseName("IX_Payments_LateFeeSweep")
-                  .HasFilter("\"PeriodKey\" IS NOT NULL");
-            // #1 Collected-MTD, cash-flow/GL/Schedule-E income, owner statements, recent-payments — all
-            // bucket by PaidDate within a portfolio, and there was no PaidDate index. Highest-value add;
-            // also powers the grid PaidDate date-range filter.
-            entity.HasIndex(e => new { e.PortfolioId, e.PaidDate })
-                  .HasDatabaseName("IX_Payments_Portfolio_PaidDate");
-            // #4 Overdue / receivables (Dashboard, PortfolioQa, PaymentAttention): WHERE PortfolioId
-            // AND Status IN (...) AND DueDate < today.
-            entity.HasIndex(e => new { e.PortfolioId, e.Status, e.DueDate })
-                  .HasDatabaseName("IX_Payments_Portfolio_Status_DueDate");
-            // #5 Paged lease ledger (GetLedgerAsync): WHERE PortfolioId AND LeaseId, ORDER BY
-            // COALESCE(PaidDate, DueDate) DESC, Id DESC. Covering so the page is an index range scan.
-            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.PaidDate, e.DueDate, e.Id })
-                  .HasDatabaseName("IX_Payments_Portfolio_Lease_LedgerDates");
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.Payments)
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
-                .WithMany(l => l.Payments)
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
-
         modelBuilder.Entity<Expense>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -2309,57 +2166,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<SecurityDepositHolding>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasConversion<string>();
-            entity.Property(e => e.Amount).HasPrecision(18, 2);
-            entity.Property(e => e.ReturnedAmount).HasPrecision(18, 2);
-            entity.Property(e => e.DeductionsTotal).HasPrecision(18, 2);
-            entity.Property(e => e.DeductionsJson).IsRequired().HasColumnType("jsonb");
-            entity.Property(e => e.Notes).HasMaxLength(2000);
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.LeaseId);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany()
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
-                .WithMany()
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        // --- Stripe payment groundwork ---
-
-        modelBuilder.Entity<PaymentTransaction>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Amount).HasPrecision(18, 2);
-            entity.Property(e => e.Currency).IsRequired().HasMaxLength(10);
-            entity.Property(e => e.Provider).IsRequired().HasMaxLength(50);
-            entity.Property(e => e.ProviderPaymentIntentId).HasMaxLength(200);
-            entity.Property(e => e.IdempotencyKey).HasMaxLength(200);
-            entity.Property(e => e.FailureReason).HasMaxLength(1000);
-            // Provider object identifiers are unique inside their provider namespace. The
-            // composite fence prevents duplicate local financial application without assuming
-            // unrelated providers coordinate identifier formats.
-            entity.HasIndex(e => new { e.Provider, e.ProviderPaymentIntentId })
-                  .IsUnique()
-                  .HasFilter("\"ProviderPaymentIntentId\" IS NOT NULL");
-            // Unique index on IdempotencyKey — DB-level backstop so a retry of the same charge can
-            // never persist a second transaction row even if the application-level recovery races.
-            entity.HasIndex(e => e.IdempotencyKey)
-                  .IsUnique()
-                  .HasFilter("\"IdempotencyKey\" IS NOT NULL");
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.PaymentId);
-            entity.HasOne(e => e.Payment)
-                .WithMany()
-                .HasForeignKey(e => e.PaymentId)
-                .OnDelete(DeleteBehavior.Restrict);
-        });
-
         modelBuilder.Entity<ProviderInboxEvent>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -2381,32 +2187,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .HasFilter("\"ProcessedAtUtc\" IS NULL AND \"DeadLetteredAtUtc\" IS NULL AND \"ClaimToken\" IS NOT NULL");
         });
 
-        modelBuilder.Entity<AutopayEnrollment>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.StripeCustomerId).HasMaxLength(200);
-            entity.Property(e => e.StripePaymentMethodId).HasMaxLength(200);
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.TenantId);
-            // At most one Active enrollment per lease. Filtered so cancelled (inactive) rows never
-            // collide and a tenant can re-enroll after cancelling.
-            entity.HasIndex(e => e.LeaseId)
-                  .IsUnique()
-                  .HasFilter("\"Active\" = true");
-            entity.HasOne(e => e.Portfolio)
-                .WithMany()
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Lease)
-                .WithMany()
-                .HasForeignKey(e => e.LeaseId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Tenant)
-                .WithMany()
-                .HasForeignKey(e => e.TenantId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
         modelBuilder.Entity<EngineWorkerHeartbeat>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -2418,15 +2198,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         });
 
         // ----------------------------------------------------------------------------------------
-        // Soft-delete consistency across required relationships (audit M-7, root cause of H-4).
+        // Soft-delete consistency across required relationships.
         //
-        // A soft-deletable principal (Portfolio/Lease/Expense/RentalApplication/WorkOrder, each with
+        // A soft-deletable principal (Portfolio/Expense/RentalApplication/WorkOrder, each with
         // a `DeletedAt == null` global filter) was the REQUIRED end of relationships whose dependent
         // rows had NO matching filter. EF Core flagged every one of these with warning EF10622
-        // ("required entity is filtered out"). More importantly, the dependents stayed visible after
-        // their principal was soft-deleted: a query of `_db.Payments` referencing only the scalar
-        // `LeaseId` FK never triggered the Lease filter, so soft-deleted leases' payments kept
-        // inflating the overdue/collected/past-due KPIs and produced ghost "who's behind" rows (H-4).
+        // ("required entity is filtered out").
         //
         // Fix: give each such dependent a query filter that matches its principal's soft-delete state
         // by walking the required navigation. Because the relationship is required, EF emits an INNER
@@ -2439,17 +2216,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // ProviderInboxEvent) are intentionally NOT filtered here — they are not soft-deletable and
         // several legitimately outlive any single business row.
         // ----------------------------------------------------------------------------------------
-
-        // Dependents of Lease (Lease has `DeletedAt == null`). Payment is the H-4 root.
-        // Keep a payment when it is lease-less (LeaseId == null — an application/screening fee) OR it has a
-        // LIVE lease. EF composes the Lease soft-delete query filter into the `e.Lease` navigation, so
-        // `e.Lease != null` is true only for a non-deleted lease; a soft-deleted lease's payments are still
-        // hidden. This mirrors the accounting view's `p."LeaseId" IS NULL OR l."Id" IS NOT NULL` guard. Do NOT
-        // use `e.Lease!.DeletedAt == null` here: adding the lease-less OR forces a LEFT JOIN, and on the
-        // no-match (soft-deleted) side `l."DeletedAt" IS NULL` is true, which would resurface those payments.
-        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.LeaseId == null || e.Lease != null);
-        modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
-        modelBuilder.Entity<SecurityDepositHolding>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
 
         // Dependent of Loan (Loan has its own `DeletedAt == null`). The amortization rows disappear
         // when the loan is soft-deleted, so a deleted loan's interest never leaks into a report.
@@ -2496,7 +2262,5 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         // principal's `DeletedAt` so the whole sub-tree disappears when an ancestor is soft-deleted.
         modelBuilder.Entity<ConversationMessage>().HasQueryFilter(e => e.Conversation!.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<InspectionItem>().HasQueryFilter(e => e.Inspection!.Portfolio!.DeletedAt == null);
-        modelBuilder.Entity<PaymentTransaction>().HasQueryFilter(e => e.Payment!.Lease!.DeletedAt == null);
-
     }
 }

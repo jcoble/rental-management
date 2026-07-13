@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
@@ -28,107 +27,6 @@ public sealed class TenantAccountOptionListResponse
     public int TotalCount { get; init; }
     public int Skip { get; init; }
     public int Take { get; init; }
-}
-
-/// <summary>Wire shape returned for a <see cref="Payment"/>.</summary>
-public class PaymentResponse
-{
-    public int Id { get; set; }
-    public int PortfolioId { get; set; }
-
-    /// <summary>The lease this payment is on; null for a lease-less payment (e.g. an application fee).</summary>
-    public int? LeaseId { get; set; }
-
-    /// <summary>
-    /// Unit the payment's lease is on; resolved DB-side via the lease join so the web client can route the
-    /// payment to its unit's Command Center tab. Null only if the lease navigation wasn't loaded.
-    /// </summary>
-    public int? UnitId { get; set; }
-
-    /// <summary>
-    /// Property the payment's lease is on; resolved DB-side via the lease join so the web client can route the
-    /// payment to its unit's Command Center tab. Null only if the lease navigation wasn't loaded.
-    /// </summary>
-    public int? PropertyId { get; set; }
-
-    public PaymentType PaymentType { get; set; }
-    public PaymentStatus Status { get; set; }
-    public decimal Amount { get; set; }
-
-    /// <summary>
-    /// Cash collected so far when the payment is <see cref="PaymentStatus.Partial"/> (strictly between
-    /// 0 and <see cref="Amount"/>); null otherwise. A Paid payment is fully collected (<see cref="Amount"/>).
-    /// </summary>
-    public decimal? AmountPaid { get; set; }
-
-    public DateTime DueDate { get; set; }
-    public DateTime? PaidDate { get; set; }
-    public string? Method { get; set; }
-    public string? ExternalReference { get; set; }
-    public string? Notes { get; set; }
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
-
-    /// <summary>Human-readable lease number for the payment's lease; populated when the Lease navigation is loaded.</summary>
-    public string? LeaseNumber { get; set; }
-
-    /// <summary>Tenant name on the payment's lease; populated when the Lease/Tenant navigations are loaded.</summary>
-    public string? TenantName { get; set; }
-
-    /// <summary>Property name on the payment's lease; populated when the Lease/Property navigation is loaded.</summary>
-    public string? PropertyName { get; set; }
-
-    /// <summary>Unit number on the payment's lease; populated when the Lease/Unit navigation is loaded.</summary>
-    public string? UnitNumber { get; set; }
-
-    /// <summary>Name on the check / of the payer; from a scanned rent check.</summary>
-    public string? PayerName { get; set; }
-
-    /// <summary>Check number; from a scanned rent check.</summary>
-    public string? CheckNumber { get; set; }
-
-    /// <summary>Issuing bank name; from a scanned rent check.</summary>
-    public string? BankName { get; set; }
-
-    /// <summary>True when a scanned source document is attached to this payment (drives the detail-page viewer).</summary>
-    public bool HasScan { get; set; }
-
-    /// <summary>True when the attached scan is an image (vs a PDF) — lets the UI show a thumbnail.</summary>
-    public bool ScanIsImage { get; set; }
-
-    /// <summary>Stable selector for frontend tests, e.g. <c>payment-1</c>.</summary>
-    public string TestId => $"payment-{Id}";
-
-    public static PaymentResponse FromEntity(Payment e) => new()
-    {
-        Id = e.Id,
-        PortfolioId = e.PortfolioId,
-        LeaseId = e.LeaseId,
-        PaymentType = e.PaymentType,
-        Status = e.Status,
-        Amount = e.Amount,
-        AmountPaid = e.AmountPaid,
-        DueDate = e.DueDate,
-        PaidDate = e.PaidDate,
-        Method = e.Method,
-        ExternalReference = e.ExternalReference,
-        Notes = e.Notes,
-        CreatedAt = e.CreatedAt,
-        UpdatedAt = e.UpdatedAt,
-        PayerName = e.PayerName,
-        CheckNumber = e.CheckNumber,
-        BankName = e.BankName,
-        // Lease label for the detail/list view. Only set when the Lease navigation was loaded
-        // (Include'd); left null otherwise so callers that don't join don't pay for it.
-        LeaseNumber = e.Lease?.LeaseNumber,
-        UnitId = e.Lease?.UnitId,
-        PropertyId = e.Lease?.PropertyId,
-        PropertyName = e.Lease?.Property?.Name,
-        UnitNumber = e.Lease?.Unit?.UnitNumber,
-        TenantName = e.Lease?.Tenant == null
-            ? null
-            : $"{e.Lease.Tenant.FirstName} {e.Lease.Tenant.LastName}".Trim(),
-    };
 }
 
 public class PaymentListResponse

@@ -1,13 +1,10 @@
 using System.ComponentModel.DataAnnotations;
-using System.Text.Json;
-using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.DTOs;
 
 /// <summary>A single itemised deduction from a security deposit.</summary>
 public record DepositDeduction(string Reason, decimal Amount, string? Notes);
 
-/// <summary>Wire shape returned for a <see cref="SecurityDepositHolding"/>.</summary>
 public class SecurityDepositResponse
 {
     public int Id { get; set; }
@@ -30,40 +27,6 @@ public class SecurityDepositResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
-    public static SecurityDepositResponse FromEntity(SecurityDepositHolding e)
-    {
-        var deductions = string.IsNullOrWhiteSpace(e.DeductionsJson)
-            ? []
-            : JsonSerializer.Deserialize<List<DepositDeduction>>(e.DeductionsJson,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-              ?? [];
-
-        var totalDeductions = e.DeductionsTotal;
-        var netRefund = Math.Max(0m, e.Amount - totalDeductions);
-
-        return new SecurityDepositResponse
-        {
-            Id = e.Id,
-            PortfolioId = e.PortfolioId,
-            LeaseId = e.LeaseId,
-            LeaseNumber = e.Lease?.LeaseNumber,
-            // Populated only when the caller eager-loads Lease→Tenant.
-            TenantName = e.Lease?.Tenant == null
-                ? null
-                : $"{e.Lease.Tenant.FirstName} {e.Lease.Tenant.LastName}".Trim(),
-            Amount = e.Amount,
-            Status = e.Status.ToString(),
-            HeldAt = e.HeldAt,
-            ReturnedAt = e.ReturnedAt,
-            ReturnedAmount = e.ReturnedAmount,
-            Deductions = deductions,
-            TotalDeductions = totalDeductions,
-            NetRefund = netRefund,
-            Notes = e.Notes,
-            CreatedAt = e.CreatedAt,
-            UpdatedAt = e.UpdatedAt,
-        };
-    }
 }
 
 public class SecurityDepositListResponse

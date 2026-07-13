@@ -41,8 +41,6 @@ public class Portfolio
     public List<OwnerEntity> OwnerEntities { get; set; } = [];
     public List<Tenant> Tenants { get; set; } = [];
     public List<Vendor> Vendors { get; set; } = [];
-    public List<Lease> Leases { get; set; } = [];
-    public List<LeaseTenant> LeaseTenants { get; set; } = [];
     public List<LeaseManagement> LeaseManagements { get; set; } = [];
     public List<LeaseManagementParty> LeaseManagementParties { get; set; } = [];
     public List<TenantUserAccess> TenantUserAccesses { get; set; } = [];
@@ -51,7 +49,6 @@ public class Portfolio
     public List<LegalDocumentArtifact> LegalDocumentArtifacts { get; set; } = [];
     public List<LeaseAgreement> LeaseAgreements { get; set; } = [];
     public List<LeaseAddendum> LeaseAddenda { get; set; } = [];
-    public List<Payment> Payments { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<RecurringMaintenanceTask> RecurringMaintenanceTasks { get; set; } = [];
