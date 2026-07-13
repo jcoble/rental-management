@@ -21,7 +21,6 @@ namespace RentalCommand.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
-    private readonly IJwtTokenService _tokenService;
     private readonly IGoogleAuthService _googleAuthService;
     private readonly GoogleAuthOptions _googleOptions;
     private readonly IWebHostEnvironment _environment;
@@ -35,7 +34,6 @@ public class AuthController : ControllerBase
 
     public AuthController(
         IAuthService authService,
-        IJwtTokenService tokenService,
         IGoogleAuthService googleAuthService,
         IOptions<GoogleAuthOptions> googleOptions,
         IWebHostEnvironment environment,
@@ -48,7 +46,6 @@ public class AuthController : ControllerBase
         ILogger<AuthController> logger)
     {
         _authService = authService;
-        _tokenService = tokenService;
         _googleAuthService = googleAuthService;
         _googleOptions = googleOptions.Value;
         _environment = environment;
@@ -363,7 +360,16 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "Not authenticated" });
         }
 
-        var result = await _authService.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword);
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "No active access context" });
+        }
+
+        var result = await _authService.ChangePasswordAsync(
+            userId,
+            active.AccessContextId,
+            request.CurrentPassword,
+            request.NewPassword);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.NotFound)
@@ -442,13 +448,11 @@ public class AuthController : ControllerBase
             SameSite = SameSiteMode.Strict,
             Expires = expiration
         });
-        Response.Cookies.Delete(AuthCookieNames.LegacyRefreshToken);
     }
 
     private void ClearRefreshTokenCookies()
     {
         Response.Cookies.Delete(AuthCookieNames.RefreshToken);
-        Response.Cookies.Delete(AuthCookieNames.LegacyRefreshToken);
     }
 
     private string? GetIpAddress() => HttpContext.Connection.RemoteIpAddress?.ToString();

@@ -134,9 +134,6 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
         (await _sqlite.Db.OwnerUserAccesses.SingleAsync(access =>
             access.AccessContextId == context.Id && access.ApplicationUserId == user.Id))
             .OwnerEntityId.Should().Be(owner.Id);
-        (await _users.GetRolesAsync(user)).Should().BeEmpty(
-            "fresh registration must not recreate the removed Identity Admin role");
-        (await _sqlite.Db.UserAccounts.CountAsync(account => account.Email == user.Email)).Should().Be(0);
 
         var loggedIn = await auth.LoginAsync(user.Email!, "Password123!");
 
@@ -196,7 +193,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommand.Data.RentalCommandDbContext db)
     {
-        var store = new UserStore<ApplicationUser, IdentityRole<int>, RentalCommand.Data.RentalCommandDbContext, int>(db);
+        var store = new UserOnlyStore<ApplicationUser, RentalCommand.Data.RentalCommandDbContext, int>(db);
         var manager = new UserManager<ApplicationUser>(
             store,
             Options.Create(new IdentityOptions { User = { RequireUniqueEmail = true } }),

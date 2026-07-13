@@ -144,7 +144,6 @@ internal static class FoundationBaselinePostgreSql
         "TenantUserAccesses",
         "UnitOperationalPeriods",
         "Units",
-        "UserAccounts",
         "UserAlertPreferences",
         "VendorDispatches",
         "VendorRatings",
@@ -181,11 +180,8 @@ internal static class FoundationBaselinePostgreSql
     /// </summary>
     internal static IReadOnlyList<string> GlobalAuthAndSystemTables { get; } =
     [
-        "AspNetRoleClaims",
-        "AspNetRoles",
         "AspNetUserClaims",
         "AspNetUserLogins",
-        "AspNetUserRoles",
         "AspNetUsers",
         "AspNetUserTokens",
         "AtomicCommandReceipts",
@@ -197,7 +193,6 @@ internal static class FoundationBaselinePostgreSql
         "LoginContextSelectionChallenges",
         "OutboxMessages",
         "ProviderInboxEvents",
-        "RefreshTokens",
         "RoleProfileCapabilities",
         "RoleProfiles",
         "SimWorkerCommands",
@@ -218,6 +213,11 @@ internal static class FoundationBaselinePostgreSql
         "OpeningBalances",
         "Payments",
         "PaymentTransactions",
+        "RefreshTokens",
+        "UserAccounts",
+        "AspNetRoleClaims",
+        "AspNetRoles",
+        "AspNetUserRoles",
         "SecurityDepositHoldings",
         "vw_accounting_transactions",
     ];
@@ -258,7 +258,7 @@ internal static class FoundationBaselinePostgreSql
     // Catalogs and supplied system templates are data, not runtime configuration mutation surfaces.
     private static readonly HashSet<string> ApiReadOnlyTables = new(StringComparer.Ordinal)
     {
-        "AspNetRoleClaims", "AspNetRoles", "CapabilityDefinitions", "EngineWorkerHeartbeats",
+        "CapabilityDefinitions", "EngineWorkerHeartbeats",
         "RoleProfileCapabilities", "RoleProfiles", "SystemNoticeTemplateVersions",
     };
 
@@ -267,7 +267,7 @@ internal static class FoundationBaselinePostgreSql
     private static readonly HashSet<string> ApiDeleteTables = new(StringComparer.Ordinal)
     {
         "AccountingConnections", "Appointments", "AspNetUserClaims", "AspNetUserLogins",
-        "AspNetUserRoles", "AspNetUsers", "AspNetUserTokens", "DeviceTokens",
+        "AspNetUsers", "AspNetUserTokens", "DeviceTokens",
         "DocumentTemplateFields", "ExpenseLineItems", "InspectionItems", "Inspections",
         "InspectionTemplateItems", "InspectionTemplates", "LeaseAddendumFinancialEffects",
         "LeaseAddendumSigners", "LeaseAgreementSigners", "MembershipRoleAssignmentProperties",
@@ -319,7 +319,7 @@ internal static class FoundationBaselinePostgreSql
             "DeviceTokens", "InspectionTemplateItems", "InspectionTemplates",
             "MembershipRoleAssignments",
             "NotificationPreferences", "NotificationSettings", "TenantNoticePolicies",
-            "UserAccounts", "UserAlertPreferences", "WorkspaceAccessContexts", "WorkspaceMemberships",
+            "UserAlertPreferences", "WorkspaceAccessContexts", "WorkspaceMemberships",
             "WorkspaceNoticeTemplateVersions",
         };
 
@@ -355,13 +355,13 @@ internal static class FoundationBaselinePostgreSql
         "OwnerDistributions", "OwnerEntities", "OwnerUserAccesses", "Owners", "PendingFileUploads",
         "PlaidTokenExchangeAttempts", "PortalMessages", "Portfolios", "Properties",
         "PropertyDispositions", "ProviderInboxEvents", "QueuedJobs", "RecurringExpenses",
-        "RecurringMaintenanceTasks", "RefreshTokens", "RentalApplications", "RentalListings",
+        "RecurringMaintenanceTasks", "RentalApplications", "RentalListings",
         "ScanBatches", "ScanDrafts", "SecurityDepositAccounts", "SignatureRequests",
         "SignatureSigners", "SimWorkerCommands", "SimulationClocks", "StoredFiles",
         "TeamRoutingRules", "TenantAccountConditionPeriods", "TenantAccounts",
         "TenantAutopayEnrollments", "TenantNoticePolicies", "TenantNoticeWorkItems",
         "TenantPaymentAttempts", "TenantUserAccesses", "Tenants", "UnitOperationalPeriods",
-        "Units", "UserAccounts", "UserAlertPreferences", "VendorDispatches", "VendorRatings",
+        "Units", "UserAlertPreferences", "VendorDispatches", "VendorRatings",
         "Vendors", "WorkOrderStatusEvents", "WorkOrders", "WorkspaceAccessContexts",
         "WorkspaceMemberships",
     };
@@ -370,10 +370,9 @@ internal static class FoundationBaselinePostgreSql
     // but authentication credentials and refresh/session material are intentionally API-only.
     private static readonly HashSet<string> EngineDeniedTables = new(StringComparer.Ordinal)
     {
-        "AspNetRoleClaims", "AspNetUserClaims", "AspNetUserLogins", "AspNetUserTokens",
+        "AspNetUserClaims", "AspNetUserLogins", "AspNetUserTokens",
         "AuthSessionRefreshCredentials", "AuthSessionRefreshTokenFamilies", "AuthSessions",
         "LoginContextSelectionChallenges", "OAuthStates", "PlaidTokenExchangeAttempts",
-        "RefreshTokens",
     };
 
     private static readonly HashSet<string> EngineAppendOnlyTables = new(StringComparer.Ordinal)
@@ -406,7 +405,7 @@ internal static class FoundationBaselinePostgreSql
     {
         "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
         "ApplicationFinancialAccounts", "ApplicationFinancialEntries", "Appointments",
-        "AspNetRoles", "AspNetUserRoles", "AspNetUsers", "CapabilityDefinitions", "CapitalAssets",
+        "AspNetUsers", "CapabilityDefinitions", "CapitalAssets",
         "DeviceTokens", "DocumentTemplateFields", "DocumentTemplates", "EvictionCaseEvents",
         "EvictionCaseRespondents", "EvictionCases", "ExternalListingSignals", "InspectionItems",
         "Inspections", "LeaseAddenda", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
@@ -420,7 +419,7 @@ internal static class FoundationBaselinePostgreSql
         "StoredFiles", "SystemNoticeTemplateVersions", "TeamRoutingRuleRecipients",
         "TeamRoutingRules", "TenantAccountConditionPeriods", "TenantAutopayEnrollments",
         "TenantNoticePolicies", "TenantUserAccesses", "Tenants", "UnitOperationalPeriods", "Units",
-        "UserAccounts", "UserAlertPreferences", "VendorDispatches", "VendorRatings", "Vendors",
+        "UserAlertPreferences", "VendorDispatches", "VendorRatings", "Vendors",
         "WorkspaceAccessContexts", "WorkspaceMemberships",
     };
 

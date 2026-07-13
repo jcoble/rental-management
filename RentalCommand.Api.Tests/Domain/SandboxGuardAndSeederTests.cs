@@ -213,7 +213,6 @@ public class SandboxGuardAndSeederTests : IDisposable
         var actor = new ApplicationUser
         {
             Id = 1,
-            PortfolioId = portfolioId,
             UserName = "sandbox-payment@example.test",
             NormalizedUserName = "SANDBOX-PAYMENT@EXAMPLE.TEST",
             Email = "sandbox-payment@example.test",

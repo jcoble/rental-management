@@ -4,6 +4,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -162,17 +163,8 @@ public class NotificationService : INotificationService
 
     private async Task<bool> IsStaffUserAsync(int portfolioId, int userId, CancellationToken ct)
     {
-        var staffRoles = new[] { "Admin", "Manager", "Agent" };
-
-        return await (
-                from user in _db.Users.AsNoTracking()
-                join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
-                join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
-                where user.Id == userId &&
-                      user.PortfolioId == portfolioId &&
-                      role.Name != null &&
-                      staffRoles.Contains(role.Name)
-                select user.Id)
-            .AnyAsync(ct);
+        return await ScopedNotificationRecipientQuery
+            .ForWorkspaceMembership(_db, portfolioId, _timeProvider.UtcNow())
+            .AnyAsync(candidateUserId => candidateUserId == userId, ct);
     }
 }

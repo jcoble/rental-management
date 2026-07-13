@@ -63,11 +63,11 @@ public sealed class FoundationBaselinePostgreSqlTests
     {
         FoundationBaselinePostgreSql.SandboxGraduationPreservedTables.Should().Contain(
         [
-            "AccountingConnections", "BankConnections", "UserAccounts",
+            "AccountingConnections", "BankConnections",
         ]);
         FoundationBaselinePostgreSql.SandboxGraduationDeleteTables.Should().NotContain(
         [
-            "AccountingConnections", "BankConnections", "UserAccounts",
+            "AccountingConnections", "BankConnections",
         ]);
     }
 

@@ -54,7 +54,6 @@ public sealed class AuditTrailTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = 7,
-            PortfolioId = PortfolioId,
             UserName = "jane@example.test",
             NormalizedUserName = "JANE@EXAMPLE.TEST",
             Email = "jane@example.test",
@@ -294,7 +293,6 @@ public sealed class AuditTrailTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = 8,
-            PortfolioId = PortfolioId,
             UserName = "noname@example.test",
             NormalizedUserName = "NONAME@EXAMPLE.TEST",
             Email = "noname@example.test",

@@ -106,9 +106,9 @@ public interface IAuthService
     /// Changes the signed-in user's password. Rejects accounts with no local password (external
     /// login only, e.g. Google) and surfaces Identity's password-policy/validation failures.
     /// </summary>
-    Task<AuthUserResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword);
+    Task<AuthUserResult> ChangePasswordAsync(string userId, int accessContextId, string currentPassword, string newPassword);
 
-    Task<UserDto> MapToUserDtoAsync(ApplicationUser user, IList<string> roles);
+    Task<UserDto> MapToUserDtoAsync(ApplicationUser user);
 }
 
 public class AuthService : IAuthService
@@ -405,8 +405,7 @@ public class AuthService : IAuthService
             return AuthUserResult.Fail($"Email confirmation failed: {errors}", AuthErrorType.BadRequest);
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
     public async Task<AuthUserResult> GetCurrentUserAsync(string userId)
@@ -417,8 +416,7 @@ public class AuthService : IAuthService
             return AuthUserResult.Fail("User not found");
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
     public async Task<string?> GeneratePasswordResetTokenAsync(string email)
@@ -461,8 +459,7 @@ public class AuthService : IAuthService
             await _userManager.UpdateAsync(user);
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
     public async Task<AuthUserResult> ResendVerificationEmailAsync(string email)
@@ -491,12 +488,28 @@ public class AuthService : IAuthService
         return AuthUserResult.Ok(null!);
     }
 
-    public async Task<AuthUserResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword)
+    public async Task<AuthUserResult> ChangePasswordAsync(
+        string userId,
+        int accessContextId,
+        string currentPassword,
+        string newPassword)
     {
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
             return AuthUserResult.Fail("User not found");
+        }
+
+        var portfolioId = await _db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .Where(context => context.Id == accessContextId && context.UserId == user.Id
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
+            .Select(context => (int?)context.PortfolioId)
+            .SingleOrDefaultAsync();
+        if (portfolioId is null)
+        {
+            return AuthUserResult.Fail("Active access context not found", AuthErrorType.BadRequest);
         }
 
         // An external-login-only account (e.g. Google) has no local password to change. Reject
@@ -515,41 +528,21 @@ public class AuthService : IAuthService
             return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
         }
 
-        await LogPasswordChangeAuditAsync(user);
+        await LogPasswordChangeAuditAsync(user, accessContextId, portfolioId.Value);
         _logger.LogInformation("Password changed for user {UserId}.", userId);
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    private async Task LogPasswordChangeAuditAsync(ApplicationUser user)
+    private async Task LogPasswordChangeAuditAsync(
+        ApplicationUser user,
+        int accessContextId,
+        int portfolioId)
     {
-        if (!user.PortfolioId.HasValue)
-        {
-            return;
-        }
-
         var email = user.Email ?? user.UserName ?? string.Empty;
-        var account = string.IsNullOrWhiteSpace(email)
-            ? null
-            : await _db.UserAccounts
-                .AsNoTracking()
-                .Where(a => a.PortfolioId == user.PortfolioId.Value && a.Email == email)
-                .Select(a => new
-                {
-                    a.Id,
-                    a.Email,
-                    a.DisplayName,
-                    Role = a.Role.ToString(),
-                    a.IsActive,
-                })
-                .FirstOrDefaultAsync();
-
-        var entityType = account is null ? nameof(ApplicationUser) : nameof(UserAccount);
-        var entityId = account?.Id ?? user.Id;
         await _audit.LogAsync(
-            user.PortfolioId.Value,
-            entityType,
-            entityId,
+            portfolioId,
+            nameof(ApplicationUser),
+            user.Id,
             AuditLogOperation.Updated,
             userId: user.Id,
             oldValues: SerializeAudit(new
@@ -562,24 +555,21 @@ public class AuthService : IAuthService
                 securityEvent = "PasswordChanged",
                 targetUserId = user.Id,
                 email,
-                displayName = account?.DisplayName ?? user.DisplayName,
-                role = account?.Role,
-                isActive = account?.IsActive,
+                displayName = user.DisplayName,
+                accessContextId,
             }),
             changeReason: "Password changed by account user.");
     }
 
     private static string SerializeAudit(object values) => JsonSerializer.Serialize(values);
 
-    public Task<UserDto> MapToUserDtoAsync(ApplicationUser user, IList<string> roles)
+    public Task<UserDto> MapToUserDtoAsync(ApplicationUser user)
     {
         return Task.FromResult(new UserDto
         {
             Id = user.Id,
             Email = user.Email ?? string.Empty,
             DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
-            PortfolioId = user.PortfolioId,
-            Roles = roles.ToList(),
             EmailVerified = user.EmailConfirmed
         });
     }

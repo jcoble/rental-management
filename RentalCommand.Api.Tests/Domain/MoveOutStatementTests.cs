@@ -126,7 +126,6 @@ public sealed class MoveOutStatementTests : IDisposable
         var actor = new ApplicationUser
         {
             Id = ActorUserId,
-            PortfolioId = PortfolioId,
             UserName = "moveout-test@rentalcommand.local",
             NormalizedUserName = "MOVEOUT-TEST@RENTALCOMMAND.LOCAL",
             Email = "moveout-test@rentalcommand.local",

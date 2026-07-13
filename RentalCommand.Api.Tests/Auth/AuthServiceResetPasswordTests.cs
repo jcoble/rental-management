@@ -45,7 +45,6 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             Email = "locked-reset@example.local",
             EmailConfirmed = true,
             DisplayName = "Locked Reset",
-            PortfolioId = 1,
             CreatedAt = DateTime.UtcNow,
         };
         (await _userManager.CreateAsync(user, "OldPassword123!")).Succeeded.Should().BeTrue();
@@ -72,35 +71,42 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             Email = "password-audit@example.local",
             EmailConfirmed = true,
             DisplayName = "Password Audit",
-            PortfolioId = 1,
             CreatedAt = now,
         };
         (await _userManager.CreateAsync(user, "OldPassword123!")).Succeeded.Should().BeTrue();
-        var account = new UserAccount
+        var portfolio = new Portfolio
         {
-            PortfolioId = 1,
-            Email = user.Email,
-            DisplayName = user.DisplayName,
-            PasswordHash = string.Empty,
-            Role = UserRole.Admin,
-            IsActive = true,
+            Name = "Password Audit",
+            ManagementCompanyName = "Password Audit",
+            Status = PortfolioStatus.Active,
+            Currency = "USD",
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.UserAccounts.Add(account);
+        _ctx.Db.Portfolios.Add(portfolio);
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            Portfolio = portfolio,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         await _ctx.Db.SaveChangesAsync();
 
         var result = await CreateService().ChangePasswordAsync(
             user.Id.ToString(),
+            accessContext.Id,
             "OldPassword123!",
             "NewPassword123!");
 
         result.Success.Should().BeTrue();
         var audit = _ctx.Db.AuditLogs.Should().ContainSingle().Subject;
-        audit.PortfolioId.Should().Be(1);
+        audit.PortfolioId.Should().Be(portfolio.Id);
         audit.UserId.Should().Be(user.Id);
-        audit.EntityType.Should().Be(nameof(UserAccount));
-        audit.EntityId.Should().Be(account.Id);
+        audit.EntityType.Should().Be(nameof(ApplicationUser));
+        audit.EntityId.Should().Be(user.Id);
         audit.Operation.Should().Be(AuditLogOperation.Updated);
         audit.ChangeReason.Should().Contain("Password");
         audit.NewValues.Should().Contain("\"securityEvent\":\"PasswordChanged\"");
@@ -133,7 +139,7 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {
-        var store = new UserStore<ApplicationUser, IdentityRole<int>, RentalCommandDbContext, int>(db);
+        var store = new UserOnlyStore<ApplicationUser, RentalCommandDbContext, int>(db);
         var options = Options.Create(new IdentityOptions());
         options.Value.Tokens.PasswordResetTokenProvider = TestTokenProvider.ProviderName;
 

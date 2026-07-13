@@ -10,7 +10,7 @@ public class DeviceToken
     public int Id { get; set; }
     public int PortfolioId { get; set; }
 
-    /// <summary>The <see cref="ApplicationUser"/> / UserAccount id that registered the device.</summary>
+    /// <summary>The <see cref="ApplicationUser"/> id that registered the device.</summary>
     public int UserId { get; set; }
 
     /// <summary>FCM/APNs registration token (up to 500 chars).</summary>

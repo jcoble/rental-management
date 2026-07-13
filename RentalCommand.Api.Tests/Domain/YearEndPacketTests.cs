@@ -56,7 +56,6 @@ public class YearEndPacketTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = ActorUserId,
-            PortfolioId = PortfolioId,
             UserName = "year-end-test@rentalcommand.local",
             NormalizedUserName = "YEAR-END-TEST@RENTALCOMMAND.LOCAL",
             Email = "year-end-test@rentalcommand.local",

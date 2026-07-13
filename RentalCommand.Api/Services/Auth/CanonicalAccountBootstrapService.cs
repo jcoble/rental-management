@@ -12,6 +12,8 @@ namespace RentalCommand.Api.Services.Auth;
 
 public sealed record CanonicalAccountBootstrapResult(
     ApplicationUser? User,
+    int? PortfolioId,
+    int? AccessContextId,
     IReadOnlyList<string> Errors)
 {
     public bool Succeeded => User is not null;
@@ -65,7 +67,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         if (await _db.Users.AsNoTracking()
                 .AnyAsync(user => user.NormalizedEmail == normalizedEmail, ct))
         {
-            return new CanonicalAccountBootstrapResult(null, ["Email is already registered"]);
+            return new CanonicalAccountBootstrapResult(null, null, null, ["Email is already registered"]);
         }
 
         var now = _timeProvider.UtcNow();
@@ -86,6 +88,8 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         {
             await transaction.RollbackAsync(ct);
             return new CanonicalAccountBootstrapResult(
+                null,
+                null,
                 null,
                 createResult.Errors.Select(error => error.Description).ToArray());
         }
@@ -165,15 +169,11 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         _db.AddRange(owner, administratorAssignment, ownerAccess);
         await _db.SaveChangesAsync(ct);
 
-        // PortfolioId remains a non-authoritative presentation hint. Owner authority comes only from
-        // the explicit context-scoped OwnerUserAccess created above.
-        user.PortfolioId = portfolio.Id;
-        await _db.SaveChangesAsync(ct);
         if (_notificationFoundation is not null)
         {
             await _notificationFoundation.SeedSuppliedTemplatesAsync(portfolio.Id, user.Id, ct);
         }
         await transaction.CommitAsync(ct);
-        return new CanonicalAccountBootstrapResult(user, []);
+        return new CanonicalAccountBootstrapResult(user, portfolio.Id, context.Id, []);
     }
 }

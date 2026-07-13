@@ -318,7 +318,6 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
 
         var actor = new ApplicationUser
         {
-            PortfolioId = portfolio.Id,
             UserName = $"rls-{tag.ToLowerInvariant()}@example.test",
             NormalizedUserName = $"RLS-{tag.ToUpperInvariant()}@EXAMPLE.TEST",
             Email = $"rls-{tag.ToLowerInvariant()}@example.test",

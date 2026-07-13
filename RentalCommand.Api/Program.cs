@@ -453,7 +453,7 @@ builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
             sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));
 
 // --- ASP.NET Identity (int keys) ---
-builder.Services.AddIdentity<ApplicationUser, IdentityRole<int>>(options =>
+builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         options.Password.RequireDigit = true;
         options.Password.RequireLowercase = true;
@@ -464,7 +464,7 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole<int>>(options =>
         options.Lockout.MaxFailedAccessAttempts = 5;
         options.User.RequireUniqueEmail = true;
     })
-    .AddRoles<IdentityRole<int>>()
+    .AddSignInManager()
     .AddEntityFrameworkStores<RentalCommandDbContext>()
     .AddDefaultTokenProviders();
 
@@ -554,7 +554,6 @@ builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
 
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");
-builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<ICanonicalAccessTokenService, CanonicalAccessTokenService>();
 builder.Services.AddSingleton(serviceProvider =>
     new RentalCommand.Core.Auth.RefreshCredentialTokenFactory(

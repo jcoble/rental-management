@@ -58,7 +58,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+            isManagement: true);
 
         var result = await controller.GetFile(7, thumb: true, CancellationToken.None);
 
@@ -141,7 +141,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+            isManagement: true);
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
         var result = await controller.Upload(
@@ -185,7 +185,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+            isManagement: true);
 
         var result = await controller.Upload(
             FormFile("test-upload.txt", "text/plain", "legacy target"),
@@ -259,8 +259,8 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", tenantId.ToString()),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
         var result = await controller.Upload(
@@ -303,8 +303,8 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             storage.Object,
-            new Claim("tenantId", tenantId.ToString()),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
         var file = FormFile("test-upload.txt", "text/plain", "hello upload");
 
         var result = await controller.Upload(
@@ -328,15 +328,14 @@ public sealed class DocumentsControllerTests : IDisposable
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("MaintenanceTechnician")]
-    [InlineData("UnknownRole")]
-    public async Task List_WithoutCanonicalStaffOrTenantRelationship_FailsClosed(string? role)
+    [Fact]
+    public async Task List_WithoutCanonicalStaffOrTenantRelationship_FailsClosed()
     {
         var documents = new Mock<IDocumentService>();
-        Claim[] claims = role is null ? [] : [new Claim(ClaimTypes.Role, role)];
-        var controller = CreateController(documents.Object, Mock.Of<IFileStorage>(), claims);
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            isManagement: false);
 
         var result = await controller.List("Unit", 10, CancellationToken.None);
 
@@ -360,8 +359,8 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             Mock.Of<IFileStorage>(),
-            new Claim("tenantId", tenantId.ToString()),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Tenant)));
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
 
         var result = await controller.List("WorkOrder", workOrderId, CancellationToken.None);
 
@@ -379,7 +378,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             Mock.Of<IFileStorage>(),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+            isManagement: true);
 
         var result = await controller.List("Unit", 10, CancellationToken.None);
 
@@ -397,7 +396,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var controller = CreateController(
             documents.Object,
             Mock.Of<IFileStorage>(),
-            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+            isManagement: true);
 
         var result = await controller.List(entityType, 1, CancellationToken.None);
 
@@ -414,7 +413,11 @@ public sealed class DocumentsControllerTests : IDisposable
         return data.ToArray();
     }
 
-    private DocumentsController CreateController(IDocumentService documents, IFileStorage storage, params Claim[] claims)
+    private DocumentsController CreateController(
+        IDocumentService documents,
+        IFileStorage storage,
+        bool isManagement,
+        params Claim[] claims)
     {
         EnsureRelationshipProjectionView();
         var user = EnsureUser();
@@ -423,8 +426,6 @@ public sealed class DocumentsControllerTests : IDisposable
         if (int.TryParse(tenantClaim, out var tenantId))
             EnsureTenantRelationship(context, user, tenantId);
 
-        var isStaff = claims.Any(claim =>
-            claim.Type == ClaimTypes.Role && claim.Value == nameof(UserRole.Admin));
         var baseClaims = new List<Claim>
         {
             new("portfolioId", PortfolioId.ToString()),
@@ -453,9 +454,9 @@ public sealed class DocumentsControllerTests : IDisposable
         };
         controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
             Guid.NewGuid(), user.Id, context.Id, PortfolioId, 1,
-            isStaff ? WorkspaceExperience.Management : WorkspaceExperience.Tenant,
-            isStaff ? 1 : null,
-            isStaff ? WorkspaceExperience.Management : WorkspaceExperience.Tenant);
+            isManagement ? WorkspaceExperience.Management : WorkspaceExperience.Tenant,
+            isManagement ? 1 : null,
+            isManagement ? WorkspaceExperience.Management : WorkspaceExperience.Tenant);
 
         return controller;
     }
@@ -474,7 +475,6 @@ public sealed class DocumentsControllerTests : IDisposable
             Email = "documents@example.test",
             NormalizedEmail = "DOCUMENTS@EXAMPLE.TEST",
             DisplayName = "Documents Test User",
-            PortfolioId = PortfolioId,
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = DateTime.UtcNow,

@@ -2,9 +2,9 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Engine.Services;
 
@@ -20,15 +20,10 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class AutomationNotifier
 {
-    private static readonly string[] StaffRoleNames =
-    [
-        nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent), nameof(UserRole.Owner),
-    ];
-
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
 
-    // H2: the staff-user set is resolved via a 3-table join (Users⋈UserRoles⋈Roles) and callers reuse
+    // The staff-user set is resolved from canonical active workspace memberships and callers reuse
     // one notifier instance across a per-item loop (rent charges, late fees, expiry reminders). Memoize
     // per portfolio so the join runs once per portfolio per sweep instead of once per notification.
     // A worker's sweep is short-lived, so staff membership is effectively constant for its duration.
@@ -58,7 +53,7 @@ public sealed class AutomationNotifier
         var created = new List<Notification>();
         var targets = audience ?? AudienceTargets.StaffOnly;
         var staffUserIds = targets.IncludeStaff
-            ? await StaffUserIdsAsync(portfolioId, ct)
+            ? await StaffUserIdsAsync(portfolioId, now, ct)
             : Array.Empty<int>();
         var tenantUserId = targets.TenantId.HasValue
             ? await TenantUserIdAsync(portfolioId, targets.TenantId.Value, ct)
@@ -172,18 +167,13 @@ public sealed class AutomationNotifier
         }
     }
 
-    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct)
+    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, DateTime now, CancellationToken ct)
     {
         if (_staffUserIdCache.TryGetValue(portfolioId, out var cached))
             return cached;
 
-        var ids = await (
-                from user in _db.Users.AsNoTracking()
-                join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
-                join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
-                where user.PortfolioId == portfolioId && role.Name != null && StaffRoleNames.Contains(role.Name)
-                select user.Id)
-            .Distinct()
+        var ids = await ScopedNotificationRecipientQuery
+            .ForWorkspaceMembership(_db, portfolioId, now)
             .ToListAsync(ct);
 
         _staffUserIdCache[portfolioId] = ids;

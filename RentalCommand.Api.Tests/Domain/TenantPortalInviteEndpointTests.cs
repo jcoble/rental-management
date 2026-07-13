@@ -34,12 +34,6 @@ public sealed class TenantPortalInviteEndpointTests : IDisposable
     public TenantPortalInviteEndpointTests()
     {
         _userManager = CreateUserManager(_ctx.Db);
-        _ctx.Db.Roles.Add(new IdentityRole<int>
-        {
-            Name = nameof(UserRole.Tenant),
-            NormalizedName = nameof(UserRole.Tenant).ToUpperInvariant(),
-        });
-        _ctx.Db.SaveChanges();
     }
 
     public void Dispose()
@@ -134,7 +128,7 @@ public sealed class TenantPortalInviteEndpointTests : IDisposable
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {
-        var store = new UserStore<ApplicationUser, IdentityRole<int>, RentalCommandDbContext, int>(db);
+        var store = new UserOnlyStore<ApplicationUser, RentalCommandDbContext, int>(db);
         return new UserManager<ApplicationUser>(
             store,
             Options.Create(new IdentityOptions()),

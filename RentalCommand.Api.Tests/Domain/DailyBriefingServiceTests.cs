@@ -44,7 +44,6 @@ public class DailyBriefingServiceTests : IDisposable
         _db.Users.Add(new ApplicationUser
         {
             Id = ActorUserId,
-            PortfolioId = PortfolioId,
             UserName = "briefing-test@rentalcommand.local",
             NormalizedUserName = "BRIEFING-TEST@RENTALCOMMAND.LOCAL",
             Email = "briefing-test@rentalcommand.local",

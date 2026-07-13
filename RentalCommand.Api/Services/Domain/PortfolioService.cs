@@ -159,13 +159,11 @@ public class PortfolioService : IPortfolioService
         _db.Portfolios.Add(entity);
         await _db.SaveChangesAsync(ct);
 
-        // Scope the creating user to the new portfolio so their subsequent JWT carries this portfolioId.
+        // Create the relationship-scoped canonical access context; bearer tokens never carry a
+        // mutable user-level portfolio hint.
         var user = await _userManager.FindByIdAsync(userId.ToString());
         if (user != null)
         {
-            user.PortfolioId = entity.Id;
-            await _userManager.UpdateAsync(user);
-
             // The landlord IS the first owner — auto-create a primary self-owner so the new portfolio is
             // never owner-less and onboarding skips the manual "add an owner" step. Idempotent.
             await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, entity.Id, ct);

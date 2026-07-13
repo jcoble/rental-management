@@ -282,7 +282,6 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
 
         var user = new ApplicationUser
         {
-            PortfolioId = portfolio.Id,
             UserName = $"billing-{suffix}@example.test",
             NormalizedUserName = $"BILLING-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
             Email = $"billing-{suffix}@example.test",

@@ -14,5 +14,4 @@ public class Owner
 
     public Portfolio? Portfolio { get; set; }
     public List<Property> Properties { get; set; } = [];
-    public List<UserAccount> UserAccounts { get; set; } = [];
 }

@@ -1,5 +1,4 @@
 using System.Net;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -9,10 +8,10 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data;
 
 /// <summary>
-/// Primary application + Identity database context. Uses an <c>int</c> Identity key
-/// (<see cref="IdentityRole{Int32}"/>) so the auth user PK matches every domain entity.
+/// Primary application + user-only Identity database context. Uses an <c>int</c> Identity key
+/// so the auth user PK matches every domain entity. Workspace authorization is capability-based.
 /// </summary>
-public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, IdentityRole<int>, int>
+public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
 {
     public RentalCommandDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 
@@ -105,7 +104,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<InspectionItem> InspectionItems => Set<InspectionItem>();
     public DbSet<InspectionTemplate> InspectionTemplates => Set<InspectionTemplate>();
     public DbSet<InspectionTemplateItem> InspectionTemplateItems => Set<InspectionTemplateItem>();
-    public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
     public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
@@ -138,7 +136,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<SignatureAuditEvent> SignatureAuditEvents => Set<SignatureAuditEvent>();
 
     // Auth + audit + infrastructure entities (Task 3)
-    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AtomicCommandReceipt> AtomicCommandReceipts => Set<AtomicCommandReceipt>();
     public DbSet<AtomicAuditLog> AtomicAuditLogs => Set<AtomicAuditLog>();
     public DbSet<WorkspaceAccessContext> WorkspaceAccessContexts => Set<WorkspaceAccessContext>();
@@ -244,27 +241,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<ApplicationUser>(entity =>
         {
             entity.Property(e => e.DisplayName).HasMaxLength(200);
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany()
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
-
-        modelBuilder.Entity<RefreshToken>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Token).IsRequired().HasMaxLength(256);
-            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
-            entity.Property(e => e.IpAddress).HasMaxLength(64);
-            entity.Property(e => e.UserAgent).HasMaxLength(512);
-            entity.HasIndex(e => e.TokenHash).IsUnique();
-            entity.HasIndex(e => e.UserId);
-            entity.HasIndex(e => e.ExpiresAt);
-            entity.HasOne(e => e.User)
-                .WithMany(u => u.RefreshTokens)
-                .HasForeignKey(e => e.UserId)
-                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<AuditLog>(entity =>
@@ -2073,29 +2049,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<UserAccount>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Email).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.DisplayName).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.PasswordHash).IsRequired().HasMaxLength(500);
-            entity.Property(e => e.Role).HasConversion<int>();
-            entity.HasIndex(e => new { e.PortfolioId, e.Email }).IsUnique();
-            entity.HasIndex(e => e.Role);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.UserAccounts)
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Owner)
-                .WithMany(o => o.UserAccounts)
-                .HasForeignKey(e => e.OwnerId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Tenant)
-                .WithMany(t => t.UserAccounts)
-                .HasForeignKey(e => e.TenantId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
-
         modelBuilder.Entity<PortalMessage>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -2105,19 +2058,18 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Channels).HasMaxLength(100);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.UserAccountId);
+            entity.HasIndex(e => new { e.PortfolioId, e.AuthorAccessContextId });
             entity.HasIndex(e => e.RecipientTenantId);
             entity.HasIndex(e => e.Status);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.PortalMessages)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            // UserAccountId is now optional (landlord-authored messages carry null + FromLandlord=true).
-            // SetNull rather than Cascade so deleting a portal account does not delete the thread.
-            entity.HasOne(e => e.UserAccount)
-                .WithMany(u => u.Messages)
-                .HasForeignKey(e => e.UserAccountId)
-                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.AuthorAccessContext)
+                .WithMany()
+                .HasForeignKey(e => new { e.AuthorAccessContextId, e.PortfolioId })
+                .HasPrincipalKey(context => new { context.Id, context.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             // Recipient tenant of a landlord message — optional, no cascade (matches other optional FKs).
             entity.HasOne(e => e.RecipientTenant)
                 .WithMany()
@@ -2244,7 +2196,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<QueuedJob>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<ScanBatch>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<ScanDraft>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
-        modelBuilder.Entity<UserAccount>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<VendorDispatch>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<VendorRating>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
 

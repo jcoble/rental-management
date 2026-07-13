@@ -76,11 +76,6 @@ public class ConversationNotificationTests : IDisposable
     [Fact]
     public async Task TenantStartAsync_WithoutLeaseResponsibility_CommitsMessageButNoRecipientNotification()
     {
-        var role = new IdentityRole<int>(nameof(UserRole.Admin))
-        {
-            Id = 11,
-            NormalizedName = nameof(UserRole.Admin).ToUpperInvariant(),
-        };
         var tenant = new Tenant
         {
             PortfolioId = 1,
@@ -89,19 +84,7 @@ public class ConversationNotificationTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
-        var legacyAdmin = new ApplicationUser
-        {
-            Id = 12,
-            PortfolioId = 1,
-            UserName = "legacy-admin@example.test",
-            NormalizedUserName = "LEGACY-ADMIN@EXAMPLE.TEST",
-            DisplayName = "Legacy admin",
-            CreatedAt = DateTime.UtcNow,
-        };
-        _ctx.Db.Roles.Add(role);
         _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.Users.Add(legacyAdmin);
-        _ctx.Db.UserRoles.Add(new IdentityUserRole<int> { UserId = legacyAdmin.Id, RoleId = role.Id });
         _ctx.Db.SaveChanges();
 
         var result = await CreateSut().TenantStartAsync(
@@ -355,18 +338,6 @@ public class ConversationNotificationTests : IDisposable
 
     private Tenant SeedTenantWithStaffAndTenantUsers()
     {
-        _ctx.Db.Roles.AddRange(
-            new IdentityRole<int>(nameof(UserRole.Admin))
-            {
-                Id = 1,
-                NormalizedName = nameof(UserRole.Admin).ToUpperInvariant(),
-            },
-            new IdentityRole<int>(nameof(UserRole.Tenant))
-            {
-                Id = 2,
-                NormalizedName = nameof(UserRole.Tenant).ToUpperInvariant(),
-            });
-
         var tenant = new Tenant
         {
             Id = 8,
@@ -383,7 +354,6 @@ public class ConversationNotificationTests : IDisposable
             new ApplicationUser
             {
                 Id = 10,
-                PortfolioId = 1,
                 UserName = "admin@example.test",
                 NormalizedUserName = "ADMIN@EXAMPLE.TEST",
                 Email = "admin@example.test",
@@ -393,7 +363,6 @@ public class ConversationNotificationTests : IDisposable
             new ApplicationUser
             {
                 Id = 20,
-                PortfolioId = 1,
                 UserName = "emily@example.test",
                 NormalizedUserName = "EMILY@EXAMPLE.TEST",
                 Email = "emily@example.test",
@@ -403,18 +372,12 @@ public class ConversationNotificationTests : IDisposable
             new ApplicationUser
             {
                 Id = 30,
-                PortfolioId = 1,
                 UserName = "decoy@example.test",
                 NormalizedUserName = "DECOY@EXAMPLE.TEST",
                 Email = "decoy@example.test",
                 NormalizedEmail = "DECOY@EXAMPLE.TEST",
                 DisplayName = "Unrelated property manager",
             });
-        _ctx.Db.UserRoles.AddRange(
-            new IdentityUserRole<int> { UserId = 10, RoleId = 1 },
-            new IdentityUserRole<int> { UserId = 20, RoleId = 2 },
-            // A legacy Admin role is intentionally insufficient without an in-scope TSK-670 assignment.
-            new IdentityUserRole<int> { UserId = 30, RoleId = 1 });
         var now = DateTime.UtcNow;
         var tenantProperty = new Property
         {

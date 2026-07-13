@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -17,7 +16,6 @@ namespace RentalCommand.Api.Services.Auth;
 public class IdentitySeeder
 {
     private readonly UserManager<ApplicationUser> _userManager;
-    private readonly RoleManager<IdentityRole<int>> _roleManager;
     private readonly RentalCommandDbContext _dbContext;
     private readonly SeedSettings _settings;
     private readonly ITenantPortalProvisioningService _portalProvisioning;
@@ -27,7 +25,6 @@ public class IdentitySeeder
 
     public IdentitySeeder(
         UserManager<ApplicationUser> userManager,
-        RoleManager<IdentityRole<int>> roleManager,
         RentalCommandDbContext dbContext,
         IOptions<SeedSettings> settings,
         ITenantPortalProvisioningService portalProvisioning,
@@ -36,7 +33,6 @@ public class IdentitySeeder
         TimeProvider timeProvider)
     {
         _userManager = userManager;
-        _roleManager = roleManager;
         _dbContext = dbContext;
         _settings = settings.Value;
         _portalProvisioning = portalProvisioning;
@@ -47,13 +43,9 @@ public class IdentitySeeder
 
     public async Task SeedAsync(CancellationToken ct = default)
     {
-        // Tenant portal identity is still a separate relationship-auth surface. Management access no
-        // longer consumes any of these roles, and fresh administrator bootstrap never writes one.
-        await EnsureRolesAsync();
-
         if (!_settings.Enabled)
         {
-            _logger.LogDebug("Identity seeding disabled (Seed:Enabled=false); roles ensured, skipping admin/demo seed.");
+            _logger.LogDebug("Identity seeding disabled (Seed:Enabled=false); skipping admin/demo seed.");
             return;
         }
 
@@ -70,7 +62,8 @@ public class IdentitySeeder
             _settings.AdminPassword,
             emailConfirmed: true,
             ct);
-        if (!bootstrap.Succeeded || bootstrap.User?.PortfolioId is not int portfolioId)
+        if (!bootstrap.Succeeded || bootstrap.User is not { } seededUser
+            || bootstrap.PortfolioId is not int portfolioId)
         {
             _logger.LogError(
                 "Failed to seed canonical administrator {Email}: {Errors}",
@@ -88,28 +81,8 @@ public class IdentitySeeder
         _logger.LogInformation(
             "Seeded canonical administrator {Email} (id {UserId}) in workspace {PortfolioId}.",
             _settings.AdminEmail,
-            bootstrap.User.Id,
+            seededUser.Id,
             portfolioId);
-    }
-
-    private async Task EnsureRolesAsync()
-    {
-        foreach (var role in Enum.GetNames<UserRole>())
-        {
-            if (!await _roleManager.RoleExistsAsync(role))
-            {
-                var result = await _roleManager.CreateAsync(new IdentityRole<int>(role));
-                if (result.Succeeded)
-                {
-                    _logger.LogInformation("Seeded role {Role}.", role);
-                }
-                else
-                {
-                    _logger.LogError("Failed to seed role {Role}: {Errors}", role,
-                        string.Join("; ", result.Errors.Select(e => e.Description)));
-                }
-            }
-        }
     }
 
     private async Task EnsureTenantPortalAccountsAsync(int portfolioId, CancellationToken ct)
