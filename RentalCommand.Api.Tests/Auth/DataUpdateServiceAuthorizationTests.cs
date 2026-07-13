@@ -36,7 +36,6 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
 
         _service = new DataUpdateService(
             _context.Db,
-            new RlsExecutionContext(),
             hub.Object,
             TimeProvider.System,
             Mock.Of<ILogger<DataUpdateService>>());

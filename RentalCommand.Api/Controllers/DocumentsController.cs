@@ -11,6 +11,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -431,6 +432,23 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             .FirstOrDefaultAsync(ct);
     }
 
+    private bool TryReadWorkspaceScope(out WorkspaceReadScope scope)
+    {
+        scope = default;
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return false;
+        }
+
+        scope = new WorkspaceReadScope(
+            active.PortfolioId,
+            active.UserId,
+            active.SessionId,
+            active.AccessContextId,
+            active.AccessRevision);
+        return true;
+    }
+
     private Task<bool> StaffMayAccessTargetAsync(
         WorkspaceReadScope scope,
         StoredDocumentTarget target,
@@ -476,7 +494,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             StoredDocumentTarget.Vendor => _db.Vendors.AsNoTracking().AnyAsync(vendor =>
                 vendor.Id == entityId && vendor.PortfolioId == scope.PortfolioId &&
                 _db.AuthorizedWorkspaceAssignments(
-                    scope, [capability], CapabilityAuthorizationTargetKind.Property, DateTime.UtcNow).Any(), ct),
+                    scope, new[] { capability }, CapabilityAuthorizationTargetKind.Property, DateTime.UtcNow).Any(), ct),
             _ => Task.FromResult(false),
         };
     }

@@ -2,10 +2,12 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Npgsql;
 using RentalCommand.Api.Data;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 using RentalCommand.Data.Scanning;
+using RentalCommand.Data.Security;
 using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Data;
 using Testcontainers.PostgreSql;
@@ -15,8 +17,12 @@ namespace RentalCommand.IntegrationTests;
 /// <summary>Real PostgreSQL proof for the scan and dev-simulation leased queue boundaries.</summary>
 public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
 {
+    private const string ApiPassword = "scan-claim-api-password";
+    private const string EnginePassword = "scan-claim-engine-password";
+
     private PostgreSqlContainer? _postgres;
     private string _connectionString = string.Empty;
+    private string _engineConnectionString = string.Empty;
     private bool _dockerAvailable;
 
     public async Task InitializeAsync()
@@ -44,6 +50,15 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         // fail the suite rather than being disguised as an unavailable Docker daemon.
         await using var db = NewContext();
         await db.Database.MigrateAsync();
+        var apiConnectionString = RuntimeConnectionString(DatabaseRuntimeIdentity.ApiRole, ApiPassword);
+        _engineConnectionString = RuntimeConnectionString(
+            DatabaseRuntimeIdentity.EngineRole,
+            EnginePassword);
+        await RuntimeDatabaseRoleProvisioner.ProvisionAsync(
+            _connectionString,
+            apiConnectionString,
+            _engineConnectionString,
+            allowDevelopmentDefaults: true);
     }
 
     public async Task DisposeAsync()
@@ -116,17 +131,18 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
         var portfolioId = await SeedPortfolioAsync(now);
         await SeedScansAsync(portfolioId, now, 1);
 
-        var failClosedInterceptor = new RlsConnectionInterceptor(
-            new HttpContextAccessor(),
-            new RlsExecutionContext());
+        var failClosedInterceptor = new RlsConnectionInterceptor(new HttpContextAccessor());
         await using (var failClosed = NewContext(rlsInterceptor: failClosedInterceptor))
         {
-            (await new ScanProcessingClaimStore(failClosed)
-                .ClaimAsync("no-engine-context", TimeSpan.FromMinutes(2), 1))
-                .Should().BeEmpty();
+            var act = async () => await new ScanProcessingClaimStore(failClosed)
+                .ClaimAsync("owner-cannot-masquerade-as-api", TimeSpan.FromMinutes(2), 1);
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*restricted direct-login role 'rentalcommand_api'*");
         }
 
-        await using var engineContext = NewContext(rlsInterceptor: new EngineRlsInterceptor());
+        await using var engineContext = NewContext(
+            _engineConnectionString,
+            new EngineRlsInterceptor());
         (await new ScanProcessingClaimStore(engineContext)
             .ClaimAsync("engine-context", TimeSpan.FromMinutes(2), 1))
             .Should().ContainSingle();
@@ -236,4 +252,12 @@ public sealed class ScanAndSimulationClaimStoreTests : IAsyncLifetime
 
         return new RentalCommandDbContext(options.Options);
     }
+
+    private string RuntimeConnectionString(string role, string password) =>
+        new NpgsqlConnectionStringBuilder(_connectionString)
+        {
+            Username = role,
+            Password = password,
+            Pooling = false,
+        }.ConnectionString;
 }

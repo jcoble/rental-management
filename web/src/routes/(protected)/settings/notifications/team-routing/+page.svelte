@@ -194,7 +194,7 @@
 				{:else}
 					<div class="grid gap-4 md:grid-cols-3">
 						<label class="flex min-h-20 items-start gap-3 rounded-lg border border-border p-4"><Checkbox checked={briefingForm.enabled} onCheckedChange={(value) => (briefingForm.enabled = value === true)} /><span><span class="block font-medium">Send every morning</span><span class="block text-sm text-muted-foreground">Turn off to pause scheduled briefings.</span></span></label>
-						<label class="block rounded-lg border border-border p-4"><span class="text-sm font-medium">Local send hour</span><Input class="mt-2" type="number" min="0" max="23" value={briefingForm.sendHourLocal} oninput={(event) => (briefingForm.sendHourLocal = Number(event.currentTarget.value))} /><span class="mt-1 block text-xs text-muted-foreground">0–23 in {briefingQuery.data.timeZone}</span></label>
+						<label class="block rounded-lg border border-border p-4"><span class="text-sm font-medium">Local send hour</span><Input class="mt-2" type="number" min="0" max="23" bind:value={briefingForm.sendHourLocal} /><span class="mt-1 block text-xs text-muted-foreground">0–23 in {briefingQuery.data.timeZone}</span></label>
 						<label class="flex min-h-20 items-start gap-3 rounded-lg border border-border p-4"><Checkbox checked={briefingForm.includeEmpty} onCheckedChange={(value) => (briefingForm.includeEmpty = value === true)} /><span><span class="block font-medium">Send all-clear days</span><span class="block text-sm text-muted-foreground">Also send when nothing currently needs attention.</span></span></label>
 					</div>
 					<Button onclick={() => saveBriefingMutation.mutate()} disabled={saveBriefingMutation.isPending || !briefingHourIsValid}>{saveBriefingMutation.isPending ? 'Saving…' : 'Save Morning Briefing'}</Button>

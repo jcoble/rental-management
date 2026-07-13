@@ -136,8 +136,12 @@ string? engineConnectionStringForMigration = null;
 
 if (migrateOnly)
 {
-    migratorConnectionString ??= throw new InvalidOperationException(
-        "The one-shot migration process requires ConnectionStrings:MigratorConnection.");
+    if (string.IsNullOrWhiteSpace(migratorConnectionString))
+    {
+        throw new InvalidOperationException(
+            "The one-shot migration process requires ConnectionStrings:MigratorConnection.");
+    }
+
     engineConnectionStringForMigration = builder.Configuration.GetConnectionString("EngineConnection")
         ?? throw new InvalidOperationException(
             "The one-shot migration process requires ConnectionStrings:EngineConnection.");

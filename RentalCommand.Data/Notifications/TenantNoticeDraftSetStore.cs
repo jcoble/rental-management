@@ -246,6 +246,19 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         WHERE money.candidate_rank = 1
         """;
 
+    private const string TenantNameToken = "{{tenant_name}}";
+    private const string PropertyAddressToken = "{{property_address}}";
+    private const string UnitNumberToken = "{{unit_number}}";
+    private const string LeaseStartDateToken = "{{lease_start_date}}";
+    private const string LeaseEndDateToken = "{{lease_end_date}}";
+    private const string RentAmountToken = "{{rent_amount}}";
+    private const string OverdueAmountToken = "{{overdue_amount}}";
+    private const string RentDueDateToken = "{{rent_due_date}}";
+    private const string LateFeeAmountToken = "{{late_fee_amount}}";
+    private const string TodayToken = "{{today}}";
+    private const string PortfolioNameToken = "{{portfolio_name}}";
+    private const string RenewalStartDateToken = "{{renewal_start_date}}";
+
     private static string BuildSql(string sourceSql) => $$"""
         WITH source_candidates AS MATERIALIZED (
         {{sourceSql}}
@@ -410,31 +423,31 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
           SELECT token.*,
                  left(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
                    token."TemplateSubject",
-                   '{{tenant_name}}', token."RenderedTenantName"),
-                   '{{property_address}}', token."PropertyLabel"),
-                   '{{unit_number}}', COALESCE(token."UnitNumber", '')),
-                   '{{lease_start_date}}', token."LeaseStartText"),
-                   '{{lease_end_date}}', token."LeaseEndText"),
-                   '{{rent_amount}}', token."RentAmountText"),
-                   '{{overdue_amount}}', token."OverdueAmountText"),
-                   '{{rent_due_date}}', token."DueOnText"),
-                   '{{late_fee_amount}}', token."LateFeeAmountText"),
-                   '{{today}}', token."TodayText"),
-                   '{{portfolio_name}}', token."PortfolioName"), 200) AS "RenderedSubject",
+                   '{{TenantNameToken}}', token."RenderedTenantName"),
+                   '{{PropertyAddressToken}}', token."PropertyLabel"),
+                   '{{UnitNumberToken}}', COALESCE(token."UnitNumber", '')),
+                   '{{LeaseStartDateToken}}', token."LeaseStartText"),
+                   '{{LeaseEndDateToken}}', token."LeaseEndText"),
+                   '{{RentAmountToken}}', token."RentAmountText"),
+                   '{{OverdueAmountToken}}', token."OverdueAmountText"),
+                   '{{RentDueDateToken}}', token."DueOnText"),
+                   '{{LateFeeAmountToken}}', token."LateFeeAmountText"),
+                   '{{TodayToken}}', token."TodayText"),
+                   '{{PortfolioNameToken}}', token."PortfolioName"), 200) AS "RenderedSubject",
                  left(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
                    token."TemplateBody",
-                   '{{tenant_name}}', token."RenderedTenantName"),
-                   '{{property_address}}', token."PropertyLabel"),
-                   '{{unit_number}}', COALESCE(token."UnitNumber", '')),
-                   '{{lease_start_date}}', token."LeaseStartText"),
-                   '{{lease_end_date}}', token."LeaseEndText"),
-                   '{{rent_amount}}', token."RentAmountText"),
-                   '{{overdue_amount}}', token."OverdueAmountText"),
-                   '{{rent_due_date}}', token."DueOnText"),
-                   '{{late_fee_amount}}', token."LateFeeAmountText"),
-                   '{{today}}', token."TodayText"),
-                   '{{portfolio_name}}', token."PortfolioName"),
-                   '{{renewal_start_date}}', token."RenewalStartText"), 4000) AS "RenderedBody",
+                   '{{TenantNameToken}}', token."RenderedTenantName"),
+                   '{{PropertyAddressToken}}', token."PropertyLabel"),
+                   '{{UnitNumberToken}}', COALESCE(token."UnitNumber", '')),
+                   '{{LeaseStartDateToken}}', token."LeaseStartText"),
+                   '{{LeaseEndDateToken}}', token."LeaseEndText"),
+                   '{{RentAmountToken}}', token."RentAmountText"),
+                   '{{OverdueAmountToken}}', token."OverdueAmountText"),
+                   '{{RentDueDateToken}}', token."DueOnText"),
+                   '{{LateFeeAmountToken}}', token."LateFeeAmountText"),
+                   '{{TodayToken}}', token."TodayText"),
+                   '{{PortfolioNameToken}}', token."PortfolioName"),
+                   '{{RenewalStartDateToken}}', token."RenewalStartText"), 4000) AS "RenderedBody",
                  CASE token."AutomationKey"
                    WHEN 'rent-reminder' THEN concat('Rent due ', token."DueOnText", '.')
                    WHEN 'late-rent-late-fee' THEN concat(
