@@ -36,9 +36,9 @@ public class StripeCheckoutTests : IDisposable
             PortfolioId, tenantId: 10, tenantAccountId: 1, chargeLedgerEntryId: 1,
             actorUserId: 1, successUrl: null, cancelUrl: null, CancellationToken.None);
 
-        // Gated: no Stripe call, no transaction created.
+        // Gated: no Stripe call and no canonical provider attempt created.
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
-        _ctx.Db.PaymentTransactions.Should().BeEmpty();
+        _ctx.Db.TenantPaymentAttempts.Should().BeEmpty();
     }
 
     [Fact]

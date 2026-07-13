@@ -220,7 +220,8 @@ public class CsvImportServiceTests : IDisposable
         command.RequiredCapability.Should().Be("money.payments.manage");
         command.BusinessKey.Should().StartWith("csv-receipt:");
         command.DeliveryIdempotencyKey.Should().Contain("operation-digest:2");
-        (await _ctx.Db.Payments.CountAsync()).Should().Be(0);
+        (await _ctx.Db.TenantLedgerEntries.CountAsync()).Should().Be(0,
+            "the fake atomic unit returns the canonical receipt id without persisting a ledger row");
     }
 
     [Fact]

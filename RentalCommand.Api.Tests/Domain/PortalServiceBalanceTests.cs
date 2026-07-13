@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -19,6 +20,58 @@ public class PortalServiceBalanceTests : IDisposable
     public PortalServiceBalanceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _ctx.Db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_tenant_account_balances" AS
+            SELECT account."PortfolioId" AS "PortfolioId",
+                   account."LeaseManagementId" AS "LeaseManagementId",
+                   account."Id" AS "TenantAccountId",
+                   max(
+                     COALESCE((
+                       SELECT sum(entry."Amount")
+                       FROM "TenantLedgerEntries" AS entry
+                       WHERE entry."PortfolioId" = account."PortfolioId"
+                         AND entry."TenantAccountId" = account."Id"
+                         AND entry."Direction" = 'Debit'
+                     ), 0) - COALESCE((
+                       SELECT sum(entry."Amount")
+                       FROM "TenantLedgerEntries" AS entry
+                       WHERE entry."PortfolioId" = account."PortfolioId"
+                         AND entry."TenantAccountId" = account."Id"
+                         AND entry."Direction" = 'Credit'
+                     ), 0),
+                     0
+                   ) AS "ReceivableBalance",
+                   COALESCE((
+                     SELECT sum(max(charge."Amount" - COALESCE((
+                       SELECT sum(allocation."Amount")
+                       FROM "TenantLedgerAllocations" AS allocation
+                       WHERE allocation."PortfolioId" = charge."PortfolioId"
+                         AND allocation."TenantAccountId" = charge."TenantAccountId"
+                         AND allocation."DebitEntryId" = charge."Id"
+                     ), 0), 0))
+                     FROM "TenantLedgerEntries" AS charge
+                     WHERE charge."PortfolioId" = account."PortfolioId"
+                       AND charge."TenantAccountId" = account."Id"
+                       AND charge."Direction" = 'Debit'
+                       AND charge."DueOn" < date('now')
+                   ), 0) AS "PastDueAmount",
+                   COALESCE((
+                     SELECT count(*)
+                     FROM "TenantLedgerEntries" AS charge
+                     WHERE charge."PortfolioId" = account."PortfolioId"
+                       AND charge."TenantAccountId" = account."Id"
+                       AND charge."Direction" = 'Debit'
+                       AND charge."DueOn" < date('now')
+                       AND charge."Amount" > COALESCE((
+                         SELECT sum(allocation."Amount")
+                         FROM "TenantLedgerAllocations" AS allocation
+                         WHERE allocation."PortfolioId" = charge."PortfolioId"
+                           AND allocation."TenantAccountId" = charge."TenantAccountId"
+                           AND allocation."DebitEntryId" = charge."Id"
+                       ), 0)
+                   ), 0) AS "PastDueCount"
+            FROM "TenantAccounts" AS account
+            """);
         _sut = new PortalService(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
@@ -29,16 +82,16 @@ public class PortalServiceBalanceTests : IDisposable
     {
         var tenant = SeedTenant("Blake", "Hayes");
         var otherTenant = SeedTenant("Other", "Tenant");
-        var lease = SeedLease(tenant);
-        var otherLease = SeedLease(otherTenant);
+        var account = SeedTenantAccount(tenant);
+        var otherAccount = SeedTenantAccount(otherTenant);
         var todayUtc = DateTime.UtcNow.Date;
 
-        SeedPayment(lease, PaymentStatus.Scheduled, 100m, todayUtc);
-        SeedPayment(lease, PaymentStatus.Partial, 80m, todayUtc, amountPaid: 20m);
-        SeedPayment(lease, PaymentStatus.Scheduled, 30m, todayUtc.AddDays(-1));
-        SeedPayment(lease, PaymentStatus.Late, 40m, todayUtc);
-        SeedPayment(lease, PaymentStatus.Paid, 25m, todayUtc);
-        SeedPayment(otherLease, PaymentStatus.Scheduled, 999m, todayUtc.AddDays(-1));
+        SeedCharge(account, 100m, todayUtc);
+        SeedCharge(account, 80m, todayUtc, amountPaid: 20m);
+        SeedCharge(account, 30m, todayUtc.AddDays(-1));
+        SeedCharge(account, 40m, todayUtc.AddDays(-1));
+        SeedCharge(account, 25m, todayUtc, amountPaid: 25m);
+        SeedCharge(otherAccount, 999m, todayUtc.AddDays(-1));
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
@@ -51,7 +104,7 @@ public class PortalServiceBalanceTests : IDisposable
         result.OverdueCount.Should().Be(2);
 
         var balanceQueries = _commands
-            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+            .Where(sql => sql.Contains("vw_tenant_account_balances", StringComparison.OrdinalIgnoreCase))
             .ToList();
         balanceQueries.Should().ContainSingle("portal balance should be one DB-side aggregate query");
         balanceQueries[0].Should().Contain("ef_sum");
@@ -59,18 +112,16 @@ public class PortalServiceBalanceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetBalanceAsync_CountsPastDueFailedPaymentAsOutstandingAndOverdue()
+    public async Task GetBalanceAsync_CountsUnsettledPastDueChargeAsOutstandingAndOverdue()
     {
-        // A Failed charge collected nothing, so its full Amount is still owed — and once it is past
-        // due it is overdue too (Outstanding + Overdue + overdueCount). This matches the payments UI,
-        // which marks Failed as "still owed" and keeps it payable. A separate Paid payment is all that
-        // lands in Collected; the failed amount is not double-counted there.
+        // One old charge is fully settled while a newer past-due charge remains entirely open.
+        // Collected cash and outstanding receivables therefore both equal one month's rent.
         var tenant = SeedTenant("Marcus", "Williams");
-        var lease = SeedLease(tenant);
+        var account = SeedTenantAccount(tenant);
         var todayUtc = DateTime.UtcNow.Date;
 
-        SeedPayment(lease, PaymentStatus.Failed, 1050m, todayUtc.AddDays(-1));
-        SeedPayment(lease, PaymentStatus.Paid, 1050m, todayUtc.AddDays(-30));
+        SeedCharge(account, 1050m, todayUtc.AddDays(-1));
+        SeedCharge(account, 1050m, todayUtc.AddDays(-30), amountPaid: 1050m);
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
@@ -83,7 +134,7 @@ public class PortalServiceBalanceTests : IDisposable
         result.OverdueCount.Should().Be(1);
 
         var balanceQueries = _commands
-            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+            .Where(sql => sql.Contains("vw_tenant_account_balances", StringComparison.OrdinalIgnoreCase))
             .ToList();
         balanceQueries.Should().ContainSingle("portal balance should remain one DB-side aggregate query");
     }
@@ -106,9 +157,25 @@ public class PortalServiceBalanceTests : IDisposable
         return tenant;
     }
 
-    private Lease SeedLease(Tenant tenant)
+    private TenantAccountFixture SeedTenantAccount(Tenant tenant)
     {
         var now = DateTime.UtcNow;
+        var actor = _ctx.Db.Users.SingleOrDefault(user => user.Id == 1);
+        if (actor is null)
+        {
+            actor = new ApplicationUser
+            {
+                Id = 1,
+                PortfolioId = PortfolioId,
+                UserName = "portal-balance@example.test",
+                NormalizedUserName = "PORTAL-BALANCE@EXAMPLE.TEST",
+                Email = "portal-balance@example.test",
+                NormalizedEmail = "PORTAL-BALANCE@EXAMPLE.TEST",
+                DisplayName = "Portal Balance Actor",
+                CreatedAt = now,
+            };
+            _ctx.Db.Users.Add(actor);
+        }
         var property = new Property
         {
             PortfolioId = PortfolioId,
@@ -121,57 +188,146 @@ public class PortalServiceBalanceTests : IDisposable
             UpdatedAt = now,
         };
 
-        var lease = new Lease
+        var unit = new Unit
         {
             PortfolioId = PortfolioId,
             Property = property,
-            Unit = new Unit
-            {
-                Property = property,
-                UnitNumber = "2B",
-                Bedrooms = 2,
-                Bathrooms = 1,
-                MarketRent = 1200m,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            Tenant = tenant,
-            LeaseNumber = $"L-{tenant.FirstName}",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-1),
-            EndDate = now.Date.AddYears(1),
-            MonthlyRent = 1200m,
+            UnitNumber = "2B",
+            Bedrooms = 2,
+            Bathrooms = 1,
+            MarketRent = 1200m,
             CreatedAt = now,
             UpdatedAt = now,
         };
-
-        _ctx.Db.Leases.Add(lease);
+        _ctx.Db.AddRange(property, unit);
         _ctx.Db.SaveChanges();
-        return lease;
+
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"LM-{tenant.Id}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+            RowVersion = Guid.NewGuid(),
+        };
+        _ctx.Db.LeaseManagements.Add(management);
+        _ctx.Db.SaveChanges();
+
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{tenant.Id}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{tenant.Id}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 1200m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 0m,
+            LateFeeAmount = 0m,
+            GracePeriodDays = 0,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        _ctx.Db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Canonical portal balance fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        });
+        _ctx.Db.AddRange(account, agreement);
+        _ctx.Db.SaveChanges();
+        return new TenantAccountFixture(account, agreement);
     }
 
-    private void SeedPayment(
-        Lease lease,
-        PaymentStatus status,
+    private void SeedCharge(
+        TenantAccountFixture fixture,
         decimal amount,
         DateTime dueDate,
         decimal? amountPaid = null)
     {
         var now = DateTime.UtcNow;
-        _ctx.Db.Payments.Add(new Payment
+        var charge = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = fixture.Account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueDate),
+            DueOn = DateOnly.FromDateTime(dueDate),
+            PostedAtUtc = now,
+            Description = "Rent charge",
+            BusinessKey = $"portal-charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = fixture.Agreement.Id,
+            CreatedByUserId = 1,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(charge);
+
+        if (amountPaid is not > 0m)
+            return;
+
+        var receipt = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = fixture.Account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amountPaid.Value,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueDate),
+            PostedAtUtc = now,
+            Description = "Payment receipt",
+            BusinessKey = $"portal-receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(receipt);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
         {
             PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = status,
-            Amount = amount,
-            AmountPaid = amountPaid,
-            DueDate = dueDate,
-            PaidDate = status == PaymentStatus.Paid ? dueDate : null,
-            CreatedAt = now,
-            UpdatedAt = now,
+            TenantAccountId = fixture.Account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = amountPaid.Value,
+            AllocatedAtUtc = now,
+            BusinessKey = $"portal-allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
         });
     }
+
+    private sealed record TenantAccountFixture(TenantAccount Account, LeaseAgreement Agreement);
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {

@@ -298,7 +298,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task SignedLeaseImport_PersistsCanonicalAgreementArtifactAndNoLegacyLeaseGraph()
+    public async Task SignedLeaseImport_PersistsCanonicalAgreementArtifactAndPartyGraph()
     {
         SkipIfDockerUnavailable();
         var source = await SeedLeaseDraftAsync("Zillow signed lease import");
@@ -308,16 +308,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             _tenantId,
             leaseManagementId: _leaseManagementId,
             tenantAccountId: _tenantAccountId);
-        int legacyLeaseCount;
-        int legacyPartyCount;
-        int legacyPaymentCount;
-        await using (var before = Scope())
-        {
-            legacyLeaseCount = await before.Db.Leases.CountAsync();
-            legacyPartyCount = await before.Db.LeaseTenants.CountAsync();
-            legacyPaymentCount = await before.Db.Payments.CountAsync();
-        }
-
         var outcome = await UnitOfWork.ExecuteAsync(
             ScanConfirmationCommandIdentity.Create(
                 _portfolioId, source.DraftId, "signed-zillow-import"),
@@ -342,9 +332,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             row.LeaseManagementId == _leaseManagementId)).Should().Be(1);
         (await verify.Db.LeaseAgreementSigners.CountAsync(row =>
             row.LeaseAgreementId == agreement.Id)).Should().Be(1);
-        (await verify.Db.Leases.CountAsync()).Should().Be(legacyLeaseCount);
-        (await verify.Db.LeaseTenants.CountAsync()).Should().Be(legacyPartyCount);
-        (await verify.Db.Payments.CountAsync()).Should().Be(legacyPaymentCount);
     }
 
     [SkippableFact]
