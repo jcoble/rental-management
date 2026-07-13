@@ -121,6 +121,8 @@ describe('onboarding flow state', () => {
 		assert.match(source, /currentStep\.key === 'import'/);
 		assert.match(source, /<LeaseFirstImport[^>]*oncomplete=\{handleLeaseImportComplete\}/s);
 		assert.match(source, /leaseImportCreatedSpine/);
-		assert.match(source, /if \(!result\.leaseId\)/);
+		assert.match(source, /if \(!result\.leaseManagementId \|\| !result\.agreementId\)/);
+		assert.match(source, /queryKey: \['lease-managements'\]/);
+		assert.doesNotMatch(source, /result\.leaseId/);
 	});
 });

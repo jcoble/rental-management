@@ -15,6 +15,51 @@ public sealed class LeaseAgreementDraftSignerRequest
     public bool IsRequired { get; set; } = true;
 }
 
+public sealed class LeaseAgreementDraftSignerResponse
+{
+    public int LeaseAgreementSignerId { get; init; }
+    public int? LeaseManagementPartyId { get; init; }
+    public int? TenantId { get; init; }
+    public LeaseLegalSignerRole SignerRole { get; init; }
+    public string NameSnapshot { get; init; } = string.Empty;
+    public string EmailSnapshot { get; init; } = string.Empty;
+    public short SigningOrder { get; init; }
+    public bool IsRequired { get; init; }
+}
+
+/// <summary>
+/// Exact, reloadable state for an unissued Agreement draft. DraftRevision is the optimistic
+/// concurrency token required by both edit and issuance-preparation commands.
+/// </summary>
+public sealed class LeaseAgreementDraftDetailResponse
+{
+    public int LeaseManagementId { get; init; }
+    public int LeaseAgreementId { get; init; }
+    public Guid PublicId { get; init; }
+    public int VersionNumber { get; init; }
+    public int DraftRevision { get; init; }
+    public string AgreementNumber { get; init; } = string.Empty;
+    public LeaseAgreementChangeType ChangeType { get; init; }
+    public LeaseAgreementTermType TermType { get; init; }
+    public DateOnly TermStartOn { get; init; }
+    public DateOnly? TermEndOn { get; init; }
+    public DateOnly GoverningFromOn { get; init; }
+    public decimal BaseRentAmount { get; init; }
+    public short RentDueDay { get; init; }
+    public decimal SecurityDepositObligation { get; init; }
+    public decimal LateFeeAmount { get; init; }
+    public short GracePeriodDays { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public int TermsSchemaVersion { get; init; }
+    public JsonElement TermsPayload { get; init; }
+    public int DocumentSourceVersionId { get; init; }
+    public int? DocumentTemplateId { get; init; }
+    public int? DocumentTemplateVersion { get; init; }
+    public IReadOnlyList<LeaseAgreementDraftSignerResponse> Signers { get; init; } = [];
+    public DateTime CreatedAtUtc { get; init; }
+    public DateTime UpdatedAtUtc { get; init; }
+}
+
 public sealed class EditLeaseAgreementDraftRequest
 {
     public int DraftRevision { get; set; }
@@ -47,6 +92,58 @@ public sealed class CreateLeaseAgreementSuccessorDraftRequest
     public DateOnly? TermEndOn { get; set; }
     public DateOnly GoverningFromOn { get; set; }
     public List<LeaseRenewalAddendumDecisionRequest> AddendumDecisions { get; set; } = [];
+}
+
+public sealed class LeaseAgreementRenewalFinancialEffectSummaryResponse
+{
+    public int LeaseAddendumFinancialEffectId { get; init; }
+    public LeaseAddendumFinancialEffectType EffectType { get; init; }
+    public decimal Amount { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public string ChargeCode { get; init; } = string.Empty;
+    public DateOnly? EffectiveFromOn { get; init; }
+    public DateOnly? EffectiveThroughOn { get; init; }
+    public DateOnly? DueOn { get; init; }
+    public string Description { get; init; } = string.Empty;
+}
+
+public sealed class LeaseAgreementEffectiveAddendumSeriesItemResponse
+{
+    public Guid SeriesPublicId { get; init; }
+    public int CurrentLeaseAddendumId { get; init; }
+    public Guid CurrentLeaseAddendumPublicId { get; init; }
+    public int CurrentVersionNumber { get; init; }
+    public int BaseAgreementId { get; init; }
+    public string BaseAgreementNumber { get; init; } = string.Empty;
+    public DateOnly BaseAgreementTermStartOn { get; init; }
+    public DateOnly? BaseAgreementTermEndOn { get; init; }
+    public LeaseAddendumPurpose Purpose { get; init; }
+    /// <summary>The immutable legal Addendum number is the canonical display title.</summary>
+    public string Title { get; init; } = string.Empty;
+    public DateOnly EffectiveFromOn { get; init; }
+    public DateOnly? EffectiveThroughOn { get; init; }
+    public bool DecisionRequired { get; init; }
+    public int FinancialEffectCount { get; init; }
+    public IReadOnlyList<LeaseAgreementRenewalFinancialEffectSummaryResponse> FinancialEffects
+        { get; init; } = [];
+}
+
+/// <summary>
+/// The exact relationship-wide Addendum series set that a Renewal or Month-to-month successor
+/// command must disposition. Source Agreement authority and the effective business date are DB-derived.
+/// </summary>
+public sealed class LeaseAgreementEffectiveAddendumSeriesResponse
+{
+    public int LeaseManagementId { get; init; }
+    public int SourceAgreementId { get; init; }
+    public string SourceAgreementNumber { get; init; } = string.Empty;
+    public DateOnly SourceTermStartOn { get; init; }
+    public DateOnly? SourceTermEndOn { get; init; }
+    public DateOnly SourceGoverningFromOn { get; init; }
+    public DateOnly BusinessDate { get; init; }
+    public bool DecisionRequired { get; init; }
+    public int RequiredDecisionCount { get; init; }
+    public IReadOnlyList<LeaseAgreementEffectiveAddendumSeriesItemResponse> Series { get; init; } = [];
 }
 
 public sealed record LeaseAgreementDraftMutationResponse(
@@ -94,3 +191,51 @@ public sealed record IssueLeaseAgreementResponse(
     int SignatureRequestId,
     int IssuedArtifactId,
     bool Replayed);
+
+/// <summary>Management-only signer progress; deliberately excludes every signing token and token digest.</summary>
+public sealed class LeaseAgreementSignatureProgressSignerResponse
+{
+    public int SignatureSignerId { get; init; }
+    public int LeaseAgreementSignerId { get; init; }
+    public int? LeaseManagementPartyId { get; init; }
+    public int? TenantId { get; init; }
+    public LeaseLegalSignerRole SignerRole { get; init; }
+    public string NameSnapshot { get; init; } = string.Empty;
+    public string EmailSnapshot { get; init; } = string.Empty;
+    public short SigningOrder { get; init; }
+    public bool IsRequired { get; init; }
+    public SignatureSignerStatus Status { get; init; }
+    /// <summary>The invitation was durably queued at issuance; this is not provider delivery proof.</summary>
+    public DateTime DeliveryQueuedAtUtc { get; init; }
+    public DateTime? ViewedAtUtc { get; init; }
+    public DateTime? ConsentGivenAtUtc { get; init; }
+    public DateTime? SignedAtUtc { get; init; }
+    public DateTime? DeclinedAtUtc { get; init; }
+}
+
+/// <summary>Authorized management view of one canonical Agreement signature packet.</summary>
+public sealed class LeaseAgreementSignatureProgressResponse
+{
+    public int LeaseManagementId { get; init; }
+    public int LeaseAgreementId { get; init; }
+    public int SignatureRequestId { get; init; }
+    public Guid SignatureRequestPublicId { get; init; }
+    public string Provider { get; init; } = string.Empty;
+    public string Subject { get; init; } = string.Empty;
+    public SignatureRequestStatus Status { get; init; }
+    public int TotalSignerCount { get; init; }
+    public int RequiredSignerCount { get; init; }
+    public int SignedSignerCount { get; init; }
+    public int DeclinedSignerCount { get; init; }
+    public int IssuedArtifactId { get; init; }
+    public bool IssuedArtifactReady { get; init; }
+    public int? ExecutedArtifactId { get; init; }
+    public bool ExecutedArtifactReady { get; init; }
+    public DateTime PreparedAtUtc { get; init; }
+    public DateTime? ProviderAcceptedAtUtc { get; init; }
+    public DateTime? CompletedAtUtc { get; init; }
+    public DateTime? DeclinedAtUtc { get; init; }
+    public DateTime? VoidedAtUtc { get; init; }
+    public string? FailureCode { get; init; }
+    public IReadOnlyList<LeaseAgreementSignatureProgressSignerResponse> Signers { get; init; } = [];
+}

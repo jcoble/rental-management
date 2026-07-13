@@ -26,12 +26,16 @@
 		type RentalListingLinkContext,
 	} from '$lib/applications/application-link';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import PrepareMoveInDialog from '$lib/components/applications/PrepareMoveInDialog.svelte';
+	import { readPrepareMoveInPrefill } from '$lib/leases/prepare-move-in-prefill';
+	import type { PrepareMoveInResponse } from '$lib/api/endpoints/lease-managements';
 
 	const PAGE_SIZE = 20;
 
 	// Search + status filter + sort + page persisted in the URL so they survive navigating away and back.
 	// Sort/page seed the server-side DataGrid query so applications are filtered/sorted/paged in SQL.
 	const initialParams = page.url.searchParams;
+	const prepareMoveInPrefill = $derived(readPrepareMoveInPrefill(page.url.searchParams));
 	let search = $state(readGridParam(initialParams, 'q'));
 	const debouncedSearch = debounced(() => search, 300);
 
@@ -138,6 +142,23 @@
 		} catch {
 			showError('Could not copy. Select the link and copy it manually.');
 		}
+	}
+
+	function closePrepareMoveIn() {
+		const url = new URL(page.url);
+		url.searchParams.delete('prepareMoveIn');
+		url.searchParams.delete('applicationId');
+		url.searchParams.delete('unitId');
+		url.searchParams.delete('tenantId');
+		void goto(`${url.pathname}${url.search}`, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
+	}
+
+	function finishPrepareMoveIn(result: PrepareMoveInResponse) {
+		void goto(`/leases/${result.leaseManagementId}`);
 	}
 
 	const columns: ColumnDef<ApplicationResponse>[] = [
@@ -281,3 +302,11 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+{#if prepareMoveInPrefill}
+	<PrepareMoveInDialog
+		prefill={prepareMoveInPrefill}
+		onclose={closePrepareMoveIn}
+		onprepared={finishPrepareMoveIn}
+	/>
+{/if}

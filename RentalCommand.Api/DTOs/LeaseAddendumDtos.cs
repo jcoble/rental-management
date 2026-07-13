@@ -27,6 +27,88 @@ public sealed class LeaseAddendumFinancialEffectRequest
     public string Description { get; set; } = string.Empty;
 }
 
+public sealed class LeaseAddendumDraftSignerResponse
+{
+    public int LeaseAddendumSignerId { get; init; }
+    public int? LeaseManagementPartyId { get; init; }
+    public int? TenantId { get; init; }
+    public LeaseLegalSignerRole SignerRole { get; init; }
+    public string NameSnapshot { get; init; } = string.Empty;
+    public string EmailSnapshot { get; init; } = string.Empty;
+    public short SigningOrder { get; init; }
+    public bool IsRequired { get; init; }
+}
+
+public sealed class LeaseAddendumDraftFinancialEffectResponse
+{
+    public int LeaseAddendumFinancialEffectId { get; init; }
+    public LeaseAddendumFinancialEffectType EffectType { get; init; }
+    public decimal Amount { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public string ChargeCode { get; init; } = string.Empty;
+    public DateOnly? EffectiveFromOn { get; init; }
+    public DateOnly? EffectiveThroughOn { get; init; }
+    public DateOnly? DueOn { get; init; }
+    public string Description { get; init; } = string.Empty;
+}
+
+public sealed class LeaseAddendumEligibleBaseAgreementPageResponse
+{
+    public IReadOnlyList<LeaseAddendumEligibleBaseAgreementResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class LeaseAddendumEligibleBaseAgreementResponse
+{
+    public int LeaseAgreementId { get; init; }
+    public Guid PublicId { get; init; }
+    public string AgreementNumber { get; init; } = string.Empty;
+    public int VersionNumber { get; init; }
+    public DateOnly TermStartOn { get; init; }
+    public DateOnly? TermEndOn { get; init; }
+    public DateOnly GoverningFromOn { get; init; }
+    public string Currency { get; init; } = string.Empty;
+}
+
+public sealed class LeaseAddendumSignerCandidatesResponse
+{
+    public IReadOnlyList<LeaseManagementPartyResponse> Items { get; init; } = [];
+}
+
+/// <summary>
+/// Exact, reloadable state for an unissued Addendum draft. DraftRevision is the optimistic
+/// concurrency token required by both edit and issuance-preparation commands.
+/// </summary>
+public sealed class LeaseAddendumDraftDetailResponse
+{
+    public int LeaseManagementId { get; init; }
+    public int LeaseAddendumId { get; init; }
+    public Guid PublicId { get; init; }
+    public Guid SeriesPublicId { get; init; }
+    public int BaseAgreementId { get; init; }
+    public Guid BaseAgreementPublicId { get; init; }
+    public string BaseAgreementNumber { get; init; } = string.Empty;
+    public string BaseAgreementCurrency { get; init; } = string.Empty;
+    public int VersionNumber { get; init; }
+    public int DraftRevision { get; init; }
+    public string AddendumNumber { get; init; } = string.Empty;
+    public LeaseAddendumPurpose Purpose { get; init; }
+    public int? SourceAddendumId { get; init; }
+    public DateOnly EffectiveFromOn { get; init; }
+    public DateOnly? EffectiveThroughOn { get; init; }
+    public int TermsSchemaVersion { get; init; }
+    public JsonElement TermsPayload { get; init; }
+    public int DocumentSourceVersionId { get; init; }
+    public int? DocumentTemplateId { get; init; }
+    public int? DocumentTemplateVersion { get; init; }
+    public IReadOnlyList<LeaseAddendumDraftSignerResponse> Signers { get; init; } = [];
+    public IReadOnlyList<LeaseAddendumDraftFinancialEffectResponse> FinancialEffects { get; init; } = [];
+    public DateTime CreatedAtUtc { get; init; }
+    public DateTime UpdatedAtUtc { get; init; }
+}
+
 public class CreateLeaseAddendumDraftRequest
 {
     public int BaseAgreementId { get; set; }

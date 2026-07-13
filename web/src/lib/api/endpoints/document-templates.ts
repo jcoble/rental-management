@@ -59,6 +59,7 @@ export interface DocumentTemplate {
 export interface DocumentTemplateListParams extends ListParams {
 	kind?: DocumentTemplateKind | '';
 	status?: DocumentTemplateStatus | '';
+	propertyId?: number;
 }
 
 export interface DocumentTemplateListResponse {
@@ -124,7 +125,8 @@ export interface UpdateDocumentTemplateRequest {
 function buildTemplateQuery(params?: DocumentTemplateListParams): string {
 	return buildListQuery(params, {
 		kind: params?.kind || undefined,
-		status: params?.status || undefined
+		status: params?.status || undefined,
+		propertyId: params?.propertyId
 	});
 }
 

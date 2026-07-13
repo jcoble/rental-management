@@ -624,7 +624,7 @@ internal static class LeaseAgreementDraftCommandSupport
 
     private static bool ValidSigners(IReadOnlyList<LeaseAgreementDraftSignerInput> signers) =>
         signers.Count > 0
-        && signers.All(signer => Enum.IsDefined(signer.SignerRole)
+        && signers.All(signer => signer.IsRequired && Enum.IsDefined(signer.SignerRole)
             && !string.IsNullOrWhiteSpace(signer.NameSnapshot) && signer.NameSnapshot.Trim().Length <= 200
             && !string.IsNullOrWhiteSpace(signer.EmailSnapshot) && signer.EmailSnapshot.Trim().Length <= 320
             && signer.SigningOrder > 0

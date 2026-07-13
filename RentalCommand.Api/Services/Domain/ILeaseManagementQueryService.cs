@@ -11,6 +11,8 @@ public interface ILeaseManagementQueryService
     Task<LeaseManagementListResponse> ListPageAsync(
         LeaseManagementReadContext access, LeaseManagementListQuery query,
         CancellationToken ct = default);
+    Task<DateOnly> GetPortfolioBusinessDateAsync(
+        LeaseManagementReadContext access, CancellationToken ct = default);
     Task<LeaseManagementDetailResponse?> GetAsync(
         LeaseManagementReadContext access, int leaseManagementId,
         CancellationToken ct = default);
@@ -20,11 +22,32 @@ public interface ILeaseManagementQueryService
     Task<bool> CanReadAsync(
         LeaseManagementReadContext access, int leaseManagementId,
         CancellationToken ct = default);
+    Task<ReturnPossessionContextResponse> GetReturnPossessionContextAsync(
+        LeaseManagementReadContext access, int leaseManagementId,
+        CancellationToken ct = default);
     Task<LeaseAgreementHistoryPageResponse?> ListAgreementHistoryPageAsync(
         LeaseManagementReadContext access, int leaseManagementId, LeaseLegalHistoryQuery query,
         CancellationToken ct = default);
+    Task<LeaseAgreementDraftDetailResponse?> GetAgreementDraftAsync(
+        LeaseManagementReadContext access, int leaseManagementId, int leaseAgreementId,
+        CancellationToken ct = default);
+    Task<LeaseAgreementSignatureProgressResponse?> GetAgreementSignatureProgressAsync(
+        LeaseManagementReadContext access, int leaseManagementId, int leaseAgreementId,
+        CancellationToken ct = default);
+    Task<LeaseAgreementEffectiveAddendumSeriesResponse?> GetEffectiveAddendumSeriesAsync(
+        LeaseManagementReadContext access, int leaseManagementId, int sourceAgreementId,
+        CancellationToken ct = default);
     Task<LeaseAddendumHistoryPageResponse?> ListAddendumHistoryPageAsync(
         LeaseManagementReadContext access, int leaseManagementId, LeaseLegalHistoryQuery query,
+        CancellationToken ct = default);
+    Task<LeaseAddendumEligibleBaseAgreementPageResponse?> ListAddendumEligibleBaseAgreementsAsync(
+        LeaseManagementReadContext access, int leaseManagementId, ListQuery query,
+        CancellationToken ct = default);
+    Task<LeaseAddendumSignerCandidatesResponse?> GetAddendumSignerCandidatesAsync(
+        LeaseManagementReadContext access, int leaseManagementId,
+        CancellationToken ct = default);
+    Task<LeaseAddendumDraftDetailResponse?> GetAddendumDraftAsync(
+        LeaseManagementReadContext access, int leaseManagementId, int leaseAddendumId,
         CancellationToken ct = default);
     Task<LegalArtifactFileReference?> GetAgreementArtifactAsync(
         LeaseManagementReadContext access, int leaseManagementId, int leaseAgreementId, int artifactId,

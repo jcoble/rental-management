@@ -134,13 +134,62 @@ class ScanLineItem {
 // ---------------------------------------------------------------------------
 
 class ScanCaptureContext {
-  const ScanCaptureContext({this.tenantAccountId});
+  const ScanCaptureContext({
+    this.experience,
+    this.accessContextId,
+    this.accessRevision,
+    this.propertyId,
+    this.unitId,
+    this.leaseManagementId,
+    this.leaseAgreementId,
+    this.tenantAccountId,
+    this.tenantLedgerEntryId,
+    this.workOrderId,
+    this.applicationId,
+    this.rentalListingId,
+    this.sourceLabel,
+  });
 
+  final String? experience;
+  final int? accessContextId;
+  final int? accessRevision;
+  final int? propertyId;
+  final int? unitId;
+  final int? leaseManagementId;
+  final int? leaseAgreementId;
   final int? tenantAccountId;
+  final int? tenantLedgerEntryId;
+  final int? workOrderId;
+  final int? applicationId;
+  final int? rentalListingId;
+  final String? sourceLabel;
+
+  bool get hasBusinessContext =>
+      propertyId != null ||
+      unitId != null ||
+      leaseManagementId != null ||
+      leaseAgreementId != null ||
+      tenantAccountId != null ||
+      tenantLedgerEntryId != null ||
+      workOrderId != null ||
+      applicationId != null ||
+      rentalListingId != null;
 
   factory ScanCaptureContext.fromJson(Map<String, dynamic> json) {
     return ScanCaptureContext(
+      experience: json['experience'] as String?,
+      accessContextId: (json['accessContextId'] as num?)?.toInt(),
+      accessRevision: (json['accessRevision'] as num?)?.toInt(),
+      propertyId: (json['propertyId'] as num?)?.toInt(),
+      unitId: (json['unitId'] as num?)?.toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num?)?.toInt(),
+      leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt(),
       tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num?)?.toInt(),
+      workOrderId: (json['workOrderId'] as num?)?.toInt(),
+      applicationId: (json['applicationId'] as num?)?.toInt(),
+      rentalListingId: (json['rentalListingId'] as num?)?.toInt(),
+      sourceLabel: json['sourceLabel'] as String?,
     );
   }
 }

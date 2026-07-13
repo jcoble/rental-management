@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import {
 	buildRecurringExpenseListPagePath,
 	buildRecurringExpenseListPath,
@@ -46,8 +47,22 @@ export const recurringExpenses = {
 	listPage: (params?: RecurringExpenseListParams) =>
 		api.get<RecurringExpenseListResponse>(buildRecurringExpenseListPagePath(params)),
 	get: (id: number) => api.get<RecurringExpense>(`/recurring-expenses/${id}`),
-	create: (data: Record<string, unknown>) => api.post<RecurringExpense>('/recurring-expenses', data),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`recurring-expenses:create:${JSON.stringify(data)}`, (key) =>
+			api.post<RecurringExpense>('/recurring-expenses', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	update: (id: number, data: Record<string, unknown>) =>
-		api.patch<RecurringExpense>(`/recurring-expenses/${id}`, data),
-	remove: (id: number) => api.delete(`/recurring-expenses/${id}`)
+		idempotentMutation(`recurring-expenses:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<RecurringExpense>(`/recurring-expenses/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`recurring-expenses:delete:${id}`, (key) =>
+			api.delete(`/recurring-expenses/${id}`, {
+				headers: { 'Idempotency-Key': key }
+			})
+		)
 };

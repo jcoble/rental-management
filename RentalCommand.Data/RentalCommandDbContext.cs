@@ -455,7 +455,6 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.SourceContentSha256).HasColumnType("char(64)");
             entity.Property(e => e.SourceLabel).HasMaxLength(100);
             entity.Property(e => e.CaptureExperience).HasConversion<string>().HasMaxLength(30);
-            entity.Property(e => e.CaptureFocusedRecordKind).HasMaxLength(80);
             entity.Property(e => e.ThumbnailPath).HasMaxLength(1024);
             entity.Property(e => e.TargetEntityType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
@@ -469,6 +468,15 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasIndex(e => new { e.Status, e.ProcessingClaimExpiresAtUtc, e.CreatedAt, e.Id });
             entity.HasIndex(e => e.BatchId);
             entity.HasIndex(e => e.SourceStoredFileId);
+            entity.HasIndex(e => e.CapturePropertyId);
+            entity.HasIndex(e => e.CaptureUnitId);
+            entity.HasIndex(e => e.CaptureLeaseManagementId);
+            entity.HasIndex(e => e.CaptureLeaseAgreementId);
+            entity.HasIndex(e => e.CaptureTenantAccountId);
+            entity.HasIndex(e => e.CaptureTenantLedgerEntryId);
+            entity.HasIndex(e => e.CaptureWorkOrderId);
+            entity.HasIndex(e => e.CaptureApplicationId);
+            entity.HasIndex(e => e.CaptureRentalListingId);
             entity.HasIndex(e => new { e.PortfolioId, e.SourceContentSha256 });
             // The owning batch is optional (single-file scans carry null). SetNull rather than Cascade
             // so a draft (and the record it created) survives if a batch row is ever removed.
@@ -479,6 +487,42 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasOne(e => e.SourceStoredFile)
                 .WithMany()
                 .HasForeignKey(e => e.SourceStoredFileId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureProperty)
+                .WithMany()
+                .HasForeignKey(e => e.CapturePropertyId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureUnit)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureUnitId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureLeaseManagement)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureLeaseManagementId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureLeaseAgreement)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureLeaseAgreementId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureTenantAccount)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureTenantAccountId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureTenantLedgerEntry)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureTenantLedgerEntryId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureWorkOrder)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureWorkOrderId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureApplication)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureApplicationId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CaptureRentalListing)
+                .WithMany()
+                .HasForeignKey(e => e.CaptureRentalListingId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

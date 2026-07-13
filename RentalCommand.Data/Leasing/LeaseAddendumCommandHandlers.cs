@@ -40,6 +40,13 @@ public sealed class CreateLeaseAddendumDraftHandler
                 command, 0, Guid.Empty, 0, 0, null,
                 "The template, signer provenance, and financial-effect currency must belong to this relationship.");
         }
+        if (!await LeaseAddendumCommandSupport.ValidateSignerScopeAsync(
+                command, command.Signers, attempt.Leasing, ct))
+        {
+            return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
+                command, 0, Guid.Empty, 0, 0, null,
+                "Every Addendum signer must reference its exact relationship party and tenant pair.");
+        }
         var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
             command.PortfolioId, relationship.Relationship.PropertyId, command.LeaseManagementId,
             command.DocumentTemplateId,
@@ -126,6 +133,14 @@ public sealed class EditLeaseAddendumDraftHandler
             return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
                 command, addendum.Id, addendum.SeriesPublicId, addendum.VersionNumber, addendum.DraftRevision,
                 addendum.ReplacesAddendumId, "The template, signer provenance, and effects are invalid.");
+        }
+        if (!await LeaseAddendumCommandSupport.ValidateSignerScopeAsync(
+                command, command.Signers, attempt.Leasing, ct))
+        {
+            return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
+                command, addendum.Id, addendum.SeriesPublicId, addendum.VersionNumber, addendum.DraftRevision,
+                addendum.ReplacesAddendumId,
+                "Every Addendum signer must reference its exact relationship party and tenant pair.");
         }
         var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
             command.PortfolioId, 0, command.LeaseManagementId, command.DocumentTemplateId,
@@ -219,6 +234,19 @@ public sealed class CorrectLeaseAddendumDraftHandler
                 command, 0, source.SeriesPublicId, source.VersionNumber + 1, 0, source.Id,
                 "Only the latest executed, nonvoid Addendum can be corrected within its effective range.");
         }
+        var existingSuccessor = await LeaseAddendumCommandSupport.LiveCorrectionSuccessors(
+                attempt.Persistence.Query<LeaseAddendum>(),
+                command.PortfolioId,
+                command.LeaseManagementId,
+                source.Id)
+            .AnyAsync(ct);
+        if (existingSuccessor)
+        {
+            return LeaseAddendumCommandSupport.Error(
+                LeaseAddendumDraftMutationOutcome.SourceAddendumNotEligible,
+                command, 0, source.SeriesPublicId, source.VersionNumber + 1, 0, source.Id,
+                "The source Addendum already has a durable correction successor.");
+        }
         var nextVersion = await attempt.Persistence.Query<LeaseAddendum>()
             .Where(item => item.PortfolioId == command.PortfolioId
                 && item.LeaseManagementId == command.LeaseManagementId
@@ -292,6 +320,17 @@ internal static class LeaseAddendumCommandSupport
         ILeaseAddendumCommand command, IAtomicPersistenceSession persistence, DateTime now) =>
         LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, persistence, now);
 
+    internal static IQueryable<LeaseAddendum> LiveCorrectionSuccessors(
+        IQueryable<LeaseAddendum> addenda,
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAddendumId) => addenda.Where(candidate =>
+            candidate.PortfolioId == portfolioId
+            && candidate.LeaseManagementId == leaseManagementId
+            && candidate.ReplacesAddendumId == sourceAddendumId
+            && candidate.DraftCanceledAtUtc == null
+            && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null));
+
     internal static async Task AuthorizeReplayAsync<T>(T command, IAtomicPersistenceSession persistence,
         CancellationToken ct) where T : ILeaseAddendumCommand
     {
@@ -345,7 +384,7 @@ internal static class LeaseAddendumCommandSupport
 
     private static bool ValidSigners(IReadOnlyList<LeaseAddendumDraftSignerInput> signers) =>
         signers.Count > 0
-        && signers.All(item => Enum.IsDefined(item.SignerRole) && item.SigningOrder > 0
+        && signers.All(item => item.IsRequired && Enum.IsDefined(item.SignerRole) && item.SigningOrder > 0
             && !string.IsNullOrWhiteSpace(item.NameSnapshot) && item.NameSnapshot.Trim().Length <= 200
             && !string.IsNullOrWhiteSpace(item.EmailSnapshot) && item.EmailSnapshot.Trim().Length <= 320
             && item.LeaseManagementPartyId.HasValue == item.TenantId.HasValue)
@@ -381,37 +420,44 @@ internal static class LeaseAddendumCommandSupport
 
     internal static async Task<bool> ValidateReferencesAsync(CreateLeaseAddendumDraftCommand command,
         string currency, IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        await ValidateReferencesAsync(command, command.Signers, command.FinancialEffects,
+        await ValidateReferencesAsync(command, command.FinancialEffects,
             command.DocumentTemplateId, currency, persistence, ct);
 
     internal static async Task<bool> ValidateReferencesAsync(EditLeaseAddendumDraftCommand command,
         string currency, IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        await ValidateReferencesAsync(command, command.Signers, command.FinancialEffects,
+        await ValidateReferencesAsync(command, command.FinancialEffects,
             command.DocumentTemplateId, currency, persistence, ct);
 
-    private static async Task<bool> ValidateReferencesAsync(ILeaseAddendumCommand command,
+    internal static Task<bool> ValidateSignerScopeAsync(
+        ILeaseAddendumCommand command,
         IReadOnlyList<LeaseAddendumDraftSignerInput> signers,
+        IAtomicLeaseMutationPersistence persistence,
+        CancellationToken ct) => persistence.ValidateAgreementDraftSignerScopeAsync(
+            command.PortfolioId,
+            command.LeaseManagementId,
+            signers.Select(signer => new AtomicAgreementDraftSignerInput(
+                signer.LeaseManagementPartyId,
+                signer.TenantId,
+                (int)signer.SignerRole,
+                signer.NameSnapshot,
+                signer.EmailSnapshot,
+                signer.SigningOrder,
+                signer.IsRequired)).ToArray(),
+            ct);
+
+    private static async Task<bool> ValidateReferencesAsync(ILeaseAddendumCommand command,
         IReadOnlyList<LeaseAddendumFinancialEffectInput> effects, int templateId,
         string currency, IAtomicPersistenceSession persistence, CancellationToken ct)
     {
-        var partyIds = signers.Where(item => item.LeaseManagementPartyId.HasValue)
-            .Select(item => item.LeaseManagementPartyId!.Value).Distinct().ToArray();
-        var tenantIds = signers.Where(item => item.TenantId.HasValue)
-            .Select(item => item.TenantId!.Value).Distinct().ToArray();
-        var facts = await persistence.Query<LeaseManagement>()
+        var templateValid = await persistence.Query<LeaseManagement>()
             .Where(item => item.Id == command.LeaseManagementId && item.PortfolioId == command.PortfolioId)
-            .Select(item => new
-            {
-                PartyCount = item.Parties.Count(party => partyIds.Contains(party.Id)
-                    && tenantIds.Contains(party.TenantId)),
-                TemplateValid = persistence.Query<DocumentTemplate>().Any(template =>
+            .AnyAsync(item => persistence.Query<DocumentTemplate>().Any(template =>
                     template.Id == templateId && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
                     && template.ArchivedAtUtc == null
-                    && (template.PropertyId == null || template.PropertyId == item.PropertyId)),
-            }).SingleAsync(ct);
-        return facts.PartyCount == partyIds.Length && facts.TemplateValid
+                    && (template.PropertyId == null || template.PropertyId == item.PropertyId)), ct);
+        return templateValid
             && effects.All(effect => string.Equals(effect.Currency.Trim(), currency, StringComparison.OrdinalIgnoreCase));
     }
 

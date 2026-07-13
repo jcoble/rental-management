@@ -124,27 +124,42 @@ public class MoneySnapshotExplanations
 }
 
 /// <summary>
-/// The "Who's behind" list: one row per lease/tenant currently behind on rent, plus the headline
+/// The "Who's behind" list: one row per tenant account currently behind on rent, plus the headline
 /// totals. This is the actionable destination behind the dashboard "tenants behind" KPI — the same
-/// past-due definition powers both, so <see cref="TotalCount"/> always equals the KPI count and the
-/// number of <see cref="Items"/>. Computed DB-side in a single grouped query (no rows loaded to count).
+/// past-due definition powers both, so <see cref="TotalCount"/> always equals the KPI count while
+/// <see cref="Items"/> contains one bounded server page. Totals are computed DB-side without loading
+/// rows to count or sum.
 /// </summary>
 public class PastDueResponse
 {
-    /// <summary>One row per behind lease, ordered by who's been waiting longest (oldest due date first).</summary>
+    /// <summary>One row per behind tenant account, ordered by who's been waiting longest (oldest due date first).</summary>
     public IReadOnlyList<PastDueLeaseResponse> Items { get; set; } = [];
 
-    /// <summary>Number of leases/tenants behind — equal to <see cref="Items"/>.Count and the KPI's PastDueCount.</summary>
+    /// <summary>Number of tenant accounts behind across every page — equal to the KPI's PastDueCount.</summary>
     public int TotalCount { get; set; }
 
     /// <summary>Total amount past due across all behind leases — equal to the KPI's PastDueAmount.</summary>
     public decimal TotalPastDueAmount { get; set; }
+
+    /// <summary>
+    /// Portfolio-local date used by the database projections to decide which charges are past due.
+    /// Null only when the authorized scope has no current tenant-account projection rows.
+    /// </summary>
+    public DateOnly? BusinessDate { get; set; }
+
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+/// <summary>Bounded page request for the canonical tenant-account past-due relation.</summary>
+public sealed class PastDueQuery : ListQuery
+{
 }
 
 /// <summary>
-/// One lease/tenant that is behind on rent, with everything the landlord needs to act: who they are,
-/// how much they owe, how many payments are past due, how long they've been late, and a deep-link
-/// anchor to the oldest past-due payment.
+/// One tenant account that is behind on rent, with everything the landlord needs to act: who they are,
+    /// how much they owe, how many charges are past due, how long they've been late, and a deep-link
+    /// anchor to the oldest past-due charge.
 /// </summary>
 public class PastDueLeaseResponse
 {

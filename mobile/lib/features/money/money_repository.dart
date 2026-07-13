@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../properties/capital_assets_repository.dart';
 import 'expense_models.dart';
 import 'transaction_models.dart';
@@ -273,9 +275,13 @@ class MoneyRepository {
   /// category/status.
   Future<Expense> createExpense(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/expenses',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'expenses:create:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/expenses',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -294,9 +300,13 @@ class MoneyRepository {
   /// category/status. Omit a key to leave it unchanged.
   Future<Expense> updateExpense(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/expenses/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'expenses:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/expenses/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -335,7 +345,13 @@ class MoneyRepository {
 
   Future<void> deleteExpense(int id) async {
     try {
-      await _dio.delete<void>('/expenses/$id');
+      await IdempotentMutation.run(
+        'expenses:delete:$id',
+        (key) => _dio.delete<void>(
+          '/expenses/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

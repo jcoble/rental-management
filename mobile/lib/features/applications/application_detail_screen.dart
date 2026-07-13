@@ -6,6 +6,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../leases/prepare_move_in_sheet.dart';
 import '../tenants/tenant_detail_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
@@ -98,6 +99,22 @@ class _ApplicationDetailScreenState
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _prepareMoveIn(RentalApplication application) async {
+    final result = await showPrepareMoveInSheet(
+      context,
+      ref: ref,
+      application: application,
+    );
+    if (result == null || !mounted) return;
+    _snack('Move-in prepared.');
+    openUnitCommandCenter(
+      context,
+      unitId: application.unitId!,
+      initialTab: UnitCommandCenterTab.lease,
+      leaseManagementId: result.leaseManagementId,
+    );
   }
 
   Future<void> _decline() async {
@@ -533,6 +550,7 @@ class _ApplicationDetailScreenState
             onOpenProvider: _openProvider,
             onGenerateAdverseAction: () => _generateAdverseAction(app),
             onViewNotice: _viewNotice,
+            onPrepareMoveIn: () => _prepareMoveIn(app),
           ),
         ),
       ),
@@ -562,6 +580,7 @@ class _DetailBody extends StatelessWidget {
     required this.onOpenProvider,
     required this.onGenerateAdverseAction,
     required this.onViewNotice,
+    required this.onPrepareMoveIn,
   });
 
   final RentalApplication application;
@@ -582,6 +601,7 @@ class _DetailBody extends StatelessWidget {
   final void Function(String url) onOpenProvider;
   final VoidCallback onGenerateAdverseAction;
   final void Function(int storedFileId) onViewNotice;
+  final VoidCallback onPrepareMoveIn;
 
   @override
   Widget build(BuildContext context) {
@@ -647,7 +667,7 @@ class _DetailBody extends StatelessWidget {
                       Expanded(
                         child: Text(
                           'Approved — tenant #$createdTenantId created. '
-                          'Open the tenant to set up a lease.',
+                          'Prepare the move-in and initial agreement.',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: cs.onTertiaryContainer,
                           ),
@@ -656,54 +676,63 @@ class _DetailBody extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton.tonalIcon(
-                      onPressed: () {
-                        if (app.unitId != null) {
-                          openUnitCommandCenter(
-                            context,
-                            unitId: app.unitId!,
-                            initialTab: UnitCommandCenterTab.tenants,
-                            application: app,
-                            tenantId: createdTenantId,
-                          );
-                          return;
-                        }
-
-                        Widget detailBuilder(BuildContext _) =>
-                            TenantDetailLoaderScreen(
-                              tenantId: createdTenantId!,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: onPrepareMoveIn,
+                        icon: const Icon(Icons.login_outlined, size: 18),
+                        label: const Text('Prepare move-in'),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () {
+                          if (app.unitId != null) {
+                            openUnitCommandCenter(
+                              context,
+                              unitId: app.unitId!,
+                              initialTab: UnitCommandCenterTab.tenants,
+                              application: app,
+                              tenantId: createdTenantId,
                             );
-                        final shellNavigator = mobileShellNavigatorOf(context);
-                        if (shellNavigator != null) {
-                          shellNavigator.openTab(
-                            MobileShellTabId.rentals,
-                            destination: MobileDestinationId.tenants,
-                            detailBuilder: detailBuilder,
-                          );
-                          revealMobileShellIfDetached(context);
-                          return;
-                        }
+                            return;
+                          }
 
-                        final domainNavigator = MobileDomainNavigation.maybeOf(
-                          context,
-                        );
-                        if (domainNavigator != null) {
-                          domainNavigator.openDestination(
-                            MobileDestinationId.tenants,
-                            detailBuilder: detailBuilder,
+                          Widget detailBuilder(BuildContext _) =>
+                              TenantDetailLoaderScreen(
+                                tenantId: createdTenantId!,
+                              );
+                          final shellNavigator = mobileShellNavigatorOf(
+                            context,
                           );
-                          return;
-                        }
+                          if (shellNavigator != null) {
+                            shellNavigator.openTab(
+                              MobileShellTabId.rentals,
+                              destination: MobileDestinationId.tenants,
+                              detailBuilder: detailBuilder,
+                            );
+                            revealMobileShellIfDetached(context);
+                            return;
+                          }
 
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(builder: detailBuilder),
-                        );
-                      },
-                      icon: const Icon(Icons.person_outline, size: 18),
-                      label: const Text('View tenant'),
-                    ),
+                          final domainNavigator =
+                              MobileDomainNavigation.maybeOf(context);
+                          if (domainNavigator != null) {
+                            domainNavigator.openDestination(
+                              MobileDestinationId.tenants,
+                              detailBuilder: detailBuilder,
+                            );
+                            return;
+                          }
+
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(builder: detailBuilder),
+                          );
+                        },
+                        icon: const Icon(Icons.person_outline, size: 18),
+                        label: const Text('View tenant'),
+                      ),
+                    ],
                   ),
                 ],
               ),

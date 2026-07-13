@@ -15,6 +15,12 @@ namespace RentalCommand.Api.Controllers;
 [Authorize(Policy = CanonicalManagementPolicy.Name)]
 public abstract class ManagementControllerBase : AuthenticatedPortfolioControllerBase
 {
+    protected static bool TryValidateIdempotencyKey(string? raw, out string key)
+    {
+        key = raw?.Trim() ?? string.Empty;
+        return key.Length is > 0 and <= 128;
+    }
+
     protected WorkspaceReadScope GetWorkspaceReadScope()
     {
         var active = GetActiveAccessContext();

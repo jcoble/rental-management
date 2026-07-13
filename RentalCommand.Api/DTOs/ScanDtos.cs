@@ -16,9 +16,12 @@ public sealed record ScanCaptureContextDto(
     int? PropertyId,
     int? UnitId,
     int? LeaseManagementId,
+    int? LeaseAgreementId,
     int? TenantAccountId,
-    string? FocusedRecordKind,
-    long? FocusedRecordId,
+    long? TenantLedgerEntryId,
+    int? WorkOrderId,
+    int? ApplicationId,
+    int? RentalListingId,
     string? SourceLabel);
 
 /// <summary>Draft as seen by the review page.</summary>
@@ -74,7 +77,8 @@ public sealed record ScanDraftResponse(
     internal static ScanCaptureContextDto ToCaptureContext(ScanDraft d) => new(
         d.CaptureExperience?.ToString(), d.CaptureAccessContextId, d.CaptureAccessRevision,
         d.CapturePropertyId, d.CaptureUnitId, d.CaptureLeaseManagementId,
-        d.CaptureTenantAccountId, d.CaptureFocusedRecordKind, d.CaptureFocusedRecordId,
+        d.CaptureLeaseAgreementId, d.CaptureTenantAccountId, d.CaptureTenantLedgerEntryId,
+        d.CaptureWorkOrderId, d.CaptureApplicationId, d.CaptureRentalListingId,
         d.SourceLabel);
 
     /// <summary>

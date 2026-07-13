@@ -41,9 +41,12 @@ public class ScanDraft : IAuditable, IPortfolioScoped
     public int? CapturePropertyId { get; set; }
     public int? CaptureUnitId { get; set; }
     public int? CaptureLeaseManagementId { get; set; }
+    public int? CaptureLeaseAgreementId { get; set; }
     public int? CaptureTenantAccountId { get; set; }
-    public string? CaptureFocusedRecordKind { get; set; }
-    public long? CaptureFocusedRecordId { get; set; }
+    public long? CaptureTenantLedgerEntryId { get; set; }
+    public int? CaptureWorkOrderId { get; set; }
+    public int? CaptureApplicationId { get; set; }
+    public int? CaptureRentalListingId { get; set; }
 
     /// <summary>Storage key of a small downscaled JPEG preview; null until generated (or for
     /// non-image uploads like PDFs). Served to clients by default so phones never fetch the
@@ -83,4 +86,13 @@ public class ScanDraft : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public ScanBatch? Batch { get; set; }
     public StoredFile? SourceStoredFile { get; set; }
+    public Property? CaptureProperty { get; set; }
+    public Unit? CaptureUnit { get; set; }
+    public LeaseManagement? CaptureLeaseManagement { get; set; }
+    public LeaseAgreement? CaptureLeaseAgreement { get; set; }
+    public TenantAccount? CaptureTenantAccount { get; set; }
+    public TenantLedgerEntry? CaptureTenantLedgerEntry { get; set; }
+    public WorkOrder? CaptureWorkOrder { get; set; }
+    public RentalApplication? CaptureApplication { get; set; }
+    public RentalListing? CaptureRentalListing { get; set; }
 }

@@ -66,7 +66,15 @@
 		{
 			key: 'agreementStatus',
 			title: 'Agreement',
-			accessor: (item) => item.agreementStatus ?? 'No agreement'
+			accessor: (item) => {
+				const current = item.agreementStatus ?? 'No governing agreement';
+				return item.upcomingLeaseAgreementId ? `${current} · Upcoming prepared` : current;
+			}
+		},
+		{
+			key: 'hasReconciliationException',
+			title: 'Review',
+			accessor: (item) => (item.hasReconciliationException ? 'Needs reconciliation' : '—')
 		},
 		{ key: 'termEndOn', title: 'Term ends', format: 'date' },
 		{
@@ -123,10 +131,11 @@
 					>
 					<Select.Content>
 						<Select.Item value="">All relationships</Select.Item>
-						<Select.Item value="Planned">Planned</Select.Item>
+						<Select.Item value="Preparing">Preparing</Select.Item>
+						<Select.Item value="Upcoming">Upcoming</Select.Item>
 						<Select.Item value="Occupied">Occupied</Select.Item>
-						<Select.Item value="MoveOutPlanned">Move-out planned</Select.Item>
-						<Select.Item value="PossessionReturned">Possession returned</Select.Item>
+						<Select.Item value="Ending">Ending</Select.Item>
+						<Select.Item value="AccountingCloseout">Accounting closeout</Select.Item>
 						<Select.Item value="Closed">Closed</Select.Item>
 						<Select.Item value="Canceled">Canceled</Select.Item>
 					</Select.Content>

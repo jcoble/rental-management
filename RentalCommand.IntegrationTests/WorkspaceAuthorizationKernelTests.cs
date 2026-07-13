@@ -7,6 +7,8 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
@@ -80,6 +82,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, AccessTestActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            AtomicMoneyMutationCommand,
+            AtomicMoneyMutationResult,
+            AtomicMoneyMutationHandler>();
         services.AddAtomicCommandHandler<
             ChangeWorkspaceAssignmentScopeCommand,
             WorkspaceAccessMutationResult,
@@ -296,6 +302,16 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             CapabilityKeys.LeasingApplicationsManage,
             new RentalApplicationCapabilityAuthorizationTarget(_portfolioId, _leasingApplicationId),
             _now)).Should().BeFalse();
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.TeamRead,
+            new WorkspaceCapabilityAuthorizationTarget(_portfolioId),
+            _now)).Should().BeFalse();
+        (await evaluator.HasCapabilityAsync(
+            active,
+            CapabilityKeys.TeamManage,
+            new WorkspaceCapabilityAuthorizationTarget(_portfolioId),
+            _now)).Should().BeFalse();
     }
 
     [SkippableFact]
@@ -465,6 +481,235 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             "authorization must be in the SQL WHERE clause before sort");
         orderAt.Should().BeLessThan(limitAt,
             "paging must apply only after the authorization predicate and stable ordering");
+    }
+
+    [SkippableFact]
+    public void MoneyAuthorizationRemainsDbSideBeforeOrderingAndPaging()
+    {
+        SkipIfNoDocker();
+        using var db = NewContext();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+
+        var queries = new[]
+        {
+            db.Expenses.AsNoTracking()
+                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
+                .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
+            db.RecurringExpenses.AsNoTracking()
+                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
+                .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
+            db.Loans.AsNoTracking()
+                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyBalancesRead, _now)
+                .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
+            db.OwnerDistributions.AsNoTracking()
+                .WhereMoneyAuthorized(db, scope, CapabilityKeys.MoneyOwnerReportsRead, _now)
+                .OrderBy(row => row.Id).Skip(20).Take(20).Select(row => row.Id).ToQueryString(),
+        };
+
+        foreach (var sql in queries)
+        {
+            var existsAt = sql.IndexOf("EXISTS", StringComparison.OrdinalIgnoreCase);
+            var orderAt = sql.IndexOf("ORDER BY", StringComparison.OrdinalIgnoreCase);
+            var limitAt = sql.IndexOf("LIMIT", StringComparison.OrdinalIgnoreCase);
+
+            existsAt.Should().BeGreaterThanOrEqualTo(0);
+            sql.Should().Contain("RoleProfileCapabilities");
+            existsAt.Should().BeLessThan(orderAt,
+                "money authorization must remain in the SQL WHERE clause before sort");
+            orderAt.Should().BeLessThan(limitAt,
+                "money paging must apply only after authorization and stable ordering");
+        }
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_StaleRevisionRollsBackBusinessRowAndReceipt()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 6);
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stale-test", ValidLoanRequest(_managerPropertyId));
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var act = () => AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        await using var verify = NewContext();
+        (await verify.Loans.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_SelectedScopeCannotWriteUnassignedProperty()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "cross-scope-test", ValidLoanRequest(_unscopedPropertyId));
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var act = () => AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        await using var verify = NewContext();
+        (await verify.Loans.CountAsync(row => row.PropertyId == _unscopedPropertyId)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_FailedBusinessFlushRollsBackReceipt()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var request = ValidLoanRequest(_managerPropertyId);
+        request.Lender = null!;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "rollback-test", request);
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var act = () => AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        await act.Should().ThrowAsync<DbUpdateException>();
+
+        await using var verify = NewContext();
+        (await verify.Loans.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_SameCallerKeyReplaysAndChangedPayloadConflicts()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var request = ValidLoanRequest(_managerPropertyId);
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stable-loan-create", request);
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        var changedRequest = ValidLoanRequest(_managerPropertyId);
+        changedRequest.Lender = "Different lender";
+        var changedCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stable-loan-create", changedRequest);
+        var conflictAct = async () => await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyMutation.Identity(changedCommand), changedCommand, AtomicMoneyMutation.Codec);
+
+        await conflictAct.Should().ThrowAsync<AtomicIdempotencyConflictException>();
+
+        await using var verify = NewContext();
+        (await verify.Loans.AsNoTracking().CountAsync(row =>
+            row.Id == first.Value.EntityId && row.PortfolioId == _portfolioId)).Should().Be(1);
+        (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_DeleteReplaysAfterTheBusinessRowIsSoftDeleted()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var createCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "loan-before-delete", ValidLoanRequest(_managerPropertyId));
+        var created = await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyMutation.Identity(createCommand), createCommand, AtomicMoneyMutation.Codec);
+        var deleteCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, created.Value.EntityId, "stable-loan-delete", new object());
+        var deleteIdentity = AtomicMoneyMutation.Identity(deleteCommand);
+
+        var firstDelete = await AtomicUnitOfWork.ExecuteAsync(
+            deleteIdentity, deleteCommand, AtomicMoneyMutation.Codec);
+        var replayedDelete = await AtomicUnitOfWork.ExecuteAsync(
+            deleteIdentity, deleteCommand, AtomicMoneyMutation.Codec);
+
+        firstDelete.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replayedDelete.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayedDelete.Value.Should().Be(firstDelete.Value);
+        replayedDelete.Value.Should().Be(new AtomicMoneyMutationResult(
+            Found: true, Applied: true, EntityId: created.Value.EntityId));
+
+        await using var verify = NewContext();
+        var persisted = await verify.Loans.IgnoreQueryFilters().AsNoTracking()
+            .Where(row => row.Id == created.Value.EntityId && row.PortfolioId == _portfolioId)
+            .Select(row => new { row.Id, row.DeletedAt })
+            .SingleAsync();
+        persisted.DeletedAt.Should().NotBeNull();
+        (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == deleteIdentity.CommandType && row.IdempotencyKey == deleteIdentity.IdempotencyKey))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_ExpensePatchRejectsIncompatibleEffectivePropertyUnitAndWorkOrder()
+    {
+        SkipIfNoDocker();
+        int unitWorkOrderId;
+        await using (var seed = NewContext())
+        {
+            var workOrder = new WorkOrder
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                UnitId = _managerUnitId,
+                Title = "Unit-scoped repair",
+                Description = "Expense effective-tuple test",
+                Category = "General",
+                RequestedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.WorkOrders.Add(workOrder);
+            await seed.SaveChangesAsync();
+            unitWorkOrderId = workOrder.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var createRequest = new CreateExpenseRequest
+        {
+            PropertyId = _managerPropertyId,
+            UnitId = _managerUnitId,
+            WorkOrderId = unitWorkOrderId,
+            Category = ScheduleECategory.Repairs,
+            Description = "Scoped repair expense",
+            Status = ExpenseStatus.Pending,
+            Amount = 125m,
+            IncurredAt = _now,
+        };
+        var createCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, "effective-expense-create", createRequest);
+        var created = await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyMutation.Identity(createCommand), createCommand, AtomicMoneyMutation.Codec);
+
+        var patchCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, created.Value.EntityId,
+            "effective-expense-invalid-patch", new UpdateExpenseRequest { PropertyId = _leasingPropertyId });
+        var patchOutcome = await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyMutation.Identity(patchCommand), patchCommand, AtomicMoneyMutation.Codec);
+
+        patchOutcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        patchOutcome.Value.Should().Be(new AtomicMoneyMutationResult(
+            Found: false, Applied: false, EntityId: 0));
+
+        await using var verify = NewContext();
+        var unchanged = await verify.Expenses.AsNoTracking()
+            .Where(row => row.Id == created.Value.EntityId && row.PortfolioId == _portfolioId)
+            .Select(row => new { row.PropertyId, row.UnitId, row.WorkOrderId })
+            .SingleAsync();
+        unchanged.PropertyId.Should().Be(_managerPropertyId);
+        unchanged.UnitId.Should().Be(_managerUnitId);
+        unchanged.WorkOrderId.Should().Be(unitWorkOrderId);
     }
 
     [SkippableFact]
@@ -1047,6 +1292,30 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task TeamAdministrator_CannotAddAssignmentToOwnAccessContext()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"self-expand-{Guid.NewGuid():N}");
+        var command = new AddWorkspaceRoleAssignmentCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            pair.ActorContextId, 1, RoleProfileKeys.PropertyManager,
+            MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now);
+
+        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.self-expand"), command, TeamMutationCodec);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*cannot change their own role, scope, or membership status*");
+        await using var verification = NewContext();
+        (await verification.WorkspaceAccessContexts
+            .Where(context => context.Id == pair.ActorContextId)
+            .Select(context => context.AccessRevision)
+            .SingleAsync()).Should().Be(1);
+        (await verification.MembershipRoleAssignments.CountAsync(assignment =>
+            assignment.WorkspaceMembership!.AccessContextId == pair.ActorContextId)).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task TeamMutation_StaleTargetRevisionCannotOverwriteWinningChange()
     {
         SkipIfNoDocker();
@@ -1534,6 +1803,20 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
     private PropertyCapabilityAuthorizationTarget PropertyTarget(int propertyId) =>
         new(_portfolioId, propertyId);
+
+    private CreateLoanRequest ValidLoanRequest(int propertyId) => new()
+    {
+        PropertyId = propertyId,
+        Lender = "Atomic test lender",
+        OriginalAmount = 200_000m,
+        CurrentBalance = 200_000m,
+        AnnualInterestRatePct = 6m,
+        TermMonths = 360,
+        StartDate = _now,
+        DayOfMonthDue = 1,
+        MonthlyPrincipalInterest = 1_200m,
+        Status = LoanStatus.Active,
+    };
 
     private IAtomicUnitOfWork AtomicUnitOfWork =>
         _services?.GetRequiredService<IAtomicUnitOfWork>()

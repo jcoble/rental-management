@@ -25,6 +25,25 @@ public sealed class CapabilityAuthorizationPolicyTests
     }
 
     [Fact]
+    public void Leasing_agent_can_read_scoped_rentals_without_money_or_workspace_admin_authority()
+    {
+        var capabilityIds = AccessCatalog.CapabilityIdsByRole[3];
+
+        capabilityIds.Should().Contain(AccessCatalog.Capabilities.Single(capability =>
+            capability.Key == CapabilityKeys.RentalsRead).Id);
+        capabilityIds.Should().Contain(AccessCatalog.Capabilities.Single(capability =>
+            capability.Key == CapabilityKeys.LeasingTermsRead).Id);
+        capabilityIds.Should().Contain(AccessCatalog.Capabilities.Single(capability =>
+            capability.Key == CapabilityKeys.LeasingAgreementsPrepare).Id);
+        capabilityIds.Should().NotContain(AccessCatalog.Capabilities.Single(capability =>
+            capability.Key == CapabilityKeys.MoneyBalancesRead).Id);
+        capabilityIds.Should().NotContain(AccessCatalog.Capabilities.Single(capability =>
+            capability.Key == CapabilityKeys.SecurityManage).Id);
+        capabilityIds.Should().NotContain(AccessCatalog.Capabilities.Single(capability =>
+            capability.Key == CapabilityKeys.TeamManage).Id);
+    }
+
+    [Fact]
     public async Task DynamicPolicy_UsesStableCapabilityRequirement_NotRoleAliases()
     {
         var services = new ServiceCollection();

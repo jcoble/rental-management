@@ -214,21 +214,38 @@ public class AccountingService : IAccountingService
 
     public Task<PastDueResponse> GetPastDueAsync(
         WorkspaceReadScope scope,
+        PastDueQuery query,
         CancellationToken ct = default) =>
-        GetPastDueCoreAsync(scope.PortfolioId, AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead), ct);
+        GetPastDueCoreAsync(
+            scope.PortfolioId,
+            AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead),
+            query.NormalizedSkip,
+            query.NormalizedTake,
+            ct);
 
     private async Task<PastDueResponse> GetPastDueCoreAsync(
         int portfolioId,
         IQueryable<Property> authorizedProperties,
+        int skip,
+        int take,
         CancellationToken ct)
     {
         var summary = await PastDueSummaryQuery(portfolioId, authorizedProperties).FirstOrDefaultAsync(ct);
         var totalCount = summary?.TotalCount ?? 0;
         var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
+        var businessDate = summary?.BusinessDate;
 
         if (totalCount == 0)
         {
-            return new PastDueResponse { Items = [], TotalCount = 0, TotalPastDueAmount = 0m };
+            return new PastDueResponse
+            {
+                Items = [],
+                TotalCount = 0,
+                TotalPastDueAmount = 0m,
+                BusinessDate = businessDate,
+                Skip = skip,
+                Take = take,
+            };
         }
 
         var items = await (
@@ -268,6 +285,8 @@ public class AccountingService : IAccountingService
                 OldestDueOn = oldest.DueOn!.Value,
                 OldestLedgerEntryId = oldest.TenantLedgerEntryId,
             })
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
         return new PastDueResponse
@@ -275,6 +294,9 @@ public class AccountingService : IAccountingService
             Items = items,
             TotalCount = totalCount,
             TotalPastDueAmount = totalPastDueAmount,
+            BusinessDate = businessDate,
+            Skip = skip,
+            Take = take,
         };
     }
 
@@ -287,12 +309,13 @@ public class AccountingService : IAccountingService
         int portfolioId,
         IQueryable<Property> authorizedProperties) =>
         CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
-            .Where(balance => balance.PastDueAmount > 0m)
-            .GroupBy(_ => 1)
+            .GroupBy(balance => balance.BusinessDate)
             .Select(g => new PastDueSummary
             {
-                TotalCount = g.Count(),
-                TotalPastDueAmount = g.Sum(balance => balance.PastDueAmount),
+                BusinessDate = g.Key,
+                TotalCount = g.Count(balance => balance.PastDueAmount > 0m),
+                TotalPastDueAmount = g.Sum(balance =>
+                    balance.PastDueAmount > 0m ? balance.PastDueAmount : 0m),
             });
 
     /// <summary>
@@ -317,6 +340,7 @@ public class AccountingService : IAccountingService
             PropertyId = lifecycle.PropertyId,
             LeaseManagementId = balance.LeaseManagementId,
             TenantAccountId = balance.TenantAccountId,
+            BusinessDate = balance.BusinessDate,
             ReceivableBalance = balance.ReceivableBalance,
             PastDueAmount = balance.PastDueAmount,
             PastDueCount = balance.PastDueCount,
@@ -327,6 +351,7 @@ public class AccountingService : IAccountingService
 
     private sealed class PastDueSummary
     {
+        public DateOnly BusinessDate { get; set; }
         public int TotalCount { get; set; }
         public decimal TotalPastDueAmount { get; set; }
     }
@@ -1405,6 +1430,7 @@ public class AccountingService : IAccountingService
         public int PropertyId { get; set; }
         public int LeaseManagementId { get; set; }
         public int TenantAccountId { get; set; }
+        public DateOnly BusinessDate { get; set; }
         public decimal ReceivableBalance { get; set; }
         public decimal PastDueAmount { get; set; }
         public int PastDueCount { get; set; }

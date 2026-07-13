@@ -6,10 +6,10 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IDocumentTemplateService
 {
     Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
-        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, ListQuery query, CancellationToken ct = default);
+        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default);
 
     Task<DocumentTemplateListResponse> ListPageAsync(
-        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, ListQuery query, CancellationToken ct = default);
+        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default);
 
     Task<DocumentTemplateResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 

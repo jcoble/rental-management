@@ -116,7 +116,10 @@
 		// A Loan has no standalone detail page (it lives under its property) — fall back to the
 		// read-only draft rather than linking to a non-existent loan record.
 		if (type === 'Loan') return null;
-		return createdRecordHref(type, id, draft.createdUnitId);
+		return createdRecordHref(type, id, {
+			unitId: draft.createdUnitId,
+			leaseManagementId: draft.captureContext?.leaseManagementId
+		});
 	}
 
 	// A confirmed draft is terminal: its action/row-click should jump straight to the created record

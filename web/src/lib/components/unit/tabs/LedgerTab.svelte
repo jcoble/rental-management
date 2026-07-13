@@ -102,7 +102,7 @@
 				{dashboard}
 				tabQuery="ledger"
 				ledgerQuery="rent"
-				onScan={() => onScan({ type: 'Payment', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, focusedRecordKind: 'TenantAccount', focusedRecordId: dashboard.currentLease?.tenantAccountId ?? undefined, returnTo: ledgerUrl('rent') })}
+				onScan={() => onScan({ type: 'Payment', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, returnTo: ledgerUrl('rent') })}
 			/>
 		</Tabs.Content>
 		<Tabs.Content value="expenses" class="mt-4" data-testid="ledger-expenses-panel">

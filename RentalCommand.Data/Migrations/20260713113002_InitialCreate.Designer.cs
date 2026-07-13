@@ -6596,6 +6596,11 @@ namespace RentalCommand.Data.Migrations
                         new
                         {
                             RoleProfileId = 3,
+                            CapabilityDefinitionId = 1
+                        },
+                        new
+                        {
+                            RoleProfileId = 3,
                             CapabilityDefinitionId = 14
                         },
                         new
@@ -6716,12 +6721,11 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
-                    b.Property<long?>("CaptureFocusedRecordId")
-                        .HasColumnType("bigint");
+                    b.Property<int?>("CaptureApplicationId")
+                        .HasColumnType("integer");
 
-                    b.Property<string>("CaptureFocusedRecordKind")
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
+                    b.Property<int?>("CaptureLeaseAgreementId")
+                        .HasColumnType("integer");
 
                     b.Property<int?>("CaptureLeaseManagementId")
                         .HasColumnType("integer");
@@ -6729,10 +6733,19 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int?>("CapturePropertyId")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("CaptureRentalListingId")
+                        .HasColumnType("integer");
+
                     b.Property<int?>("CaptureTenantAccountId")
                         .HasColumnType("integer");
 
+                    b.Property<long?>("CaptureTenantLedgerEntryId")
+                        .HasColumnType("bigint");
+
                     b.Property<int?>("CaptureUnitId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("CaptureWorkOrderId")
                         .HasColumnType("integer");
 
                     b.Property<DateTime?>("ConfirmedAt")
@@ -6820,6 +6833,24 @@ namespace RentalCommand.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("BatchId");
+
+                    b.HasIndex("CaptureApplicationId");
+
+                    b.HasIndex("CaptureLeaseAgreementId");
+
+                    b.HasIndex("CaptureLeaseManagementId");
+
+                    b.HasIndex("CapturePropertyId");
+
+                    b.HasIndex("CaptureRentalListingId");
+
+                    b.HasIndex("CaptureTenantAccountId");
+
+                    b.HasIndex("CaptureTenantLedgerEntryId");
+
+                    b.HasIndex("CaptureUnitId");
+
+                    b.HasIndex("CaptureWorkOrderId");
 
                     b.HasIndex("PortfolioId");
 
@@ -8395,6 +8426,8 @@ namespace RentalCommand.Data.Migrations
                         .HasFilter("\"RefundsPaymentAttemptId\" IS NOT NULL");
 
                     b.HasIndex("TenantAccountId", "PortfolioId");
+
+                    b.HasIndex("RefundsPaymentAttemptId", "TenantAccountId", "PortfolioId");
 
                     b.HasIndex("PortfolioId", "State", "NextAttemptAtUtc", "ClaimExpiresAtUtc", "Id");
 
@@ -11651,6 +11684,51 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("BatchId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("RentalCommand.Core.Entities.RentalApplication", "CaptureApplication")
+                        .WithMany()
+                        .HasForeignKey("CaptureApplicationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.LeaseAgreement", "CaptureLeaseAgreement")
+                        .WithMany()
+                        .HasForeignKey("CaptureLeaseAgreementId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.LeaseManagement", "CaptureLeaseManagement")
+                        .WithMany()
+                        .HasForeignKey("CaptureLeaseManagementId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.Property", "CaptureProperty")
+                        .WithMany()
+                        .HasForeignKey("CapturePropertyId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.RentalListing", "CaptureRentalListing")
+                        .WithMany()
+                        .HasForeignKey("CaptureRentalListingId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.TenantAccount", "CaptureTenantAccount")
+                        .WithMany()
+                        .HasForeignKey("CaptureTenantAccountId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.TenantLedgerEntry", "CaptureTenantLedgerEntry")
+                        .WithMany()
+                        .HasForeignKey("CaptureTenantLedgerEntryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.Unit", "CaptureUnit")
+                        .WithMany()
+                        .HasForeignKey("CaptureUnitId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.WorkOrder", "CaptureWorkOrder")
+                        .WithMany()
+                        .HasForeignKey("CaptureWorkOrderId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()
                         .HasForeignKey("PortfolioId")
@@ -11663,6 +11741,24 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Batch");
+
+                    b.Navigation("CaptureApplication");
+
+                    b.Navigation("CaptureLeaseAgreement");
+
+                    b.Navigation("CaptureLeaseManagement");
+
+                    b.Navigation("CaptureProperty");
+
+                    b.Navigation("CaptureRentalListing");
+
+                    b.Navigation("CaptureTenantAccount");
+
+                    b.Navigation("CaptureTenantLedgerEntry");
+
+                    b.Navigation("CaptureUnit");
+
+                    b.Navigation("CaptureWorkOrder");
 
                     b.Navigation("Portfolio");
 

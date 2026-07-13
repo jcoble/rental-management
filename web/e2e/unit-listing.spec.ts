@@ -204,7 +204,7 @@ test.describe('Unit listing workspace', () => {
 		const signedLeaseLink = page.getByRole('link', { name: 'Import signed Zillow lease' });
 		await expect(signedLeaseLink).toHaveAttribute(
 			'href',
-			`/scan?type=LeaseAgreement&propertyId=${changed.propertyId}&unitId=${unitId}&focusedRecordKind=RentalListing&focusedRecordId=${changed.id}&sourceLabel=Zillow%20signed%20lease%20import&returnTo=%2Funits%2F${unitId}%3Ftab%3Dlease`
+			`/scan?type=LeaseAgreement&propertyId=${changed.propertyId}&unitId=${unitId}&rentalListingId=${changed.id}&sourceLabel=Zillow%20signed%20lease%20import&returnTo=%2Funits%2F${unitId}%3Ftab%3Dlease`
 		);
 	});
 

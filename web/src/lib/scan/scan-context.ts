@@ -6,10 +6,12 @@ export interface ScanContext {
 	propertyId?: number;
 	unitId?: number;
 	leaseManagementId?: number;
+	leaseAgreementId?: number;
 	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
 	workOrderId?: number;
-	focusedRecordKind?: string;
-	focusedRecordId?: number;
+	applicationId?: number;
+	rentalListingId?: number;
 	sourceLabel?: string;
 	returnTo?: string;
 }
@@ -35,10 +37,12 @@ export function parseScanContext(searchParams: URLSearchParams): ScanContext {
 	const propertyId = parsePositiveInt(searchParams.get('propertyId'));
 	const unitId = parsePositiveInt(searchParams.get('unitId'));
 	const leaseManagementId = parsePositiveInt(searchParams.get('leaseManagementId'));
+	const leaseAgreementId = parsePositiveInt(searchParams.get('leaseAgreementId'));
 	const tenantAccountId = parsePositiveInt(searchParams.get('tenantAccountId'));
+	const tenantLedgerEntryId = parsePositiveInt(searchParams.get('tenantLedgerEntryId'));
 	const workOrderId = parsePositiveInt(searchParams.get('workOrderId'));
-	const focusedRecordKind = searchParams.get('focusedRecordKind')?.trim() || undefined;
-	const focusedRecordId = parsePositiveInt(searchParams.get('focusedRecordId'));
+	const applicationId = parsePositiveInt(searchParams.get('applicationId'));
+	const rentalListingId = parsePositiveInt(searchParams.get('rentalListingId'));
 	const sourceLabel = searchParams.get('sourceLabel')?.trim() || undefined;
 	const returnTo = safeReturnTo(searchParams.get('returnTo'));
 	return {
@@ -46,10 +50,12 @@ export function parseScanContext(searchParams: URLSearchParams): ScanContext {
 		...(propertyId ? { propertyId } : {}),
 		...(unitId ? { unitId } : {}),
 		...(leaseManagementId ? { leaseManagementId } : {}),
+		...(leaseAgreementId ? { leaseAgreementId } : {}),
 		...(tenantAccountId ? { tenantAccountId } : {}),
+		...(tenantLedgerEntryId ? { tenantLedgerEntryId } : {}),
 		...(workOrderId ? { workOrderId } : {}),
-		...(focusedRecordKind ? { focusedRecordKind } : {}),
-		...(focusedRecordId ? { focusedRecordId } : {}),
+		...(applicationId ? { applicationId } : {}),
+		...(rentalListingId ? { rentalListingId } : {}),
 		...(sourceLabel ? { sourceLabel } : {}),
 		...(returnTo ? { returnTo } : {})
 	};
@@ -65,10 +71,12 @@ export function appendScanContext(href: string, context: ScanContext = {}): stri
 	url.searchParams.delete('propertyId');
 	url.searchParams.delete('unitId');
 	url.searchParams.delete('leaseManagementId');
+	url.searchParams.delete('leaseAgreementId');
 	url.searchParams.delete('tenantAccountId');
+	url.searchParams.delete('tenantLedgerEntryId');
 	url.searchParams.delete('workOrderId');
-	url.searchParams.delete('focusedRecordKind');
-	url.searchParams.delete('focusedRecordId');
+	url.searchParams.delete('applicationId');
+	url.searchParams.delete('rentalListingId');
 	url.searchParams.delete('sourceLabel');
 	url.searchParams.delete('returnTo');
 
@@ -76,10 +84,12 @@ export function appendScanContext(href: string, context: ScanContext = {}): stri
 	if (context.propertyId) url.searchParams.set('propertyId', String(context.propertyId));
 	if (context.unitId) url.searchParams.set('unitId', String(context.unitId));
 	if (context.leaseManagementId) url.searchParams.set('leaseManagementId', String(context.leaseManagementId));
+	if (context.leaseAgreementId) url.searchParams.set('leaseAgreementId', String(context.leaseAgreementId));
 	if (context.tenantAccountId) url.searchParams.set('tenantAccountId', String(context.tenantAccountId));
+	if (context.tenantLedgerEntryId) url.searchParams.set('tenantLedgerEntryId', String(context.tenantLedgerEntryId));
 	if (context.workOrderId) url.searchParams.set('workOrderId', String(context.workOrderId));
-	if (context.focusedRecordKind) url.searchParams.set('focusedRecordKind', context.focusedRecordKind);
-	if (context.focusedRecordId) url.searchParams.set('focusedRecordId', String(context.focusedRecordId));
+	if (context.applicationId) url.searchParams.set('applicationId', String(context.applicationId));
+	if (context.rentalListingId) url.searchParams.set('rentalListingId', String(context.rentalListingId));
 	if (context.sourceLabel) url.searchParams.set('sourceLabel', context.sourceLabel);
 	const returnTo = safeReturnTo(context.returnTo);
 	if (returnTo) url.searchParams.set('returnTo', returnTo);
@@ -114,8 +124,8 @@ export function applyScanContextOverrides(
 	}
 
 	if (targetEntityType === 'Payment') {
-		// Payment confirmation selects a canonical tenant account in the review UI.
-		// A historical agreement id is not an accounting target.
+		setIfMissing(overrides, 'tenantAccountId', context.tenantAccountId);
+		setIfMissing(overrides, 'tenantLedgerEntryId', context.tenantLedgerEntryId);
 		return;
 	}
 

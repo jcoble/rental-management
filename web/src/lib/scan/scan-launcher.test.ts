@@ -23,13 +23,14 @@ describe('scan launcher helpers', () => {
 				propertyId: 10,
 				unitId: 20,
 				leaseManagementId: 30,
+				leaseAgreementId: 31,
 				tenantAccountId: 40,
-				focusedRecordKind: 'RentalListing',
-				focusedRecordId: 50,
+				tenantLedgerEntryId: 41,
+				rentalListingId: 50,
 				sourceLabel: 'Zillow signed lease import',
 				returnTo: '/units/20?tab=lease'
 			}),
-			'/scan/391?type=LeaseAgreement&propertyId=10&unitId=20&leaseManagementId=30&tenantAccountId=40&focusedRecordKind=RentalListing&focusedRecordId=50&sourceLabel=Zillow+signed+lease+import&returnTo=%2Funits%2F20%3Ftab%3Dlease'
+			'/scan/391?type=LeaseAgreement&propertyId=10&unitId=20&leaseManagementId=30&leaseAgreementId=31&tenantAccountId=40&tenantLedgerEntryId=41&rentalListingId=50&sourceLabel=Zillow+signed+lease+import&returnTo=%2Funits%2F20%3Ftab%3Dlease'
 		);
 	});
 

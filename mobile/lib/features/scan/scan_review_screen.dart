@@ -970,6 +970,9 @@ class _ReviewBody extends ConsumerWidget {
                     child: const Text('This scan has been rejected.'),
                   ),
 
+                if (draft.captureContext?.hasBusinessContext ?? false)
+                  _CaptureContextBanner(context: draft.captureContext!),
+
                 // ---- Document preview ----
                 _DocumentPreview(draftId: draft.id),
 
@@ -1209,6 +1212,66 @@ class _ReviewBody extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _CaptureContextBanner extends StatelessWidget {
+  const _CaptureContextBanner({required this.context});
+
+  final ScanCaptureContext context;
+
+  @override
+  Widget build(BuildContext buildContext) {
+    final colorScheme = Theme.of(buildContext).colorScheme;
+    final items = <String>[
+      if (context.propertyId != null) 'Property #${context.propertyId}',
+      if (context.unitId != null) 'Unit #${context.unitId}',
+      if (context.leaseManagementId != null)
+        'Rental relationship #${context.leaseManagementId}',
+      if (context.leaseAgreementId != null)
+        'Agreement #${context.leaseAgreementId}',
+      if (context.tenantAccountId != null)
+        'Rental account #${context.tenantAccountId}',
+      if (context.tenantLedgerEntryId != null)
+        'Ledger entry #${context.tenantLedgerEntryId}',
+      if (context.workOrderId != null) 'Work order #${context.workOrderId}',
+      if (context.applicationId != null)
+        'Application #${context.applicationId}',
+      if (context.rentalListingId != null)
+        'Listing #${context.rentalListingId}',
+    ];
+
+    return _Banner(
+      color: colorScheme.secondaryContainer,
+      borderColor: colorScheme.secondary.withValues(alpha: 0.35),
+      textColor: colorScheme.onSecondaryContainer,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This scan will stay connected to:',
+            style: Theme.of(buildContext).textTheme.labelLarge?.copyWith(
+              color: colorScheme.onSecondaryContainer,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: items.map((item) => Chip(label: Text(item))).toList(),
+          ),
+          if (context.sourceLabel?.trim().isNotEmpty ?? false) ...[
+            const SizedBox(height: 6),
+            Text('Source: ${context.sourceLabel!.trim()}'),
+          ],
+          const SizedBox(height: 6),
+          const Text(
+            'Rental Command will verify this context again when you confirm.',
+          ),
+        ],
       ),
     );
   }

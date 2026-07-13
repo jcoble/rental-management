@@ -12,6 +12,49 @@ namespace RentalCommand.Data.Authorization;
 /// </summary>
 public static class WorkspaceAuthorizationQuery
 {
+    public static IQueryable<MembershipRoleAssignment> AuthorizedAllPropertyAssignments(
+        this RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        CapabilityAuthorizationTargetKind targetKind,
+        DateTime utcNow)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(capabilityKey);
+
+        return db.MembershipRoleAssignments.AsNoTracking()
+            .Where(assignment =>
+                assignment.PortfolioId == scope.PortfolioId &&
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.SuspendedAtUtc == null &&
+                assignment.RevokedAtUtc == null &&
+                assignment.EffectiveFromUtc <= utcNow &&
+                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+                assignment.WorkspaceMembership!.AccessContextId == scope.AccessContextId &&
+                assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId &&
+                assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
+                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+                assignment.WorkspaceMembership.RevokedAtUtc == null &&
+                assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
+                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+                 assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
+                assignment.WorkspaceMembership.AccessContext!.UserId == scope.UserId &&
+                assignment.WorkspaceMembership.AccessContext.AccessRevision == scope.AccessRevision &&
+                assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
+                assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
+                assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
+                db.AuthSessions.AsNoTracking().Any(session =>
+                    session.Id == scope.SessionId &&
+                    session.UserId == scope.UserId &&
+                    session.ActiveAccessContextId == scope.AccessContextId &&
+                    session.Status == AuthSessionStatus.Active &&
+                    session.RevokedAtUtc == null &&
+                    session.ExpiresAtUtc > utcNow) &&
+                assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                    profileCapability.CapabilityDefinition!.Key == capabilityKey &&
+                    profileCapability.CapabilityDefinition.AuthorizationTargetKind == targetKind));
+    }
+
     /// <summary>
     /// Applies the current-session, access-revision, capability, and selected-property predicates
     /// as a correlated EXISTS inside the caller's property query. This is the list/report primitive;

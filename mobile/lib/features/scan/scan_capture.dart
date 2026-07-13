@@ -11,6 +11,7 @@ import 'package:record/record.dart';
 import '../../core/api/api_exception.dart';
 import '../voice/voice_error_message.dart';
 import 'scan_repository.dart';
+import 'scan_upload_operation.dart';
 
 /// Handles picking an image (camera or gallery), uploading it, then navigating
 /// to the review screen for the newly created draft.
@@ -25,7 +26,12 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
     this.propertyId,
     this.unitId,
     this.leaseManagementId,
+    this.leaseAgreementId,
     this.tenantAccountId,
+    this.tenantLedgerEntryId,
+    this.workOrderId,
+    this.applicationId,
+    this.rentalListingId,
     this.sourceLabel,
   });
 
@@ -34,7 +40,12 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
   final int? propertyId;
   final int? unitId;
   final int? leaseManagementId;
+  final int? leaseAgreementId;
   final int? tenantAccountId;
+  final int? tenantLedgerEntryId;
+  final int? workOrderId;
+  final int? applicationId;
+  final int? rentalListingId;
   final String? sourceLabel;
 
   @override
@@ -43,6 +54,7 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
 
 class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   final AudioRecorder _recorder = AudioRecorder();
+  final ScanUploadOperationState _uploadOperation = ScanUploadOperationState();
   bool _uploading = false;
   double _uploadProgress = 0;
   String? _error;
@@ -62,8 +74,35 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
 
   @override
   void dispose() {
+    _uploadOperation.cancel();
     _recorder.dispose();
     super.dispose();
+  }
+
+  String get _captureContextKey => [
+    _targetEntityType,
+    widget.propertyId,
+    widget.unitId,
+    widget.leaseManagementId,
+    widget.leaseAgreementId,
+    widget.tenantAccountId,
+    widget.tenantLedgerEntryId,
+    widget.workOrderId,
+    widget.applicationId,
+    widget.rentalListingId,
+    widget.sourceLabel?.trim(),
+  ].join('|');
+
+  static String _payloadKey(
+    Uint8List bytes,
+    String filename,
+    String contentType,
+  ) {
+    var hash = 0x811c9dc5;
+    for (final byte in bytes) {
+      hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
+    }
+    return '$filename|$contentType|${bytes.length}|${hash.toRadixString(16)}';
   }
 
   Future<void> _pick(ImageSource source) async {
@@ -105,6 +144,10 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     String filename,
     String contentType,
   ) async {
+    final clientOperationId = _uploadOperation.idFor(
+      payloadKey: _payloadKey(bytes, filename, contentType),
+      contextKey: _captureContextKey,
+    );
     setState(() {
       _uploading = true;
       _uploadProgress = 0;
@@ -119,10 +162,16 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             filename,
             contentType,
             targetEntityType: _targetEntityType,
+            clientOperationId: clientOperationId,
             propertyId: widget.propertyId,
             unitId: widget.unitId,
             leaseManagementId: widget.leaseManagementId,
+            leaseAgreementId: widget.leaseAgreementId,
             tenantAccountId: widget.tenantAccountId,
+            tenantLedgerEntryId: widget.tenantLedgerEntryId,
+            workOrderId: widget.workOrderId,
+            applicationId: widget.applicationId,
+            rentalListingId: widget.rentalListingId,
             sourceLabel: widget.sourceLabel,
             onSendProgress: (progress) {
               if (mounted) setState(() => _uploadProgress = progress);
@@ -130,6 +179,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
           );
 
       if (!mounted) return;
+      _uploadOperation.complete();
       // Close the sheet and pass the new draft id back.
       Navigator.of(context).pop(created.draftId);
     } on ApiException catch (e) {
@@ -353,7 +403,12 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
               const SizedBox(height: 8),
               _DocTypeSelector(
                 selected: _targetEntityType,
-                onChanged: (value) => setState(() => _targetEntityType = value),
+                onChanged: (value) => setState(() {
+                  if (_targetEntityType != value) {
+                    _uploadOperation.cancel();
+                    _targetEntityType = value;
+                  }
+                }),
               ),
             ],
             const SizedBox(height: 24),
@@ -509,7 +564,12 @@ Future<int?> showScanCaptureSheet(
   int? propertyId,
   int? unitId,
   int? leaseManagementId,
+  int? leaseAgreementId,
   int? tenantAccountId,
+  int? tenantLedgerEntryId,
+  int? workOrderId,
+  int? applicationId,
+  int? rentalListingId,
   String? sourceLabel,
 }) {
   return showModalBottomSheet<int>(
@@ -522,7 +582,12 @@ Future<int?> showScanCaptureSheet(
       propertyId: propertyId,
       unitId: unitId,
       leaseManagementId: leaseManagementId,
+      leaseAgreementId: leaseAgreementId,
       tenantAccountId: tenantAccountId,
+      tenantLedgerEntryId: tenantLedgerEntryId,
+      workOrderId: workOrderId,
+      applicationId: applicationId,
+      rentalListingId: rentalListingId,
       sourceLabel: sourceLabel,
     ),
   );

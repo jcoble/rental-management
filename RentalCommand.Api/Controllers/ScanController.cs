@@ -251,9 +251,12 @@ public class ScanController : ManagementControllerBase
             Positive(form, "propertyId"),
             Positive(form, "unitId"),
             Positive(form, "leaseManagementId"),
+            Positive(form, "leaseAgreementId"),
             Positive(form, "tenantAccountId"),
-            Text(form, "focusedRecordKind", 80),
-            PositiveLong(form, "focusedRecordId"),
+            PositiveLong(form, "tenantLedgerEntryId"),
+            Positive(form, "workOrderId"),
+            Positive(form, "applicationId"),
+            Positive(form, "rentalListingId"),
             Text(form, "sourceLabel", 100));
     }
 
@@ -609,9 +612,12 @@ public class ScanController : ManagementControllerBase
                 CapturePropertyId = d.CapturePropertyId,
                 CaptureUnitId = d.CaptureUnitId,
                 CaptureLeaseManagementId = d.CaptureLeaseManagementId,
+                CaptureLeaseAgreementId = d.CaptureLeaseAgreementId,
                 CaptureTenantAccountId = d.CaptureTenantAccountId,
-                CaptureFocusedRecordKind = d.CaptureFocusedRecordKind,
-                CaptureFocusedRecordId = d.CaptureFocusedRecordId,
+                CaptureTenantLedgerEntryId = d.CaptureTenantLedgerEntryId,
+                CaptureWorkOrderId = d.CaptureWorkOrderId,
+                CaptureApplicationId = d.CaptureApplicationId,
+                CaptureRentalListingId = d.CaptureRentalListingId,
                 CreatedEntityType = d.Status == "Confirmed" && d.ConfirmedEntityId != null
                     ? d.TargetEntityType
                     : null,
@@ -674,8 +680,10 @@ public class ScanController : ManagementControllerBase
                 CaptureContext: new ScanCaptureContextDto(
                     draft.CaptureExperience?.ToString(), draft.CaptureAccessContextId,
                     draft.CaptureAccessRevision, draft.CapturePropertyId, draft.CaptureUnitId,
-                    draft.CaptureLeaseManagementId, draft.CaptureTenantAccountId,
-                    draft.CaptureFocusedRecordKind, draft.CaptureFocusedRecordId, draft.SourceLabel),
+                    draft.CaptureLeaseManagementId, draft.CaptureLeaseAgreementId,
+                    draft.CaptureTenantAccountId, draft.CaptureTenantLedgerEntryId,
+                    draft.CaptureWorkOrderId, draft.CaptureApplicationId,
+                    draft.CaptureRentalListingId, draft.SourceLabel),
                 SourceContentSha256: draft.SourceContentSha256));
         }
 
@@ -741,9 +749,12 @@ public class ScanController : ManagementControllerBase
         public int? CapturePropertyId { get; init; }
         public int? CaptureUnitId { get; init; }
         public int? CaptureLeaseManagementId { get; init; }
+        public int? CaptureLeaseAgreementId { get; init; }
         public int? CaptureTenantAccountId { get; init; }
-        public string? CaptureFocusedRecordKind { get; init; }
-        public long? CaptureFocusedRecordId { get; init; }
+        public long? CaptureTenantLedgerEntryId { get; init; }
+        public int? CaptureWorkOrderId { get; init; }
+        public int? CaptureApplicationId { get; init; }
+        public int? CaptureRentalListingId { get; init; }
         public string? CreatedEntityType { get; init; }
         public long? CreatedEntityId { get; init; }
         public int? CreatedUnitId { get; init; }

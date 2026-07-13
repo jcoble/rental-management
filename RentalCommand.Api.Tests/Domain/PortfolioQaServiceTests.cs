@@ -987,7 +987,10 @@ public sealed class PortfolioQaServiceTests : IDisposable
             throw new NotSupportedException();
         public Task<MoneySnapshotResponse> GetSnapshotAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<PastDueResponse> GetPastDueAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
+        public Task<PastDueResponse> GetPastDueAsync(
+            WorkspaceReadScope scope,
+            PastDueQuery query,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<AccountingReportsResponse> GetReportsAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -1019,7 +1022,10 @@ public sealed class PortfolioQaServiceTests : IDisposable
         public Task<MoneySnapshotResponse> GetSnapshotAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             Task.FromResult(_snapshot);
 
-        public Task<PastDueResponse> GetPastDueAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
+        public Task<PastDueResponse> GetPastDueAsync(
+            WorkspaceReadScope scope,
+            PastDueQuery query,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<AccountingReportsResponse> GetReportsAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>

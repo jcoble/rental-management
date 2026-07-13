@@ -208,7 +208,7 @@ public class AccountingServiceTests : IDisposable
         _commands.Clear();
 
         var snapshot = await _sut.GetSnapshotAsync(_scope, CancellationToken.None);
-        var pastDue = await _sut.GetPastDueAsync(_scope, CancellationToken.None);
+        var pastDue = await _sut.GetPastDueAsync(_scope, new PastDueQuery(), CancellationToken.None);
 
         // The KPI count equals the number of list rows (two distinct behind leases), and the amounts agree.
         snapshot.PastDueCount.Should().Be(2);
@@ -218,6 +218,7 @@ public class AccountingServiceTests : IDisposable
 
         snapshot.PastDueAmount.Should().Be(2000m); // 1000 + 200 + 800
         pastDue.TotalPastDueAmount.Should().Be(snapshot.PastDueAmount);
+        pastDue.BusinessDate.Should().Be(DateOnly.FromDateTime(now));
 
         // Lease A's row rolls up both of its past-due payments into one tenant.
         var rowA = pastDue.Items.Single(i => i.LeaseManagementId == leaseA.Id);
@@ -246,7 +247,7 @@ public class AccountingServiceTests : IDisposable
         _db.SaveChanges();
         _commands.Clear();
 
-        var pastDue = await _sut.GetPastDueAsync(_scope, CancellationToken.None);
+        var pastDue = await _sut.GetPastDueAsync(_scope, new PastDueQuery(), CancellationToken.None);
 
         var row = pastDue.Items.Should().ContainSingle().Subject;
         row.LeaseManagementId.Should().Be(lease.LeaseManagementId);
@@ -272,6 +273,42 @@ public class AccountingServiceTests : IDisposable
         selects[1].Should().Contain("\"Properties\"", "property labels should not require a post-materialization dictionary query");
         selects[1].Should().Contain("\"Units\"", "unit labels should not require a post-materialization dictionary query");
         selects[1].Should().Contain("ORDER BY", "oldest-payment selection and row ordering should be SQL-side");
+        selects[1].Should().Contain("LIMIT", "the row page must be bounded in SQL before materialization");
+    }
+
+    [Fact]
+    public async Task GetPastDueAsync_PagesAfterCanonicalSqlOrdering_WhileKeepingExactTotals()
+    {
+        var now = DateTime.UtcNow;
+        var (_, oldestLease) = SeedPropertyAndLease(now);
+        SeedPayment(oldestLease, 700m, dueDate: now.AddDays(-20), paidInFull: false);
+        var (_, middleLease) = SeedPropertyAndLease(now);
+        SeedPayment(middleLease, 800m, dueDate: now.AddDays(-10), paidInFull: false);
+        var (_, newestLease) = SeedPropertyAndLease(now);
+        SeedPayment(newestLease, 900m, dueDate: now.AddDays(-5), paidInFull: false);
+        await _db.SaveChangesAsync();
+        _commands.Clear();
+
+        var page = await _sut.GetPastDueAsync(
+            _scope,
+            new PastDueQuery { Skip = 1, Take = 1 },
+            CancellationToken.None);
+
+        page.TotalCount.Should().Be(3);
+        page.TotalPastDueAmount.Should().Be(2400m);
+        page.BusinessDate.Should().Be(DateOnly.FromDateTime(now));
+        page.Skip.Should().Be(1);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle()
+            .Which.LeaseManagementId.Should().Be(middleLease.LeaseManagementId);
+
+        var selects = _commands
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        selects.Should().HaveCount(2, "totals and the bounded page are each one SQL statement");
+        selects[1].Should().Contain("ORDER BY");
+        selects[1].Should().Contain("LIMIT");
+        selects[1].Should().Contain("OFFSET");
     }
 
     [Fact]
@@ -291,7 +328,7 @@ public class AccountingServiceTests : IDisposable
         await _db.SaveChangesAsync();
 
         var snapshot = await _sut.GetSnapshotAsync(_scope, CancellationToken.None);
-        var pastDue = await _sut.GetPastDueAsync(_scope, CancellationToken.None);
+        var pastDue = await _sut.GetPastDueAsync(_scope, new PastDueQuery(), CancellationToken.None);
 
         snapshot.PastDueCount.Should().Be(2);
         snapshot.PastDueAmount.Should().Be(1900m);
@@ -318,7 +355,7 @@ public class AccountingServiceTests : IDisposable
         await _db.SaveChangesAsync();
 
         var snapshot = await _sut.GetSnapshotAsync(_scope, CancellationToken.None);
-        var pastDue = await _sut.GetPastDueAsync(_scope, CancellationToken.None);
+        var pastDue = await _sut.GetPastDueAsync(_scope, new PastDueQuery(), CancellationToken.None);
 
         snapshot.PastDueCount.Should().Be(1);
         snapshot.PastDueAmount.Should().Be(975m);

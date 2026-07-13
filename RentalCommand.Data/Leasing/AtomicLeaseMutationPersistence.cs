@@ -226,7 +226,6 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         int portfolioId,
         int leaseManagementId,
         int unitId,
-        DateOnly requiredBusinessDate,
         IReadOnlyList<AtomicReturnPossessionPartyInput> parties,
         IReadOnlyList<AtomicReturnPossessionAccessInput> accesses,
         int actorUserId,
@@ -251,7 +250,6 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("portfolioId", portfolioId),
             Integer("leaseManagementId", leaseManagementId),
             Integer("unitId", unitId),
-            new("businessDate", NpgsqlDbType.Date) { Value = requiredBusinessDate },
             Integer("actorUserId", actorUserId),
             Timestamp("changedAt", changedAtUtc),
             Text("turnoverReason", turnoverReason.Trim()),
@@ -906,6 +904,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             SELECT access_id, disposition
             FROM jsonb_to_recordset(@accesses::jsonb) AS row(access_id integer, disposition integer)
         ),
+        business_clock AS MATERIALIZED (
+            SELECT rc_business_date(@portfolioId) AS business_date
+        ),
         relationship AS MATERIALIZED (
             SELECT relationship.*
             FROM "LeaseManagements" AS relationship
@@ -917,10 +918,12 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         current_parties AS MATERIALIZED (
             SELECT party."Id", party."Role"
             FROM "LeaseManagementParties" AS party
+            CROSS JOIN business_clock
             WHERE party."PortfolioId" = @portfolioId
               AND party."LeaseManagementId" = @leaseManagementId
-              AND party."EffectiveFrom" <= @businessDate
-              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= @businessDate)
+              AND party."EffectiveFrom" <= business_clock.business_date
+              AND (party."EffectiveThrough" IS NULL
+                   OR party."EffectiveThrough" >= business_clock.business_date)
         ),
         current_access AS MATERIALIZED (
             SELECT access."Id"
@@ -934,7 +937,6 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                 relationship."PossessionGivenAtUtc" IS NOT NULL AS possession_given,
                 relationship."PossessionReturnedAtUtc" IS NOT NULL AS already_returned,
                 relationship."PossessionReturnedAtUtc" AS returned_at,
-                rc_business_date(@portfolioId) = @businessDate AS business_date_matches,
                 EXISTS (
                     SELECT 1 FROM "UnitOperationalPeriods" AS period
                     WHERE period."PortfolioId" = @portfolioId
@@ -969,7 +971,7 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                     WHEN already_returned THEN @alreadyReturned
                     WHEN NOT possession_given THEN @notGiven
                     WHEN turnover_open THEN @turnoverOpen
-                    WHEN NOT business_date_matches OR NOT parties_valid THEN @invalidParty
+                    WHEN NOT parties_valid THEN @invalidParty
                     WHEN NOT accesses_valid THEN @invalidAccess
                     ELSE @returned
                 END AS outcome
@@ -977,9 +979,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         ),
         ended_parties AS (
             UPDATE "LeaseManagementParties" AS party
-            SET "EffectiveThrough" = @businessDate,
+            SET "EffectiveThrough" = business_clock.business_date,
                 "ChangeReason" = 'Party membership ended when possession returned.'
-            FROM party_input AS input, decision
+            FROM party_input AS input, decision, business_clock
             WHERE decision.outcome = @returned
               AND input.disposition = @endMembership
               AND party."Id" = input.party_id

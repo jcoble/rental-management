@@ -5,8 +5,12 @@ import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/lease.dart';
 import '../tenants/tenant_detail_screen.dart';
+import 'addendum_action_sheets.dart';
+import 'agreement_draft_action_sheets.dart';
 import 'lease_ledger_view.dart';
 import 'leases_repository.dart';
+import 'return_possession_sheet.dart';
+import 'successor_agreement_sheet.dart';
 
 class LeaseManagementDetailLoaderScreen extends StatelessWidget {
   const LeaseManagementDetailLoaderScreen({
@@ -39,6 +43,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
     final agreements = ref.watch(
       leaseAgreementHistoryProvider(leaseManagementId),
     );
+    final agreementHistory = agreements.asData?.value;
     return detail.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => _ErrorState(
@@ -48,8 +53,15 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
       ),
       data: (management) => RefreshIndicator(
         onRefresh: () async {
-          ref.invalidate(leaseManagementDetailProvider(leaseManagementId));
-          ref.invalidate(leaseAgreementHistoryProvider(leaseManagementId));
+          ref.invalidate(leaseAddendumHistoryProvider);
+          await Future.wait([
+            ref.refresh(
+              leaseManagementDetailProvider(leaseManagementId).future,
+            ),
+            ref.refresh(
+              leaseAgreementHistoryProvider(leaseManagementId).future,
+            ),
+          ]);
         },
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -79,12 +91,36 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
               data: (history) => _AgreementHistoryCard(
                 leaseManagementId: leaseManagementId,
                 agreements: history.items,
+                propertyName: management.summary.propertyName,
+                unitNumber: management.summary.unitNumber,
+                managementBusinessDate: management.summary.businessDate,
               ),
             ),
+            const SizedBox(height: 12),
+            _AddendumHistoryCard(management: management),
             const SizedBox(height: 12),
             _ActionsCard(
               management: management,
               onAsk: () => _ask(context, ref),
+              onGivePossession:
+                  management.summary.possessionGivenAt == null &&
+                      management.summary.canceledAt == null &&
+                      management.summary.tenantAccountId != null &&
+                      management.summary.currentResidentCount > 0 &&
+                      (agreementHistory?.items.any(
+                            (agreement) =>
+                                agreement.isGoverning &&
+                                agreement.executedArtifact != null,
+                          ) ??
+                          false)
+                  ? () => _givePossession(context, ref, management)
+                  : null,
+              onReturnPossession:
+                  management.summary.possessionGivenAt != null &&
+                      management.summary.possessionReturnedAt == null &&
+                      management.summary.canceledAt == null
+                  ? () => _returnPossession(context, ref, management)
+                  : null,
             ),
           ],
         ),
@@ -139,6 +175,124 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
           ],
         ),
       );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _givePossession(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+  ) async {
+    final summary = management.summary;
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Give possession',
+              style: Theme.of(sheetContext).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            Text('${summary.propertyName} · Unit ${summary.unitNumber}'),
+            const SizedBox(height: 8),
+            const Text(
+              'This records possession now. The server will recheck the executed governing agreement, open account, resident household, unit availability, and your current access before changing lifecycle state.',
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(sheetContext).pop(true),
+              icon: const Icon(Icons.key_outlined),
+              label: const Text('Confirm possession'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(sheetContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final operationKey = LeaseManagementsRepository.newOperationKey();
+    try {
+      final result = await _runWithStableRetry(
+        context,
+        actionLabel: 'give possession',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .givePossession(
+              leaseManagementId: summary.id,
+              unitId: summary.unitId,
+              operationKey: operationKey,
+            ),
+      );
+      if (result == null || !context.mounted) return;
+      ref.invalidate(leaseManagementDetailProvider(summary.id));
+      await ref.read(leaseManagementDetailProvider(summary.id).future);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Possession recorded for Unit ${summary.unitNumber}.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _returnPossession(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+  ) async {
+    final summary = management.summary;
+    try {
+      final returnContext = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .returnPossessionContext(summary.id);
+      if (!context.mounted) return;
+      if (returnContext.parties.isEmpty) {
+        _showError(
+          context,
+          const ApiException(
+            statusCode: 0,
+            message:
+                'The server did not return a current household to disposition.',
+          ),
+        );
+        return;
+      }
+
+      final result = await showReturnPossessionSheet(
+        context,
+        summary: summary,
+        returnContext: returnContext,
+      );
+      if (result == null || !context.mounted) return;
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(summary.id).future),
+        ref.refresh(leaseAgreementHistoryProvider(summary.id).future),
+      ]);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Possession returned for Unit ${summary.unitNumber}; turnover is open.',
+            ),
+          ),
+        );
+      }
     } catch (error) {
       if (context.mounted) _showError(context, error);
     }
@@ -265,14 +419,19 @@ class _AgreementHistoryCard extends ConsumerWidget {
   const _AgreementHistoryCard({
     required this.leaseManagementId,
     required this.agreements,
+    required this.propertyName,
+    required this.unitNumber,
+    required this.managementBusinessDate,
   });
 
   final int leaseManagementId;
   final List<LeaseAgreementHistory> agreements;
+  final String propertyName;
+  final String unitNumber;
+  final DateTime managementBusinessDate;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final current = agreements.where((item) => item.isGoverning).firstOrNull;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -313,40 +472,94 @@ class _AgreementHistoryCard extends ConsumerWidget {
                     '${agreement.termEndOn == null ? 'Month-to-month' : _date(agreement.termEndOn!)}',
                   ),
                   isThreeLine: true,
-                  trailing:
-                      agreement.executedArtifact == null &&
-                          agreement.issuedArtifact == null
-                      ? null
-                      : IconButton(
-                          tooltip: 'Open agreement PDF',
-                          icon: const Icon(Icons.picture_as_pdf_outlined),
-                          onPressed: () =>
-                              _openArtifact(context, ref, agreement),
-                        ),
                 ),
-                if (agreement == current)
+                if (agreement.issuedArtifact != null ||
+                    agreement.executedArtifact != null)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (agreement.issuedArtifact != null)
+                        OutlinedButton.icon(
+                          onPressed: () => _openArtifact(
+                            context,
+                            ref,
+                            agreement,
+                            agreement.issuedArtifact!,
+                          ),
+                          icon: const Icon(Icons.picture_as_pdf_outlined),
+                          label: const Text('Issued PDF'),
+                        ),
+                      if (agreement.executedArtifact != null)
+                        OutlinedButton.icon(
+                          onPressed: () => _openArtifact(
+                            context,
+                            ref,
+                            agreement,
+                            agreement.executedArtifact!,
+                          ),
+                          icon: const Icon(Icons.verified_outlined),
+                          label: const Text('Executed PDF'),
+                        ),
+                    ],
+                  ),
+                if (agreement.isDraft)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => _editDraft(context, ref, agreement),
+                        icon: const Icon(Icons.edit_outlined),
+                        label: const Text('Edit draft'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => _issueDraft(context, ref, agreement),
+                        icon: const Icon(Icons.send_outlined),
+                        label: const Text('Issue for signature'),
+                      ),
+                    ],
+                  ),
+                if (agreement.isGoverning)
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
                       OutlinedButton(
-                        onPressed: () =>
-                            _openSuccessor(context, ref, agreement, 'correct'),
-                        child: const Text('Correct'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () =>
-                            _openSuccessor(context, ref, agreement, 'renew'),
-                        child: const Text('Renew'),
+                        onPressed: () => _openSuccessor(
+                          context,
+                          ref,
+                          agreement,
+                          LeaseSuccessorOperation.correction,
+                        ),
+                        child: const Text('Create correction'),
                       ),
                       OutlinedButton(
                         onPressed: () => _openSuccessor(
                           context,
                           ref,
                           agreement,
-                          'month-to-month',
+                          LeaseSuccessorOperation.restatement,
                         ),
-                        child: const Text('Month-to-month'),
+                        child: const Text('Create restatement'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => _openSuccessor(
+                          context,
+                          ref,
+                          agreement,
+                          LeaseSuccessorOperation.renewal,
+                        ),
+                        child: const Text('Create renewal'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => _openSuccessor(
+                          context,
+                          ref,
+                          agreement,
+                          LeaseSuccessorOperation.monthToMonth,
+                        ),
+                        child: const Text('Create month-to-month'),
                       ),
                     ],
                   ),
@@ -362,9 +575,8 @@ class _AgreementHistoryCard extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     LeaseAgreementHistory agreement,
+    LegalArtifactSummary artifact,
   ) async {
-    final artifact = agreement.executedArtifact ?? agreement.issuedArtifact;
-    if (artifact == null) return;
     try {
       final bytes = await ref
           .read(leaseManagementsRepositoryProvider)
@@ -383,37 +595,162 @@ class _AgreementHistoryCard extends ConsumerWidget {
     }
   }
 
+  Future<LeaseAgreementDraftDetail?> _loadDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    try {
+      return await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementDraft(
+            leaseManagementId: leaseManagementId,
+            leaseAgreementId: agreement.id,
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+      return null;
+    }
+  }
+
+  Future<void> _editDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final draft = await _loadDraft(context, ref, agreement);
+    if (draft == null || !context.mounted) return;
+    if (draft.documentTemplateId == null) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message:
+              'This source-scan draft has no template identity and cannot be edited with the template-backed mobile form.',
+        ),
+      );
+      return;
+    }
+    final result = await showEditAgreementDraftSheet(
+      context,
+      draft: draft,
+      propertyName: propertyName,
+      unitNumber: unitNumber,
+    );
+    if (result == null || !context.mounted) return;
+    await _refresh(context, ref);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Draft revision ${result.draftRevision} saved.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _issueDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final draft = await _loadDraft(context, ref, agreement);
+    if (draft == null || !context.mounted) return;
+    if (!draft.hasExactOrderedSigners) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message:
+              'The draft does not have a complete, uniquely ordered signer snapshot.',
+        ),
+      );
+      return;
+    }
+    final result = await showIssueAgreementSheet(
+      context,
+      draft: draft,
+      propertyName: propertyName,
+      unitNumber: unitNumber,
+    );
+    if (result == null || !context.mounted) return;
+    await _refresh(context, ref);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Agreement issued for signature.')),
+      );
+    }
+  }
+
+  Future<void> _refresh(BuildContext context, WidgetRef ref) async {
+    try {
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(leaseManagementId).future),
+        ref.refresh(leaseAgreementHistoryProvider(leaseManagementId).future),
+      ]);
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
   Future<void> _openSuccessor(
     BuildContext context,
     WidgetRef ref,
     LeaseAgreementHistory source,
-    String operation,
+    LeaseSuccessorOperation operation,
   ) async {
-    final result = await showModalBottomSheet<_SuccessorDates>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) =>
-          _SuccessorAgreementSheet(source: source, operation: operation),
+    LeaseAgreementEffectiveAddendumSeries? effectiveAddendumSeries;
+    if (operation.requiresEffectiveAddendumDecisions) {
+      try {
+        effectiveAddendumSeries = await ref
+            .read(leaseManagementsRepositoryProvider)
+            .effectiveAddendumSeries(
+              leaseManagementId: leaseManagementId,
+              sourceAgreementId: source.id,
+            );
+      } catch (error) {
+        if (context.mounted) _showError(context, error);
+        return;
+      }
+      if (!context.mounted) return;
+    }
+
+    final result = await showSuccessorAgreementSheet(
+      context,
+      source: source,
+      operation: operation,
+      propertyName: propertyName,
+      unitNumber: unitNumber,
+      businessDate: managementBusinessDate,
+      effectiveAddendumSeries: effectiveAddendumSeries,
     );
     if (result == null || !context.mounted) return;
     try {
-      await ref
-          .read(leaseManagementsRepositoryProvider)
-          .createSuccessorDraft(
-            leaseManagementId: leaseManagementId,
-            sourceAgreementId: source.id,
-            operation: operation,
-            termStartOn: result.termStart,
-            termEndOn: result.termEnd,
-            governingFromOn: result.governingFrom,
-          );
-      ref.invalidate(leaseManagementDetailProvider(leaseManagementId));
-      ref.invalidate(leaseAgreementHistoryProvider(leaseManagementId));
+      final created = await _runWithStableRetry(
+        context,
+        actionLabel: 'create successor draft',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .createSuccessorDraft(
+              leaseManagementId: leaseManagementId,
+              sourceAgreementId: source.id,
+              changeType: operation.apiChangeType,
+              termStartOn: result.termStart,
+              termEndOn: result.termEnd,
+              governingFromOn: result.governingFrom,
+              addendumDecisions: result.addendumDecisions,
+              operationKey: result.operationKey,
+            ),
+      );
+      if (created == null || !context.mounted) return;
+      await Future.wait([
+        ref.refresh(leaseManagementDetailProvider(leaseManagementId).future),
+        ref.refresh(leaseAgreementHistoryProvider(leaseManagementId).future),
+      ]);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'New agreement version created as a draft. Review it before issuing it for signature.',
+              'Draft v${created.versionNumber} created and loaded into agreement history.',
             ),
           ),
         );
@@ -424,11 +761,301 @@ class _AgreementHistoryCard extends ConsumerWidget {
   }
 }
 
+class _AddendumHistoryCard extends ConsumerStatefulWidget {
+  const _AddendumHistoryCard({required this.management});
+
+  final LeaseManagementDetail management;
+
+  @override
+  ConsumerState<_AddendumHistoryCard> createState() =>
+      _AddendumHistoryCardState();
+}
+
+class _AddendumHistoryCardState extends ConsumerState<_AddendumHistoryCard> {
+  static const _pageSize = 10;
+  int _skip = 0;
+
+  LeaseAddendumHistoryQuery get _query => LeaseAddendumHistoryQuery(
+    leaseManagementId: widget.management.summary.id,
+    skip: _skip,
+    take: _pageSize,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final page = ref.watch(leaseAddendumHistoryProvider(_query));
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Addenda',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => _create(context),
+                  icon: const Icon(Icons.add),
+                  label: const Text('New draft'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            page.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (error, _) => _ErrorState(
+                error: error,
+                onRetry: () =>
+                    ref.invalidate(leaseAddendumHistoryProvider(_query)),
+              ),
+              data: (history) => _history(context, history),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _history(
+    BuildContext context,
+    LeaseAddendumHistoryPage page,
+  ) => Column(
+    children: [
+      if (page.items.isEmpty)
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text('No addendum draft has been created.'),
+        )
+      else
+        for (final addendum in page.items) ...[
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.description_outlined),
+            title: Text(
+              '${addendum.addendumNumber} · v${addendum.versionNumber}',
+            ),
+            subtitle: Text(
+              '${addendum.purpose} · ${addendum.status}\n'
+              '${_date(addendum.effectiveFromOn)} – '
+              '${addendum.effectiveThroughOn == null ? 'Open ended' : _date(addendum.effectiveThroughOn!)}\n'
+              '${addendum.financialEffectCount} financial effect${addendum.financialEffectCount == 1 ? '' : 's'} · '
+              '${addendum.signerCount} signer${addendum.signerCount == 1 ? '' : 's'}',
+            ),
+            isThreeLine: true,
+          ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (addendum.issuedArtifact != null)
+                OutlinedButton.icon(
+                  onPressed: () => _openArtifact(
+                    context,
+                    addendum,
+                    addendum.issuedArtifact!,
+                  ),
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  label: const Text('Issued PDF'),
+                ),
+              if (addendum.executedArtifact != null)
+                OutlinedButton.icon(
+                  onPressed: () => _openArtifact(
+                    context,
+                    addendum,
+                    addendum.executedArtifact!,
+                  ),
+                  icon: const Icon(Icons.verified_outlined),
+                  label: const Text('Executed PDF'),
+                ),
+              if (addendum.isDraft)
+                OutlinedButton.icon(
+                  onPressed: () => _edit(context, addendum),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Edit draft'),
+                ),
+              if (addendum.isDraft)
+                FilledButton.icon(
+                  onPressed: () => _issue(context, addendum),
+                  icon: const Icon(Icons.send_outlined),
+                  label: const Text('Issue'),
+                ),
+              if (addendum.canCorrect)
+                OutlinedButton.icon(
+                  onPressed: () => _correct(context, addendum),
+                  icon: const Icon(Icons.content_copy_outlined),
+                  label: const Text('Correct'),
+                ),
+            ],
+          ),
+          const Divider(),
+        ],
+      if (page.totalCount > 0)
+        Row(
+          children: [
+            IconButton(
+              onPressed: page.hasPrevious
+                  ? () => setState(() {
+                      _skip = _skip > _pageSize ? _skip - _pageSize : 0;
+                    })
+                  : null,
+              icon: const Icon(Icons.chevron_left),
+              tooltip: 'Previous addenda page',
+            ),
+            Expanded(
+              child: Text(
+                '${page.skip + 1}–${page.skip + page.items.length} of ${page.totalCount}',
+                textAlign: TextAlign.center,
+              ),
+            ),
+            IconButton(
+              onPressed: page.hasNext
+                  ? () => setState(() => _skip += _pageSize)
+                  : null,
+              icon: const Icon(Icons.chevron_right),
+              tooltip: 'Next addenda page',
+            ),
+          ],
+        ),
+    ],
+  );
+
+  Future<void> _create(BuildContext context) async {
+    final result = await showCreateAddendumDraftSheet(
+      context,
+      management: widget.management.summary,
+    );
+    if (result == null || !mounted) return;
+    setState(() => _skip = 0);
+    await _refresh();
+  }
+
+  Future<LeaseAddendumDraftDetail?> _loadDraft(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    try {
+      return await ref
+          .read(leaseManagementsRepositoryProvider)
+          .addendumDraft(
+            leaseManagementId: widget.management.summary.id,
+            leaseAddendumId: addendum.id,
+          );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+      return null;
+    }
+  }
+
+  Future<void> _edit(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    final draft = await _loadDraft(context, addendum);
+    if (draft == null || !context.mounted) return;
+    if (draft.documentTemplateId == null) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message: 'This draft has no editable template identity.',
+        ),
+      );
+      return;
+    }
+    final result = await showEditAddendumDraftSheet(
+      context,
+      draft: draft,
+      propertyName: widget.management.summary.propertyName,
+      unitNumber: widget.management.summary.unitNumber,
+    );
+    if (result != null && mounted) await _refresh();
+  }
+
+  Future<void> _issue(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    final draft = await _loadDraft(context, addendum);
+    if (draft == null || !context.mounted) return;
+    final result = await showIssueAddendumSheet(
+      context,
+      draft: draft,
+      propertyName: widget.management.summary.propertyName,
+      unitNumber: widget.management.summary.unitNumber,
+    );
+    if (result != null && mounted) await _refresh();
+  }
+
+  Future<void> _correct(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+  ) async {
+    final result = await showCorrectAddendumSheet(
+      context,
+      leaseManagementId: widget.management.summary.id,
+      source: addendum,
+      businessDate: widget.management.summary.businessDate,
+    );
+    if (result != null && mounted) {
+      setState(() => _skip = 0);
+      await _refresh();
+    }
+  }
+
+  Future<void> _openArtifact(
+    BuildContext context,
+    LeaseAddendumHistory addendum,
+    LegalArtifactSummary artifact,
+  ) async {
+    try {
+      final bytes = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .addendumArtifactBytes(
+            leaseManagementId: widget.management.summary.id,
+            leaseAddendumId: addendum.id,
+            artifactId: artifact.id,
+          );
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: artifact.fileName,
+        mimeType: artifact.contentType,
+      );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(leaseAddendumHistoryProvider);
+    await Future.wait([
+      ref.refresh(
+        leaseManagementDetailProvider(widget.management.summary.id).future,
+      ),
+      ref.refresh(leaseAddendumHistoryProvider(_query).future),
+    ]);
+  }
+}
+
 class _ActionsCard extends StatelessWidget {
-  const _ActionsCard({required this.management, required this.onAsk});
+  const _ActionsCard({
+    required this.management,
+    required this.onAsk,
+    required this.onGivePossession,
+    required this.onReturnPossession,
+  });
 
   final LeaseManagementDetail management;
   final VoidCallback onAsk;
+  final VoidCallback? onGivePossession;
+  final VoidCallback? onReturnPossession;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -442,6 +1069,22 @@ class _ActionsCard extends StatelessWidget {
             icon: const Icon(Icons.auto_awesome_outlined),
             label: const Text('Ask this tenant & lease'),
           ),
+          if (onGivePossession != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: onGivePossession,
+              icon: const Icon(Icons.key_outlined),
+              label: const Text('Give possession'),
+            ),
+          ],
+          if (onReturnPossession != null) ...[
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: onReturnPossession,
+              icon: const Icon(Icons.key_off_outlined),
+              label: const Text('Return possession'),
+            ),
+          ],
           if (management.summary.tenantAccountId != null) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
@@ -462,142 +1105,6 @@ class _ActionsCard extends StatelessWidget {
         ],
       ),
     ),
-  );
-}
-
-class _SuccessorDates {
-  const _SuccessorDates({
-    required this.termStart,
-    required this.termEnd,
-    required this.governingFrom,
-  });
-
-  final DateTime termStart;
-  final DateTime? termEnd;
-  final DateTime governingFrom;
-}
-
-class _SuccessorAgreementSheet extends StatefulWidget {
-  const _SuccessorAgreementSheet({
-    required this.source,
-    required this.operation,
-  });
-
-  final LeaseAgreementHistory source;
-  final String operation;
-
-  @override
-  State<_SuccessorAgreementSheet> createState() =>
-      _SuccessorAgreementSheetState();
-}
-
-class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
-  late DateTime _start;
-  DateTime? _end;
-  late DateTime _governingFrom;
-
-  @override
-  void initState() {
-    super.initState();
-    final source = widget.source;
-    final nextDay = source.termEndOn?.add(const Duration(days: 1));
-    _start = widget.operation == 'renew'
-        ? nextDay ?? source.termStartOn
-        : source.termStartOn;
-    _end = widget.operation == 'month-to-month'
-        ? null
-        : widget.operation == 'renew'
-        ? DateTime(_start.year + 1, _start.month, _start.day)
-        : source.termEndOn;
-    _governingFrom = widget.operation == 'correct' ? DateTime.now() : _start;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final label = switch (widget.operation) {
-      'correct' => 'Correct agreement',
-      'renew' => 'Renew agreement',
-      _ => 'Offer month-to-month',
-    };
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          20,
-          20,
-          20 + MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(label, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            const Text(
-              'This creates a new agreement version. The signed agreement is never edited. Review the copied terms before sending the new version for signature.',
-            ),
-            const SizedBox(height: 16),
-            _DateButton(
-              label: 'Term starts',
-              value: _start,
-              onChanged: (value) => setState(() => _start = value),
-            ),
-            if (widget.operation != 'month-to-month')
-              _DateButton(
-                label: 'Term ends',
-                value: _end!,
-                onChanged: (value) => setState(() => _end = value),
-              ),
-            _DateButton(
-              label: 'Becomes governing',
-              value: _governingFrom,
-              onChanged: (value) => setState(() => _governingFrom = value),
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: () => Navigator.pop(
-                context,
-                _SuccessorDates(
-                  termStart: _start,
-                  termEnd: _end,
-                  governingFrom: _governingFrom,
-                ),
-              ),
-              child: const Text('Create draft version'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DateButton extends StatelessWidget {
-  const _DateButton({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-
-  final String label;
-  final DateTime value;
-  final ValueChanged<DateTime> onChanged;
-
-  @override
-  Widget build(BuildContext context) => ListTile(
-    contentPadding: EdgeInsets.zero,
-    title: Text(label),
-    subtitle: Text(_date(value)),
-    trailing: const Icon(Icons.calendar_month_outlined),
-    onTap: () async {
-      final selected = await showDatePicker(
-        context: context,
-        firstDate: DateTime(2000),
-        lastDate: DateTime(2100),
-        initialDate: value,
-      );
-      if (selected != null) onChanged(selected);
-    },
   );
 }
 
@@ -664,6 +1171,42 @@ void _showError(BuildContext context, Object error) {
       content: Text(error is ApiException ? error.message : error.toString()),
     ),
   );
+}
+
+Future<T?> _runWithStableRetry<T>(
+  BuildContext context, {
+  required String actionLabel,
+  required Future<T> Function() action,
+}) async {
+  while (context.mounted) {
+    try {
+      return await action();
+    } catch (error) {
+      if (!context.mounted) return null;
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Request not confirmed'),
+          content: Text(
+            '${error is ApiException ? error.message : error}\n\n'
+            'Retry $actionLabel with the same request key so the server can safely replay an earlier success.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Retry safely'),
+            ),
+          ],
+        ),
+      );
+      if (retry != true) return null;
+    }
+  }
+  return null;
 }
 
 String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';

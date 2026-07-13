@@ -95,15 +95,17 @@ public class AccountingController : ManagementControllerBase
     }
 
     /// <summary>
-    /// The "Who's behind" list: one actionable row per lease/tenant currently behind on rent. This is
+    /// The "Who's behind" list: one actionable row per tenant account currently behind on rent. This is
     /// the destination behind the dashboard "tenants behind" KPI — both come from the same past-due
     /// definition, so the returned <c>TotalCount</c> always equals that KPI count.
     /// </summary>
     [HttpGet("past-due")]
     [ProducesResponseType(typeof(PastDueResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<PastDueResponse>> PastDue(CancellationToken ct)
+    public async Task<ActionResult<PastDueResponse>> PastDue(
+        [FromQuery] PastDueQuery query,
+        CancellationToken ct)
     {
-        var pastDue = await _service.GetPastDueAsync(GetWorkspaceReadScope(), ct);
+        var pastDue = await _service.GetPastDueAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(pastDue);
     }
 

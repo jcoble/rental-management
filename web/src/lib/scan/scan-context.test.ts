@@ -42,6 +42,34 @@ describe('scan context helpers', () => {
 		);
 	});
 
+	it('round-trips every explicit canonical record id without a generic record alias', () => {
+		const context = {
+			type: 'Payment' as const,
+			propertyId: 1,
+			unitId: 2,
+			leaseManagementId: 3,
+			leaseAgreementId: 4,
+			tenantAccountId: 5,
+			tenantLedgerEntryId: 6,
+			workOrderId: 7,
+			applicationId: 8,
+			rentalListingId: 9,
+			sourceLabel: 'Unit ledger'
+		};
+		const href = scanHref(context);
+		assert.deepEqual(parseScanContext(new URL(href, 'https://localhost').searchParams), context);
+		assert.equal(href.includes('focusedRecord'), false);
+	});
+
+	it('applies the exact rental account and ledger entry to payment confirmation', () => {
+		const overrides: Record<string, unknown> = {};
+		applyScanContextOverrides(overrides, {
+			tenantAccountId: 5,
+			tenantLedgerEntryId: 6
+		}, 'Payment');
+		assert.deepEqual(overrides, { tenantAccountId: 5, tenantLedgerEntryId: 6 });
+	});
+
 	it('applies expense and work-order context to confirm overrides without overwriting explicit property choices', () => {
 		const expenseOverrides: Record<string, unknown> = { propertyId: 99, is_paid: true };
 		applyScanContextOverrides(expenseOverrides, {

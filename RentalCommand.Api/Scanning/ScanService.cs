@@ -93,26 +93,32 @@ public sealed class ScanService : IScanService
             var receiptData = ToAtomicReceipt(receipt);
             if (kind == ScanConfirmationTargetKind.Payment)
             {
-                var tenantAccountId = TryGetOverrideInt(
-                        overrideRoot, out var selectedTenantAccountId,
-                        "tenantAccountId", "tenant_account_id")
-                    ? selectedTenantAccountId
-                    : 0;
+                var tenantAccountId = PositiveOverride(
+                        overrideRoot, "tenantAccountId", "tenant_account_id")
+                    ?? draft.CaptureTenantAccountId
+                    ?? 0;
+                var tenantLedgerEntryId = PositiveLongOverride(
+                        overrideRoot, "tenantLedgerEntryId", "tenant_ledger_entry_id")
+                    ?? draft.CaptureTenantLedgerEntryId;
                 if (tenantAccountId <= 0)
                 {
                     throw new ScanConfirmationValidationException(
                         "Select the rental account this payment belongs to.");
                 }
-                target = new(kind, Payment: new ScanPaymentTargetData(receiptData, tenantAccountId));
+                target = new(kind, Payment: new ScanPaymentTargetData(
+                    receiptData, tenantAccountId, tenantLedgerEntryId));
             }
             else
             {
                 var isPaid = TryGetOverrideBool(overrideRoot, out var paid, "is_paid", "isPaid")
                     ? paid
                     : receipt.DocumentKind is not ("Bill" or "Invoice" or "UtilityBill" or "PropertyTax");
-                var propertyId = PositiveOverride(overrideRoot, "propertyId", "property_id");
-                var unitId = PositiveOverride(overrideRoot, "unitId", "unit_id");
-                var workOrderId = PositiveOverride(overrideRoot, "workOrderId", "work_order_id");
+                var propertyId = PositiveOverride(overrideRoot, "propertyId", "property_id")
+                    ?? draft.CapturePropertyId;
+                var unitId = PositiveOverride(overrideRoot, "unitId", "unit_id")
+                    ?? draft.CaptureUnitId;
+                var workOrderId = PositiveOverride(overrideRoot, "workOrderId", "work_order_id")
+                    ?? draft.CaptureWorkOrderId;
                 if (unitId is null && propertyId is int selectedPropertyId)
                     unitId = await TryResolveExpenseUnitFromNotesAsync(
                         portfolioId, selectedPropertyId, receipt.Notes, ct);
@@ -126,6 +132,10 @@ public sealed class ScanService : IScanService
             var fields = BuildWorkOrderFields(draft.ExtractedFields);
             await ValidateWorkOrderIdsInPortfolioAsync(portfolioId, fields, ct);
             ApplyWorkOrderOverrides(fields, normalizedOverrides);
+            if (fields.PropertyId <= 0)
+                fields.PropertyId = draft.CapturePropertyId ?? 0;
+            fields.UnitId ??= draft.CaptureUnitId;
+            fields.LeaseManagementId ??= draft.CaptureLeaseManagementId;
             if (fields.UnitId is null && fields.PropertyId > 0)
                 fields.UnitId = await TryResolveWorkOrderUnitFromTextAsync(
                     portfolioId, fields.PropertyId, fields, ct);
@@ -149,6 +159,9 @@ public sealed class ScanService : IScanService
             var tenantAccountId = PositiveOverride(
                 overrideRoot, "tenantAccountId", "tenant_account_id")
                 ?? draft.CaptureTenantAccountId;
+            var leaseAgreementId = PositiveOverride(
+                overrideRoot, "leaseAgreementId", "lease_agreement_id")
+                ?? draft.CaptureLeaseAgreementId;
             var templateId = PositiveOverride(
                 overrideRoot, "documentTemplateId", "document_template_id");
             var dispositionText = TryGetOverrideString(
@@ -171,7 +184,7 @@ public sealed class ScanService : IScanService
                 fields.UnitBedrooms, fields.UnitBathrooms, fields.UnitSquareFeet, fields.LeaseNumber,
                 fields.StartDate, fields.EndDate, fields.MonthlyRent, fields.SecurityDeposit,
                 fields.LateFee, fields.RentDueDay,
-                disposition, leaseManagementId, tenantAccountId, templateId,
+                disposition, leaseManagementId, tenantAccountId, leaseAgreementId, templateId,
                 TermsSchemaVersion: 1,
                 TermsPayload: string.IsNullOrWhiteSpace(draft.ExtractedFields) ? "{}" : draft.ExtractedFields,
                 GracePeriodDays: 0));
@@ -181,6 +194,8 @@ public sealed class ScanService : IScanService
             var fields = BuildApplicationFields(draft.ExtractedFields);
             await ValidateApplicationIdsInPortfolioAsync(portfolioId, fields, ct);
             ApplyApplicationOverrides(fields, normalizedOverrides);
+            fields.PropertyId ??= draft.CapturePropertyId;
+            fields.UnitId ??= draft.CaptureUnitId;
             int? propertyId = fields.PropertyId is > 0
                 && await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId.Value, ct)
                 ? fields.PropertyId
@@ -230,18 +245,51 @@ public sealed class ScanService : IScanService
                     draft.CapturePropertyId,
                     draft.CaptureUnitId,
                     draft.CaptureLeaseManagementId,
+                    draft.CaptureLeaseAgreementId,
                     draft.CaptureTenantAccountId,
-                    draft.CaptureFocusedRecordKind,
-                    draft.CaptureFocusedRecordId,
+                    draft.CaptureTenantLedgerEntryId,
+                    draft.CaptureWorkOrderId,
+                    draft.CaptureApplicationId,
+                    draft.CaptureRentalListingId,
                     draft.SourceLabel),
                 target,
                 draft.SourceStoredFileId,
                 SourceContentSha256: draft.SourceContentSha256,
-                SourceLabel: draft.SourceLabel));
+                SourceLabel: draft.SourceLabel,
+                CaptureContext: new ScanCaptureContextData(
+                    draft.CaptureExperience,
+                    draft.CaptureAccessContextId,
+                    draft.CaptureAccessRevision,
+                    draft.CapturePropertyId,
+                    draft.CaptureUnitId,
+                    draft.CaptureLeaseManagementId,
+                    draft.CaptureLeaseAgreementId,
+                    draft.CaptureTenantAccountId,
+                    draft.CaptureTenantLedgerEntryId,
+                    draft.CaptureWorkOrderId,
+                    draft.CaptureApplicationId,
+                    draft.CaptureRentalListingId,
+                    draft.SourceLabel)));
     }
 
     private static int? PositiveOverride(JsonElement root, params string[] names) =>
         TryGetOverrideInt(root, out var value, names) && value > 0 ? value : null;
+
+    private static long? PositiveLongOverride(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var value))
+                continue;
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var numeric) && numeric > 0)
+                return numeric;
+            if (value.ValueKind == JsonValueKind.String
+                && long.TryParse(value.GetString(), out numeric)
+                && numeric > 0)
+                return numeric;
+        }
+        return null;
+    }
 
     private static ScanReceiptData ToAtomicReceipt(ExtractedReceiptDto receipt) => new(
         receipt.VendorName, receipt.VendorAddress, receipt.VendorPhone, receipt.VendorWebsite,

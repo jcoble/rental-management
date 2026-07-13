@@ -57,7 +57,6 @@ public sealed record ReturnPossessionCommand(
     Guid AuthSessionId,
     int AccessContextId,
     long ExpectedAccessRevision,
-    DateOnly EffectiveOn,
     IReadOnlyList<ReturnPossessionParty> Parties,
     IReadOnlyList<ReturnPossessionAccess> Accesses,
     string TurnoverReason,

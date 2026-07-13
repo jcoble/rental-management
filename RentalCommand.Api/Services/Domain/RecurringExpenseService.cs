@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -15,12 +19,15 @@ public class RecurringExpenseService : IRecurringExpenseService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
-    public RecurringExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
+    public RecurringExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
+        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -29,9 +36,32 @@ public class RecurringExpenseService : IRecurringExpenseService
         return page.Items;
     }
 
+    public async Task<IReadOnlyList<RecurringExpenseResponse>> ListAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var page = await ListPageAsync(scope, propertyId, query, ct);
+        return page.Items;
+    }
+
     public async Task<RecurringExpenseListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var filtered = BuildListQuery(portfolioId, propertyId, query);
+        return await BuildPageAsync(filtered, query, ct);
+    }
+
+    public Task<RecurringExpenseListResponse> ListPageAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(
+            _db.RecurringExpenses.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, propertyId, query);
+        return BuildPageAsync(filtered, query, ct);
+    }
+
+    private static async Task<RecurringExpenseListResponse> BuildPageAsync(
+        IQueryable<RecurringExpense> filtered, ListQuery query, CancellationToken ct)
+    {
         var totalCount = await filtered.CountAsync(ct);
 
         var items = await ApplySort(filtered, query)
@@ -55,10 +85,12 @@ public class RecurringExpenseService : IRecurringExpenseService
     }
 
     private IQueryable<RecurringExpense> BuildListQuery(int portfolioId, int? propertyId, ListQuery query)
+        => BuildListQuery(_db.RecurringExpenses.AsNoTracking(), portfolioId, propertyId, query);
+
+    private static IQueryable<RecurringExpense> BuildListQuery(
+        IQueryable<RecurringExpense> q, int portfolioId, int? propertyId, ListQuery query)
     {
-        var q = _db.RecurringExpenses
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId);
+        q = q.Where(t => t.PortfolioId == portfolioId);
 
         if (propertyId.HasValue)
             q = q.Where(t => t.PropertyId == propertyId.Value);
@@ -96,10 +128,20 @@ public class RecurringExpenseService : IRecurringExpenseService
         return ordered.ThenBy(t => t.Id);
     }
 
-    public async Task<RecurringExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<RecurringExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
+        GetAsync(_db.RecurringExpenses.AsNoTracking(), portfolioId, id, ct);
+
+    public Task<RecurringExpenseResponse?> GetAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        GetAsync(
+            _db.RecurringExpenses.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, id, ct);
+
+    private static async Task<RecurringExpenseResponse?> GetAsync(
+        IQueryable<RecurringExpense> expenses, int portfolioId, int id, CancellationToken ct)
     {
-        var entity = await _db.RecurringExpenses
-            .AsNoTracking()
+        var entity = await expenses
             .Include(t => t.Property)
             .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
 
@@ -144,6 +186,20 @@ public class RecurringExpenseService : IRecurringExpenseService
         return response;
     }
 
+    public async Task<RecurringExpenseResponse?> CreateAsync(
+        WorkspaceReadScope scope, CreateRecurringExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.RecurringExpense, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
+        return response;
+    }
+
     public async Task<RecurringExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateRecurringExpenseRequest request, CancellationToken ct = default)
     {
         var entity = await _db.RecurringExpenses
@@ -180,6 +236,22 @@ public class RecurringExpenseService : IRecurringExpenseService
         return response;
     }
 
+    public async Task<RecurringExpenseResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdateRecurringExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        if (await GetAsync(scope, id, ct) is null)
+            return null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.RecurringExpense, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, id, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
+        return response;
+    }
+
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.RecurringExpenses
@@ -192,6 +264,53 @@ public class RecurringExpenseService : IRecurringExpenseService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
+    {
+        var visible = await GetAsync(scope, id, ct) is not null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.RecurringExpense, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
+        try
+        {
+            outcome = await Atomic.ExecuteAsync(
+                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        }
+        catch (UnauthorizedAccessException) when (!visible)
+        {
+            return false;
+        }
+        if (outcome.Value.Applied)
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
+            ? outcome.Value.Found
+            : false;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped recurring-expense mutations require the atomic persistence kernel.");
+
+    private async Task<bool> HasTargetCapabilityAsync(
+        WorkspaceReadScope scope, int? propertyId, int? unitId,
+        string capabilityKey, CancellationToken ct)
+    {
+        var now = _timeProvider.UtcNow();
+        if (propertyId is null && unitId is null)
+        {
+            return await _db.AuthorizedAllPropertyAssignments(
+                    scope, capabilityKey, CapabilityAuthorizationTargetKind.Property, now)
+                .AnyAsync(ct);
+        }
+
+        return await _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilityKey, now)
+            .AnyAsync(property =>
+                (propertyId == null || property.Id == propertyId) &&
+                (unitId == null || _db.Units.Any(unit =>
+                    unit.Id == unitId && unit.PortfolioId == scope.PortfolioId &&
+                    unit.PropertyId == property.Id)), ct);
     }
 
     private async Task<RecurringExpenseResponse> BuildResponseAsync(RecurringExpense entity, CancellationToken ct)

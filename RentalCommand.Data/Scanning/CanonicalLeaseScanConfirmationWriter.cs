@@ -75,6 +75,19 @@ internal static class CanonicalLeaseScanConfirmationWriter
         var relationship = await ResolveRelationshipAsync(command, target, home, attempt, now, ct);
         var account = await ResolveAccountAsync(command, target, relationship, home.Currency, attempt, now, ct);
 
+        if (target.LeaseAgreementId is > 0)
+        {
+            var agreementContextIsValid = await attempt.Persistence.Query<LeaseAgreement>()
+                .AnyAsync(agreement => agreement.Id == target.LeaseAgreementId.Value
+                    && agreement.PortfolioId == command.PortfolioId
+                    && agreement.LeaseManagementId == relationship.Id, ct);
+            if (!agreementContextIsValid)
+            {
+                throw new ScanConfirmationValidationException(
+                    "The selected agreement does not belong to this rental relationship.");
+            }
+        }
+
         var existingAgreementCount = await attempt.Persistence.Query<LeaseAgreement>()
             .CountAsync(agreement => agreement.PortfolioId == command.PortfolioId
                 && agreement.LeaseManagementId == relationship.Id, ct);

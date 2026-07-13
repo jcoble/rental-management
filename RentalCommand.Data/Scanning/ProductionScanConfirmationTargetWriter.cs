@@ -135,14 +135,27 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             throw new ScanConfirmationValidationException("Confirmed payment amount must be greater than zero.");
         }
 
-        var unitId = await attempt.Persistence.Query<TenantAccount>()
+        var accountContext = await attempt.Persistence.Query<TenantAccount>()
             .Where(account => account.Id == target.TenantAccountId
                 && account.PortfolioId == command.PortfolioId)
-            .Select(account => (int?)account.LeaseManagement!.UnitId)
+            .Select(account => new
+            {
+                UnitId = (int?)account.LeaseManagement!.UnitId,
+                ContextEntryIsValid = target.TenantLedgerEntryId == null
+                    || attempt.Persistence.Query<TenantLedgerEntry>().Any(entry =>
+                        entry.Id == target.TenantLedgerEntryId.Value
+                        && entry.PortfolioId == command.PortfolioId
+                        && entry.TenantAccountId == account.Id),
+            })
             .SingleOrDefaultAsync(ct);
-        if (unitId is null)
+        if (accountContext?.UnitId is null)
         {
             throw new ScanConfirmationValidationException("Selected tenant account is not in this portfolio.");
+        }
+        if (!accountContext.ContextEntryIsValid)
+        {
+            throw new ScanConfirmationValidationException(
+                "The selected ledger entry does not belong to this rental account.");
         }
 
         var paymentDate = ToUtc(receipt.TransactionDate) ?? ToUtc(command.ConfirmedAtUtc);
@@ -172,7 +185,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         var result = await new RecordTenantReceiptHandler().HandleAsync(receiptCommand, attempt, ct);
         return new ScanConfirmationTargetWriteResult(
             target.TenantAccountId,
-            unitId,
+            accountContext.UnitId,
             nameof(TenantAccount),
             result.LedgerEntryId);
     }

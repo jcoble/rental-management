@@ -26,14 +26,14 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     }
 
     public async Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
-        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, ListQuery query, CancellationToken ct = default)
+        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, kind, status, query, ct);
+        var page = await ListPageAsync(portfolioId, kind, status, propertyId, query, ct);
         return page.Items;
     }
 
     public async Task<DocumentTemplateListResponse> ListPageAsync(
-        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, ListQuery query, CancellationToken ct = default)
+        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var q = _db.DocumentTemplates
             .AsNoTracking()
@@ -47,6 +47,11 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         if (status.HasValue)
         {
             q = q.Where(t => t.Status == status.Value);
+        }
+
+        if (propertyId.HasValue)
+        {
+            q = q.Where(t => t.PropertyId == null || t.PropertyId == propertyId.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -72,25 +77,31 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
+            .Select(t => new DocumentTemplateResponse
+            {
+                Id = t.Id,
+                PortfolioId = t.PortfolioId,
+                Kind = t.Kind,
+                Status = t.Status,
+                RenderMode = t.RenderMode,
+                Name = t.Name,
+                Description = t.Description,
+                OriginalStoredFileId = t.OriginalStoredFileId,
+                CompiledStoredFileId = t.CompiledStoredFileId,
+                HasDraftHtml = t.DraftHtml != null && t.DraftHtml != string.Empty,
+                DefaultForPortfolio = t.DefaultForPortfolio,
+                PropertyId = t.PropertyId,
+                Version = t.Version,
+                FieldCount = t.Fields.Count,
+                CreatedAtUtc = t.CreatedAtUtc,
+                UpdatedAtUtc = t.UpdatedAtUtc,
+                ArchivedAtUtc = t.ArchivedAtUtc,
+            })
             .ToListAsync(ct);
-        var itemIds = items.Select(t => t.Id).ToList();
-        var fieldCounts = itemIds.Count == 0
-            ? new Dictionary<int, int>()
-            : await _db.DocumentTemplateFields
-                .AsNoTracking()
-                .Where(f => itemIds.Contains(f.DocumentTemplateId))
-                .GroupBy(f => f.DocumentTemplateId)
-                .Select(g => new { DocumentTemplateId = g.Key, Count = g.Count() })
-                .ToDictionaryAsync(x => x.DocumentTemplateId, x => x.Count, ct);
 
         return new DocumentTemplateListResponse
         {
-            Items = items
-                .Select(t => DocumentTemplateResponse.FromEntity(
-                    t,
-                    [],
-                    fieldCounts.GetValueOrDefault(t.Id)))
-                .ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,

@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/recurring-expenses")]
 [Produces("application/json")]
-public class RecurringExpenseController : AuthenticatedPortfolioControllerBase
+public class RecurringExpenseController : ManagementControllerBase
 {
     private readonly IRecurringExpenseService _service;
 
@@ -27,7 +27,7 @@ public class RecurringExpenseController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<IReadOnlyList<RecurringExpenseResponse>>> List(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
+        var items = await _service.ListAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(items);
     }
 
@@ -36,7 +36,7 @@ public class RecurringExpenseController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<RecurringExpenseListResponse>> ListPage(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, query, ct);
+        var page = await _service.ListPageAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(page);
     }
 
@@ -45,36 +45,61 @@ public class RecurringExpenseController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<RecurringExpenseResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Recurring expense not found" }) : Ok(item);
     }
 
     [HttpPost]
     [ProducesResponseType(typeof(RecurringExpenseResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringExpenseResponse>> Create([FromBody] CreateRecurringExpenseRequest request, CancellationToken ct)
+    public async Task<ActionResult<RecurringExpenseResponse>> Create(
+        [FromBody] CreateRecurringExpenseRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
-        return created == null
-            ? NotFound(new { error = "Referenced property or unit not found in this portfolio" })
-            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var created = await _service.CreateAsync(GetWorkspaceReadScope(), request, operationKey, ct);
+            return created == null
+                ? NotFound(new { error = "Referenced property or unit not found in this portfolio" })
+                : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(RecurringExpenseResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringExpenseResponse>> Update(int id, [FromBody] UpdateRecurringExpenseRequest request, CancellationToken ct)
+    public async Task<ActionResult<RecurringExpenseResponse>> Update(
+        int id, [FromBody] UpdateRecurringExpenseRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
-        return updated == null ? NotFound(new { error = "Recurring expense not found" }) : Ok(updated);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
+            return updated == null ? NotFound(new { error = "Recurring expense not found" }) : Ok(updated);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
-        return deleted ? NoContent() : NotFound(new { error = "Recurring expense not found" });
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var deleted = await _service.DeleteAsync(GetWorkspaceReadScope(), id, operationKey, ct);
+            return deleted ? NoContent() : NotFound(new { error = "Recurring expense not found" });
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 }

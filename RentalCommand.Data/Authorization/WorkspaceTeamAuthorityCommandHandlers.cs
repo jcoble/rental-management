@@ -47,6 +47,13 @@ internal static class WorkspaceTeamAuthoritySupport
         DateTime utcNow,
         CancellationToken ct)
     {
+        if (command is IWorkspaceAccessMutationCommand mutation &&
+            mutation.AccessContextId == command.ActorAccessContextId)
+        {
+            throw new UnauthorizedAccessException(
+                "Team members cannot change their own role, scope, or membership status.");
+        }
+
         var sessions = persistence.Query<AuthSession>().AsNoTracking();
         var memberships = persistence.Query<WorkspaceMembership>().AsNoTracking();
         var assignments = persistence.Query<MembershipRoleAssignment>().AsNoTracking();

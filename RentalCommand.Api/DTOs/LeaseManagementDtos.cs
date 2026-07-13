@@ -39,6 +39,7 @@ public sealed class LeaseManagementSummaryResponse
     public int UnitId { get; init; }
     public string UnitNumber { get; init; } = string.Empty;
     public string Lifecycle { get; init; } = string.Empty;
+    public DateOnly BusinessDate { get; init; }
     public int? LeaseAgreementId { get; init; }
     public string? AgreementNumber { get; init; }
     public string? AgreementStatus { get; init; }
@@ -112,6 +113,7 @@ public sealed class LeaseAgreementHistoryResponse
     public string AgreementStatus { get; init; } = string.Empty;
     public bool IsGoverning { get; init; }
     public int SignerCount { get; init; }
+    public bool HasSourceScan { get; init; }
     public LegalArtifactSummaryResponse? IssuedArtifact { get; init; }
     public LegalArtifactSummaryResponse? ExecutedArtifact { get; init; }
     public DateTime? IssuedAtUtc { get; init; }
@@ -147,6 +149,7 @@ public sealed class LeaseAddendumHistoryResponse
     public int FinancialEffectCount { get; init; }
     public decimal RecurringRentDelta { get; init; }
     public int SignerCount { get; init; }
+    public bool CanCorrect { get; init; }
     public LegalArtifactSummaryResponse? IssuedArtifact { get; init; }
     public LegalArtifactSummaryResponse? ExecutedArtifact { get; init; }
     public DateTime? IssuedAtUtc { get; init; }
@@ -179,7 +182,26 @@ public sealed class LeaseManagementPartyResponse
     public LeaseManagementPartyRole Role { get; init; }
     public DateOnly EffectiveFrom { get; init; }
     public DateOnly? EffectiveThrough { get; init; }
+    public bool IsCurrent { get; init; }
     public bool GuarantorLegalNoticeEligible { get; init; }
+}
+
+/// <summary>
+/// An active portal-access grant that must receive an explicit disposition when a relationship
+/// is canceled or possession is returned.
+/// </summary>
+public sealed class ActiveTenantUserAccessResponse
+{
+    public int TenantUserAccessId { get; init; }
+    public Guid PublicId { get; init; }
+    public int LeaseManagementPartyId { get; init; }
+    public int AccessContextId { get; init; }
+    public int ApplicationUserId { get; init; }
+    public string TenantName { get; init; } = string.Empty;
+    public string UserDisplayName { get; init; } = string.Empty;
+    public string UserEmail { get; init; } = string.Empty;
+    public DateTime GrantedAtUtc { get; init; }
+    public string Reason { get; init; } = string.Empty;
 }
 
 /// <summary>

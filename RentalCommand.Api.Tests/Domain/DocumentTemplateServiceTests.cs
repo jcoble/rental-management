@@ -59,6 +59,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             PortfolioId,
             DocumentTemplateKind.Lease,
             status: null,
+            propertyId: null,
             new ListQuery { Sort = "name", Skip = 1, Take = 1 });
 
         result.TotalCount.Should().Be(3);
@@ -73,6 +74,45 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_FiltersPropertyCompatibilityAndCountsFieldsInPagedSql()
+    {
+        var selectedProperty = SeedProperty("Selected");
+        var otherProperty = SeedProperty("Other");
+        var global = SeedTemplate("Global lease", DocumentTemplateKind.Lease);
+        var selected = SeedTemplate("Selected lease", DocumentTemplateKind.Lease, selectedProperty.Id);
+        SeedTemplate("Other lease", DocumentTemplateKind.Lease, otherProperty.Id);
+        _ctx.Db.DocumentTemplateFields.Add(new DocumentTemplateField
+        {
+            DocumentTemplateId = selected.Id,
+            FieldKey = "lease.monthlyRent",
+            Label = "Monthly rent",
+            Kind = DocumentTemplateFieldKind.Currency,
+            SignerRole = DocumentTemplateSignerRole.None,
+            PageNumber = 1,
+            WidthPct = 10,
+            HeightPct = 10,
+        });
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(
+            PortfolioId,
+            DocumentTemplateKind.Lease,
+            status: null,
+            propertyId: selectedProperty.Id,
+            new ListQuery { Sort = "name", Take = 20 });
+
+        result.Items.Select(t => t.Id).Should().BeEquivalentTo([global.Id, selected.Id]);
+        result.Items.Single(t => t.Id == selected.Id).FieldCount.Should().Be(1);
+        result.Items.Should().NotContain(t => t.PropertyId == otherProperty.Id);
+        _commands.Should().HaveCount(2);
+        _commands.Should().Contain(sql =>
+            sql.Contains("PropertyId", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DocumentTemplateFields", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -166,19 +206,43 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         _files.Contains(stored.FilePath).Should().BeTrue();
     }
 
-    private void SeedTemplate(string name, DocumentTemplateKind kind)
+    private Property SeedProperty(string name)
     {
-        _ctx.Db.DocumentTemplates.Add(new DocumentTemplate
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = "1 Test St",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private DocumentTemplate SeedTemplate(
+        string name,
+        DocumentTemplateKind kind,
+        int? propertyId = null)
+    {
+        var template = new DocumentTemplate
         {
             PortfolioId = PortfolioId,
             Kind = kind,
             Status = DocumentTemplateStatus.Draft,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = name,
+            PropertyId = propertyId,
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow,
-        });
+        };
+        _ctx.Db.DocumentTemplates.Add(template);
         _ctx.Db.SaveChanges();
+        return template;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

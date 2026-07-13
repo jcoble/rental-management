@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -16,18 +20,30 @@ public class ExpenseService : IExpenseService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
-    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IFileStorage files, TimeProvider timeProvider)
+    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IFileStorage files,
+        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _files = files;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
     {
         var page = await ListPageAsync(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly: false, query, ct);
+        return page.Items;
+    }
+
+    public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(
+        WorkspaceReadScope scope, int? propertyId, int? unitId, int? workOrderId,
+        ListQuery query, CancellationToken ct = default)
+    {
+        var page = await ListPageAsync(
+            scope, propertyId, unitId, workOrderId, workOrderLinkedOnly: false, query, ct);
         return page.Items;
     }
 
@@ -41,6 +57,28 @@ public class ExpenseService : IExpenseService
         CancellationToken ct = default)
     {
         var filtered = BuildListQuery(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
+        return await BuildPageAsync(filtered, portfolioId, query, ct);
+    }
+
+    public Task<ExpenseListResponse> ListPageAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        bool workOrderLinkedOnly,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(
+            _db.Expenses.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
+        return BuildPageAsync(filtered, scope.PortfolioId, query, ct);
+    }
+
+    private async Task<ExpenseListResponse> BuildPageAsync(
+        IQueryable<Expense> filtered, int portfolioId, ListQuery query, CancellationToken ct)
+    {
         var totalCount = await filtered.CountAsync(ct);
 
         var items = await ApplySort(filtered, query)
@@ -66,10 +104,19 @@ public class ExpenseService : IExpenseService
         int? workOrderId,
         bool workOrderLinkedOnly,
         ListQuery query)
+        => BuildListQuery(_db.Expenses.AsNoTracking(), portfolioId, propertyId, unitId,
+            workOrderId, workOrderLinkedOnly, query);
+
+    private IQueryable<Expense> BuildListQuery(
+        IQueryable<Expense> q,
+        int portfolioId,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        bool workOrderLinkedOnly,
+        ListQuery query)
     {
-        var q = _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId);
+        q = q.Where(e => e.PortfolioId == portfolioId);
 
         if (propertyId.HasValue)
         {
@@ -207,10 +254,19 @@ public class ExpenseService : IExpenseService
         return results;
     }
 
-    public async Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
+        GetAsync(_db.Expenses.AsNoTracking(), portfolioId, id, ct);
+
+    public Task<ExpenseResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        GetAsync(
+            _db.Expenses.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, id, ct);
+
+    private async Task<ExpenseResponse?> GetAsync(
+        IQueryable<Expense> expenses, int portfolioId, int id, CancellationToken ct)
     {
-        var response = await _db.Expenses
-            .AsNoTracking()
+        var response = await expenses
             .Where(e => e.Id == id && e.PortfolioId == portfolioId)
             .Select(e => new ExpenseResponse
             {
@@ -345,6 +401,20 @@ public class ExpenseService : IExpenseService
         return response;
     }
 
+    public async Task<ExpenseResponse?> CreateAsync(
+        WorkspaceReadScope scope, CreateExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
+        return response;
+    }
+
     public async Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default)
     {
         IQueryable<Expense> expenseQuery = _db.Expenses;
@@ -432,6 +502,22 @@ public class ExpenseService : IExpenseService
         return response;
     }
 
+    public async Task<ExpenseResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdateExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        if (await GetAsync(scope, id, ct) is null)
+            return null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, id, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
+        return response;
+    }
+
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.Expenses
@@ -446,5 +532,53 @@ public class ExpenseService : IExpenseService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
+    {
+        var visible = await GetAsync(scope, id, ct) is not null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
+        try
+        {
+            outcome = await Atomic.ExecuteAsync(
+                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        }
+        catch (UnauthorizedAccessException) when (!visible)
+        {
+            return false;
+        }
+        if (outcome.Value.Applied)
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
+            ? outcome.Value.Found
+            : false;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped expense mutations require the atomic persistence kernel.");
+
+    private async Task<bool> HasExpenseTargetCapabilityAsync(
+        WorkspaceReadScope scope, int? propertyId, int? unitId, int? workOrderId,
+        string capabilityKey, CancellationToken ct)
+    {
+        var now = _timeProvider.UtcNow();
+        if (propertyId is null && unitId is null && workOrderId is null)
+        {
+            return await _db.AuthorizedAllPropertyAssignments(
+                    scope, capabilityKey, CapabilityAuthorizationTargetKind.Property, now)
+                .AnyAsync(ct);
+        }
+
+        var properties = _db.Properties.AsNoTracking().WhereAuthorized(_db, scope, capabilityKey, now);
+        return await properties.AnyAsync(property =>
+            (propertyId == null || property.Id == propertyId) &&
+            (unitId == null || _db.Units.Any(unit =>
+                unit.Id == unitId && unit.PortfolioId == scope.PortfolioId && unit.PropertyId == property.Id)) &&
+            (workOrderId == null || _db.WorkOrders.Any(workOrder =>
+                workOrder.Id == workOrderId && workOrder.PortfolioId == scope.PortfolioId &&
+                workOrder.PropertyId == property.Id)), ct);
     }
 }

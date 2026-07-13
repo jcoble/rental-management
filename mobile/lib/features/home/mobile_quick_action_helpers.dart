@@ -24,7 +24,12 @@ Future<void> openMobileScan(
   int? propertyId,
   int? unitId,
   int? leaseManagementId,
+  int? leaseAgreementId,
   int? tenantAccountId,
+  int? tenantLedgerEntryId,
+  int? workOrderId,
+  int? applicationId,
+  int? rentalListingId,
   String? sourceLabel,
 }) async {
   final draftId = await showScanCaptureSheet(
@@ -34,7 +39,12 @@ Future<void> openMobileScan(
     propertyId: propertyId,
     unitId: unitId,
     leaseManagementId: leaseManagementId,
+    leaseAgreementId: leaseAgreementId,
     tenantAccountId: tenantAccountId,
+    tenantLedgerEntryId: tenantLedgerEntryId,
+    workOrderId: workOrderId,
+    applicationId: applicationId,
+    rentalListingId: rentalListingId,
     sourceLabel: sourceLabel,
   );
   if (draftId == null || !context.mounted) return;

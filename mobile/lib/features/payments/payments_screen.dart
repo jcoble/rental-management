@@ -15,6 +15,7 @@ Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
   required int leaseManagementId,
   String? tenantName,
   String? rentalLabel,
+  double? initialAmount,
 }) {
   return showModalBottomSheet<RecordTenantReceiptResult>(
     context: context,
@@ -26,6 +27,7 @@ Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
       leaseManagementId: leaseManagementId,
       tenantName: tenantName,
       rentalLabel: rentalLabel,
+      initialAmount: initialAmount,
     ),
   );
 }
@@ -214,12 +216,14 @@ class _RecordTenantReceiptSheet extends ConsumerStatefulWidget {
     required this.leaseManagementId,
     this.tenantName,
     this.rentalLabel,
+    this.initialAmount,
   });
 
   final int tenantAccountId;
   final int leaseManagementId;
   final String? tenantName;
   final String? rentalLabel;
+  final double? initialAmount;
 
   @override
   ConsumerState<_RecordTenantReceiptSheet> createState() =>
@@ -229,7 +233,11 @@ class _RecordTenantReceiptSheet extends ConsumerStatefulWidget {
 class _RecordTenantReceiptSheetState
     extends ConsumerState<_RecordTenantReceiptSheet> {
   final _formKey = GlobalKey<FormState>();
-  final _amount = TextEditingController();
+  late final TextEditingController _amount = TextEditingController(
+    text: widget.initialAmount == null
+        ? ''
+        : widget.initialAmount!.toStringAsFixed(2),
+  );
   final _description = TextEditingController(text: 'Tenant payment received');
   final _method = TextEditingController();
   final _reference = TextEditingController();

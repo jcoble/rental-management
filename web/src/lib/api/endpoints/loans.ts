@@ -1,9 +1,6 @@
 import { api } from '../client';
-import {
-	buildLoanListPagePath,
-	buildLoanListPath,
-	type LoanListParams
-} from './loan-list-path';
+import { idempotentMutation } from '../idempotency';
+import { buildLoanListPagePath, buildLoanListPath, type LoanListParams } from './loan-list-path';
 
 /** Lifecycle of a per-property loan (mortgage). */
 export type LoanStatus = 'Active' | 'PaidOff' | 'Closed';
@@ -69,7 +66,18 @@ export const loans = {
 	listPage: (params?: LoanListParams) => api.get<LoanListResponse>(buildLoanListPagePath(params)),
 	get: (id: number) => api.get<Loan>(`/loans/${id}`),
 	payments: (id: number) => api.get<LoanPayment[]>(`/loans/${id}/payments`),
-	create: (data: Record<string, unknown>) => api.post<Loan>('/loans', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Loan>(`/loans/${id}`, data),
-	remove: (id: number) => api.delete(`/loans/${id}`)
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`loans:create:${JSON.stringify(data)}`, (key) =>
+			api.post<Loan>('/loans', data, { headers: { 'Idempotency-Key': key } })
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`loans:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<Loan>(`/loans/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`loans:delete:${id}`, (key) =>
+			api.delete(`/loans/${id}`, { headers: { 'Idempotency-Key': key } })
+		)
 };

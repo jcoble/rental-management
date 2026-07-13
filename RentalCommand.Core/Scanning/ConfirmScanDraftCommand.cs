@@ -67,7 +67,8 @@ public sealed record ScanExpenseTargetData(
 
 public sealed record ScanPaymentTargetData(
     ScanReceiptData Receipt,
-    int TenantAccountId) : IAtomicCommandData;
+    int TenantAccountId,
+    long? TenantLedgerEntryId = null) : IAtomicCommandData;
 
 public sealed record ScanWorkOrderTargetData(
     int PropertyId,
@@ -109,6 +110,7 @@ public sealed record ScanLeaseTargetData(
     LeaseScanReviewDisposition? ReviewDisposition = null,
     int? LeaseManagementId = null,
     int? TenantAccountId = null,
+    int? LeaseAgreementId = null,
     int? DocumentTemplateId = null,
     int TermsSchemaVersion = 1,
     string? TermsPayload = null,
@@ -199,7 +201,8 @@ public sealed record ConfirmScanDraftCommand(
     long ExpectedAccessRevision = 0,
     string DeliveryIdempotencyKey = "",
     string? SourceContentSha256 = null,
-    string? SourceLabel = null) : IAtomicCommandData;
+    string? SourceLabel = null,
+    ScanCaptureContextData? CaptureContext = null) : IAtomicCommandData;
 
 /// <summary>
 /// Stable version token for the exact draft facts used to prepare a confirmation command. The
@@ -208,7 +211,7 @@ public sealed record ConfirmScanDraftCommand(
 /// </summary>
 public static class ScanConfirmationDraftFingerprint
 {
-    private const int EncodingVersion = 3;
+    private const int EncodingVersion = 4;
 
     public static string Create(
         string targetEntityType,
@@ -220,9 +223,12 @@ public static class ScanConfirmationDraftFingerprint
         int? capturePropertyId = null,
         int? captureUnitId = null,
         int? captureLeaseManagementId = null,
+        int? captureLeaseAgreementId = null,
         int? captureTenantAccountId = null,
-        string? captureFocusedRecordKind = null,
-        long? captureFocusedRecordId = null,
+        long? captureTenantLedgerEntryId = null,
+        int? captureWorkOrderId = null,
+        int? captureApplicationId = null,
+        int? captureRentalListingId = null,
         string? sourceLabel = null)
     {
         ArgumentNullException.ThrowIfNull(targetEntityType);
@@ -242,9 +248,12 @@ public static class ScanConfirmationDraftFingerprint
             WriteNullableInt32(writer, capturePropertyId);
             WriteNullableInt32(writer, captureUnitId);
             WriteNullableInt32(writer, captureLeaseManagementId);
+            WriteNullableInt32(writer, captureLeaseAgreementId);
             WriteNullableInt32(writer, captureTenantAccountId);
-            WriteNullableString(writer, captureFocusedRecordKind);
-            WriteNullableInt64(writer, captureFocusedRecordId);
+            WriteNullableInt64(writer, captureTenantLedgerEntryId);
+            WriteNullableInt32(writer, captureWorkOrderId);
+            WriteNullableInt32(writer, captureApplicationId);
+            WriteNullableInt32(writer, captureRentalListingId);
             WriteNullableString(writer, sourceLabel);
         }
 

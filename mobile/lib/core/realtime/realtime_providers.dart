@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_controller.dart';
 import '../auth/token_store.dart';
+import '../../features/accounting/accounting_repository.dart';
 import '../../features/appointments/appointments_repository.dart';
 import '../../features/applications/applications_repository.dart';
 import '../../features/activity/activity_repository.dart';
@@ -66,6 +67,8 @@ final realtimeWatcherProvider = Provider<void>((ref) {
 /// controller has installed a different canonical access boundary.
 Future<void> resetAccessScopedClient(WidgetRef ref) async {
   ref.invalidate(activityHistoryProvider);
+  ref.invalidate(moneySnapshotProvider);
+  ref.invalidate(pastDueProvider);
   ref.invalidate(tenantLedgerEntriesPageProvider);
   ref.invalidate(accountingSummaryProvider);
   ref.invalidate(expensesPageProvider);
@@ -134,6 +137,8 @@ void _invalidateForEntity(Ref ref, String entityType) {
     case 'Payment':
     case 'TenantLedgerEntry':
       ref.invalidate(tenantLedgerEntriesPageProvider);
+      ref.invalidate(moneySnapshotProvider);
+      _refreshIfAlive(ref, pastDueProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
 
     case 'Expense':

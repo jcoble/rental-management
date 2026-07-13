@@ -482,6 +482,7 @@ export interface LeaseAgreementSummary {
 	agreementStatus: string;
 	isGoverning: boolean;
 	signerCount: number;
+	hasSourceScan: boolean;
 	issuedArtifact?: LegalDocumentArtifactSummary | null;
 	executedArtifact?: LegalDocumentArtifactSummary | null;
 	issuedAtUtc?: string | null;
@@ -818,14 +819,19 @@ export interface MoneySnapshotExplanations {
 
 /**
  * The "Who's behind" list from GET /api/v1/accounting/past-due (PastDueResponse). Shares the snapshot's
- * past-due definition server-side, so `totalCount` always equals the dashboard "tenants behind" KPI.
+ * past-due definition server-side, so `totalCount` always equals the dashboard "tenants behind" KPI
+ * while `items` is one bounded server page.
  */
 export interface PastDueResponse {
 	items: PastDueLease[];
-	/** Number of leases/tenants behind — equals items.length and the snapshot's pastDueCount. */
+	/** Number of leases/tenants behind across every page — equals the snapshot's pastDueCount. */
 	totalCount: number;
 	/** Total amount past due across all behind leases — equals the snapshot's pastDueAmount. */
 	totalPastDueAmount: number;
+	/** Portfolio-local date used by the database to age charges; null only when the scope has no current accounts. */
+	businessDate: string | null;
+	skip: number;
+	take: number;
 }
 
 /** One behind lease/tenant row (PastDueLeaseResponse). */

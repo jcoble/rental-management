@@ -161,7 +161,6 @@ public sealed class ReturnPossessionHandler
             command.PortfolioId,
             command.LeaseManagementId,
             command.UnitId,
-            command.EffectiveOn,
             command.Parties.Select(item => new AtomicReturnPossessionPartyInput(
                 item.LeaseManagementPartyId, item.Disposition)).ToArray(),
             command.Accesses.Select(item => new AtomicReturnPossessionAccessInput(
@@ -184,7 +183,7 @@ public sealed class ReturnPossessionHandler
                     mutation.Outcome, command, "The unit already has an open turnover period."),
                 ReturnPossessionOutcome.InvalidPartyDisposition => Empty(
                     mutation.Outcome, command,
-                    "The date must be today's portfolio business date and every current party must have one valid disposition."),
+                    "Every current party must have one valid disposition."),
                 ReturnPossessionOutcome.InvalidAccessDisposition => Empty(
                     mutation.Outcome, command, "Every active tenant access must have one explicit disposition."),
                 _ => throw new InvalidOperationException("Return possession produced an unknown outcome."),
@@ -239,7 +238,7 @@ public sealed class ReturnPossessionHandler
         PossessionCommandAuthorization.ValidateShape(command.PortfolioId, command.LeaseManagementId,
             command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
             command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
-        if (command.EffectiveOn == default || string.IsNullOrWhiteSpace(command.TurnoverReason)
+        if (string.IsNullOrWhiteSpace(command.TurnoverReason)
             || command.TurnoverReason.Length > 1000
             || command.Parties.Count == 0
             || command.Parties.Select(item => item.LeaseManagementPartyId).Distinct().Count() != command.Parties.Count

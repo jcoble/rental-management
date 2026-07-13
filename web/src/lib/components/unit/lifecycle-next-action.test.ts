@@ -21,7 +21,7 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(pageSource, /<LifecycleRail[^>]+nextBestAction=\{dashboard\.nextBestAction\}/s);
 	});
 
-	test('move-in next action funds the prepared canonical deposit account and completes the appointment', () => {
+	test('move-in next action funds the prepared deposit, gives canonical possession, then completes the appointment', () => {
 		const pageSource = readFileSync(
 			new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 			'utf8'
@@ -29,16 +29,25 @@ describe('unit lifecycle next action handoff', () => {
 
 		assert.match(pageSource, /import \{ securityDeposits \} from '\$lib\/api\/endpoints\/securityDeposits';/);
 		assert.match(pageSource, /import \{ appointments \} from '\$lib\/api\/endpoints\/appointments';/);
+		assert.match(pageSource, /import \{ leaseManagements \} from '\$lib\/api\/endpoints\/lease-managements';/);
 		assert.match(pageSource, /page\.url\.searchParams\.get\('action'\) === 'confirm-move-in'/);
 		assert.match(pageSource, /data-testid="unit-move-in-dialog"/);
 		assert.match(pageSource, /securityDeposits\.get\(lease\.tenantAccountId\)/);
-		assert.match(pageSource, /securityDeposits\.fund\(account\.tenantAccountId, operationKey/);
+		assert.match(pageSource, /securityDeposits\.fund\(account\.tenantAccountId, depositOperationKey/);
 		assert.match(pageSource, /securityDepositAccountId: account\.securityDepositAccountId/);
 		assert.doesNotMatch(pageSource, /securityDeposits\.list/);
 		assert.doesNotMatch(pageSource, /accounts\.find/);
 		assert.match(pageSource, /paymentMethodSummary: moveInDepositPaymentMethod\.trim\(\)/);
 		assert.doesNotMatch(pageSource, /securityDeposits\.create/);
+		assert.match(pageSource, /leaseManagements\.givePossession\(\s*lease\.leaseManagementId,\s*\{ unitId: id \},\s*possessionOperationKey\s*\)/s);
 		assert.match(pageSource, /appointments\.update\(moveInAppointment\.id,\s*\{\s*status: 'Completed'\s*\}\)/s);
+		assert.ok(
+			pageSource.indexOf('leaseManagements.givePossession(') < pageSource.indexOf('appointments.update('),
+			'canonical possession must succeed before the appointment is completed'
+		);
+		assert.match(pageSource, /depositKey: crypto\.randomUUID\(\)/);
+		assert.match(pageSource, /possessionKey: crypto\.randomUUID\(\)/);
+		assert.match(pageSource, /showSuccess\('Possession given\. Move-in confirmed\.'\)/);
 		assert.match(pageSource, /queryClient\.invalidateQueries\(\{ queryKey: \['unit-dashboard', id\] \}\)/);
 	});
 

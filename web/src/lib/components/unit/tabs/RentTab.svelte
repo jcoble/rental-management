@@ -14,6 +14,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2 } from '@lucide/svelte';
 
 	let { dashboard, onScan, tabQuery = 'rent', ledgerQuery }: {
@@ -77,6 +78,36 @@
 	let errors = $state<Record<string, string>>({});
 	let receiptForm = $state({ amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' });
 	let chargeForm = $state({ amount: '', effectiveOn: today(), dueOn: today(), description: '' });
+
+	function clearCreateError(field: string) {
+		const next = clearFieldError(errors, field);
+		if (next !== errors) errors = next;
+	}
+
+	$effect(() => {
+		if (formKind === 'receipt' && Number(receiptForm.amount) > 0) clearCreateError('amount');
+	});
+	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.effectiveOn) clearCreateError('effectiveOn');
+	});
+	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.description.trim()) clearCreateError('description');
+	});
+	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.method) clearCreateError('method');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && Number(chargeForm.amount) > 0) clearCreateError('amount');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && chargeForm.effectiveOn) clearCreateError('effectiveOn');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && chargeForm.dueOn) clearCreateError('dueOn');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && chargeForm.description.trim()) clearCreateError('description');
+	});
 
 	function openForm(kind: Exclude<FormKind, null>) {
 		formKind = kind;
