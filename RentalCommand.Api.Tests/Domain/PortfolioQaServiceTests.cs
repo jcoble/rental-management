@@ -43,7 +43,81 @@ public sealed class PortfolioQaServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 1,
+            PortfolioId = PortfolioId,
+            UserName = "portfolio-qa@example.test",
+            NormalizedUserName = "PORTFOLIO-QA@EXAMPLE.TEST",
+            Email = "portfolio-qa@example.test",
+            NormalizedEmail = "PORTFOLIO-QA@EXAMPLE.TEST",
+            DisplayName = "Portfolio QA Actor",
+            CreatedAt = DateTime.UtcNow,
+        });
         _db.SaveChanges();
+        _db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_lease_management_lifecycle" AS
+            SELECT management."PortfolioId" AS "PortfolioId",
+                   management."Id" AS "LeaseManagementId",
+                   management."UnitId" AS "UnitId",
+                   CASE WHEN agreement."TermEndOn" IS NOT NULL
+                             AND agreement."TermEndOn" < date('now')
+                        THEN 'Closed' ELSE 'Occupied' END AS "Lifecycle",
+                   agreement."Id" AS "CurrentAgreementId",
+                   trim(tenant."FirstName" || ' ' || tenant."LastName") AS "CurrentPrimaryTenantName"
+            FROM "LeaseManagements" AS management
+            JOIN "LeaseAgreements" AS agreement
+              ON agreement."PortfolioId" = management."PortfolioId"
+             AND agreement."LeaseManagementId" = management."Id"
+             AND agreement."VoidedAtUtc" IS NULL
+             AND agreement."DraftCanceledAtUtc" IS NULL
+            LEFT JOIN "LeaseManagementParties" AS party
+              ON party."PortfolioId" = management."PortfolioId"
+             AND party."LeaseManagementId" = management."Id"
+             AND party."Role" = 'PrimaryTenant'
+             AND party."EffectiveThrough" IS NULL
+            LEFT JOIN "Tenants" AS tenant
+              ON tenant."PortfolioId" = party."PortfolioId"
+             AND tenant."Id" = party."TenantId"
+            WHERE management."CanceledAtUtc" IS NULL
+              AND management."AccountClosedAtUtc" IS NULL
+            """);
+        _db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_tenant_charge_balances" AS
+            SELECT entry."PortfolioId" AS "PortfolioId",
+                   entry."TenantAccountId" AS "TenantAccountId",
+                   entry."Id" AS "TenantLedgerEntryId",
+                   date('now') AS "BusinessDate",
+                   entry."EntryType" AS "EntryType",
+                   entry."Currency" AS "Currency",
+                   entry."EffectiveOn" AS "EffectiveOn",
+                   entry."DueOn" AS "DueOn",
+                   entry."Amount" AS "OriginalAmount",
+                   0 AS "ReversedAmount",
+                   COALESCE((
+                     SELECT sum(allocation."Amount")
+                     FROM "TenantLedgerAllocations" AS allocation
+                     WHERE allocation."PortfolioId" = entry."PortfolioId"
+                       AND allocation."TenantAccountId" = entry."TenantAccountId"
+                       AND allocation."DebitEntryId" = entry."Id"
+                   ), 0) AS "NetAllocations",
+                   max(entry."Amount" - COALESCE((
+                     SELECT sum(allocation."Amount")
+                     FROM "TenantLedgerAllocations" AS allocation
+                     WHERE allocation."PortfolioId" = entry."PortfolioId"
+                       AND allocation."TenantAccountId" = entry."TenantAccountId"
+                       AND allocation."DebitEntryId" = entry."Id"
+                   ), 0), 0) AS "OpenAmount",
+                   entry."DueOn" < date('now') AND entry."Amount" > COALESCE((
+                     SELECT sum(allocation."Amount")
+                     FROM "TenantLedgerAllocations" AS allocation
+                     WHERE allocation."PortfolioId" = entry."PortfolioId"
+                       AND allocation."TenantAccountId" = entry."TenantAccountId"
+                       AND allocation."DebitEntryId" = entry."Id"
+                   ), 0) AS "IsPastDue"
+            FROM "TenantLedgerEntries" AS entry
+            WHERE entry."Direction" = 'Debit'
+            """);
     }
 
     public void Dispose()
@@ -91,18 +165,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
         var lease = SeedLease(now);
         for (var i = 0; i < 51; i++)
         {
-            _db.Payments.Add(new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = lease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Paid,
-                Amount = 1m,
-                DueDate = now.AddDays(-1).AddMinutes(-i),
-                PaidDate = now.AddMinutes(-i),
-                CreatedAt = now.AddMinutes(-i),
-                UpdatedAt = now.AddMinutes(-i),
-            });
+            SeedReceipt(lease.Account, 1m, now.AddMinutes(-i));
         }
         await _db.SaveChangesAsync();
 
@@ -119,37 +182,18 @@ public sealed class PortfolioQaServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task OverdueRentTool_ExcludesEndedFixedTermLeasePayments()
+    public async Task OverdueRentTool_ExcludesClosedLeaseRelationshipCharges()
     {
         var now = DateTime.UtcNow;
         var current = SeedLease(now);
         var stale = SeedLease(now);
-        current.LeaseNumber = "CURRENT-1";
-        stale.LeaseNumber = "STALE-1";
-        stale.EndDate = now.Date.AddDays(-1);
-        _db.Payments.AddRange(
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = current,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1400m,
-                DueDate = now.AddDays(-5),
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = stale,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1400m,
-                DueDate = now.AddDays(-30),
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
+        current.Agreement.AgreementNumber = "CURRENT-1";
+        stale.Agreement.AgreementNumber = "STALE-1";
+        stale.Agreement.TermEndOn = DateOnly.FromDateTime(now.AddDays(-1));
+        stale.Management.PossessionReturnedAtUtc = now.AddDays(-1);
+        stale.Management.AccountClosedAtUtc = now.AddDays(-1);
+        SeedRentCharge(current, 1400m, now.AddDays(-5));
+        SeedRentCharge(stale, 1400m, now.AddDays(-30));
         await _db.SaveChangesAsync();
 
         var answer = await AskToolAsync(
@@ -172,17 +216,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
         var lease = SeedLease(now);
         for (var i = 0; i < 51; i++)
         {
-            _db.Payments.Add(new Payment
-            {
-                PortfolioId = PortfolioId,
-                Lease = lease,
-                PaymentType = PaymentType.Rent,
-                Status = PaymentStatus.Scheduled,
-                Amount = 1000m + i,
-                DueDate = now.Date.AddDays(-60 + i),
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
+            SeedRentCharge(lease, 1000m + i, now.Date.AddDays(-60 + i));
         }
         await _db.SaveChangesAsync();
 
@@ -406,11 +440,12 @@ public sealed class PortfolioQaServiceTests : IDisposable
         return response.Answer;
     }
 
-    private Lease SeedLease(DateTime now)
+    private LeaseFixture SeedLease(DateTime now)
     {
         var property = SeedProperty(now);
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = "A",
             MarketRent = 1400m,
@@ -425,26 +460,122 @@ public sealed class PortfolioQaServiceTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        var lease = new Lease
+        _db.AddRange(unit, tenant);
+        _db.SaveChanges();
+
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"MGD-A-{Guid.NewGuid():N}",
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            PossessionAgreementExceptionReason = "Projection fixture with imported terms pending execution",
+            PossessionAgreementExceptionAuthorizedByUserId = 1,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagements.Add(management);
+        _db.SaveChanges();
+
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"MGD-A-{management.Id}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 1400m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1400m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
+        };
+        var party = new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "MGD-A-1",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1400m,
-            SecurityDeposit = 1400m,
-            LateFeeAmount = 50m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Canonical portfolio QA fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
         };
-        _db.Leases.Add(lease);
+        _db.AddRange(account, agreement, party);
         _db.SaveChanges();
-        return lease;
+        return new LeaseFixture(management, account, agreement);
     }
+
+    private void SeedReceipt(TenantAccount account, decimal amount, DateTime effectiveAt)
+    {
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(effectiveAt),
+            PostedAtUtc = effectiveAt,
+            Description = "Rent receipt",
+            BusinessKey = $"qa-receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        });
+    }
+
+    private void SeedRentCharge(LeaseFixture lease, decimal amount, DateTime dueAt)
+    {
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = lease.Account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueAt),
+            DueOn = DateOnly.FromDateTime(dueAt),
+            PostedAtUtc = dueAt,
+            Description = "Rent charge",
+            BusinessKey = $"qa-charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = lease.Agreement.Id,
+            CreatedByUserId = 1,
+        });
+    }
+
+    private sealed record LeaseFixture(
+        LeaseManagement Management,
+        TenantAccount Account,
+        LeaseAgreement Agreement);
 
     private Property SeedProperty(DateTime now)
     {
