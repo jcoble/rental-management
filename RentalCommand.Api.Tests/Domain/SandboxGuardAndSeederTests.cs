@@ -60,7 +60,7 @@ public class SandboxGuardAndSeederTests : IDisposable
     public async Task SeedPortfolio_SeedsArbitraryPortfolio_WithoutTouchingSandboxFlag()
     {
         // A second portfolio (id 2), distinct from the pre-seeded anchor (id 1).
-        _ctx.Db.Portfolios.Add(new Portfolio
+        var portfolio = new Portfolio
         {
             Id = 2,
             Name = "New Signup",
@@ -68,7 +68,26 @@ public class SandboxGuardAndSeederTests : IDisposable
             TimeZone = "UTC",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
-        });
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = _ctx.Db.Users.OrderBy(user => user.Id).Select(user => user.Id).First(),
+            Portfolio = portfolio,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            Membership = new WorkspaceMembership
+            {
+                PortfolioId = 2,
+                Status = WorkspaceMembershipStatus.Active,
+                DefaultExperience = WorkspaceExperience.Management,
+                EffectiveFromUtc = DateTime.UtcNow,
+                CreatedAtUtc = DateTime.UtcNow,
+                UpdatedAtUtc = DateTime.UtcNow,
+            },
+        };
+        _ctx.Db.Portfolios.Add(portfolio);
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         _ctx.Db.SaveChanges();
 
         var seeder = new DemoDataSeeder(_ctx.Db, NullLogger<DemoDataSeeder>.Instance, TimeProvider.System);
@@ -76,14 +95,13 @@ public class SandboxGuardAndSeederTests : IDisposable
 
         // Demo data landed under portfolio 2, all FK'd correctly.
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
-        (await _ctx.Db.Leases.IgnoreQueryFilters().CountAsync(l => l.PortfolioId == 2)).Should().BeGreaterThan(0);
-        (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
+        (await _ctx.Db.LeaseManagements.CountAsync(l => l.PortfolioId == 2)).Should().BeGreaterThan(0);
+        (await _ctx.Db.TenantLedgerEntries.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
         (await _ctx.Db.Tenants.IgnoreQueryFilters().CountAsync(t => t.PortfolioId == 2)).Should().BeGreaterThan(0);
 
         // Scan-persistence demo data: a subset of expenses carry the typed scan columns + child line
-        // items, and a lease / deposit-check payment / work-order carry the ExtractedData superset — so
-        // reseeded or Sandbox-signup data exercises the scan schema (line-item table, payment chips,
-        // document-kind) exactly as a real scan→draft→confirm would.
+        // items. Canonical lease demo data carries explicit relationship/agreement/ledger facts;
+        // it does not manufacture legacy Lease or Payment scan targets or fake legal-document bytes.
         var scannedExpenses = await _ctx.Db.Expenses.IgnoreQueryFilters()
             .Include(e => e.LineItems)
             .Where(e => e.PortfolioId == 2 && e.DocumentKind != null)
@@ -94,10 +112,11 @@ public class SandboxGuardAndSeederTests : IDisposable
         scannedExpenses.Should().Contain(e => e.CardLast4 != null && e.PaymentMethod != null); // a card receipt
         scannedExpenses.Should().Contain(e => e.DocumentKind == "Invoice");                     // a vendor invoice
 
-        (await _ctx.Db.Leases.IgnoreQueryFilters()
-            .CountAsync(l => l.PortfolioId == 2 && l.ExtractedData != null)).Should().BeGreaterThan(0);
-        (await _ctx.Db.Payments
-            .CountAsync(p => p.PortfolioId == 2 && p.ExtractedData != null && p.CheckNumber != null)).Should().BeGreaterThan(0);
+        (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+            agreement.PortfolioId == 2)).Should().BeGreaterThan(0);
+        (await _ctx.Db.LeaseManagements.CountAsync(relationship =>
+            relationship.PortfolioId == 2
+            && relationship.PossessionAgreementExceptionReason != null)).Should().BeGreaterThan(0);
         (await _ctx.Db.WorkOrders.IgnoreQueryFilters()
             .CountAsync(w => w.PortfolioId == 2 && w.ExtractedData != null)).Should().BeGreaterThan(0);
 
