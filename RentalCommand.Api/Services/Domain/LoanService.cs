@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -16,12 +19,15 @@ public class LoanService : ILoanService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
-    public LoanService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
+    public LoanService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
+        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -30,9 +36,32 @@ public class LoanService : ILoanService
         return page.Items;
     }
 
+    public async Task<IReadOnlyList<LoanResponse>> ListAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var page = await ListPageAsync(scope, propertyId, query, ct);
+        return page.Items;
+    }
+
     public async Task<LoanListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var filtered = BuildListQuery(portfolioId, propertyId, query);
+        return await BuildPageAsync(filtered, query, ct);
+    }
+
+    public Task<LoanListResponse> ListPageAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(
+            _db.Loans.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, propertyId, query);
+        return BuildPageAsync(filtered, query, ct);
+    }
+
+    private static async Task<LoanListResponse> BuildPageAsync(
+        IQueryable<Loan> filtered, ListQuery query, CancellationToken ct)
+    {
         var totalCount = await filtered.CountAsync(ct);
 
         var items = await ApplySort(filtered, query)
@@ -56,10 +85,12 @@ public class LoanService : ILoanService
     }
 
     private IQueryable<Loan> BuildListQuery(int portfolioId, int? propertyId, ListQuery query)
+        => BuildListQuery(_db.Loans.AsNoTracking(), portfolioId, propertyId, query);
+
+    private static IQueryable<Loan> BuildListQuery(
+        IQueryable<Loan> q, int portfolioId, int? propertyId, ListQuery query)
     {
-        var q = _db.Loans
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId);
+        q = q.Where(l => l.PortfolioId == portfolioId);
 
         if (propertyId.HasValue)
             q = q.Where(l => l.PropertyId == propertyId.Value);
@@ -99,10 +130,19 @@ public class LoanService : ILoanService
         return ordered.ThenBy(l => l.Id);
     }
 
-    public async Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
+        GetAsync(_db.Loans.AsNoTracking(), portfolioId, id, ct);
+
+    public Task<LoanResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        GetAsync(
+            _db.Loans.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, id, ct);
+
+    private static async Task<LoanResponse?> GetAsync(
+        IQueryable<Loan> loans, int portfolioId, int id, CancellationToken ct)
     {
-        var entity = await _db.Loans
-            .AsNoTracking()
+        var entity = await loans
             .Include(l => l.Property)
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
 
@@ -153,6 +193,20 @@ public class LoanService : ILoanService
         return response;
     }
 
+    public async Task<LoanResponse?> CreateAsync(
+        WorkspaceReadScope scope, CreateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
+        return response;
+    }
+
     public async Task<LoanResponse?> UpdateAsync(int portfolioId, int id, UpdateLoanRequest request, CancellationToken ct = default)
     {
         var entity = await _db.Loans
@@ -189,6 +243,22 @@ public class LoanService : ILoanService
         return response;
     }
 
+    public async Task<LoanResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        if (await GetAsync(scope, id, ct) is null)
+            return null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, id, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
+        return response;
+    }
+
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.Loans
@@ -202,6 +272,32 @@ public class LoanService : ILoanService
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
     }
+
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
+    {
+        var visible = await GetAsync(scope, id, ct) is not null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
+        try
+        {
+            outcome = await Atomic.ExecuteAsync(
+                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        }
+        catch (UnauthorizedAccessException) when (!visible)
+        {
+            return false;
+        }
+        if (outcome.Value.Applied)
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
+            ? outcome.Value.Found
+            : false;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped loan mutations require the atomic persistence kernel.");
 
     public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default)
     {
@@ -217,6 +313,22 @@ public class LoanService : ILoanService
             .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId)
             .OrderBy(p => p.PeriodKey)
             .Select(p => LoanPaymentResponse.FromEntity(p))
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        WorkspaceReadScope scope, int loanId, CancellationToken ct = default)
+    {
+        var loanInScope = await _db.Loans.AsNoTracking()
+            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow())
+            .AnyAsync(loan => loan.Id == loanId, ct);
+        if (!loanInScope)
+            return null;
+
+        return await _db.LoanPayments.AsNoTracking()
+            .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId)
+            .OrderBy(payment => payment.PeriodKey)
+            .Select(payment => LoanPaymentResponse.FromEntity(payment))
             .ToListAsync(ct);
     }
 }

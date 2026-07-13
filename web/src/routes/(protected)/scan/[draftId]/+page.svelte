@@ -70,7 +70,7 @@
 	const queryClient = useQueryClient();
 
 	const draftId = $derived(parseInt(page.params.draftId ?? '0', 10));
-	const scanContext = $derived(parseScanContext(page.url.searchParams));
+	const launchContext = $derived(parseScanContext(page.url.searchParams));
 
 	const draftQuery = createQuery(() => ({
 		queryKey: ['scan', draftId],
@@ -86,6 +86,30 @@
 	}));
 
 	const data = $derived(draftQuery.data);
+	const scanContext = $derived({
+		...launchContext,
+		propertyId: data?.captureContext?.propertyId ?? launchContext.propertyId,
+		unitId: data?.captureContext?.unitId ?? launchContext.unitId,
+		leaseManagementId: data?.captureContext?.leaseManagementId ?? launchContext.leaseManagementId,
+		leaseAgreementId: data?.captureContext?.leaseAgreementId ?? launchContext.leaseAgreementId,
+		tenantAccountId: data?.captureContext?.tenantAccountId ?? launchContext.tenantAccountId,
+		tenantLedgerEntryId: data?.captureContext?.tenantLedgerEntryId ?? launchContext.tenantLedgerEntryId,
+		workOrderId: data?.captureContext?.workOrderId ?? launchContext.workOrderId,
+		applicationId: data?.captureContext?.applicationId ?? launchContext.applicationId,
+		rentalListingId: data?.captureContext?.rentalListingId ?? launchContext.rentalListingId,
+		sourceLabel: data?.captureContext?.sourceLabel ?? launchContext.sourceLabel
+	});
+	const inheritedContextItems = $derived([
+		scanContext.propertyId ? `Property #${scanContext.propertyId}` : null,
+		scanContext.unitId ? `Unit #${scanContext.unitId}` : null,
+		scanContext.leaseManagementId ? `Rental relationship #${scanContext.leaseManagementId}` : null,
+		scanContext.leaseAgreementId ? `Agreement #${scanContext.leaseAgreementId}` : null,
+		scanContext.tenantAccountId ? `Rental account #${scanContext.tenantAccountId}` : null,
+		scanContext.tenantLedgerEntryId ? `Ledger entry #${scanContext.tenantLedgerEntryId}` : null,
+		scanContext.workOrderId ? `Work order #${scanContext.workOrderId}` : null,
+		scanContext.applicationId ? `Application #${scanContext.applicationId}` : null,
+		scanContext.rentalListingId ? `Listing #${scanContext.rentalListingId}` : null
+	].filter((item): item is string => item !== null));
 	const processingCopy = $derived(scanProcessingCopy(data?.targetEntityType ?? scanContext.type));
 
 	// Whether this draft targets a Payment (rent check) rather than an Expense
@@ -683,7 +707,11 @@
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
 		const unitId = confirmedRecord?.unitId ?? data?.createdUnitId ?? scanContext.unitId ?? null;
-		return createdRecordHref(type, id, unitId, selectedTenantAccountId ? Number(selectedTenantAccountId) : null);
+		return createdRecordHref(type, id, {
+			unitId,
+			tenantAccountId: selectedTenantAccountId ? Number(selectedTenantAccountId) : null,
+			leaseManagementId: data?.captureContext?.leaseManagementId ?? scanContext.leaseManagementId ?? null
+		});
 	})());
 
 	function formatUsd(val: number | null): string {
@@ -739,7 +767,9 @@
 				const applicationId = result.applicationId ?? result.entityId ?? null;
 				toast.success('Applicant created');
 				goto(applicationId
-					? createdRecordHref('Application', applicationId, result.unitId ?? scanContext.unitId ?? null)
+					? createdRecordHref('Application', applicationId, {
+						unitId: result.unitId ?? scanContext.unitId ?? null
+					})
 					: '/applications');
 				return;
 			}
@@ -992,6 +1022,18 @@
 				{statusLabel(data.status)}
 			</Badge>
 		</div>
+		{#if inheritedContextItems.length > 0 || scanContext.sourceLabel}
+			<div class="mb-4 rounded-lg border bg-muted/35 px-4 py-3" data-testid="scan-inherited-context">
+				<p class="text-sm font-medium">This scan will stay connected to:</p>
+				<div class="mt-2 flex flex-wrap gap-2">
+					{#each inheritedContextItems as item}
+						<Badge variant="secondary">{item}</Badge>
+					{/each}
+					{#if scanContext.sourceLabel}<Badge variant="outline">Source: {scanContext.sourceLabel}</Badge>{/if}
+				</div>
+				<p class="mt-2 text-xs text-muted-foreground">Review any editable destination below before confirming. The server rechecks every relationship and access scope when it saves.</p>
+			</div>
+		{/if}
 
 		{#if confirmedRecord}
 			<!-- design#11: keep context after confirm instead of dumping to /accounting -->

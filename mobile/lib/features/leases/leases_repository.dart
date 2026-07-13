@@ -98,6 +98,195 @@ class LeaseAgreementHistoryPage {
       );
 }
 
+class LeaseAddendumHistoryQuery {
+  const LeaseAddendumHistoryQuery({
+    required this.leaseManagementId,
+    this.skip = 0,
+    this.take = 10,
+  });
+
+  final int leaseManagementId;
+  final int skip;
+  final int take;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LeaseAddendumHistoryQuery &&
+      other.leaseManagementId == leaseManagementId &&
+      other.skip == skip &&
+      other.take == take;
+
+  @override
+  int get hashCode => Object.hash(leaseManagementId, skip, take);
+}
+
+class LeaseAddendumHistoryPage {
+  const LeaseAddendumHistoryPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<LeaseAddendumHistory> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory LeaseAddendumHistoryPage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(LeaseAddendumHistory.fromJson)
+        .toList();
+    return LeaseAddendumHistoryPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
+class LeaseAddendumEligibleBaseAgreementPage {
+  const LeaseAddendumEligibleBaseAgreementPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<LeaseAddendumEligibleBaseAgreement> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory LeaseAddendumEligibleBaseAgreementPage.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    final items = (json['items'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(LeaseAddendumEligibleBaseAgreement.fromJson)
+        .toList();
+    return LeaseAddendumEligibleBaseAgreementPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
+class LeaseAddendumDraftInput {
+  const LeaseAddendumDraftInput({
+    required this.baseAgreementId,
+    required this.addendumNumber,
+    required this.purpose,
+    required this.effectiveFromOn,
+    required this.termsSchemaVersion,
+    required this.termsPayload,
+    required this.documentTemplateId,
+    required this.signers,
+    required this.financialEffects,
+    this.effectiveThroughOn,
+    this.draftRevision,
+  });
+
+  final int baseAgreementId;
+  final String addendumNumber;
+  final String purpose;
+  final DateTime effectiveFromOn;
+  final DateTime? effectiveThroughOn;
+  final int termsSchemaVersion;
+  final Map<String, dynamic> termsPayload;
+  final int documentTemplateId;
+  final List<LeaseAddendumDraftSigner> signers;
+  final List<LeaseAddendumFinancialEffect> financialEffects;
+  final int? draftRevision;
+
+  Map<String, dynamic> toJson() => {
+    if (draftRevision != null) 'draftRevision': draftRevision,
+    'baseAgreementId': baseAgreementId,
+    'addendumNumber': addendumNumber,
+    'purpose': purpose,
+    'effectiveFromOn': LeaseManagementsRepository._dateOnly(effectiveFromOn),
+    'effectiveThroughOn': effectiveThroughOn == null
+        ? null
+        : LeaseManagementsRepository._dateOnly(effectiveThroughOn!),
+    'termsSchemaVersion': termsSchemaVersion,
+    'termsPayload': termsPayload,
+    'documentTemplateId': documentTemplateId,
+    'signers': signers.map((signer) => signer.toRequestJson()).toList(),
+    'financialEffects': financialEffects
+        .map((effect) => effect.toRequestJson())
+        .toList(),
+  };
+}
+
+class LeaseAddendumDraftMutationResult {
+  const LeaseAddendumDraftMutationResult({
+    required this.leaseManagementId,
+    required this.leaseAddendumId,
+    required this.seriesPublicId,
+    required this.versionNumber,
+    required this.draftRevision,
+    required this.replayed,
+    this.sourceAddendumId,
+  });
+
+  final int leaseManagementId;
+  final int leaseAddendumId;
+  final String seriesPublicId;
+  final int versionNumber;
+  final int draftRevision;
+  final int? sourceAddendumId;
+  final bool replayed;
+
+  factory LeaseAddendumDraftMutationResult.fromJson(
+    Map<String, dynamic> json,
+  ) => LeaseAddendumDraftMutationResult(
+    leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+    leaseAddendumId: (json['leaseAddendumId'] as num?)?.toInt() ?? 0,
+    seriesPublicId: json['seriesPublicId'] as String? ?? '',
+    versionNumber: (json['versionNumber'] as num?)?.toInt() ?? 0,
+    draftRevision: (json['draftRevision'] as num?)?.toInt() ?? 0,
+    sourceAddendumId: (json['sourceAddendumId'] as num?)?.toInt(),
+    replayed: json['replayed'] as bool? ?? false,
+  );
+}
+
+class IssueAddendumResult {
+  const IssueAddendumResult({
+    required this.signatureRequestPublicId,
+    required this.leaseManagementId,
+    required this.leaseAddendumId,
+    required this.signatureRequestId,
+    required this.issuedArtifactId,
+    required this.replayed,
+  });
+
+  final String signatureRequestPublicId;
+  final int leaseManagementId;
+  final int leaseAddendumId;
+  final int signatureRequestId;
+  final int issuedArtifactId;
+  final bool replayed;
+
+  factory IssueAddendumResult.fromJson(Map<String, dynamic> json) =>
+      IssueAddendumResult(
+        signatureRequestPublicId:
+            json['signatureRequestPublicId'] as String? ?? '',
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        leaseAddendumId: (json['leaseAddendumId'] as num?)?.toInt() ?? 0,
+        signatureRequestId: (json['signatureRequestId'] as num?)?.toInt() ?? 0,
+        issuedArtifactId: (json['issuedArtifactId'] as num?)?.toInt() ?? 0,
+        replayed: json['replayed'] as bool? ?? false,
+      );
+}
+
 class LeaseSuccessorDraftResult {
   const LeaseSuccessorDraftResult({
     required this.leaseManagementId,
@@ -120,6 +309,21 @@ class LeaseSuccessorDraftResult {
       );
 }
 
+class LeaseRenewalAddendumDecisionInput {
+  const LeaseRenewalAddendumDecisionInput({
+    required this.sourceAddendumSeriesPublicId,
+    required this.decision,
+  });
+
+  final String sourceAddendumSeriesPublicId;
+  final String decision;
+
+  Map<String, dynamic> toJson() => {
+    'sourceAddendumSeriesPublicId': sourceAddendumSeriesPublicId,
+    'decision': decision,
+  };
+}
+
 class LeaseQuestionResponse {
   const LeaseQuestionResponse({
     required this.answer,
@@ -138,6 +342,369 @@ class LeaseQuestionResponse {
         sources: (json['sources'] as List? ?? const [])
             .whereType<String>()
             .toList(),
+      );
+}
+
+class LeaseTemplateOption {
+  const LeaseTemplateOption({
+    required this.id,
+    required this.name,
+    this.propertyId,
+  });
+  final int id;
+  final String name;
+  final int? propertyId;
+
+  factory LeaseTemplateOption.fromJson(Map<String, dynamic> json) =>
+      LeaseTemplateOption(
+        id: (json['id'] as num?)?.toInt() ?? 0,
+        name: json['name'] as String? ?? 'Lease template',
+        propertyId: (json['propertyId'] as num?)?.toInt(),
+      );
+}
+
+class LeaseTemplateOptionPage {
+  const LeaseTemplateOptionPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+  final List<LeaseTemplateOption> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory LeaseTemplateOptionPage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(LeaseTemplateOption.fromJson)
+        .toList();
+    return LeaseTemplateOptionPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
+class PrepareMoveInPartyInput {
+  const PrepareMoveInPartyInput({
+    required this.tenantId,
+    required this.role,
+    required this.isAgreementSigner,
+    this.guarantorLegalNoticeEligible = false,
+    this.changeReason = 'Approved application move-in',
+    this.signingOrder = 1,
+  });
+  final int tenantId;
+  final String role;
+  final bool guarantorLegalNoticeEligible;
+  final String changeReason;
+  final bool isAgreementSigner;
+  final int? signingOrder;
+
+  Map<String, dynamic> toJson() => {
+    'tenantId': tenantId,
+    'role': role,
+    'guarantorLegalNoticeEligible': guarantorLegalNoticeEligible,
+    'changeReason': changeReason,
+    'isAgreementSigner': isAgreementSigner,
+    'signingOrder': isAgreementSigner ? signingOrder : null,
+    'isRequiredSigner': isAgreementSigner,
+  };
+}
+
+class PrepareMoveInInput {
+  const PrepareMoveInInput({
+    required this.applicationId,
+    required this.unitId,
+    required this.plannedPossessionAtUtc,
+    required this.partyEffectiveFrom,
+    required this.parties,
+    required this.documentTemplateId,
+    required this.termType,
+    required this.termStartOn,
+    this.termEndOn,
+    required this.baseRentAmount,
+    required this.rentDueDay,
+    required this.securityDepositObligation,
+    required this.lateFeeAmount,
+    required this.gracePeriodDays,
+    required this.createSecurityDepositAccount,
+    this.openingBalanceAmount,
+    this.openingBalanceEffectiveOn,
+    this.openingBalanceNote,
+  });
+  final int applicationId;
+  final int unitId;
+  final DateTime? plannedPossessionAtUtc;
+  final DateTime partyEffectiveFrom;
+  final List<PrepareMoveInPartyInput> parties;
+  final int documentTemplateId;
+  final String termType;
+  final DateTime termStartOn;
+  final DateTime? termEndOn;
+  final double baseRentAmount;
+  final int rentDueDay;
+  final double securityDepositObligation;
+  final double lateFeeAmount;
+  final int gracePeriodDays;
+  final bool createSecurityDepositAccount;
+  final double? openingBalanceAmount;
+  final DateTime? openingBalanceEffectiveOn;
+  final String? openingBalanceNote;
+
+  Map<String, dynamic> toJson() => {
+    'applicationId': applicationId,
+    'unitId': unitId,
+    'plannedPossessionAtUtc': plannedPossessionAtUtc?.toUtc().toIso8601String(),
+    'partyEffectiveFrom': LeaseManagementsRepository._dateOnly(
+      partyEffectiveFrom,
+    ),
+    'parties': parties.map((party) => party.toJson()).toList(),
+    'documentTemplateId': documentTemplateId,
+    'termType': termType,
+    'termStartOn': LeaseManagementsRepository._dateOnly(termStartOn),
+    'termEndOn': termEndOn == null
+        ? null
+        : LeaseManagementsRepository._dateOnly(termEndOn!),
+    'baseRentAmount': baseRentAmount,
+    'rentDueDay': rentDueDay,
+    'securityDepositObligation': securityDepositObligation,
+    'lateFeeAmount': lateFeeAmount,
+    'gracePeriodDays': gracePeriodDays,
+    'termsSchemaVersion': 1,
+    'termsPayload': <String, dynamic>{},
+    'createSecurityDepositAccount': createSecurityDepositAccount,
+    'openingBalanceAmount': openingBalanceAmount,
+    'openingBalanceEffectiveOn': openingBalanceEffectiveOn == null
+        ? null
+        : LeaseManagementsRepository._dateOnly(openingBalanceEffectiveOn!),
+    'openingBalanceNote': openingBalanceNote,
+  };
+}
+
+class PrepareMoveInResult {
+  const PrepareMoveInResult({
+    required this.leaseManagementId,
+    required this.tenantAccountId,
+    required this.leaseAgreementId,
+    required this.unitId,
+  });
+  final int leaseManagementId;
+  final int tenantAccountId;
+  final int leaseAgreementId;
+  final int unitId;
+  factory PrepareMoveInResult.fromJson(
+    Map<String, dynamic> json, {
+    required int unitId,
+  }) => PrepareMoveInResult(
+    leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+    tenantAccountId: (json['tenantAccountId'] as num?)?.toInt() ?? 0,
+    leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt() ?? 0,
+    unitId: unitId,
+  );
+}
+
+class GivePossessionResult {
+  const GivePossessionResult({
+    required this.leaseManagementId,
+    required this.unitId,
+    required this.possessionGivenAt,
+    required this.replayed,
+  });
+
+  final int leaseManagementId;
+  final int unitId;
+  final DateTime possessionGivenAt;
+  final bool replayed;
+
+  factory GivePossessionResult.fromJson(Map<String, dynamic> json) =>
+      GivePossessionResult(
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        unitId: (json['unitId'] as num?)?.toInt() ?? 0,
+        possessionGivenAt:
+            DateTime.tryParse(json['possessionGivenAtUtc'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        replayed: json['replayed'] as bool? ?? false,
+      );
+}
+
+class EditAgreementDraftInput {
+  const EditAgreementDraftInput({
+    required this.draftRevision,
+    required this.agreementNumber,
+    required this.termType,
+    required this.termStartOn,
+    required this.termEndOn,
+    required this.governingFromOn,
+    required this.baseRentAmount,
+    required this.rentDueDay,
+    required this.securityDepositObligation,
+    required this.lateFeeAmount,
+    required this.gracePeriodDays,
+    required this.termsSchemaVersion,
+    required this.termsPayload,
+    required this.documentTemplateId,
+    required this.signers,
+  });
+
+  final int draftRevision;
+  final String agreementNumber;
+  final String termType;
+  final DateTime termStartOn;
+  final DateTime? termEndOn;
+  final DateTime governingFromOn;
+  final double baseRentAmount;
+  final int rentDueDay;
+  final double securityDepositObligation;
+  final double lateFeeAmount;
+  final int gracePeriodDays;
+  final int termsSchemaVersion;
+  final Map<String, dynamic> termsPayload;
+  final int documentTemplateId;
+  final List<LeaseAgreementDraftSigner> signers;
+
+  Map<String, dynamic> toJson() => {
+    'draftRevision': draftRevision,
+    'agreementNumber': agreementNumber,
+    'termType': termType,
+    'termStartOn': LeaseManagementsRepository._dateOnly(termStartOn),
+    'termEndOn': termEndOn == null
+        ? null
+        : LeaseManagementsRepository._dateOnly(termEndOn!),
+    'governingFromOn': LeaseManagementsRepository._dateOnly(governingFromOn),
+    'baseRentAmount': baseRentAmount,
+    'rentDueDay': rentDueDay,
+    'securityDepositObligation': securityDepositObligation,
+    'lateFeeAmount': lateFeeAmount,
+    'gracePeriodDays': gracePeriodDays,
+    'termsSchemaVersion': termsSchemaVersion,
+    'termsPayload': termsPayload,
+    'documentTemplateId': documentTemplateId,
+    'signers': signers.map((signer) => signer.toRequestJson()).toList(),
+  };
+}
+
+class AgreementIssuancePreparation {
+  const AgreementIssuancePreparation({
+    required this.pendingUploadId,
+    required this.draftRevision,
+    required this.documentSourceVersionId,
+    required this.issuanceFingerprint,
+    required this.storageKey,
+    required this.fileName,
+    required this.fileSize,
+    required this.contentSha256,
+  });
+
+  final String pendingUploadId;
+  final int draftRevision;
+  final int documentSourceVersionId;
+  final String issuanceFingerprint;
+  final String storageKey;
+  final String fileName;
+  final int fileSize;
+  final String contentSha256;
+
+  factory AgreementIssuancePreparation.fromJson(Map<String, dynamic> json) =>
+      AgreementIssuancePreparation(
+        pendingUploadId: json['pendingUploadId'] as String? ?? '',
+        draftRevision: (json['draftRevision'] as num?)?.toInt() ?? 0,
+        documentSourceVersionId:
+            (json['documentSourceVersionId'] as num?)?.toInt() ?? 0,
+        issuanceFingerprint: json['issuanceFingerprint'] as String? ?? '',
+        storageKey: json['storageKey'] as String? ?? '',
+        fileName: json['fileName'] as String? ?? '',
+        fileSize: (json['fileSize'] as num?)?.toInt() ?? 0,
+        contentSha256: json['contentSha256'] as String? ?? '',
+      );
+}
+
+class IssueAgreementResult {
+  const IssueAgreementResult({
+    required this.signatureRequestPublicId,
+    required this.leaseManagementId,
+    required this.leaseAgreementId,
+    required this.signatureRequestId,
+    required this.issuedArtifactId,
+    required this.replayed,
+  });
+
+  final String signatureRequestPublicId;
+  final int leaseManagementId;
+  final int leaseAgreementId;
+  final int signatureRequestId;
+  final int issuedArtifactId;
+  final bool replayed;
+
+  factory IssueAgreementResult.fromJson(Map<String, dynamic> json) =>
+      IssueAgreementResult(
+        signatureRequestPublicId:
+            json['signatureRequestPublicId'] as String? ?? '',
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt() ?? 0,
+        signatureRequestId: (json['signatureRequestId'] as num?)?.toInt() ?? 0,
+        issuedArtifactId: (json['issuedArtifactId'] as num?)?.toInt() ?? 0,
+        replayed: json['replayed'] as bool? ?? false,
+      );
+}
+
+class ReturnPossessionPartyInput {
+  const ReturnPossessionPartyInput({
+    required this.leaseManagementPartyId,
+    required this.disposition,
+  });
+  final int leaseManagementPartyId;
+  final String disposition;
+  Map<String, dynamic> toJson() => {
+    'leaseManagementPartyId': leaseManagementPartyId,
+    'disposition': disposition,
+  };
+}
+
+class ReturnPossessionAccessInput {
+  const ReturnPossessionAccessInput({
+    required this.tenantUserAccessId,
+    required this.disposition,
+  });
+  final int tenantUserAccessId;
+  final String disposition;
+  Map<String, dynamic> toJson() => {
+    'tenantUserAccessId': tenantUserAccessId,
+    'disposition': disposition,
+  };
+}
+
+class ReturnPossessionResult {
+  const ReturnPossessionResult({
+    required this.leaseManagementId,
+    required this.unitId,
+    required this.turnoverPeriodId,
+    required this.possessionReturnedAt,
+    required this.replayed,
+  });
+  final int leaseManagementId;
+  final int unitId;
+  final int turnoverPeriodId;
+  final DateTime possessionReturnedAt;
+  final bool replayed;
+
+  factory ReturnPossessionResult.fromJson(Map<String, dynamic> json) =>
+      ReturnPossessionResult(
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        unitId: (json['unitId'] as num?)?.toInt() ?? 0,
+        turnoverPeriodId: (json['turnoverPeriodId'] as num?)?.toInt() ?? 0,
+        possessionReturnedAt:
+            DateTime.tryParse(
+              json['possessionReturnedAtUtc'] as String? ?? '',
+            ) ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        replayed: json['replayed'] as bool? ?? false,
       );
 }
 
@@ -212,6 +779,60 @@ class LeaseManagementsRepository {
     }
   }
 
+  Future<LeaseAddendumHistoryPage> addendumHistory(
+    LeaseAddendumHistoryQuery query,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/${query.leaseManagementId}/addenda/page',
+        queryParameters: {
+          'skip': query.skip,
+          'take': query.take,
+          'sort': '-versionNumber',
+        },
+      );
+      return LeaseAddendumHistoryPage.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAddendumEligibleBaseAgreementPage>
+  addendumEligibleBaseAgreementsPage({
+    required int leaseManagementId,
+    int skip = 0,
+    int take = 50,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        'eligible-base-agreements/page',
+        queryParameters: {'skip': skip, 'take': take},
+      );
+      return LeaseAddendumEligibleBaseAgreementPage.fromJson(
+        _required(response.data),
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<List<LeaseManagementParty>> addendumSignerCandidates(
+    int leaseManagementId,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/signer-candidates',
+      );
+      return (_required(response.data)['items'] as List? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(LeaseManagementParty.fromJson)
+          .toList();
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
   Future<LeaseQuestionResponse> ask(
     int leaseManagementId,
     String question,
@@ -227,27 +848,393 @@ class LeaseManagementsRepository {
     }
   }
 
+  Future<LeaseTemplateOptionPage> leaseTemplatesPage({
+    int skip = 0,
+    int take = 20,
+    String? search,
+    int? propertyId,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/document-templates/page',
+        queryParameters: {
+          'kind': 'Lease',
+          'status': 'Active',
+          'skip': skip,
+          'take': take,
+          'sort': 'name',
+          if (propertyId != null) 'propertyId': propertyId,
+          if (search != null && search.trim().isNotEmpty)
+            'search': search.trim(),
+        },
+      );
+      return LeaseTemplateOptionPage.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAddendumDraftDetail> addendumDraft({
+    required int leaseManagementId,
+    required int leaseAddendumId,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        '$leaseAddendumId/draft',
+      );
+      return LeaseAddendumDraftDetail.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAddendumDraftMutationResult> createAddendumDraft({
+    required int leaseManagementId,
+    required LeaseAddendumDraftInput input,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda',
+        data: input.toJson(),
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return LeaseAddendumDraftMutationResult.fromJson(
+        _required(response.data),
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAddendumDraftMutationResult> editAddendumDraft({
+    required int leaseManagementId,
+    required int leaseAddendumId,
+    required LeaseAddendumDraftInput input,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        '$leaseAddendumId/draft',
+        data: input.toJson(),
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return LeaseAddendumDraftMutationResult.fromJson(
+        _required(response.data),
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAddendumDraftMutationResult> correctAddendumDraft({
+    required int leaseManagementId,
+    required int sourceAddendumId,
+    required DateTime supersessionEffectiveOn,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        '$sourceAddendumId/correct',
+        data: {'supersessionEffectiveOn': _dateOnly(supersessionEffectiveOn)},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return LeaseAddendumDraftMutationResult.fromJson(
+        _required(response.data),
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<AgreementIssuancePreparation> prepareAddendumIssuance({
+    required int leaseManagementId,
+    required int leaseAddendumId,
+    required int draftRevision,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        '$leaseAddendumId/issuance-preparations',
+        data: {'draftRevision': draftRevision},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return AgreementIssuancePreparation.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<IssueAddendumResult> issueAddendum({
+    required int leaseManagementId,
+    required int leaseAddendumId,
+    required AgreementIssuancePreparation preparation,
+    required String subject,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        '$leaseAddendumId/issue',
+        data: {
+          'draftRevision': preparation.draftRevision,
+          'pendingUploadId': preparation.pendingUploadId,
+          'documentSourceVersionId': preparation.documentSourceVersionId,
+          'issuanceFingerprint': preparation.issuanceFingerprint,
+          'storageKey': preparation.storageKey,
+          'fileName': preparation.fileName,
+          'fileSize': preparation.fileSize,
+          'contentSha256': preparation.contentSha256,
+          'subject': subject,
+        },
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return IssueAddendumResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<Uint8List> addendumArtifactBytes({
+    required int leaseManagementId,
+    required int leaseAddendumId,
+    required int artifactId,
+  }) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/lease-managements/$leaseManagementId/addenda/'
+        '$leaseAddendumId/artifacts/$artifactId',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<PrepareMoveInResult> prepareMoveIn(
+    PrepareMoveInInput input, {
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/prepare-move-in',
+        data: input.toJson(),
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return PrepareMoveInResult.fromJson(
+        _required(response.data),
+        unitId: input.unitId,
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<DateTime> prepareMoveInBusinessDate() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/prepare-move-in-context',
+      );
+      final raw = _required(response.data)['businessDate'] as String?;
+      final value = raw == null ? null : DateTime.tryParse(raw);
+      if (value == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'The server did not return its canonical business date.',
+        );
+      }
+      return value;
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<GivePossessionResult> givePossession({
+    required int leaseManagementId,
+    required int unitId,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/give-possession',
+        data: {'unitId': unitId},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return GivePossessionResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAgreementDraftDetail> agreementDraft({
+    required int leaseManagementId,
+    required int leaseAgreementId,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$leaseAgreementId/draft',
+      );
+      return LeaseAgreementDraftDetail.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseSuccessorDraftResult> editAgreementDraft({
+    required int leaseManagementId,
+    required int leaseAgreementId,
+    required EditAgreementDraftInput input,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$leaseAgreementId/draft',
+        data: input.toJson(),
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return LeaseSuccessorDraftResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<AgreementIssuancePreparation> prepareAgreementIssuance({
+    required int leaseManagementId,
+    required int leaseAgreementId,
+    required int draftRevision,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$leaseAgreementId/issuance-preparations',
+        data: {'draftRevision': draftRevision},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return AgreementIssuancePreparation.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<IssueAgreementResult> issueAgreement({
+    required int leaseManagementId,
+    required int leaseAgreementId,
+    required AgreementIssuancePreparation preparation,
+    required String subject,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$leaseAgreementId/issue',
+        data: {
+          'draftRevision': preparation.draftRevision,
+          'pendingUploadId': preparation.pendingUploadId,
+          'documentSourceVersionId': preparation.documentSourceVersionId,
+          'issuanceFingerprint': preparation.issuanceFingerprint,
+          'storageKey': preparation.storageKey,
+          'fileName': preparation.fileName,
+          'fileSize': preparation.fileSize,
+          'contentSha256': preparation.contentSha256,
+          'subject': subject,
+        },
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return IssueAgreementResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<ReturnPossessionResult> returnPossession({
+    required int leaseManagementId,
+    required int unitId,
+    required List<ReturnPossessionPartyInput> parties,
+    required List<ReturnPossessionAccessInput> accesses,
+    required String turnoverReason,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/return-possession',
+        data: {
+          'unitId': unitId,
+          'parties': parties.map((party) => party.toJson()).toList(),
+          'accesses': accesses.map((access) => access.toJson()).toList(),
+          'turnoverReason': turnoverReason,
+        },
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return ReturnPossessionResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<ReturnPossessionContext> returnPossessionContext(
+    int leaseManagementId,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/return-possession-context',
+      );
+      return ReturnPossessionContext.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
   Future<LeaseSuccessorDraftResult> createSuccessorDraft({
     required int leaseManagementId,
     required int sourceAgreementId,
-    required String operation,
+    required String changeType,
     required DateTime termStartOn,
     required DateTime governingFromOn,
+    required List<LeaseRenewalAddendumDecisionInput> addendumDecisions,
+    required String operationKey,
     DateTime? termEndOn,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/lease-managements/$leaseManagementId/agreements/'
-        '$sourceAgreementId/$operation',
+        '$sourceAgreementId/successor-drafts',
         data: {
+          'changeType': changeType,
           'termStartOn': _dateOnly(termStartOn),
           if (termEndOn != null) 'termEndOn': _dateOnly(termEndOn),
           'governingFromOn': _dateOnly(governingFromOn),
-          'addendumDecisions': const [],
+          'addendumDecisions': addendumDecisions
+              .map((decision) => decision.toJson())
+              .toList(),
         },
-        options: Options(headers: {'Idempotency-Key': _operationKey()}),
+        options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       return LeaseSuccessorDraftResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<LeaseAgreementEffectiveAddendumSeries> effectiveAddendumSeries({
+    required int leaseManagementId,
+    required int sourceAgreementId,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$sourceAgreementId/effective-addendum-series',
+      );
+      return LeaseAgreementEffectiveAddendumSeries.fromJson(
+        _required(response.data),
+      );
     } on DioException catch (error) {
       throw ApiException.fromDioException(error);
     }
@@ -305,6 +1292,8 @@ class LeaseManagementsRepository {
       (_) => random.nextInt(256),
     ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
   }
+
+  static String newOperationKey() => _operationKey();
 }
 
 class LeaseLedgerEntry {
@@ -419,6 +1408,12 @@ final leaseAgreementHistoryProvider = FutureProvider.autoDispose
     .family<LeaseAgreementHistoryPage, int>(
       (ref, id) =>
           ref.watch(leaseManagementsRepositoryProvider).agreementHistory(id),
+    );
+
+final leaseAddendumHistoryProvider = FutureProvider.autoDispose
+    .family<LeaseAddendumHistoryPage, LeaseAddendumHistoryQuery>(
+      (ref, query) =>
+          ref.watch(leaseManagementsRepositoryProvider).addendumHistory(query),
     );
 
 final leaseLedgerProvider = FutureProvider.autoDispose

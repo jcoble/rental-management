@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
@@ -301,9 +304,14 @@ class OwnerReportsRepository {
     CreateOwnerDistributionInput input,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/owner-distributions',
-        data: input.toJson(),
+      final payload = input.toJson();
+      final response = await IdempotentMutation.run(
+        'owner-distributions:create:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/owner-distributions',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -320,7 +328,13 @@ class OwnerReportsRepository {
 
   Future<void> deleteDistribution(int id) async {
     try {
-      await _dio.delete<void>('/owner-distributions/$id');
+      await IdempotentMutation.run(
+        'owner-distributions:delete:$id',
+        (key) => _dio.delete<void>(
+          '/owner-distributions/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

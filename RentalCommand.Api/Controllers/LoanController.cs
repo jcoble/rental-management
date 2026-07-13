@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/loans")]
 [Produces("application/json")]
-public class LoanController : AuthenticatedPortfolioControllerBase
+public class LoanController : ManagementControllerBase
 {
     private readonly ILoanService _service;
 
@@ -26,7 +26,7 @@ public class LoanController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<IReadOnlyList<LoanResponse>>> List(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
+        var items = await _service.ListAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(items);
     }
 
@@ -35,7 +35,7 @@ public class LoanController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<LoanListResponse>> ListPage(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, query, ct);
+        var page = await _service.ListPageAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(page);
     }
 
@@ -44,7 +44,7 @@ public class LoanController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<LoanResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Loan not found" }) : Ok(item);
     }
 
@@ -53,36 +53,61 @@ public class LoanController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<IReadOnlyList<LoanPaymentResponse>>> Payments(int id, CancellationToken ct)
     {
-        var payments = await _service.GetPaymentsAsync(GetPortfolioId(), id, ct);
+        var payments = await _service.GetPaymentsAsync(GetWorkspaceReadScope(), id, ct);
         return payments == null ? NotFound(new { error = "Loan not found" }) : Ok(payments);
     }
 
     [HttpPost]
     [ProducesResponseType(typeof(LoanResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LoanResponse>> Create([FromBody] CreateLoanRequest request, CancellationToken ct)
+    public async Task<ActionResult<LoanResponse>> Create(
+        [FromBody] CreateLoanRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
-        return created == null
-            ? NotFound(new { error = "Referenced property not found in this portfolio" })
-            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var created = await _service.CreateAsync(GetWorkspaceReadScope(), request, operationKey, ct);
+            return created == null
+                ? NotFound(new { error = "Referenced property not found in this portfolio" })
+                : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(LoanResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<LoanResponse>> Update(int id, [FromBody] UpdateLoanRequest request, CancellationToken ct)
+    public async Task<ActionResult<LoanResponse>> Update(
+        int id, [FromBody] UpdateLoanRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
-        return updated == null ? NotFound(new { error = "Loan not found" }) : Ok(updated);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
+            return updated == null ? NotFound(new { error = "Loan not found" }) : Ok(updated);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
-        return deleted ? NoContent() : NotFound(new { error = "Loan not found" });
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var deleted = await _service.DeleteAsync(GetWorkspaceReadScope(), id, operationKey, ct);
+            return deleted ? NoContent() : NotFound(new { error = "Loan not found" });
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 }

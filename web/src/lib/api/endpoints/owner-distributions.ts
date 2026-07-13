@@ -1,5 +1,6 @@
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
 
 export type DistributionMethod = 'Check' | 'Ach' | 'Wire' | 'Cash' | 'Other';
 
@@ -44,6 +45,15 @@ export const ownerDistributions = {
 			})}`
 		),
 	create: (data: CreateOwnerDistributionRequest) =>
-		api.post<OwnerDistribution>('/owner-distributions', data),
-	delete: (id: number) => api.delete(`/owner-distributions/${id}`),
+		idempotentMutation(`owner-distributions:create:${JSON.stringify(data)}`, (key) =>
+			api.post<OwnerDistribution>('/owner-distributions', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	delete: (id: number) =>
+		idempotentMutation(`owner-distributions:delete:${id}`, (key) =>
+			api.delete(`/owner-distributions/${id}`, {
+				headers: { 'Idempotency-Key': key }
+			})
+		)
 };

@@ -17,8 +17,7 @@ describe('unit payment canonical identity contract', () => {
 	});
 
 	it('scopes Unit Money reads, writes, and scans with account and relationship ids', () => {
-		assert.match(rentSource, /tenantAccountId: tenantAccountId \?\? undefined/);
-		assert.match(rentSource, /leaseManagementId: leaseManagementId \?\? undefined/);
+		assert.match(rentSource, /tenantAccounts\.accountEntriesPage\(tenantAccountId as number/);
 		assert.match(rentSource, /payments\.recordReceipt\(tenantAccountId, operationKey/);
 		assert.match(ledgerSource, /leaseManagementId: dashboard\.currentLease\?\.leaseManagementId/);
 		assert.match(ledgerSource, /tenantAccountId: dashboard\.currentLease\?\.tenantAccountId/);

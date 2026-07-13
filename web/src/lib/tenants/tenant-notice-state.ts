@@ -1,3 +1,5 @@
+import { prepareMoveInHrefForApprovedTenant } from '../leases/prepare-move-in-prefill.ts';
+
 export type TenantNoticeEmptyCopy = {
 	message: string;
 	description: string;
@@ -39,8 +41,8 @@ export function getTenantNoticeEmptyState({
 			message: 'No notice can be created yet.',
 			description: 'Create or activate a lease for this tenant before sending renewal or move-out notices.',
 			showForceControls: false,
-			leaseActionHref: safeTenantId ? `/applications?prepareMoveIn=1&tenantId=${safeTenantId}` : '/applications',
-			leaseActionLabel: 'Create lease'
+			leaseActionHref: prepareMoveInHrefForApprovedTenant(safeTenantId ?? ''),
+			leaseActionLabel: 'Prepare move-in'
 		};
 	}
 

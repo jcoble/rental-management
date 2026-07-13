@@ -21,7 +21,7 @@
 		formatRequestedProperty,
 		formatRequestedUnit,
 	} from '$lib/applications/application-display';
-	import { leaseCreateHrefForApprovedTenant } from '$lib/leases/lease-create-prefill';
+	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -625,8 +625,8 @@
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">
-					<Button class="gap-2" href={leaseCreateHrefForApprovedTenant(tenantLinkId)} data-testid="application-create-lease">
-						<Home class="h-4 w-4" /> Create lease <ArrowRight class="h-4 w-4" />
+					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '')} data-testid="application-prepare-move-in">
+						<Home class="h-4 w-4" /> Prepare move-in <ArrowRight class="h-4 w-4" />
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
 						<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />

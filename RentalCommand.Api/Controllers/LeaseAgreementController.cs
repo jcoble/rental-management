@@ -66,6 +66,57 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             : Ok(page);
     }
 
+    [HttpGet("{leaseAgreementId:int}/draft")]
+    [ProducesResponseType(typeof(LeaseAgreementDraftDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAgreementDraftDetailResponse>> GetDraft(
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var draft = await _queryService.GetAgreementDraftAsync(
+            access, leaseManagementId, leaseAgreementId, ct);
+        return draft is null
+            ? NotFound(new { error = "Agreement draft not found" })
+            : Ok(draft);
+    }
+
+    [HttpGet("{leaseAgreementId:int}/signature-progress")]
+    [ProducesResponseType(typeof(LeaseAgreementSignatureProgressResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAgreementSignatureProgressResponse>> GetSignatureProgress(
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var progress = await _queryService.GetAgreementSignatureProgressAsync(
+            access, leaseManagementId, leaseAgreementId, ct);
+        return progress is null
+            ? NotFound(new { error = "Issued Agreement signature packet not found" })
+            : Ok(progress);
+    }
+
+    [HttpGet("{sourceAgreementId:int}/effective-addendum-series")]
+    [ProducesResponseType(typeof(LeaseAgreementEffectiveAddendumSeriesResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAgreementEffectiveAddendumSeriesResponse>> GetEffectiveAddendumSeries(
+        int leaseManagementId,
+        int sourceAgreementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var series = await _queryService.GetEffectiveAddendumSeriesAsync(
+            access, leaseManagementId, sourceAgreementId, ct);
+        return series is null
+            ? NotFound(new { error = "Current governing source Agreement not found" })
+            : Ok(series);
+    }
+
     [HttpGet("{leaseAgreementId:int}/artifacts/{artifactId:int}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

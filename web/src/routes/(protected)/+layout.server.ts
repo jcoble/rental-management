@@ -19,9 +19,12 @@ const ONBOARDING_GATE_PATHS = ['/choose-setup', '/setting-up'];
 const ROUTE_CAPABILITIES: Array<[string, string[]]> = [
 	['/admin/users', ['team.read', 'team.manage']],
 	['/settings', ['security.manage', 'billing.manage', 'integrations.manage']],
+	['/onboarding', ['rentals.manage']],
 	['/accounting', ['money.balances.read']],
 	['/deposits', ['money.deposits.manage', 'leasing.deposits.read']],
 	['/reports', ['reports.read', 'money.owner-reports.read']],
+	['/audit', ['reports.read']],
+	['/ai', ['rentals.read', 'work.read', 'leasing.terms.read']],
 	['/owners', ['money.owner-reports.read']],
 	['/properties', ['rentals.read']],
 	['/units', ['rentals.read']],

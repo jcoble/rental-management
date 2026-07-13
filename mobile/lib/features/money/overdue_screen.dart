@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api/api_exception.dart';
 import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
+import '../payments/payments_screen.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_command_center_tabs.dart';
 import 'money_format.dart';
 
-/// "Who's behind" — one row per tenant/lease behind on rent, with one-tap
-/// Mark-paid and Text actions.
+/// "Who's behind" — one row per canonical tenant account behind on rent, with
+/// receipt, account-ledger, and reminder actions.
 ///
 /// The rows come from `GET /accounting/past-due`, which shares the snapshot's
 /// past-due definition. That guarantees the row count here equals the dashboard
@@ -21,33 +23,68 @@ class OverdueScreen extends ConsumerStatefulWidget {
 }
 
 class _OverdueScreenState extends ConsumerState<OverdueScreen> {
+  Future<void> _openLedger(PastDueLease account) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => UnitCommandCenterLoaderScreen(
+          unitId: account.unitId,
+          initialTab: UnitCommandCenterTab.ledger,
+          initialLeaseManagementId: account.leaseManagementId,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _recordReceipt(PastDueLease account) async {
+    final result = await showRecordTenantReceiptSheet(
+      context,
+      ref,
+      tenantAccountId: account.tenantAccountId,
+      leaseManagementId: account.leaseManagementId,
+      tenantName: account.tenantName,
+      rentalLabel:
+          [
+                account.propertyName,
+                if (account.unitNumber?.trim().isNotEmpty == true)
+                  'Unit ${account.unitNumber!.trim()}',
+              ]
+              .whereType<String>()
+              .where((value) => value.trim().isNotEmpty)
+              .join(' · '),
+      initialAmount: account.pastDueAmount,
+    );
+    if (result == null || !mounted) return;
+    ref.invalidate(moneySnapshotProvider);
+    await ref.read(pastDueProvider.notifier).refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final async = ref.watch(pastDueProvider);
+    final state = ref.watch(pastDueProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text("Who's behind")),
       body: RefreshIndicator(
-        onRefresh: () async {
-          ref.invalidate(pastDueProvider);
-          await ref.read(pastDueProvider.future);
-        },
-        child: async.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => ListView(
-            children: [
-              const SizedBox(height: 120),
-              Center(
-                child: Text(
-                  e is ApiException ? e.message : "Couldn't load who's behind.",
-                ),
-              ),
-            ],
-          ),
-          data: (result) {
-            final behind = result.items;
-            if (behind.isEmpty) {
-              return ListView(
+        onRefresh: ref.read(pastDueProvider.notifier).refresh,
+        child: state.loading && state.items.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 120),
+                  Center(child: CircularProgressIndicator()),
+                ],
+              )
+            : state.error != null && state.items.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  const SizedBox(height: 120),
+                  Center(child: Text(state.error!)),
+                ],
+              )
+            : state.items.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   const SizedBox(height: 120),
                   Center(
@@ -64,27 +101,73 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
                     ),
                   ),
                 ],
-              );
-            }
-            return ListView.separated(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              // +1 for the summary header that states the headline total, so the
-              // count the landlord sees on the dashboard is restated here.
-              itemCount: behind.length + 1,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (_, i) {
-                if (i == 0) {
-                  return _BehindSummary(
-                    count: result.totalCount,
-                    amount: result.totalPastDueAmount,
+              )
+            : state.businessDate == null
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 120),
+                  Center(
+                    child: Text("Couldn't read the portfolio business date."),
+                  ),
+                ],
+              )
+            : ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                itemCount:
+                    state.items.length +
+                    1 +
+                    (state.hasMore || state.loadingMore ? 1 : 0),
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (_, index) {
+                  if (index == 0) {
+                    return _BehindSummary(
+                      count: state.totalCount,
+                      amount: state.totalPastDueAmount,
+                    );
+                  }
+                  final itemIndex = index - 1;
+                  if (itemIndex == state.items.length) {
+                    if (state.loadingMore) {
+                      return const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    return Center(
+                      child: Column(
+                        children: [
+                          if (state.error != null) ...[
+                            Text(
+                              state.error!,
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                          OutlinedButton(
+                            onPressed: ref
+                                .read(pastDueProvider.notifier)
+                                .loadMore,
+                            child: Text(
+                              'Load more (${state.items.length} of ${state.totalCount})',
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  final account = state.items[itemIndex];
+                  return _OverdueLeaseCard(
+                    lease: account,
+                    businessDate: state.businessDate!,
+                    onOpenLedger: () => _openLedger(account),
+                    onRecordReceipt: () => _recordReceipt(account),
                   );
-                }
-                final lease = behind[i - 1];
-                return _OverdueLeaseCard(lease: lease);
-              },
-            );
-          },
-        ),
+                },
+              ),
       ),
     );
   }
@@ -116,13 +199,20 @@ class _BehindSummary extends StatelessWidget {
 }
 
 class _OverdueLeaseCard extends StatelessWidget {
-  const _OverdueLeaseCard({required this.lease});
+  const _OverdueLeaseCard({
+    required this.lease,
+    required this.businessDate,
+    required this.onOpenLedger,
+    required this.onRecordReceipt,
+  });
 
   final PastDueLease lease;
+  final DateTime businessDate;
+  final VoidCallback onOpenLedger;
+  final VoidCallback onRecordReceipt;
 
   int get _daysLate {
-    if (lease.oldestDueDate.year <= 1) return 0;
-    return DateTime.now().difference(lease.oldestDueDate).inDays;
+    return businessDate.difference(lease.oldestDueOn).inDays;
   }
 
   @override
@@ -130,9 +220,7 @@ class _OverdueLeaseCard extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final days = _daysLate;
-    final paymentsWord = lease.overduePaymentCount == 1
-        ? 'payment'
-        : 'payments';
+    final chargesWord = lease.overduePaymentCount == 1 ? 'charge' : 'charges';
 
     return Card(
       child: Padding(
@@ -179,7 +267,7 @@ class _OverdueLeaseCard extends StatelessWidget {
                         Text(
                           [
                             if (lease.overduePaymentCount > 1)
-                              '${lease.overduePaymentCount} $paymentsWord',
+                              '${lease.overduePaymentCount} $chargesWord',
                             if (lease.propertyName != null &&
                                 lease.propertyName!.isNotEmpty)
                               lease.unitNumber != null &&
@@ -196,11 +284,30 @@ class _OverdueLeaseCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: () => _text(context),
-              icon: const Icon(Icons.sms_outlined, size: 18),
-              label: const Text('Text'),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: onRecordReceipt,
+                  icon: const Icon(Icons.add_card_outlined, size: 18),
+                  label: const Text('Record receipt'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: onOpenLedger,
+                  icon: const Icon(
+                    Icons.account_balance_wallet_outlined,
+                    size: 18,
+                  ),
+                  label: const Text('Open ledger'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _text(context),
+                  icon: const Icon(Icons.sms_outlined, size: 18),
+                  label: const Text('Text'),
+                ),
+              ],
             ),
           ],
         ),

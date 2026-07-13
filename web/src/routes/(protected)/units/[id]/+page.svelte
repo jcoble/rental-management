@@ -5,6 +5,7 @@
 	import { units } from '$lib/api/endpoints/units';
 	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
 	import { appointments } from '$lib/api/endpoints/appointments';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -43,7 +44,7 @@
 	let moveInDepositPaymentMethod = $state('');
 	let moveInDepositReference = $state('');
 	let moveInDepositErrors = $state<Record<string, string>>({});
-	let moveInDepositOperation = $state({ fingerprint: '', key: '' });
+	let moveInOperation = $state({ fingerprint: '', depositKey: '', possessionKey: '' });
 	let showScanLauncher = $state(false);
 	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
@@ -93,7 +94,7 @@
 			moveInDepositPaymentMethod = '';
 			moveInDepositReference = '';
 			moveInDepositErrors = {};
-			moveInDepositOperation = { fingerprint: '', key: '' };
+			moveInOperation = { fingerprint: '', depositKey: '', possessionKey: '' };
 			showMoveInDialog = true;
 		}
 	});
@@ -116,13 +117,21 @@
 	}
 
 	const moveInMutation = createMutation(() => ({
-		mutationFn: async ({ lease, operationKey }: { lease: UnitLeaseSummary; operationKey: string }) => {
+		mutationFn: async ({
+			lease,
+			depositOperationKey,
+			possessionOperationKey
+		}: {
+			lease: UnitLeaseSummary;
+			depositOperationKey: string;
+			possessionOperationKey: string;
+		}) => {
 			if (lease.securityDeposit > 0) {
 				if (lease.tenantAccountId == null) {
 					throw new Error('This move-in does not have a prepared security deposit account. Prepare the approved application before recording funds.');
 				}
 				const account = await securityDeposits.get(lease.tenantAccountId);
-				await securityDeposits.fund(account.tenantAccountId, operationKey, {
+				await securityDeposits.fund(account.tenantAccountId, depositOperationKey, {
 					securityDepositAccountId: account.securityDepositAccountId,
 					amount: lease.securityDeposit,
 					effectiveOn: moveInDepositEffectiveOn,
@@ -134,6 +143,12 @@
 				});
 			}
 
+			await leaseManagements.givePossession(
+				lease.leaseManagementId,
+				{ unitId: id },
+				possessionOperationKey
+			);
+
 			if (moveInAppointment) {
 				await appointments.update(moveInAppointment.id, { status: 'Completed' });
 			}
@@ -141,8 +156,8 @@
 			return true;
 		},
 		onSuccess: () => {
-			showSuccess('Move-in confirmed.');
-			moveInDepositOperation = { fingerprint: '', key: '' };
+			showSuccess('Possession given. Move-in confirmed.');
+			moveInOperation = { fingerprint: '', depositKey: '', possessionKey: '' };
 			closeMoveInDialog();
 			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
 			queryClient.invalidateQueries({ queryKey: ['unit-timeline', id] });
@@ -165,15 +180,28 @@
 
 		const fingerprint = JSON.stringify({
 			leaseManagementId: lease.leaseManagementId,
+			unitId: id,
 			amount: lease.securityDeposit,
 			effectiveOn: moveInDepositEffectiveOn,
 			paymentMethod: moveInDepositPaymentMethod.trim(),
 			reference: moveInDepositReference.trim(),
 		});
-		if (moveInDepositOperation.fingerprint !== fingerprint || !moveInDepositOperation.key) {
-			moveInDepositOperation = { fingerprint, key: crypto.randomUUID() };
+		if (
+			moveInOperation.fingerprint !== fingerprint ||
+			!moveInOperation.depositKey ||
+			!moveInOperation.possessionKey
+		) {
+			moveInOperation = {
+				fingerprint,
+				depositKey: crypto.randomUUID(),
+				possessionKey: crypto.randomUUID()
+			};
 		}
-		moveInMutation.mutate({ lease, operationKey: moveInDepositOperation.key });
+		moveInMutation.mutate({
+			lease,
+			depositOperationKey: moveInOperation.depositKey,
+			possessionOperationKey: moveInOperation.possessionKey
+		});
 	}
 
 	function openEditUnit() {
@@ -279,7 +307,7 @@
 						<ListingTab {dashboard} />
 					</Tabs.Content>
 					<Tabs.Content value="lease" class="mt-4">
-						<LeaseTab {dashboard} onScan={() => goScan({ type: 'LeaseAgreement', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, focusedRecordKind: 'Unit', focusedRecordId: dashboard.unit.id, returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
+						<LeaseTab {dashboard} onScan={() => goScan({ type: 'LeaseAgreement', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
 					</Tabs.Content>
 					<Tabs.Content value="applications" class="mt-4">
 						<ApplicationsTab {dashboard} />

@@ -116,7 +116,12 @@ class ScanRepository {
     int? propertyId,
     int? unitId,
     int? leaseManagementId,
+    int? leaseAgreementId,
     int? tenantAccountId,
+    int? tenantLedgerEntryId,
+    int? workOrderId,
+    int? applicationId,
+    int? rentalListingId,
     String? sourceLabel,
     void Function(double progress)? onSendProgress,
   }) async {
@@ -132,7 +137,12 @@ class ScanRepository {
         'propertyId': ?propertyId,
         'unitId': ?unitId,
         'leaseManagementId': ?leaseManagementId,
+        'leaseAgreementId': ?leaseAgreementId,
         'tenantAccountId': ?tenantAccountId,
+        'tenantLedgerEntryId': ?tenantLedgerEntryId,
+        'workOrderId': ?workOrderId,
+        'applicationId': ?applicationId,
+        'rentalListingId': ?rentalListingId,
         if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
           'sourceLabel': sourceLabel.trim(),
       });

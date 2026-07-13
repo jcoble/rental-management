@@ -35,9 +35,10 @@ describe("scan review terminal state", () => {
   it("links confirmed application scans to the application record", () => {
     assert.equal(createdRecordLabel("Application"), "Application");
     assert.equal(createdRecordHref("Application", 123), "/applications/123");
-    assert.equal(createdRecordHref("Payment", 45, null, 7), "/tenant-accounts/7/entries/45");
+    assert.equal(createdRecordHref("Payment", 45, { tenantAccountId: 7 }), "/tenant-accounts/7/entries/45");
     assert.equal(createdRecordHref("WorkOrder", 46), "/maintenance/46");
-    assert.equal(createdRecordHref("LeaseAgreement", 47), "/leases/47");
+    assert.equal(createdRecordHref("LeaseAgreement", 47, { leaseManagementId: 71 }), "/leases/71");
+    assert.equal(createdRecordHref("LeaseAgreement", 47), "/leases");
     assert.equal(createdRecordHref("Expense", 48), "/accounting/expenses/48");
     assert.equal(createdRecordHref(null, 48), "/accounting");
     assert.equal(createdRecordHref("Application", null), "/accounting");
@@ -45,27 +46,28 @@ describe("scan review terminal state", () => {
 
   it("links unit-tied confirmed scans to the unit command center tab", () => {
     assert.equal(
-      createdRecordHref("Application", 123, 9),
+      createdRecordHref("Application", 123, { unitId: 9 }),
       "/units/9?tab=applications&app=123"
     );
     assert.equal(
-      createdRecordHref("RentalApplication", 123, 9),
+      createdRecordHref("RentalApplication", 123, { unitId: 9 }),
       "/units/9?tab=applications&app=123"
     );
     assert.equal(
-      createdRecordHref("Payment", 45, 9),
+      createdRecordHref("Payment", 45, { unitId: 9 }),
       "/units/9?tab=ledger&ledger=rent&payment=45"
     );
     assert.equal(
-      createdRecordHref("WorkOrder", 46, 9),
+      createdRecordHref("WorkOrder", 46, { unitId: 9 }),
       "/units/9?tab=maintenance&wo=46"
     );
     assert.equal(
-      createdRecordHref("LeaseAgreement", 47, 9),
-      "/units/9?tab=lease&lease=47"
+      createdRecordHref("LeaseAgreement", 47, { unitId: 9, leaseManagementId: 71 }),
+      "/units/9?tab=lease&leaseManagement=71"
     );
+    assert.equal(createdRecordHref("LeaseAgreement", 47, { unitId: 9 }), "/units/9?tab=lease");
     assert.equal(
-      createdRecordHref("Expense", 48, 9),
+      createdRecordHref("Expense", 48, { unitId: 9 }),
       "/units/9?tab=ledger&ledger=expenses&expense=48"
     );
   });

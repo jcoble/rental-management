@@ -308,6 +308,165 @@ public sealed class CanonicalLeaseReaderSqlTests
         partySql.Should().Contain("LeaseManagementParties");
         partySql.Should().Contain("Tenants");
         partySql.Should().Contain("ORDER BY");
+        partySql.Should().NotContain("TenantUserAccesses",
+            "ordinary lease detail must not carry the return-possession access collection");
+    }
+
+    [Fact]
+    public void Return_possession_context_uses_two_flat_translated_queries_without_keyless_collection_correlation()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var partySql = service.BuildCurrentPartiesQuery(ReadAccess(), 42).ToQueryString();
+        var accessSql = service.BuildCurrentPartyAccessQuery(ReadAccess(), 42).ToQueryString();
+
+        foreach (var sql in new[] { partySql, accessSql })
+        {
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("rentals.read");
+            sql.Should().Contain("vw_lease_management_lifecycle");
+            sql.Should().Contain("BusinessDate");
+            sql.Should().Contain("EffectiveFrom");
+            sql.Should().Contain("EffectiveThrough");
+            sql.Should().Contain("ORDER BY");
+            sql.TrimEnd().Should().NotEndWith(";");
+        }
+
+        partySql.Should().Contain("LeaseManagementParties");
+        partySql.Should().NotContain("TenantUserAccesses");
+        accessSql.Should().Contain("LeaseManagementParties");
+        accessSql.Should().Contain("TenantUserAccesses");
+        accessSql.Should().Contain("AspNetUsers");
+        accessSql.Should().Contain("RevokedAtUtc");
+    }
+
+    [Fact]
+    public void Agreement_draft_detail_authorizes_and_projects_exact_edit_state_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildAgreementDraftDetailQuery(ReadAccess(), 42, 73)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("LegalDocumentSourceVersions");
+        sql.Should().Contain("LeaseAgreementSigners");
+        sql.Should().Contain("DraftRevision");
+        sql.Should().Contain("TermsSchemaVersion");
+        sql.Should().Contain("TermsPayload");
+        sql.Should().Contain("DocumentTemplateId");
+        sql.Should().Contain("SigningOrder");
+        sql.Should().Contain("IssuedAtUtc\" IS NULL");
+        sql.Should().Contain("DraftCanceledAtUtc\" IS NULL");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+        sql.Should().NotContain("ClientEvaluation");
+    }
+
+    [Fact]
+    public void Agreement_signature_progress_authorizes_and_projects_packet_signers_and_artifact_readiness_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildAgreementSignatureProgressQuery(ReadAccess(), 42, 73)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("SignatureRequests");
+        sql.Should().Contain("SignatureSigners");
+        sql.Should().Contain("LeaseAgreementSigners");
+        sql.Should().Contain("LegalDocumentArtifacts");
+        sql.Should().Contain("StoredFiles");
+        sql.Should().Contain("SigningOrder");
+        sql.Should().Contain("SignedAtUtc");
+        sql.Should().Contain("DeclinedAtUtc");
+        sql.Should().Contain("DeletedAt");
+        sql.Should().Contain("count");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().NotContain("TokenHash");
+        sql.Should().NotContain("TokenExpiresAtUtc");
+        sql.Should().NotContain("ProviderEnvelopeId");
+        sql.Should().NotContain("LastError");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+        sql.Should().NotContain("ClientEvaluation");
+    }
+
+    [Fact]
+    public void Renewal_addendum_series_authorizes_and_resolves_exact_current_effective_versions_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildEffectiveAddendumSeriesQuery(ReadAccess(), 42, 73)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("vw_lease_agreement_status");
+        sql.Should().Contain("IsGoverning");
+        sql.Should().Contain("BusinessDate");
+        sql.Should().Contain("LeaseAddenda");
+        sql.Should().Contain("LeaseAddendumFinancialEffects");
+        sql.Should().Contain("SeriesPublicId");
+        sql.Should().Contain("VersionNumber");
+        sql.Should().Contain("FullyExecutedAtUtc");
+        sql.Should().Contain("ExecutedArtifactId");
+        sql.Should().Contain("EffectiveFromOn");
+        sql.Should().Contain("EffectiveThroughOn");
+        sql.Should().Contain("SupersededEffectiveOn");
+        sql.Should().Contain("NOT EXISTS");
+        sql.Should().Contain("count");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+        sql.Should().NotContain("ClientEvaluation");
+    }
+
+    [Fact]
+    public void Addendum_draft_detail_authorizes_and_projects_exact_edit_state_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildAddendumDraftDetailQuery(ReadAccess(), 42, 74)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("LeaseAddenda");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("LegalDocumentSourceVersions");
+        sql.Should().Contain("LeaseAddendumSigners");
+        sql.Should().Contain("LeaseAddendumFinancialEffects");
+        sql.Should().Contain("DraftRevision");
+        sql.Should().Contain("TermsSchemaVersion");
+        sql.Should().Contain("TermsPayload");
+        sql.Should().Contain("DocumentTemplateId");
+        sql.Should().Contain("ReplacesAddendumId");
+        sql.Should().Contain("SigningOrder");
+        sql.Should().Contain("EffectType");
+        sql.Should().Contain("ChargeCode");
+        sql.Should().Contain("IssuedAtUtc\" IS NULL");
+        sql.Should().Contain("DraftCanceledAtUtc\" IS NULL");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().NotContain("\"Leases\"");
+        sql.Should().NotContain("LeaseTenants");
+        sql.Should().NotContain("ClientEvaluation");
     }
 
     [Fact]
@@ -336,6 +495,9 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("LeaseAgreements");
         sql.Should().Contain("vw_lease_agreement_status");
         sql.Should().Contain("LeaseAgreementSigners");
+        sql.Should().Contain("StoredFiles");
+        sql.Should().Contain("EntityType");
+        sql.Should().Contain("EntityId");
         sql.Should().Contain("LegalDocumentArtifacts");
         sql.Should().Contain("ILIKE");
         sql.Should().Contain("ORDER BY");
@@ -378,6 +540,32 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("LIMIT");
         sql.Should().Contain("OFFSET");
         sql.Should().NotContain("\"Leases\"");
+    }
+
+    [Fact]
+    public void Addendum_base_agreement_selector_filters_sorts_and_pages_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildAddendumEligibleBaseAgreementQuery(ReadAccess(), 42)
+            .OrderByDescending(row => row.GoverningFromOn)
+            .ThenByDescending(row => row.VersionNumber)
+            .ThenByDescending(row => row.LeaseAgreementId)
+            .Skip(20)
+            .Take(20)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("FullyExecutedAtUtc");
+        sql.Should().Contain("ExecutedArtifactId");
+        sql.Should().Contain("VoidedAtUtc");
+        sql.Should().Contain("DraftCanceledAtUtc");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
     }
 
     [Fact]

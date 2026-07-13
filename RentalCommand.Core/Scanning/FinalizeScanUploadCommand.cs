@@ -9,9 +9,12 @@ public sealed record ScanCaptureContextData(
     int? PropertyId,
     int? UnitId,
     int? LeaseManagementId,
+    int? LeaseAgreementId,
     int? TenantAccountId,
-    string? FocusedRecordKind,
-    long? FocusedRecordId,
+    long? TenantLedgerEntryId,
+    int? WorkOrderId,
+    int? ApplicationId,
+    int? RentalListingId,
     string? SourceLabel) : IAtomicCommandData;
 
 public sealed record FinalizeScanUploadFile(

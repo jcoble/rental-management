@@ -1355,9 +1355,12 @@ namespace RentalCommand.Data.Migrations
                     CapturePropertyId = table.Column<int>(type: "integer", nullable: true),
                     CaptureUnitId = table.Column<int>(type: "integer", nullable: true),
                     CaptureLeaseManagementId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureLeaseAgreementId = table.Column<int>(type: "integer", nullable: true),
                     CaptureTenantAccountId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureFocusedRecordKind = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: true),
-                    CaptureFocusedRecordId = table.Column<long>(type: "bigint", nullable: true),
+                    CaptureTenantLedgerEntryId = table.Column<long>(type: "bigint", nullable: true),
+                    CaptureWorkOrderId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureApplicationId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureRentalListingId = table.Column<int>(type: "integer", nullable: true),
                     ThumbnailPath = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: true),
                     TargetEntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
                     Status = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
@@ -5109,6 +5112,7 @@ namespace RentalCommand.Data.Migrations
                     { 11, 2 },
                     { 12, 2 },
                     { 13, 2 },
+                    { 1, 3 },
                     { 14, 3 },
                     { 15, 3 },
                     { 16, 3 },
@@ -7001,6 +7005,51 @@ namespace RentalCommand.Data.Migrations
                 column: "BatchId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureApplicationId",
+                table: "ScanDrafts",
+                column: "CaptureApplicationId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureLeaseAgreementId",
+                table: "ScanDrafts",
+                column: "CaptureLeaseAgreementId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureLeaseManagementId",
+                table: "ScanDrafts",
+                column: "CaptureLeaseManagementId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CapturePropertyId",
+                table: "ScanDrafts",
+                column: "CapturePropertyId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureRentalListingId",
+                table: "ScanDrafts",
+                column: "CaptureRentalListingId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureTenantAccountId",
+                table: "ScanDrafts",
+                column: "CaptureTenantAccountId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureTenantLedgerEntryId",
+                table: "ScanDrafts",
+                column: "CaptureTenantLedgerEntryId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureUnitId",
+                table: "ScanDrafts",
+                column: "CaptureUnitId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ScanDrafts_CaptureWorkOrderId",
+                table: "ScanDrafts",
+                column: "CaptureWorkOrderId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_ScanDrafts_PortfolioId",
                 table: "ScanDrafts",
                 column: "PortfolioId");
@@ -7597,6 +7646,11 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "TenantAccountId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
+                name: "IX_TenantPaymentAttempts_RefundsPaymentAttemptId_TenantAccount~",
+                table: "TenantPaymentAttempts",
+                columns: new[] { "RefundsPaymentAttemptId", "TenantAccountId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Tenants_PortfolioId",
                 table: "Tenants",
                 column: "PortfolioId");
@@ -7889,6 +7943,78 @@ namespace RentalCommand.Data.Migrations
                 principalTable: "Expenses",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.SetNull);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_LeaseAgreements_CaptureLeaseAgreementId",
+                table: "ScanDrafts",
+                column: "CaptureLeaseAgreementId",
+                principalTable: "LeaseAgreements",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_LeaseManagements_CaptureLeaseManagementId",
+                table: "ScanDrafts",
+                column: "CaptureLeaseManagementId",
+                principalTable: "LeaseManagements",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_Properties_CapturePropertyId",
+                table: "ScanDrafts",
+                column: "CapturePropertyId",
+                principalTable: "Properties",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_RentalApplications_CaptureApplicationId",
+                table: "ScanDrafts",
+                column: "CaptureApplicationId",
+                principalTable: "RentalApplications",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_RentalListings_CaptureRentalListingId",
+                table: "ScanDrafts",
+                column: "CaptureRentalListingId",
+                principalTable: "RentalListings",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_TenantAccounts_CaptureTenantAccountId",
+                table: "ScanDrafts",
+                column: "CaptureTenantAccountId",
+                principalTable: "TenantAccounts",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_TenantLedgerEntries_CaptureTenantLedgerEntryId",
+                table: "ScanDrafts",
+                column: "CaptureTenantLedgerEntryId",
+                principalTable: "TenantLedgerEntries",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_Units_CaptureUnitId",
+                table: "ScanDrafts",
+                column: "CaptureUnitId",
+                principalTable: "Units",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_ScanDrafts_WorkOrders_CaptureWorkOrderId",
+                table: "ScanDrafts",
+                column: "CaptureWorkOrderId",
+                principalTable: "WorkOrders",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.Restrict);
 
             // The effective clock is global and has one fixed row. Keep the seed idempotent so the
             // same clean baseline can be exercised repeatedly against disposable databases.

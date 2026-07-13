@@ -89,7 +89,10 @@ export class ApiError extends Error {
 		if (!Array.isArray(raw)) return undefined;
 		const concerns = raw
 			.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
-			.map((c) => ({ phrase: String(c.phrase ?? ''), concern: String(c.concern ?? '') }))
+			.map((c) => ({
+				phrase: String(c.phrase ?? ''),
+				concern: String(c.concern ?? '')
+			}))
 			.filter((c) => c.phrase || c.concern);
 		return concerns.length > 0 ? concerns : undefined;
 	}
@@ -198,9 +201,7 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 
 	// StandardErrorResponse: { error: { code, message, ... }, errors: [...] }
 	const primaryError: StandardError | undefined =
-		body.error && typeof body.error === 'object'
-			? (body.error as StandardError)
-			: undefined;
+		body.error && typeof body.error === 'object' ? (body.error as StandardError) : undefined;
 	const errors: StandardError[] | undefined = Array.isArray(body.errors)
 		? (body.errors as StandardError[])
 		: undefined;
@@ -286,7 +287,11 @@ export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}):
 	}
 
 	if (!response.ok) {
-		if (response.status === 401 && response.headers.get(ACCESS_REFRESH_HEADER) === 'required' && browser) {
+		if (
+			response.status === 401 &&
+			response.headers.get(ACCESS_REFRESH_HEADER) === 'required' &&
+			browser
+		) {
 			await recoverStaleAccess();
 			if (isMutation(fetchOptions.method)) {
 				throw new ApiError(
@@ -351,13 +356,22 @@ export async function fetchPublicApi<T>(endpoint: string, options: RequestInit =
  */
 export const api = {
 	get: <T>(path: string) => fetchApi<T>(path),
-	post: <T>(path: string, data?: unknown) =>
-		fetchApi<T>(path, { method: 'POST', body: data ? JSON.stringify(data) : undefined }),
-	patch: <T>(path: string, data: unknown) =>
-		fetchApi<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
+	post: <T>(path: string, data?: unknown, options: RequestInit = {}) =>
+		fetchApi<T>(path, {
+			...options,
+			method: 'POST',
+			body: data ? JSON.stringify(data) : undefined
+		}),
+	patch: <T>(path: string, data: unknown, options: RequestInit = {}) =>
+		fetchApi<T>(path, {
+			...options,
+			method: 'PATCH',
+			body: JSON.stringify(data)
+		}),
 	put: <T>(path: string, data: unknown) =>
 		fetchApi<T>(path, { method: 'PUT', body: JSON.stringify(data) }),
-	delete: <T = void>(path: string) => fetchApi<T>(path, { method: 'DELETE' }),
+	delete: <T = void>(path: string, options: RequestInit = {}) =>
+		fetchApi<T>(path, { ...options, method: 'DELETE' }),
 	upload: <T>(path: string, formData: FormData) =>
 		fetchApi<T>(path, { method: 'POST', body: formData })
 };

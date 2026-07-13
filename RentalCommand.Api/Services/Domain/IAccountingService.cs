@@ -20,11 +20,14 @@ public interface IAccountingService
     Task<MoneySnapshotResponse> GetSnapshotAsync(WorkspaceReadScope scope, CancellationToken ct = default);
 
     /// <summary>
-    /// The "Who's behind" list: one row per lease/tenant currently behind on rent, with amount owed,
-    /// overdue-payment count, and a deep-link anchor. Uses the exact same past-due definition as the
-    /// snapshot KPI's PastDueCount/PastDueAmount, so the list length and the KPI count always agree.
+    /// The "Who's behind" list: one row per tenant account currently behind on rent, with amount owed,
+    /// overdue-charge count, and a deep-link anchor. Uses the exact same past-due definition as the
+    /// snapshot KPI's PastDueCount/PastDueAmount, so its exact totals always agree with the KPI.
     /// </summary>
-    Task<PastDueResponse> GetPastDueAsync(WorkspaceReadScope scope, CancellationToken ct = default);
+    Task<PastDueResponse> GetPastDueAsync(
+        WorkspaceReadScope scope,
+        PastDueQuery query,
+        CancellationToken ct = default);
 
     Task<AccountingReportsResponse> GetReportsAsync(WorkspaceReadScope scope, CancellationToken ct = default);
     Task<AccountingTransactionsResponse> GetTransactionsAsync(

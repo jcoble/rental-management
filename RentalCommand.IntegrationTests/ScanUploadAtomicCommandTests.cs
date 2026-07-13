@@ -206,6 +206,64 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Cross_portfolio_capture_context_is_rejected_before_scan_rows_are_persisted()
+    {
+        SkipIfNoDocker();
+        await using var seed = NewContext();
+        var now = DateTime.UtcNow;
+        var otherPortfolio = new Portfolio
+        {
+            Name = "Other workspace",
+            ManagementCompanyName = "Other workspace",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var otherProperty = new Property
+        {
+            Portfolio = otherPortfolio,
+            Name = "Outside property",
+            AddressLine1 = "1 Outside Way",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        seed.AddRange(otherPortfolio, otherProperty);
+        await seed.SaveChangesAsync();
+
+        var captureContext = new ScanCaptureContextData(
+            Experience: null,
+            AccessContextId: null,
+            AccessRevision: null,
+            PropertyId: otherProperty.Id,
+            UnitId: null,
+            LeaseManagementId: null,
+            LeaseAgreementId: null,
+            TenantAccountId: null,
+            TenantLedgerEntryId: null,
+            WorkOrderId: null,
+            ApplicationId: null,
+            RentalListingId: null,
+            SourceLabel: "outside property");
+
+        var rejected = () => UploadAsync(
+            "cross-portfolio-context",
+            [Pdf("outside.pdf", "outside")],
+            captureContext: captureContext);
+        await rejected.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*outside this workspace*");
+
+        await using var verify = NewContext();
+        (await verify.ScanDrafts.CountAsync()).Should().Be(0);
+        (await verify.StoredFiles.CountAsync()).Should().Be(0);
+        (await verify.ScanBatches.CountAsync()).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "scan-upload.finalize")).Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task Concurrent_same_operation_commits_one_set_and_admission_matching_is_one_db_query()
     {
         SkipIfNoDocker();
@@ -413,17 +471,17 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         string operationId,
         IReadOnlyList<ScanUploadFilePayload> files,
         bool createBatch = false,
-        string? batchName = null)
+        string? batchName = null,
+        ScanCaptureContextData? captureContext = null)
     {
         await using var scope = _services!.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<IScanUploadService>().UploadAsync(
-            _portfolioId,
-            73,
-            operationId,
-            "LeaseAgreement",
-            createBatch,
-            batchName,
-            files);
+        var service = scope.ServiceProvider.GetRequiredService<IScanUploadService>();
+        return captureContext is null
+            ? await service.UploadAsync(
+                _portfolioId, 73, operationId, "LeaseAgreement", createBatch, batchName, files)
+            : await service.UploadAsync(
+                _portfolioId, 73, operationId, "LeaseAgreement", createBatch, batchName,
+                captureContext, files);
     }
 
     private static ScanUploadFilePayload Pdf(string fileName, string marker) => new(

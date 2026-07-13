@@ -5,13 +5,13 @@ import '../../core/api/api_exception.dart';
 import '../../core/models/lease.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
-import '../applications/applications_list_screen.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../units/unit_command_center_tabs.dart';
 import '../units/unit_navigation.dart';
 import 'leases_repository.dart';
+import 'prepare_move_in_sheet.dart';
 
 class LeasesListScreen extends ConsumerStatefulWidget {
   const LeasesListScreen({super.key});
@@ -59,9 +59,18 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
     );
   }
 
-  void _prepareMoveIn() {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const ApplicationsListScreen()),
+  Future<void> _prepareMoveIn() async {
+    final result = await showPrepareMoveInSheet(context, ref: ref);
+    if (result == null || !mounted) return;
+    ref.invalidate(leaseManagementsPageProvider);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Move-in prepared.')));
+    openUnitCommandCenter(
+      context,
+      unitId: result.unitId,
+      initialTab: UnitCommandCenterTab.lease,
+      leaseManagementId: result.leaseManagementId,
     );
   }
 
@@ -78,7 +87,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
         primaryAction: MobileQuickAction(
           label: 'Prepare move-in',
           icon: Icons.person_add_alt_1_outlined,
-          onPressed: _prepareMoveIn,
+          onPressed: () => _prepareMoveIn(),
         ),
         onScan: () => openMobileScan(context),
         onRecord: () => openMobileRecord(context),
@@ -193,7 +202,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
               }
               if (index == result.items.length + 1) {
                 if (result.items.isEmpty) {
-                  return _EmptyState(onPrepareMoveIn: _prepareMoveIn);
+                  return _EmptyState(onPrepareMoveIn: () => _prepareMoveIn());
                 }
                 return MobileGridPagingBar(
                   totalCount: result.totalCount,

@@ -73,6 +73,8 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
             return Snapshot(AtomicScanDraftClaimOutcome.NotReady, draft);
         }
 
+        await ValidateCaptureContextAsync(draft, ct);
+
         var currentFingerprint = ScanConfirmationDraftFingerprint.Create(
             draft.TargetEntityType,
             draft.SourceStoredFileId,
@@ -83,9 +85,12 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
             draft.CapturePropertyId,
             draft.CaptureUnitId,
             draft.CaptureLeaseManagementId,
+            draft.CaptureLeaseAgreementId,
             draft.CaptureTenantAccountId,
-            draft.CaptureFocusedRecordKind,
-            draft.CaptureFocusedRecordId,
+            draft.CaptureTenantLedgerEntryId,
+            draft.CaptureWorkOrderId,
+            draft.CaptureApplicationId,
+            draft.CaptureRentalListingId,
             draft.SourceLabel);
         if (!string.Equals(currentFingerprint, expectedDraftFingerprint, StringComparison.Ordinal))
         {
@@ -204,6 +209,63 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         {
             throw new AtomicReceiptInvariantException(
                 $"Active source file #{sourceStoredFileId} for scan draft #{draft.Id} was not found in its portfolio.");
+        }
+    }
+
+    private async Task ValidateCaptureContextAsync(ScanDraft draft, CancellationToken ct)
+    {
+        var contextIsValid = await _db.ScanDrafts
+            .Where(candidate => candidate.Id == draft.Id && candidate.PortfolioId == draft.PortfolioId)
+            .Select(candidate =>
+                (candidate.CapturePropertyId == null || _db.Properties.Any(property =>
+                    property.Id == candidate.CapturePropertyId && property.PortfolioId == candidate.PortfolioId))
+                && (candidate.CaptureUnitId == null || _db.Units.Any(unit =>
+                    unit.Id == candidate.CaptureUnitId
+                    && unit.PortfolioId == candidate.PortfolioId
+                    && (candidate.CapturePropertyId == null || unit.PropertyId == candidate.CapturePropertyId)))
+                && (candidate.CaptureLeaseManagementId == null || _db.LeaseManagements.Any(relationship =>
+                    relationship.Id == candidate.CaptureLeaseManagementId
+                    && relationship.PortfolioId == candidate.PortfolioId
+                    && (candidate.CapturePropertyId == null || relationship.PropertyId == candidate.CapturePropertyId)
+                    && (candidate.CaptureUnitId == null || relationship.UnitId == candidate.CaptureUnitId)))
+                && (candidate.CaptureLeaseAgreementId == null || _db.LeaseAgreements.Any(agreement =>
+                    agreement.Id == candidate.CaptureLeaseAgreementId
+                    && agreement.PortfolioId == candidate.PortfolioId
+                    && (candidate.CaptureLeaseManagementId == null
+                        || agreement.LeaseManagementId == candidate.CaptureLeaseManagementId)))
+                && (candidate.CaptureTenantAccountId == null || _db.TenantAccounts.Any(account =>
+                    account.Id == candidate.CaptureTenantAccountId
+                    && account.PortfolioId == candidate.PortfolioId
+                    && (candidate.CaptureLeaseManagementId == null
+                        || account.LeaseManagementId == candidate.CaptureLeaseManagementId)))
+                && (candidate.CaptureTenantLedgerEntryId == null || _db.TenantLedgerEntries.Any(entry =>
+                    entry.Id == candidate.CaptureTenantLedgerEntryId
+                    && entry.PortfolioId == candidate.PortfolioId
+                    && (candidate.CaptureTenantAccountId == null
+                        || entry.TenantAccountId == candidate.CaptureTenantAccountId)))
+                && (candidate.CaptureWorkOrderId == null || _db.WorkOrders.Any(workOrder =>
+                    workOrder.Id == candidate.CaptureWorkOrderId
+                    && workOrder.PortfolioId == candidate.PortfolioId
+                    && (candidate.CapturePropertyId == null || workOrder.PropertyId == candidate.CapturePropertyId)
+                    && (candidate.CaptureUnitId == null || workOrder.UnitId == candidate.CaptureUnitId)
+                    && (candidate.CaptureLeaseManagementId == null
+                        || workOrder.LeaseManagementId == candidate.CaptureLeaseManagementId)))
+                && (candidate.CaptureApplicationId == null || _db.RentalApplications.Any(application =>
+                    application.Id == candidate.CaptureApplicationId
+                    && application.PortfolioId == candidate.PortfolioId
+                    && (candidate.CapturePropertyId == null || application.PropertyId == candidate.CapturePropertyId)
+                    && (candidate.CaptureUnitId == null || application.UnitId == candidate.CaptureUnitId)))
+                && (candidate.CaptureRentalListingId == null || _db.RentalListings.Any(listing =>
+                    listing.Id == candidate.CaptureRentalListingId
+                    && listing.PortfolioId == candidate.PortfolioId
+                    && (candidate.CapturePropertyId == null || listing.PropertyId == candidate.CapturePropertyId)
+                    && (candidate.CaptureUnitId == null || listing.UnitId == candidate.CaptureUnitId))))
+            .SingleAsync(ct);
+
+        if (!contextIsValid)
+        {
+            throw new ScanConfirmationValidationException(
+                "The record context attached to this scan is no longer valid. Reopen the record and scan again.");
         }
     }
 }

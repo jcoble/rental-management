@@ -17,7 +17,6 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
-	import { daysFromTodayUtc } from '$lib/utils/date';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
@@ -25,19 +24,31 @@
 	import { Input } from '$lib/components/ui/input';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
-	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronRight, Loader2, CircleCheckBig } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronLeft, ChevronRight, Loader2, CircleCheckBig } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
+	let skip = $state(0);
 
 	const pastDueQuery = createQuery(() => ({
-		queryKey: ['accounting-past-due', portfolioId],
+		queryKey: ['accounting-past-due', portfolioId, skip, PAGE_SIZE],
 		enabled: portfolioId > 0,
-		queryFn: () => accounting.pastDue(),
+		queryFn: () => accounting.pastDue({ skip, take: PAGE_SIZE }),
 	}));
 
 	const result = $derived(pastDueQuery.data);
 	const behind = $derived(result?.items ?? []);
+	const hasPrevious = $derived((result?.skip ?? skip) > 0);
+	const hasNext = $derived(
+		result != null && result.skip + result.items.length < result.totalCount
+	);
+
+	$effect(() => {
+		if (result && result.totalCount > 0 && result.items.length === 0 && skip > 0) {
+			skip = Math.max(0, skip - PAGE_SIZE);
+		}
+	});
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
@@ -45,19 +56,23 @@
 
 	function displayName(lease: PastDueLease): string {
 		if (lease.tenantName && lease.tenantName.trim()) return lease.tenantName.trim();
-		if (lease.relationshipNumber) return lease.relationshipNumber;
-		return `Tenant account #${lease.tenantAccountId}`;
+		if (lease.relationshipNumber && lease.relationshipNumber.trim()) return lease.relationshipNumber.trim();
+		if (lease.unitNumber && lease.unitNumber.trim()) return `Unit ${lease.unitNumber.trim()}`;
+		return 'Tenant account';
 	}
 
-	function daysLate(lease: PastDueLease): number {
-		const d = daysFromTodayUtc(lease.oldestDueOn);
-		return d === null ? 0 : Math.max(0, -d);
+	function daysLate(lease: PastDueLease): number | null {
+		if (!result?.businessDate) return null;
+		const due = Date.parse(`${lease.oldestDueOn.slice(0, 10)}T00:00:00Z`);
+		const business = Date.parse(`${result.businessDate.slice(0, 10)}T00:00:00Z`);
+		if (!Number.isFinite(due) || !Number.isFinite(business)) return null;
+		return Math.max(0, Math.floor((business - due) / 86_400_000));
 	}
 
 	function rowSubtitle(lease: PastDueLease): string {
 		const parts: string[] = [];
 		if (lease.overduePaymentCount > 1) {
-			parts.push(`${lease.overduePaymentCount} payments`);
+			parts.push(`${lease.overduePaymentCount} charges`);
 		}
 		if (lease.propertyName && lease.propertyName.trim()) {
 			parts.push(
@@ -140,6 +155,7 @@
 			showSuccess('Receipt recorded and applied to the oldest open charges.');
 			rememberLastMethod(String(vars.data.method ?? ''));
 			closeMarkPaid();
+			skip = 0;
 			queryClient.invalidateQueries({ queryKey: ['accounting-past-due', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-snapshot', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
@@ -178,7 +194,7 @@
 	}
 
 	function openTenantAccount(lease: PastDueLease) {
-		goto(`/units/${lease.unitId}?tab=ledger&ledger=rent`);
+		goto(`/units/${lease.unitId}?tab=ledger&ledger=rent&tenantAccount=${lease.tenantAccountId}`);
 	}
 </script>
 
@@ -206,7 +222,7 @@
 		<div class="flex h-48 items-center justify-center text-sm text-destructive" data-testid="past-due-error">
 			Couldn't load who's behind.
 		</div>
-	{:else if behind.length === 0}
+	{:else if (result?.totalCount ?? 0) === 0}
 		<Card.Root data-testid="past-due-empty">
 			<Card.Content class="flex flex-col items-center gap-3 py-14 text-center">
 				<CircleCheckBig class="h-12 w-12 text-success" />
@@ -217,6 +233,10 @@
 				</p>
 			</Card.Content>
 		</Card.Root>
+	{:else if !result?.businessDate}
+		<div class="flex h-48 items-center justify-center text-sm text-destructive" data-testid="past-due-error">
+			Couldn't read the portfolio business date.
+		</div>
 	{:else}
 		<!-- Headline summary: restates the KPI number so the dashboard "N behind" ties to these rows. -->
 		<div
@@ -250,7 +270,7 @@
 							<span class="min-w-0 flex-1">
 								<span class="block truncate font-semibold text-foreground" data-testid="past-due-row-name">{displayName(lease)}</span>
 								<span class="block text-sm font-medium text-destructive">
-									{money(lease.pastDueAmount)} · {days > 0 ? `${days} ${days === 1 ? 'day' : 'days'} late` : 'Past due'}
+									{money(lease.pastDueAmount)} · {days !== null && days > 0 ? `${days} ${days === 1 ? 'day' : 'days'} late` : 'Past due'}
 								</span>
 								{#if subtitle}
 									<span class="block truncate text-xs text-muted-foreground">{subtitle}</span>
@@ -290,6 +310,32 @@
 				</Card.Root>
 			{/each}
 		</div>
+
+		{#if hasPrevious || hasNext}
+			<div class="mt-4 flex items-center justify-between gap-3" data-testid="past-due-pagination">
+				<Button
+					variant="outline"
+					disabled={!hasPrevious || pastDueQuery.isFetching}
+					onclick={() => { skip = Math.max(0, skip - PAGE_SIZE); }}
+					data-testid="past-due-previous"
+				>
+					<ChevronLeft class="h-4 w-4" />
+					Previous
+				</Button>
+				<span class="text-xs text-muted-foreground">
+					Showing {(result?.skip ?? 0) + 1}–{(result?.skip ?? 0) + behind.length} of {result?.totalCount ?? 0}
+				</span>
+				<Button
+					variant="outline"
+					disabled={!hasNext || pastDueQuery.isFetching}
+					onclick={() => { skip += PAGE_SIZE; }}
+					data-testid="past-due-next"
+				>
+					Next
+					<ChevronRight class="h-4 w-4" />
+				</Button>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -306,7 +352,7 @@
 				<Dialog.Description data-testid="past-due-mark-paid-summary">
 					{displayName(markPaidTarget)} · {money(markPaidTarget.pastDueAmount)}
 					{#if markPaidTarget.overduePaymentCount > 1}
-						· {markPaidTarget.overduePaymentCount} payments
+						· {markPaidTarget.overduePaymentCount} charges
 					{/if}
 				</Dialog.Description>
 			{/if}

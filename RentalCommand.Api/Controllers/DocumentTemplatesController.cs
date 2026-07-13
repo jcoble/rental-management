@@ -36,10 +36,11 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<DocumentTemplateResponse>>> List(
         [FromQuery] DocumentTemplateKind? kind,
         [FromQuery] DocumentTemplateStatus? status,
+        [FromQuery] int? propertyId,
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), kind, status, query, ct);
+        var items = await _service.ListAsync(GetPortfolioId(), kind, status, propertyId, query, ct);
         return Ok(items);
     }
 
@@ -48,10 +49,11 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     public async Task<ActionResult<DocumentTemplateListResponse>> ListPage(
         [FromQuery] DocumentTemplateKind? kind,
         [FromQuery] DocumentTemplateStatus? status,
+        [FromQuery] int? propertyId,
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), kind, status, query, ct);
+        var page = await _service.ListPageAsync(GetPortfolioId(), kind, status, propertyId, query, ct);
         return Ok(page);
     }
 

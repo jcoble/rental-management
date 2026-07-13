@@ -64,6 +64,54 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             : Ok(page);
     }
 
+    [HttpGet("eligible-base-agreements/page")]
+    [ProducesResponseType(typeof(LeaseAddendumEligibleBaseAgreementPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAddendumEligibleBaseAgreementPageResponse>> ListEligibleBaseAgreements(
+        int leaseManagementId,
+        [FromQuery] ListQuery query,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var page = await _queryService.ListAddendumEligibleBaseAgreementsAsync(
+            access, leaseManagementId, query, ct);
+        return page is null
+            ? NotFound(new { error = "Lease management relationship not found" })
+            : Ok(page);
+    }
+
+    [HttpGet("signer-candidates")]
+    [ProducesResponseType(typeof(LeaseAddendumSignerCandidatesResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAddendumSignerCandidatesResponse>> GetSignerCandidates(
+        int leaseManagementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var candidates = await _queryService.GetAddendumSignerCandidatesAsync(
+            access, leaseManagementId, ct);
+        return candidates is null
+            ? NotFound(new { error = "Lease management relationship not found" })
+            : Ok(candidates);
+    }
+
+    [HttpGet("{leaseAddendumId:int}/draft")]
+    [ProducesResponseType(typeof(LeaseAddendumDraftDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAddendumDraftDetailResponse>> GetDraft(
+        int leaseManagementId,
+        int leaseAddendumId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var draft = await _queryService.GetAddendumDraftAsync(
+            access, leaseManagementId, leaseAddendumId, ct);
+        return draft is null
+            ? NotFound(new { error = "Addendum draft not found" })
+            : Ok(draft);
+    }
+
     [HttpGet("{leaseAddendumId:int}/artifacts/{artifactId:int}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

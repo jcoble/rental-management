@@ -542,10 +542,11 @@ public sealed class PrepareMoveInHandler
             || signerOrders.Any(order => order is null or <= 0)
             || signerOrders.Distinct().Count() != signerOrders.Length
             || command.Parties.Any(party => !party.IsAgreementSigner && party.SigningOrder is not null)
+            || command.Parties.Any(party => party.IsAgreementSigner && !party.IsRequiredSigner)
             || command.Parties.Any(party => party.IsAgreementSigner
                 && party.Role == LeaseManagementPartyRole.Occupant))
         {
-            throw new ArgumentException("Agreement signer order and party role are invalid.");
+            throw new ArgumentException("Agreement signer order, required status, and party role are invalid.");
         }
         if (command.DocumentTemplateId <= 0
             || command.TermsSchemaVersion <= 0 || string.IsNullOrWhiteSpace(command.TermsPayload)

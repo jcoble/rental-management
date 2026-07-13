@@ -224,7 +224,6 @@ public interface IAtomicLeaseMutationPersistence
         int portfolioId,
         int leaseManagementId,
         int unitId,
-        DateOnly requiredBusinessDate,
         IReadOnlyList<AtomicReturnPossessionPartyInput> parties,
         IReadOnlyList<AtomicReturnPossessionAccessInput> accesses,
         int actorUserId,

@@ -63,6 +63,20 @@ public sealed class LeaseManagementController : ManagementControllerBase
         return Ok(await _queryService.ListPageAsync(access, query, ct));
     }
 
+    [HttpGet("prepare-move-in-context")]
+    [ProducesResponseType(typeof(PrepareMoveInContextResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PrepareMoveInContextResponse>> PrepareMoveInContext(
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        var businessDate = await _queryService.GetPortfolioBusinessDateAsync(access, ct);
+        return Ok(new PrepareMoveInContextResponse(businessDate));
+    }
+
     [HttpGet("{leaseManagementId:int}")]
     [ProducesResponseType(typeof(LeaseManagementDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -77,6 +91,27 @@ public sealed class LeaseManagementController : ManagementControllerBase
 
         var item = await _queryService.GetAsync(access, leaseManagementId, ct);
         return item is null ? NotFound(new { error = "Lease management relationship not found" }) : Ok(item);
+    }
+
+    /// <summary>
+    /// Returns the exact current household and active portal-access grants that require an explicit
+    /// disposition before possession can be returned. Current membership, access filtering, and
+    /// ordering are evaluated by PostgreSQL in two purposeful flat queries: one for parties and one
+    /// for grants. The response does not rely on a client-side join or a per-party follow-up query.
+    /// </summary>
+    [HttpGet("{leaseManagementId:int}/return-possession-context")]
+    [ProducesResponseType(typeof(ReturnPossessionContextResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<ReturnPossessionContextResponse>> ReturnPossessionContext(
+        int leaseManagementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        return Ok(await _queryService.GetReturnPossessionContextAsync(access, leaseManagementId, ct));
     }
 
     /// <summary>
@@ -654,7 +689,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 new AtomicCommandIdentity("lease-management.return-possession",
                     $"{portfolioId}:{leaseManagementId}:{digest}"),
                 new ReturnPossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
-                    sessionId, accessContextId, accessRevision, request.EffectiveOn,
+                    sessionId, accessContextId, accessRevision,
                     request.Parties.Select(item => new ReturnPossessionParty(
                         item.LeaseManagementPartyId, item.Disposition!.Value)).ToArray(),
                     request.Accesses.Select(item => new ReturnPossessionAccess(

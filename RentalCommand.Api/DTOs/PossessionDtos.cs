@@ -7,6 +7,8 @@ public sealed class GivePossessionRequest
     public int UnitId { get; set; }
 }
 
+public sealed record PrepareMoveInContextResponse(DateOnly BusinessDate);
+
 public sealed record GivePossessionResponse(
     int LeaseManagementId,
     int UnitId,
@@ -28,10 +30,15 @@ public sealed class ReturnPossessionAccessRequest
 public sealed class ReturnPossessionRequest
 {
     public int UnitId { get; set; }
-    public DateOnly EffectiveOn { get; set; }
     public List<ReturnPossessionPartyRequest> Parties { get; set; } = [];
     public List<ReturnPossessionAccessRequest> Accesses { get; set; } = [];
     public string TurnoverReason { get; set; } = string.Empty;
+}
+
+public sealed class ReturnPossessionContextResponse
+{
+    public IReadOnlyList<LeaseManagementPartyResponse> Parties { get; init; } = [];
+    public IReadOnlyList<ActiveTenantUserAccessResponse> ActiveTenantUserAccesses { get; init; } = [];
 }
 
 public sealed record ReturnPossessionResponse(

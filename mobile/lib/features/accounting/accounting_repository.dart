@@ -20,8 +20,9 @@ class AccountingRepository {
   /// Fetches the plain-English money snapshot for the caller's portfolio.
   Future<MoneySnapshot> snapshot() async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/accounting/snapshot');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/accounting/snapshot',
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -35,12 +36,14 @@ class AccountingRepository {
     }
   }
 
-  /// Fetches the "Who's behind" list (one row per behind lease/tenant). Shares
+  /// Fetches a bounded "Who's behind" page (one row per tenant account). Shares
   /// the snapshot's past-due definition, so the count matches the dashboard KPI.
-  Future<PastDueResult> pastDue() async {
+  Future<PastDueResult> pastDue({int skip = 0, int take = 20}) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/accounting/past-due');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/accounting/past-due',
+        queryParameters: {'skip': skip, 'take': take},
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -79,9 +82,122 @@ final moneySnapshotProvider = FutureProvider.autoDispose<MoneySnapshot>((ref) {
   return ref.watch(accountingRepositoryProvider).snapshot();
 });
 
-/// The "Who's behind" list (one row per behind lease/tenant). autoDispose so it
-/// refreshes on each visit; shares the snapshot's past-due definition so its
-/// length always equals the dashboard "tenants behind" KPI.
-final pastDueProvider = FutureProvider.autoDispose<PastDueResult>((ref) {
-  return ref.watch(accountingRepositoryProvider).pastDue();
-});
+class PastDueState {
+  const PastDueState({
+    this.items = const [],
+    this.totalCount = 0,
+    this.totalPastDueAmount = 0,
+    this.businessDate,
+    this.loading = false,
+    this.loadingMore = false,
+    this.error,
+  });
+
+  final List<PastDueLease> items;
+  final int totalCount;
+  final double totalPastDueAmount;
+  final DateTime? businessDate;
+  final bool loading;
+  final bool loadingMore;
+  final String? error;
+
+  bool get hasMore => items.length < totalCount;
+
+  PastDueState copyWith({
+    List<PastDueLease>? items,
+    int? totalCount,
+    double? totalPastDueAmount,
+    DateTime? businessDate,
+    bool? loading,
+    bool? loadingMore,
+    String? error,
+    bool clearError = false,
+  }) => PastDueState(
+    items: items ?? this.items,
+    totalCount: totalCount ?? this.totalCount,
+    totalPastDueAmount: totalPastDueAmount ?? this.totalPastDueAmount,
+    businessDate: businessDate ?? this.businessDate,
+    loading: loading ?? this.loading,
+    loadingMore: loadingMore ?? this.loadingMore,
+    error: clearError ? null : error ?? this.error,
+  );
+}
+
+/// Accumulates bounded server pages without re-filtering, grouping, sorting, or
+/// deriving totals on the client. The exact count and amount always come from SQL.
+class PastDueNotifier extends Notifier<PastDueState> {
+  static const _pageSize = 20;
+  int _requestGeneration = 0;
+
+  @override
+  PastDueState build() {
+    Future.microtask(refresh);
+    return const PastDueState(loading: true);
+  }
+
+  AccountingRepository get _repo => ref.read(accountingRepositoryProvider);
+
+  Future<void> refresh() async {
+    final generation = ++_requestGeneration;
+    state = state.copyWith(loading: true, loadingMore: false, clearError: true);
+    try {
+      final page = await _repo.pastDue(take: _pageSize);
+      if (generation != _requestGeneration || !ref.mounted) return;
+      state = PastDueState(
+        items: page.items,
+        totalCount: page.totalCount,
+        totalPastDueAmount: page.totalPastDueAmount,
+        businessDate: page.businessDate,
+      );
+    } on ApiException catch (error) {
+      if (generation != _requestGeneration || !ref.mounted) return;
+      state = state.copyWith(
+        loading: false,
+        loadingMore: false,
+        error: error.message,
+      );
+    } catch (_) {
+      if (generation != _requestGeneration || !ref.mounted) return;
+      state = state.copyWith(
+        loading: false,
+        loadingMore: false,
+        error: "Couldn't load who's behind.",
+      );
+    }
+  }
+
+  Future<void> loadMore() async {
+    if (state.loading || state.loadingMore || !state.hasMore) return;
+    final generation = _requestGeneration;
+    final skip = state.items.length;
+    state = state.copyWith(loadingMore: true, clearError: true);
+    try {
+      final page = await _repo.pastDue(skip: skip, take: _pageSize);
+      if (generation != _requestGeneration || !ref.mounted) return;
+      if (page.businessDate != state.businessDate) {
+        await refresh();
+        return;
+      }
+      state = PastDueState(
+        items: [...state.items, ...page.items],
+        totalCount: page.totalCount,
+        totalPastDueAmount: page.totalPastDueAmount,
+        businessDate: page.businessDate,
+      );
+    } on ApiException catch (error) {
+      if (generation != _requestGeneration || !ref.mounted) return;
+      state = state.copyWith(loadingMore: false, error: error.message);
+    } catch (_) {
+      if (generation != _requestGeneration || !ref.mounted) return;
+      state = state.copyWith(
+        loadingMore: false,
+        error: "Couldn't load more accounts.",
+      );
+    }
+  }
+}
+
+final pastDueProvider =
+    NotifierProvider.autoDispose<PastDueNotifier, PastDueState>(
+      PastDueNotifier.new,
+    );

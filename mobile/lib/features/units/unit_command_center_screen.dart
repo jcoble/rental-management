@@ -1083,14 +1083,20 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     }
   }
 
-  Future<void> _importSignedLease() => openMobileScan(
-    context,
-    initialTargetEntityType: 'LeaseAgreement',
-    lockTargetEntityType: true,
-    propertyId: widget.dashboard.unit.propertyId,
-    unitId: widget.dashboard.unit.id,
-    sourceLabel: 'Zillow signed lease import',
-  );
+  Future<void> _importSignedLease() {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    return openMobileScan(
+      context,
+      initialTargetEntityType: 'LeaseAgreement',
+      lockTargetEntityType: true,
+      propertyId: widget.dashboard.unit.propertyId,
+      unitId: widget.dashboard.unit.id,
+      rentalListingId: listing?.id,
+      sourceLabel: 'Zillow signed lease import',
+    );
+  }
 
   Future<void> _copyText(String label, String text) async {
     final value = text.trim();

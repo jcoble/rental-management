@@ -80,7 +80,16 @@ export interface ScanDraftResponse {
 	 */
 	leaseProposal?: LeaseImportProposal | null;
 	captureContext?: {
+		propertyId?: number | null;
+		unitId?: number | null;
+		leaseManagementId?: number | null;
+		leaseAgreementId?: number | null;
 		tenantAccountId?: number | null;
+		tenantLedgerEntryId?: number | null;
+		workOrderId?: number | null;
+		applicationId?: number | null;
+		rentalListingId?: number | null;
+		sourceLabel?: string | null;
 	} | null;
 }
 
@@ -194,9 +203,12 @@ export const scan = {
 		if (context.propertyId) fd.append('propertyId', String(context.propertyId));
 		if (context.unitId) fd.append('unitId', String(context.unitId));
 		if (context.leaseManagementId) fd.append('leaseManagementId', String(context.leaseManagementId));
+		if (context.leaseAgreementId) fd.append('leaseAgreementId', String(context.leaseAgreementId));
 		if (context.tenantAccountId) fd.append('tenantAccountId', String(context.tenantAccountId));
-		if (context.focusedRecordKind) fd.append('focusedRecordKind', context.focusedRecordKind);
-		if (context.focusedRecordId) fd.append('focusedRecordId', String(context.focusedRecordId));
+		if (context.tenantLedgerEntryId) fd.append('tenantLedgerEntryId', String(context.tenantLedgerEntryId));
+		if (context.workOrderId) fd.append('workOrderId', String(context.workOrderId));
+		if (context.applicationId) fd.append('applicationId', String(context.applicationId));
+		if (context.rentalListingId) fd.append('rentalListingId', String(context.rentalListingId));
 		if (context.sourceLabel) fd.append('sourceLabel', context.sourceLabel);
 		const response = await api.upload<ScanCreatedResponse>('/scans', fd);
 		scanUploadOperationIds.get(file)?.delete(targetEntityType);

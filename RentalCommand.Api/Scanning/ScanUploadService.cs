@@ -48,7 +48,7 @@ public sealed class ScanUploadService : IScanUploadService
         IReadOnlyList<ScanUploadFilePayload> files,
         CancellationToken ct = default) => UploadAsync(
             portfolioId, userId, clientOperationId, targetEntityType, createBatch, batchName,
-            new ScanCaptureContextData(null, null, null, null, null, null, null, null, null, null),
+            new ScanCaptureContextData(null, null, null, null, null, null, null, null, null, null, null, null, null),
             files, ct);
 
     public async Task<FinalizeScanUploadResult> UploadAsync(

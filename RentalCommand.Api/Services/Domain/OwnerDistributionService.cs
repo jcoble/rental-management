@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -15,15 +19,18 @@ public class OwnerDistributionService : IOwnerDistributionService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
     public OwnerDistributionService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<OwnerDistributionResponse>> ListAsync(
@@ -33,10 +40,33 @@ public class OwnerDistributionService : IOwnerDistributionService
         return page.Items;
     }
 
+    public async Task<IReadOnlyList<OwnerDistributionResponse>> ListAsync(
+        WorkspaceReadScope scope, OwnerDistributionListQuery query, CancellationToken ct = default)
+    {
+        var page = await ListPageAsync(scope, query, ct);
+        return page.Items;
+    }
+
     public async Task<OwnerDistributionListResponse> ListPageAsync(
         int portfolioId, OwnerDistributionListQuery query, CancellationToken ct = default)
     {
         var filtered = BuildListQuery(portfolioId, query);
+        return await BuildPageAsync(filtered, query, ct);
+    }
+
+    public Task<OwnerDistributionListResponse> ListPageAsync(
+        WorkspaceReadScope scope, OwnerDistributionListQuery query, CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(
+            _db.OwnerDistributions.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyOwnerReportsRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, query);
+        return BuildPageAsync(filtered, query, ct);
+    }
+
+    private async Task<OwnerDistributionListResponse> BuildPageAsync(
+        IQueryable<OwnerDistribution> filtered, OwnerDistributionListQuery query, CancellationToken ct)
+    {
         var totalCount = await filtered.CountAsync(ct);
 
         var items = await ProjectResponse(ApplySort(filtered, query))
@@ -83,11 +113,20 @@ public class OwnerDistributionService : IOwnerDistributionService
             .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
     }
 
-    public async Task<OwnerDistributionResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<OwnerDistributionResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
+        GetAsync(_db.OwnerDistributions.AsNoTracking(), portfolioId, id, ct);
+
+    public Task<OwnerDistributionResponse?> GetAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        GetAsync(
+            _db.OwnerDistributions.AsNoTracking().WhereMoneyAuthorized(
+                _db, scope, CapabilityKeys.MoneyOwnerReportsRead, _timeProvider.UtcNow()),
+            scope.PortfolioId, id, ct);
+
+    private async Task<OwnerDistributionResponse?> GetAsync(
+        IQueryable<OwnerDistribution> distributions, int portfolioId, int id, CancellationToken ct)
     {
-        return await ProjectResponse(_db.OwnerDistributions
-                .AsNoTracking()
-                .Where(d => d.Id == id && d.PortfolioId == portfolioId))
+        return await ProjectResponse(distributions.Where(d => d.Id == id && d.PortfolioId == portfolioId))
             .FirstOrDefaultAsync(ct);
     }
 
@@ -120,6 +159,20 @@ public class OwnerDistributionService : IOwnerDistributionService
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? ProjectResponse(entity, ownerName: "", propertyName: null);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        return response;
+    }
+
+    public async Task<OwnerDistributionResponse?> CreateAsync(
+        WorkspaceReadScope scope, CreateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
         return response;
     }
 
@@ -161,6 +214,22 @@ public class OwnerDistributionService : IOwnerDistributionService
         return response;
     }
 
+    public async Task<OwnerDistributionResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        if (await GetAsync(scope, id, ct) is null)
+            return null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        var response = await GetAsync(scope.PortfolioId, id, ct);
+        if (response is not null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
+        return response;
+    }
+
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.OwnerDistributions
@@ -177,11 +246,50 @@ public class OwnerDistributionService : IOwnerDistributionService
         return true;
     }
 
-    private IQueryable<OwnerDistribution> BuildListQuery(int portfolioId, OwnerDistributionListQuery query)
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
-        var q = _db.OwnerDistributions
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId);
+        var visible = await GetAsync(scope, id, ct) is not null;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
+        try
+        {
+            outcome = await Atomic.ExecuteAsync(
+                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        }
+        catch (UnauthorizedAccessException) when (!visible)
+        {
+            return false;
+        }
+        if (outcome.Value.Applied)
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
+            ? outcome.Value.Found
+            : false;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped owner-distribution mutations require the atomic persistence kernel.");
+
+    private async Task DemandDisbursementAuthorityAsync(WorkspaceReadScope scope, CancellationToken ct)
+    {
+        var allowed = await _db.AuthorizedAllPropertyAssignments(
+                scope, CapabilityKeys.MoneyDisbursementsManage,
+                CapabilityAuthorizationTargetKind.Workspace, _timeProvider.UtcNow())
+            .AnyAsync(ct);
+        if (!allowed)
+            throw new UnauthorizedAccessException(
+                "Owner distributions require workspace payout authority.");
+    }
+
+    private IQueryable<OwnerDistribution> BuildListQuery(int portfolioId, OwnerDistributionListQuery query)
+        => BuildListQuery(_db.OwnerDistributions.AsNoTracking(), portfolioId, query);
+
+    private static IQueryable<OwnerDistribution> BuildListQuery(
+        IQueryable<OwnerDistribution> q, int portfolioId, OwnerDistributionListQuery query)
+    {
+        q = q.Where(d => d.PortfolioId == portfolioId);
 
         if (query.OwnerEntityId.HasValue)
             q = q.Where(d => d.OwnerEntityId == query.OwnerEntityId.Value);
