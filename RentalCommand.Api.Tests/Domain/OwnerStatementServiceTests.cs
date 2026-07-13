@@ -323,7 +323,7 @@ public class OwnerStatementServiceTests : IDisposable
         return property;
     }
 
-    private Lease SeedLease(Property property, string leaseNumber)
+    private TenantAccount SeedLease(Property property, string leaseNumber)
     {
         var unit = new Unit
         {
@@ -341,41 +341,64 @@ public class OwnerStatementServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = leaseNumber,
-            Status = LeaseStatus.Active,
-            StartDate = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(Year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            MonthlyRent = 1000m,
-            SecurityDeposit = 1000m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-        _db.Leases.Add(lease);
+        _db.AddRange(unit, tenant);
         _db.SaveChanges();
-        return lease;
+        var management = new LeaseManagement
+        {
+            PortfolioId = PortfolioId, PropertyId = property.Id, UnitId = unit.Id,
+            RelationshipNumber = leaseNumber, PlannedPossessionAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            PossessionGivenAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1, RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagements.Add(management);
+        _db.SaveChanges();
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}", Currency = "USD",
+            OpenedAtUtc = management.PossessionGivenAtUtc!.Value, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = 1,
+        };
+        _db.AddRange(account, new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id, TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant, EffectiveFrom = new DateOnly(Year, 1, 1),
+            ChangeReason = "Owner statement test", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = 1,
+        });
+        _db.SaveChanges();
+        return account;
     }
 
-    private void SeedRent(Lease lease, decimal amount, bool paidInYear, int? year = null)
+    private void SeedRent(TenantAccount account, decimal amount, bool paidInYear, int? year = null)
     {
         var y = year ?? Year;
         var paidDate = new DateTime(y, 6, 15, 0, 0, 0, DateTimeKind.Utc);
-        _db.Payments.Add(new Payment
+        var charge = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = paidInYear ? PaymentStatus.Paid : PaymentStatus.Scheduled,
-            Amount = amount,
-            DueDate = paidDate,
-            PaidDate = paidInYear ? paidDate : null,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge, Direction = TenantLedgerDirection.Debit,
+            Amount = amount, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate),
+            DueOn = DateOnly.FromDateTime(paidDate), PostedAtUtc = paidDate,
+            Description = "Rent", BusinessKey = $"rent:{Guid.NewGuid():N}", CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(charge);
+        _db.SaveChanges();
+        if (!paidInYear) return;
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
+            Amount = amount, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate),
+            PostedAtUtc = paidDate, Description = "Payment received",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}", CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(receipt);
+        _db.SaveChanges();
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId, TenantAccountId = account.Id, DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id, Amount = amount, AllocatedAtUtc = paidDate,
+            BusinessKey = $"allocation:{Guid.NewGuid():N}", CreatedByUserId = 1,
         });
         _db.SaveChanges();
     }
