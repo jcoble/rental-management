@@ -146,6 +146,34 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         sql.Should().Contain("Disposition");
     }
 
+    [Fact]
+    public void PhotoMutationReadShape_FiltersListingAndPhotoScopeInSql()
+    {
+        var query = _context.Db.ListingPhotos.AsNoTracking()
+            .Where(photo => photo.Id == 19 && photo.PortfolioId == PortfolioId
+                && photo.RentalListing != null && photo.RentalListing.UnitId == 27);
+
+        var sql = query.ToQueryString();
+
+        sql.Should().Contain("JOIN");
+        sql.Should().Contain("ListingPhotos");
+        sql.Should().Contain("RentalListings");
+        sql.Should().Contain("PortfolioId");
+        sql.Should().Contain("UnitId");
+    }
+
+    [Fact]
+    public void PhotoReorderSqlContract_ValidatesAndWritesTheCompleteOrderSetInPostgres()
+    {
+        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("unnest(@photoIds::integer[])");
+        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("COUNT(DISTINCT requested.\"PhotoId\")");
+        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("COUNT(photo.\"Id\")");
+        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("BOOL_OR");
+        ListingWorkspaceService.PhotoOrderUpdateSql.Should().Contain("UPDATE \"ListingPhotos\"");
+        ListingWorkspaceService.PhotoOrderUpdateSql.Should().Contain("WITH ORDINALITY");
+        ListingWorkspaceService.PhotoOrderUpdateSql.Should().Contain("photo.\"PortfolioId\" = @portfolioId");
+    }
+
     private Unit SeedUnit()
     {
         var now = DateTime.UtcNow;
