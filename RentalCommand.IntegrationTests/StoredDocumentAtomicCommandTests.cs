@@ -28,6 +28,25 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     private int _unitId;
     private int _otherUnitId;
 
+    [Fact]
+    public void Document_target_contract_is_canonical_and_supports_bigint_ledger_ids()
+    {
+        typeof(StoredFile).GetProperty(nameof(StoredFile.EntityId))!.PropertyType
+            .Should().Be(typeof(long?));
+
+        Enum.GetNames<StoredDocumentTarget>().Should().Contain([
+            nameof(StoredDocumentTarget.LeaseAgreement),
+            nameof(StoredDocumentTarget.LegalDocumentArtifact),
+            nameof(StoredDocumentTarget.TenantAccount),
+            nameof(StoredDocumentTarget.TenantLedgerEntry),
+            nameof(StoredDocumentTarget.SecurityDepositAccount),
+        ]);
+        Enum.GetNames<StoredDocumentTarget>().Should()
+            .NotContain("Lease")
+            .And.NotContain("Payment")
+            .And.NotContain("SecurityDeposit");
+    }
+
     public async Task InitializeAsync()
     {
         try

@@ -194,9 +194,9 @@ public class UnitDocumentSummary
     public string FileName { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
 
-    /// <summary>The kind of record the file is attached to (e.g. <c>Lease</c>, <c>WorkOrder</c>).</summary>
+    /// <summary>The kind of record the file is attached to (e.g. <c>LeaseAgreement</c>, <c>WorkOrder</c>).</summary>
     public string? EntityType { get; set; }
-    public int? EntityId { get; set; }
+    public long? EntityId { get; set; }
     public DateTime UploadedAt { get; set; }
 }
 

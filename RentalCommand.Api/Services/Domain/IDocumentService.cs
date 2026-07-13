@@ -34,7 +34,7 @@ public interface IDocumentService
     Task<IReadOnlyList<DocumentDto>> ListAsync(
         int portfolioId,
         string entityType,
-        int entityId,
+        long entityId,
         CancellationToken ct = default);
 
     /// <summary>
@@ -44,7 +44,7 @@ public interface IDocumentService
         Guid pendingUploadId,
         int portfolioId,
         StoredDocumentTarget target,
-        int entityId,
+        long entityId,
         int userId,
         int? tenantId,
         bool isStaff,

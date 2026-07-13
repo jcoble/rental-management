@@ -101,7 +101,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<DocumentDto>> Upload(
         IFormFile file,
         [FromForm] string entityType,
-        [FromForm] int entityId,
+        [FromForm] long entityId,
         [FromForm] string? category,
         [FromForm] string clientOperationId,
         CancellationToken ct)
@@ -123,9 +123,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
-        if (int.TryParse(normalizedEntityType, out _)
-            || !Enum.TryParse<StoredDocumentTarget>(normalizedEntityType, ignoreCase: true, out var target)
-            || !Enum.IsDefined(target))
+        if (!TryParseTarget(normalizedEntityType, out var target))
             return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
         var isStaff = HasWorkspaceMembership();
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
@@ -225,7 +223,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<IReadOnlyList<DocumentDto>>> List(
         [FromQuery] string entityType,
-        [FromQuery] int entityId,
+        [FromQuery] long entityId,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(entityType))
@@ -233,6 +231,9 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
+        if (!TryParseTarget(normalizedEntityType, out var target))
+            return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
+        normalizedEntityType = target.ToString();
 
         // Tenant guard: a tenant may only list documents for a WorkOrder they own. Returning an empty
         // list (rather than 403) keeps the response shape identical for any non-owned/foreign entity.
@@ -357,7 +358,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     /// is denied. Fail-closed: an unknown/missing entity reference returns <c>false</c> for a tenant.
     /// </summary>
     private async Task<bool> TenantMayAccessEntityAsync(
-        string? entityType, int? entityId, int portfolioId, CancellationToken ct)
+        string? entityType, long? entityId, int portfolioId, CancellationToken ct)
     {
         if (HasWorkspaceMembership())
         {
@@ -396,6 +397,14 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     {
         var json = JsonSerializer.Serialize(request);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
+    }
+
+    private static bool TryParseTarget(string value, out StoredDocumentTarget target)
+    {
+        target = default;
+        return !int.TryParse(value, out _)
+            && Enum.TryParse(value, ignoreCase: true, out target)
+            && Enum.IsDefined(target);
     }
 
     // -------------------------------------------------------------------------

@@ -71,12 +71,15 @@ public sealed class DocumentsControllerTests : IDisposable
     public static IEnumerable<object[]> StaffUploadTargets()
     {
         yield return ["Unit"];
-        yield return ["Lease"];
+        yield return ["LeaseAgreement"];
+        yield return ["LegalDocumentArtifact"];
+        yield return ["TenantAccount"];
+        yield return ["TenantLedgerEntry"];
         yield return ["WorkOrder"];
         yield return ["Appointment"];
         yield return ["Tenant"];
         yield return ["OwnerEntity"];
-        yield return ["SecurityDeposit"];
+        yield return ["SecurityDepositAccount"];
         yield return ["Inspection"];
     }
 
@@ -169,6 +172,32 @@ public sealed class DocumentsControllerTests : IDisposable
             It.IsAny<long>(),
             "stored/test-upload.txt",
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("Lease")]
+    [InlineData("Payment")]
+    [InlineData("SecurityDeposit")]
+    public async Task Upload_RejectsRemovedLegacyDocumentTargets(string entityType)
+    {
+        var documents = new Mock<IDocumentService>();
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+
+        var result = await controller.Upload(
+            FormFile("test-upload.txt", "text/plain", "legacy target"),
+            entityType,
+            1,
+            category: null,
+            clientOperationId: "legacy-target-operation",
+            ct: CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        documents.VerifyNoOtherCalls();
+        storage.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -356,6 +385,24 @@ public sealed class DocumentsControllerTests : IDisposable
 
         result.Result.Should().BeOfType<OkObjectResult>()
             .Which.Value.Should().BeSameAs(expected);
+    }
+
+    [Theory]
+    [InlineData("Lease")]
+    [InlineData("Payment")]
+    [InlineData("SecurityDeposit")]
+    public async Task List_RejectsRemovedLegacyDocumentTargets(string entityType)
+    {
+        var documents = new Mock<IDocumentService>();
+        var controller = CreateController(
+            documents.Object,
+            Mock.Of<IFileStorage>(),
+            new Claim(ClaimTypes.Role, nameof(UserRole.Admin)));
+
+        var result = await controller.List(entityType, 1, CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        documents.VerifyNoOtherCalls();
     }
 
     private static byte[] BuildTestPng()
@@ -603,20 +650,7 @@ public sealed class DocumentsControllerTests : IDisposable
             "Property" => property.Id,
             "Unit" => unit.Id,
             "Tenant" => tenant.Id,
-            "Lease" => AddAndSave(new Lease
-            {
-                PortfolioId = PortfolioId,
-                PropertyId = property.Id,
-                UnitId = unit.Id,
-                TenantId = tenant.Id,
-                LeaseNumber = $"L-{entityType}",
-                Status = LeaseStatus.Active,
-                StartDate = now.Date,
-                EndDate = now.Date.AddYears(1),
-                MonthlyRent = 1_200m,
-                CreatedAt = now,
-                UpdatedAt = now,
-            }).Id,
+            "LeaseAgreement" or "LegalDocumentArtifact" or "TenantAccount" or "TenantLedgerEntry" => property.Id,
             "WorkOrder" => AddAndSave(new WorkOrder
             {
                 PortfolioId = PortfolioId,
@@ -648,29 +682,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "SecurityDeposit" => AddAndSave(new SecurityDepositHolding
-            {
-                PortfolioId = PortfolioId,
-                LeaseId = AddAndSave(new Lease
-                {
-                    PortfolioId = PortfolioId,
-                    PropertyId = property.Id,
-                    UnitId = unit.Id,
-                    TenantId = tenant.Id,
-                    LeaseNumber = $"L-{entityType}",
-                    Status = LeaseStatus.Active,
-                    StartDate = now.Date,
-                    EndDate = now.Date.AddYears(1),
-                    MonthlyRent = 1_200m,
-                    SecurityDeposit = 1_200m,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                }).Id,
-                Amount = 1_200m,
-                HeldAt = now,
-                CreatedAt = now,
-                UpdatedAt = now,
-            }).Id,
+            "SecurityDepositAccount" => property.Id,
             "OwnerEntity" => AddAndSave(new OwnerEntity
             {
                 PortfolioId = PortfolioId,

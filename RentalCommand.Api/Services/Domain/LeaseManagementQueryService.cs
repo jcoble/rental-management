@@ -577,7 +577,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             {
                 agreement.PortfolioId,
                 EntityType = nameof(LeaseAgreement),
-                EntityId = (int?)agreement.Id,
+                EntityId = (long?)agreement.Id,
             }
             equals new { file.PortfolioId, file.EntityType, file.EntityId }
         where management.Id == leaseManagementId

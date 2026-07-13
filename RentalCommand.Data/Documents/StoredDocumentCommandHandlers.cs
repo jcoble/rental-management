@@ -112,7 +112,7 @@ public sealed class CreateStoredDocumentHandler
         string reason) => new(
             command.PortfolioId,
             nameof(Unit),
-            command.EntityId,
+            checked((int)command.EntityId),
             operation,
             UserId: command.UserId,
             OldValues: DocumentValue(oldFileName),
@@ -149,7 +149,7 @@ public sealed class DeleteStoredDocumentHandler
             row = await (
                 from file in attempt.Persistence.Query<StoredFile>()
                 join workOrder in attempt.Persistence.Query<WorkOrder>()
-                    on file.EntityId equals (int?)workOrder.Id
+                    on file.EntityId equals (long?)workOrder.Id
                 where file.Id == command.StoredFileId
                     && file.PortfolioId == command.PortfolioId
                     && file.EntityType == nameof(StoredDocumentTarget.WorkOrder)
@@ -190,7 +190,7 @@ public sealed class DeleteStoredDocumentHandler
             attempt.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(Unit),
-                entityId,
+                checked((int)entityId),
                 AuditLogOperation.Updated,
                 UserId: command.UserId,
                 OldValues: CreateStoredDocumentHandler.DocumentValue(row.FileName),
@@ -260,9 +260,13 @@ internal static class StoredDocumentAuthorization
                     && entity.Property.PortfolioId == command.PortfolioId, ct),
             StoredDocumentTarget.Tenant => persistence.Query<Tenant>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.Lease => persistence.Query<Lease>().AnyAsync(
+            StoredDocumentTarget.LeaseAgreement => persistence.Query<LeaseAgreement>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.Payment => persistence.Query<Payment>().AnyAsync(
+            StoredDocumentTarget.LegalDocumentArtifact => persistence.Query<LegalDocumentArtifact>().AnyAsync(
+                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+            StoredDocumentTarget.TenantAccount => persistence.Query<TenantAccount>().AnyAsync(
+                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+            StoredDocumentTarget.TenantLedgerEntry => persistence.Query<TenantLedgerEntry>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
             StoredDocumentTarget.Expense => persistence.Query<Expense>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
@@ -274,7 +278,7 @@ internal static class StoredDocumentAuthorization
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
             StoredDocumentTarget.Inspection => persistence.Query<Inspection>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.SecurityDeposit => persistence.Query<SecurityDepositHolding>().AnyAsync(
+            StoredDocumentTarget.SecurityDepositAccount => persistence.Query<SecurityDepositAccount>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
             StoredDocumentTarget.OwnerEntity => persistence.Query<OwnerEntity>().AnyAsync(
                 entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),

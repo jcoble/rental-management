@@ -7,7 +7,7 @@ import 'package:rental_command/features/money/receipt_attachment_repository.dart
 
 void main() {
   test(
-    'uploadReceipt attaches a payment receipt through the documents API',
+    'uploadReceipt attaches a tenant ledger receipt through the documents API',
     () async {
       final adapter = _RecordingAdapter();
       final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
@@ -15,7 +15,7 @@ void main() {
       final repo = ReceiptAttachmentRepository(dio);
 
       final document = await repo.uploadReceipt(
-        entityType: ReceiptEntityType.payment,
+        entityType: ReceiptEntityType.tenantLedgerEntry,
         entityId: 17,
         bytes: Uint8List.fromList([1, 2, 3]),
         fileName: 'rent-receipt.jpg',
@@ -27,14 +27,14 @@ void main() {
       expect(adapter.path, '/documents');
       expect(adapter.data, isA<FormData>());
       final formData = adapter.data! as FormData;
-      expect(_field(formData, 'entityType'), 'Payment');
+      expect(_field(formData, 'entityType'), 'TenantLedgerEntry');
       expect(_field(formData, 'entityId'), '17');
       expect(_field(formData, 'category'), 'Receipt');
       expect(_field(formData, 'clientOperationId'), 'receipt-upload-17');
       expect(formData.files.single.key, 'file');
       expect(formData.files.single.value.filename, 'rent-receipt.jpg');
       expect(document.id, 33);
-      expect(document.entityType, 'Payment');
+      expect(document.entityType, 'TenantLedgerEntry');
       expect(document.entityId, 17);
     },
   );
@@ -93,7 +93,7 @@ class _RecordingAdapter implements HttpClientAdapter {
         'fileName': 'rent-receipt.jpg',
         'contentType': 'image/jpeg',
         'sizeBytes': 3,
-        'entityType': 'Payment',
+        'entityType': 'TenantLedgerEntry',
         'entityId': 17,
         'isImage': true,
         'uploadedAt': '2026-06-28T00:00:00.000Z',

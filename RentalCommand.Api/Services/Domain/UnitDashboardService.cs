@@ -589,12 +589,31 @@ public class UnitDashboardService : IUnitDashboardService
     /// </summary>
     private IQueryable<StoredFile> BuildUnitDocumentsQuery(int portfolioId, int unitId)
     {
-        var workOrderIds = _db.WorkOrders.Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId).Select(w => w.Id);
-        var inspectionIds = _db.Inspections.Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId).Select(i => i.Id);
+        var relationshipIds = _db.LeaseManagements
+            .Where(management => management.UnitId == unitId && management.PortfolioId == portfolioId)
+            .Select(management => management.Id);
+        var agreementIds = _db.LeaseAgreements
+            .Where(agreement => agreement.PortfolioId == portfolioId
+                && relationshipIds.Contains(agreement.LeaseManagementId))
+            .Select(agreement => (long)agreement.Id);
+        var accountIds = _db.TenantAccounts
+            .Where(account => account.PortfolioId == portfolioId
+                && relationshipIds.Contains(account.LeaseManagementId))
+            .Select(account => (long)account.Id);
+        var ledgerEntryIds = _db.TenantLedgerEntries
+            .Where(entry => entry.PortfolioId == portfolioId
+                && accountIds.Contains((long)entry.TenantAccountId))
+            .Select(entry => entry.Id);
+        var depositAccountIds = _db.SecurityDepositAccounts
+            .Where(account => account.PortfolioId == portfolioId
+                && accountIds.Contains((long)account.TenantAccountId))
+            .Select(account => (long)account.Id);
+        var workOrderIds = _db.WorkOrders.Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId).Select(w => (long)w.Id);
+        var inspectionIds = _db.Inspections.Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId).Select(i => (long)i.Id);
         var expenseIds = _db.Expenses
             .Where(e => e.PortfolioId == portfolioId
-                && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
-            .Select(e => e.Id);
+                && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains((long)e.WorkOrderId.Value))))
+            .Select(e => (long)e.Id);
 
         var legalArtifactFileIds = _db.LegalDocumentArtifacts
             .Where(artifact => artifact.PortfolioId == portfolioId
@@ -602,6 +621,13 @@ public class UnitDashboardService : IUnitDashboardService
                     && (agreement.IssuedArtifactId == artifact.Id || agreement.ExecutedArtifactId == artifact.Id)
                     && agreement.LeaseManagement!.UnitId == unitId))
             .Select(artifact => artifact.StoredFileId);
+
+        var legalArtifactIds = _db.LegalDocumentArtifacts
+            .Where(artifact => artifact.PortfolioId == portfolioId
+                && _db.LeaseAgreements.Any(agreement => agreement.PortfolioId == portfolioId
+                    && (agreement.IssuedArtifactId == artifact.Id || agreement.ExecutedArtifactId == artifact.Id)
+                    && relationshipIds.Contains(agreement.LeaseManagementId)))
+            .Select(artifact => (long)artifact.Id);
 
         var ledgerSourceFileIds = _db.TenantLedgerEntries
             .Where(entry => entry.PortfolioId == portfolioId
@@ -616,6 +642,11 @@ public class UnitDashboardService : IUnitDashboardService
                 || ledgerSourceFileIds.Contains(file.Id)
                 || (file.EntityId != null && (
                     (file.EntityType == "Unit" && file.EntityId == unitId)
+                    || (file.EntityType == nameof(LeaseAgreement) && agreementIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == nameof(LegalDocumentArtifact) && legalArtifactIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == nameof(TenantAccount) && accountIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == nameof(TenantLedgerEntry) && ledgerEntryIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == nameof(SecurityDepositAccount) && depositAccountIds.Contains(file.EntityId.Value))
                     || (file.EntityType == "Expense" && expenseIds.Contains(file.EntityId.Value))
                     || (file.EntityType == "WorkOrder" && workOrderIds.Contains(file.EntityId.Value))
                     || (file.EntityType == "Inspection" && inspectionIds.Contains(file.EntityId.Value))))));
