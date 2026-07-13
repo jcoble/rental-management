@@ -127,6 +127,7 @@ public sealed class RenderedNotice
     public DateTime RenderedAtUtc { get; set; }
     public int? ApprovedByUserId { get; set; }
     public DateTime? ApprovedAtUtc { get; set; }
+    public Portfolio? Portfolio { get; set; }
 }
 
 /// <summary>One durable destination and its provider/outbox evidence.</summary>
@@ -161,4 +162,5 @@ public sealed class TenantNoticeWorkItem
     public Guid? ClaimToken { get; set; }
     public DateTime? ClaimExpiresAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; }
+    public TenantNoticePolicy? Policy { get; set; }
 }

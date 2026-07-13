@@ -139,14 +139,20 @@ internal static class LeaseEffectiveClockSql
         VOLATILE
         PARALLEL UNSAFE
         AS $function$
+          WITH statement_clock AS MATERIALIZED (
+            SELECT statement_timestamp() AS "NowUtc"
+          )
           SELECT CASE COALESCE(clock_state."Mode", 'Real')
             WHEN 'Frozen' THEN clock_state."SimAnchorUtc"
-            WHEN 'Offset' THEN statement_timestamp()
+            WHEN 'Offset' THEN statement_clock."NowUtc"
               + (clock_state."SimAnchorUtc" - clock_state."RealAnchorUtc")
-            ELSE statement_timestamp()
+            ELSE statement_clock."NowUtc"
           END
-          FROM (SELECT 1) AS singleton
-          LEFT JOIN "SimulationClocks" AS clock_state ON clock_state."Id" = 1;
+          FROM "Portfolios" AS portfolio
+          CROSS JOIN statement_clock
+          LEFT JOIN "SimulationClocks" AS clock_state ON clock_state."Id" = 1
+          WHERE portfolio."Id" = portfolio_id
+            AND portfolio."DeletedAt" IS NULL;
         $function$;
         """;
 
@@ -165,7 +171,8 @@ internal static class LeaseEffectiveClockSql
           FROM "Portfolios" AS portfolio
           LEFT JOIN "SimulationClocks" AS clock_state ON clock_state."Id" = 1
           CROSS JOIN effective_time
-          WHERE portfolio."Id" = portfolio_id;
+          WHERE portfolio."Id" = portfolio_id
+            AND portfolio."DeletedAt" IS NULL;
         $function$;
         """;
 }
@@ -181,6 +188,7 @@ internal static class LeaseAgreementStatusViewSql
           SELECT portfolio."Id" AS "PortfolioId",
                  rc_business_date(portfolio."Id") AS "BusinessDate"
           FROM "Portfolios" AS portfolio
+          WHERE portfolio."DeletedAt" IS NULL
         )
         SELECT agreement."PortfolioId",
                agreement."LeaseManagementId",
@@ -395,6 +403,7 @@ internal static class LeaseManagementLifecycleViewSql
           CROSS JOIN LATERAL (
             SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
           ) AS effective_time
+          WHERE portfolio."DeletedAt" IS NULL
         )
         SELECT management."PortfolioId",
                management."PropertyId",
@@ -555,6 +564,19 @@ internal static class LeaseReconciliationExceptionViewSql
         "CREATE VIEW \"vw_lease_reconciliation_exceptions\" WITH (security_invoker = true) AS\n" + Definition;
 
     public const string Definition = """
+        WITH effective_portfolio_time AS MATERIALIZED (
+          SELECT portfolio."Id" AS "PortfolioId",
+                 effective_time."NowUtc",
+                 (effective_time."NowUtc" AT TIME ZONE
+                    COALESCE(NULLIF(clock_state."TimeZoneId", ''), portfolio."TimeZone"))::date
+                   AS "BusinessDate"
+          FROM "Portfolios" AS portfolio
+          LEFT JOIN "SimulationClocks" AS clock_state ON clock_state."Id" = 1
+          CROSS JOIN LATERAL (
+            SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
+          ) AS effective_time
+          WHERE portfolio."DeletedAt" IS NULL
+        )
         SELECT lifecycle."PortfolioId",
                lifecycle."PropertyId",
                lifecycle."UnitId",
@@ -588,10 +610,8 @@ internal static class LeaseReconciliationExceptionViewSql
                'ReturnedPossessionMissingTurnover'::text,
                'Possession was returned without an open turnover period.'::text
         FROM "LeaseManagements" AS management
-        JOIN LATERAL (
-          SELECT rc_effective_now_utc(management."PortfolioId") AS "NowUtc",
-                 rc_business_date(management."PortfolioId") AS "BusinessDate"
-        ) AS effective_time ON TRUE
+        JOIN effective_portfolio_time AS effective_time
+          ON effective_time."PortfolioId" = management."PortfolioId"
         LEFT JOIN "TenantAccounts" AS account
           ON account."PortfolioId" = management."PortfolioId"
          AND account."LeaseManagementId" = management."Id"
@@ -641,10 +661,8 @@ internal static class LeaseReconciliationExceptionViewSql
         JOIN "LeaseManagements" AS management
           ON management."PortfolioId" = renewal."PortfolioId"
          AND management."Id" = renewal."LeaseManagementId"
-        JOIN LATERAL (
-          SELECT rc_effective_now_utc(renewal."PortfolioId") AS "NowUtc",
-                 rc_business_date(renewal."PortfolioId") AS "BusinessDate"
-        ) AS effective_time ON TRUE
+        JOIN effective_portfolio_time AS effective_time
+          ON effective_time."PortfolioId" = renewal."PortfolioId"
         LEFT JOIN "TenantAccounts" AS account
           ON account."PortfolioId" = management."PortfolioId"
          AND account."LeaseManagementId" = management."Id"
@@ -685,10 +703,8 @@ internal static class LeaseReconciliationExceptionViewSql
            (SELECT addendum."LeaseManagementId" FROM "LeaseAddenda" AS addendum
             WHERE addendum."PortfolioId" = request."PortfolioId"
               AND addendum."Id" = request."LeaseAddendumId"))
-        JOIN LATERAL (
-          SELECT rc_effective_now_utc(request."PortfolioId") AS "NowUtc",
-                 rc_business_date(request."PortfolioId") AS "BusinessDate"
-        ) AS effective_time ON TRUE
+        JOIN effective_portfolio_time AS effective_time
+          ON effective_time."PortfolioId" = request."PortfolioId"
         LEFT JOIN "TenantAccounts" AS account
           ON account."PortfolioId" = management."PortfolioId"
          AND account."LeaseManagementId" = management."Id"
@@ -709,10 +725,8 @@ internal static class LeaseReconciliationExceptionViewSql
         JOIN "LeaseManagements" AS management
           ON management."PortfolioId" = account."PortfolioId"
          AND management."Id" = account."LeaseManagementId"
-        JOIN LATERAL (
-          SELECT rc_effective_now_utc(attempt."PortfolioId") AS "NowUtc",
-                 rc_business_date(attempt."PortfolioId") AS "BusinessDate"
-        ) AS effective_time ON TRUE
+        JOIN effective_portfolio_time AS effective_time
+          ON effective_time."PortfolioId" = attempt."PortfolioId"
         WHERE attempt."ProviderObjectId" IS NOT NULL
           AND (attempt."State" = 'Succeeded' OR attempt."SettledAtUtc" IS NOT NULL)
           AND NOT EXISTS (
@@ -740,10 +754,8 @@ internal static class LeaseReconciliationExceptionViewSql
         JOIN "LeaseManagements" AS management
           ON management."PortfolioId" = account."PortfolioId"
          AND management."Id" = account."LeaseManagementId"
-        JOIN LATERAL (
-          SELECT rc_effective_now_utc(entry."PortfolioId") AS "NowUtc",
-                 rc_business_date(entry."PortfolioId") AS "BusinessDate"
-        ) AS effective_time ON TRUE
+        JOIN effective_portfolio_time AS effective_time
+          ON effective_time."PortfolioId" = entry."PortfolioId"
         WHERE attempt."ProviderObjectId" IS NOT NULL
           AND attempt."State" <> 'Succeeded'
           AND attempt."SettledAtUtc" IS NULL;

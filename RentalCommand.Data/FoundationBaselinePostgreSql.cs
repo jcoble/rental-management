@@ -30,10 +30,12 @@ internal static class FoundationBaselinePostgreSql
         AccountingParkedTransactionViewSql.Create,
         BuildRolesAndGrantSql(),
         BuildCreateRlsSql(),
+        CreateSandboxGraduationGlobalDeleteGuards,
     ];
 
     internal static IReadOnlyList<string> DropStatements { get; } =
     [
+        DropSandboxGraduationGlobalDeleteGuards,
         BuildDropRlsSql(),
         BuildRevokeRoleGrantsSql(),
         AccountingParkedTransactionViewSql.Drop,
@@ -265,27 +267,72 @@ internal static class FoundationBaselinePostgreSql
         "DocumentTemplateFields", "ExpenseLineItems", "InspectionItems", "Inspections",
         "InspectionTemplateItems", "InspectionTemplates", "LeaseAddendumFinancialEffects",
         "LeaseAddendumSigners", "LeaseAgreementSigners", "MembershipRoleAssignmentProperties",
-        "OAuthStates", "TeamRoutingRuleRecipients",
+        "OAuthStates", "TeamRoutingRuleRecipients", "TeamRoutingRules",
     };
 
-    // Exact set-based delete inventory in SandboxService.WipePortfolioDataAsync. Tables absent from
-    // ApiDeleteTables are durable canonical/history surfaces whose DELETE policy accepts only the
-    // dedicated SandboxGraduation bypass reason.
+    // Exact set-based delete inventory in SandboxService.WipePortfolioDataAsync. Portfolio-owned
+    // operational facts are removed when a sandbox graduates; reusable workspace/security/device
+    // configuration is explicitly classified in SandboxGraduationPreservedTables below. Tables
+    // absent from ApiDeleteTables are durable canonical/history surfaces whose DELETE policy accepts
+    // only the dedicated SandboxGraduation bypass reason.
     internal static readonly IReadOnlySet<string> SandboxGraduationDeleteTables =
         new HashSet<string>(StringComparer.Ordinal)
         {
+            "AccountingEntityMappings", "AccountingMappingPromotionJobs", "AccountingSyncMaps",
             "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
-            "Appointments", "AuditLogs", "BankConnections", "BankTransactions",
-            "ConversationMessages", "Conversations", "Expenses", "InspectionItems", "Inspections",
-            "LeaseAddenda", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
-            "LeaseAgreements", "LeaseAgreementSigners", "LeaseManagementParties",
-            "LeaseManagements", "LeaseRenewalAddendumDecisions", "NoticeDrafts", "OwnerEntities",
-            "Owners", "Properties", "RecurringMaintenanceTasks", "RentalApplications", "ScanBatches",
-            "ScanDrafts", "SecurityDepositAccounts", "SecurityDepositEntries", "StoredFiles",
-            "TenantAccountConditionPeriods", "TenantAccounts", "TenantAutopayEnrollments",
-            "TenantLedgerAllocations", "TenantLedgerEntries", "TenantPaymentAttempts",
-            "TenantUserAccesses", "Tenants", "UnitOperationalPeriods", "Units", "VendorDispatches",
-            "VendorRatings", "Vendors", "WorkOrders", "WorkOrderStatusEvents",
+            "ApplicationFinancialAccounts", "ApplicationFinancialEntries",
+            "Appointments", "AtomicAuditLogs", "AtomicCommandReceipts", "AuditLogs",
+            "BankTransactions", "CapitalAssets", "ConversationMessages",
+            "Conversations", "DocumentTemplateFields", "DocumentTemplates", "EvictionCaseEvents",
+            "EvictionCaseRespondents", "EvictionCases", "ExpenseLineItems", "Expenses",
+            "ExternalListingSignals", "InspectionItems", "Inspections", "LeaseAddenda",
+            "LeaseAddendumFinancialEffects", "LeaseAddendumSigners", "LeaseAgreements",
+            "LeaseAgreementSigners", "LeaseManagementParties", "LeaseManagements",
+            "LeaseRenewalAddendumDecisions", "LegalDocumentArtifacts", "ListingPhotos",
+            "ListingPublications", "LoanPayments", "Loans", "NoticeDeliveryEvidence",
+            "MembershipRoleAssignmentProperties",
+            "NoticeDrafts", "Notifications", "OAuthStates", "OutboxMessages", "OwnerDistributions",
+            "OwnerEntities", "OwnerUserAccesses", "Owners", "PendingFileUploads",
+            "PlaidTokenExchangeAttempts", "PortalMessages", "Properties", "PropertyDispositions",
+            "ProviderInboxEvents", "QueuedJobs", "RecurringExpenses", "RecurringMaintenanceTasks",
+            "RenderedNotices", "RentalApplications", "RentalListings", "ScanBatches", "ScanDrafts",
+            "SecurityDepositAccounts", "SecurityDepositEntries", "SignatureAuditEvents",
+            "SignatureRequests", "SignatureSigners", "StoredFiles", "TenantAccountConditionPeriods", "TenantAccounts",
+            "TenantAutopayEnrollments", "TenantLedgerAllocations", "TenantLedgerEntries",
+            "TenantNoticeWorkItems", "TenantPaymentAttempts", "TenantUserAccesses", "TeamRoutingRuleRecipients",
+            "TeamRoutingRules", "Tenants",
+            "UnitOperationalPeriods", "Units", "VendorDispatches", "VendorRatings",
+            "Vendors", "WorkOrders", "WorkOrderStatusEvents",
+        };
+
+    // Explicit complement of the portfolio/transitive model above. These rows are workspace identity,
+    // authorization, device registration, or reusable configuration and must survive graduation.
+    // Global system catalogs and the Portfolio row are classified separately by the baseline model.
+    internal static readonly IReadOnlySet<string> SandboxGraduationPreservedTables =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AccountingConnections", "BankConnections",
+            "DeviceTokens", "InspectionTemplateItems", "InspectionTemplates",
+            "MembershipRoleAssignments",
+            "NotificationPreferences", "NotificationSettings", "TenantNoticePolicies",
+            "UserAccounts", "UserAlertPreferences", "WorkspaceAccessContexts", "WorkspaceMemberships",
+            "WorkspaceNoticeTemplateVersions",
+        };
+
+    internal static readonly IReadOnlySet<string> SandboxGraduationGlobalDeleteTables =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AtomicCommandReceipts", "OutboxMessages", "ProviderInboxEvents",
+        };
+
+    // These tables require row-level classification: templates use explicit seed provenance, their
+    // fields follow the parent, and files referenced by preserved user templates survive.
+    internal static readonly IReadOnlySet<string> SandboxGraduationSelectiveDeleteTables =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "DocumentTemplateFields", "DocumentTemplates", "StoredFiles",
+            "AccountingEntityMappings", "AccountingSyncMaps", "MembershipRoleAssignmentProperties",
+            "TeamRoutingRuleRecipients", "TeamRoutingRules",
         };
 
     private static readonly HashSet<string> ApiMutableTables = new(StringComparer.Ordinal)
@@ -382,7 +429,6 @@ internal static class FoundationBaselinePostgreSql
     };
 
     private const string CreateAuditSearchInfrastructure = """
-        CREATE EXTENSION IF NOT EXISTS pg_trgm;
         CREATE INDEX IF NOT EXISTS "IX_AuditLogs_EntityType_trgm"
           ON "AuditLogs" USING gin (lower("EntityType") gin_trgm_ops);
         CREATE INDEX IF NOT EXISTS "IX_AuditLogs_ActorLabel_trgm"
@@ -406,13 +452,31 @@ internal static class FoundationBaselinePostgreSql
             BEGIN
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_api') THEN
                 CREATE ROLE rentalcommand_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-              ELSE
-                ALTER ROLE rentalcommand_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+              ELSIF EXISTS (
+                SELECT 1 FROM pg_roles
+                WHERE rolname = 'rentalcommand_api'
+                  AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+              ) OR EXISTS (
+                SELECT 1
+                FROM pg_auth_members membership
+                JOIN pg_roles member_role ON member_role.oid = membership.member
+                WHERE member_role.rolname = 'rentalcommand_api'
+              ) THEN
+                RAISE EXCEPTION 'Existing role rentalcommand_api has incompatible cluster-wide attributes';
               END IF;
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_engine') THEN
                 CREATE ROLE rentalcommand_engine NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-              ELSE
-                ALTER ROLE rentalcommand_engine NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+              ELSIF EXISTS (
+                SELECT 1 FROM pg_roles
+                WHERE rolname = 'rentalcommand_engine'
+                  AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+              ) OR EXISTS (
+                SELECT 1
+                FROM pg_auth_members membership
+                JOIN pg_roles member_role ON member_role.oid = membership.member
+                WHERE member_role.rolname = 'rentalcommand_engine'
+              ) THEN
+                RAISE EXCEPTION 'Existing role rentalcommand_engine has incompatible cluster-wide attributes';
               END IF;
             END
             $role$;
@@ -452,11 +516,12 @@ internal static class FoundationBaselinePostgreSql
         statements.Add(BuildSequenceGrantSql(EngineRole, MappedTables.Where(table => EngineOperations(table).HasFlag(TableOperation.Insert)), revoke: true));
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_api;");
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_engine;");
-        statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE rentalcommand_api, rentalcommand_engine FROM %I', current_user); END $revoke$;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_api', current_database()); END $revoke$;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_engine', current_database()); END $revoke$;");
 
-        // Roles are shared provisioning objects. Down removes this baseline's grants but never drops them.
+        // Roles and their membership are cluster-wide provisioning objects. Down removes only this
+        // database's grants; revoking current_user membership here could break another database that
+        // deliberately shares the same runtime roles.
         return string.Join(Environment.NewLine, statements);
     }
 
@@ -465,13 +530,19 @@ internal static class FoundationBaselinePostgreSql
         var statements = new List<string>();
         statements.AddRange(DirectPortfolioTables.Select(table =>
             RequiresSandboxGraduationDelete(table)
-                ? CreateSandboxGraduationDeletePolicySql(table, PortfolioPredicate)
+                ? CreateSandboxGraduationDeletePolicySql(
+                    table,
+                    PortfolioPredicate,
+                    DirectSandboxGraduationPredicate)
                 : CreatePolicySql(table, PortfolioPredicate)));
         statements.Add(CreatePolicySql("Portfolios", PortfolioSelfPredicate));
         statements.Add(BuildInspectionTemplatePoliciesSql());
         statements.AddRange(ChildPortfolioTables.Where(policy => policy.Table != "InspectionTemplateItems")
             .Select(policy => RequiresSandboxGraduationDelete(policy.Table)
-                ? CreateSandboxGraduationDeletePolicySql(policy.Table, ChildPredicate(policy))
+                ? CreateSandboxGraduationDeletePolicySql(
+                    policy.Table,
+                    ChildPredicate(policy),
+                    ChildSandboxGraduationPredicate(policy))
                 : CreatePolicySql(policy.Table, ChildPredicate(policy))));
         statements.Add(BuildInspectionTemplateItemPoliciesSql());
         return string.Join(Environment.NewLine, statements);
@@ -504,7 +575,10 @@ internal static class FoundationBaselinePostgreSql
           WITH CHECK {predicate};
         """;
 
-    private static string CreateSandboxGraduationDeletePolicySql(string table, string predicate) => $"""
+    private static string CreateSandboxGraduationDeletePolicySql(
+        string table,
+        string ordinaryPredicate,
+        string sandboxDeletePredicate) => $"""
         ALTER TABLE {Quote(table)} ENABLE ROW LEVEL SECURITY;
         ALTER TABLE {Quote(table)} FORCE ROW LEVEL SECURITY;
         DROP POLICY IF EXISTS tenant_isolation ON {Quote(table)};
@@ -512,19 +586,84 @@ internal static class FoundationBaselinePostgreSql
         DROP POLICY IF EXISTS tenant_insert ON {Quote(table)};
         DROP POLICY IF EXISTS tenant_update ON {Quote(table)};
         DROP POLICY IF EXISTS tenant_delete ON {Quote(table)};
-        CREATE POLICY tenant_select ON {Quote(table)} FOR SELECT USING {predicate};
-        CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK {predicate};
-        CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING {predicate} WITH CHECK {predicate};
+        CREATE POLICY tenant_select ON {Quote(table)} FOR SELECT USING {ordinaryPredicate};
+        CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK {ordinaryPredicate};
+        CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING {ordinaryPredicate} WITH CHECK {ordinaryPredicate};
         CREATE POLICY tenant_delete ON {Quote(table)} FOR DELETE USING
-          (current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation');
+          ({sandboxDeletePredicate} AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation');
         """;
 
     private static bool RequiresSandboxGraduationDelete(string table) =>
         SandboxGraduationDeleteTables.Contains(table) && !ApiDeleteTables.Contains(table);
 
+    internal const string CreateSandboxGraduationGlobalDeleteGuards = """
+        CREATE OR REPLACE FUNCTION rc_require_sandbox_graduation_delete()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          target_portfolio_id integer;
+          row_portfolio_id integer;
+        BEGIN
+          IF current_setting('app.rls_bypass_reason', true) IS DISTINCT FROM 'SandboxGraduation' THEN
+            RAISE EXCEPTION '% may be deleted only during sandbox graduation', TG_TABLE_NAME
+              USING ERRCODE = '42501';
+          END IF;
+
+          target_portfolio_id := NULLIF(current_setting('app.current_portfolio_id', true), '')::integer;
+          IF target_portfolio_id IS NULL OR target_portfolio_id <= 0 THEN
+            RAISE EXCEPTION 'Sandbox graduation requires an explicit portfolio scope'
+              USING ERRCODE = '42501';
+          END IF;
+
+          IF TG_TABLE_NAME = 'AtomicCommandReceipts' THEN
+            IF NOT EXISTS (
+              SELECT 1
+              FROM "AtomicAuditLogs" audit
+              WHERE audit."AttemptId" = (to_jsonb(OLD) ->> 'AttemptId')::uuid
+                AND audit."PortfolioId" = target_portfolio_id
+            ) THEN
+              RAISE EXCEPTION 'AtomicCommandReceipts row is outside sandbox graduation portfolio %', target_portfolio_id
+                USING ERRCODE = '42501';
+            END IF;
+          ELSE
+            row_portfolio_id := NULLIF(to_jsonb(OLD) ->> 'PortfolioId', '')::integer;
+            IF row_portfolio_id IS DISTINCT FROM target_portfolio_id THEN
+              RAISE EXCEPTION '% row is outside sandbox graduation portfolio %', TG_TABLE_NAME, target_portfolio_id
+                USING ERRCODE = '42501';
+            END IF;
+          END IF;
+
+          RETURN OLD;
+        END;
+        $function$;
+
+        CREATE TRIGGER trg_atomic_command_receipt_sandbox_delete
+          BEFORE DELETE ON "AtomicCommandReceipts"
+          FOR EACH ROW EXECUTE FUNCTION rc_require_sandbox_graduation_delete();
+
+        CREATE TRIGGER trg_outbox_message_sandbox_delete
+          BEFORE DELETE ON "OutboxMessages"
+          FOR EACH ROW EXECUTE FUNCTION rc_require_sandbox_graduation_delete();
+
+        CREATE TRIGGER trg_provider_inbox_event_sandbox_delete
+          BEFORE DELETE ON "ProviderInboxEvents"
+          FOR EACH ROW EXECUTE FUNCTION rc_require_sandbox_graduation_delete();
+        """;
+
+    internal const string DropSandboxGraduationGlobalDeleteGuards = """
+        DROP TRIGGER IF EXISTS trg_provider_inbox_event_sandbox_delete ON "ProviderInboxEvents";
+        DROP TRIGGER IF EXISTS trg_outbox_message_sandbox_delete ON "OutboxMessages";
+        DROP TRIGGER IF EXISTS trg_atomic_command_receipt_sandbox_delete ON "AtomicCommandReceipts";
+        DROP FUNCTION IF EXISTS rc_require_sandbox_graduation_delete();
+        """;
+
     private const string PortfolioPredicate =
         "(\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
         "OR current_setting('app.is_admin', true) = 'true')";
+
+    private const string DirectSandboxGraduationPredicate =
+        "\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int";
 
     private const string NullablePortfolioReadPredicate =
         "(\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
@@ -543,6 +682,12 @@ internal static class FoundationBaselinePostgreSql
         "(current_setting('app.is_admin', true) = 'true' OR EXISTS (SELECT 1 FROM " +
         $"{Quote(policy.ParentTable)} AS parent WHERE parent.\"Id\" = " +
         $"{Quote(policy.Table)}.{Quote(policy.ForeignKey)}))";
+
+    private static string ChildSandboxGraduationPredicate(ChildPolicy policy) =>
+        "EXISTS (SELECT 1 FROM " +
+        $"{Quote(policy.ParentTable)} AS parent WHERE parent.\"Id\" = " +
+        $"{Quote(policy.Table)}.{Quote(policy.ForeignKey)} " +
+        "AND parent.\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int)";
 
     private static string BuildInspectionTemplatePoliciesSql() => $"""
         ALTER TABLE "InspectionTemplates" ENABLE ROW LEVEL SECURITY;

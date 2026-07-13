@@ -63,14 +63,19 @@ internal static class AccessEnvelopeViewSql
         "CREATE VIEW \"vw_access_envelopes\" WITH (security_invoker = true) AS\n" + Definition;
 
     public const string Definition = """
-        WITH effective_contexts AS (
+        WITH effective_portfolio_dates AS MATERIALIZED (
+            SELECT portfolio."Id", portfolio."Name",
+                   rc_business_date(portfolio."Id") AS "BusinessDate"
+            FROM "Portfolios" portfolio
+            WHERE portfolio."DeletedAt" IS NULL
+        ), effective_contexts AS (
             SELECT c."Id", c."UserId", c."PortfolioId", c."AccessRevision",
                    c."LastAuthorizedExperience", u."DisplayName", u."Email",
                    p."Name" AS "WorkspaceName", m."Id" AS "MembershipId",
-                   m."DefaultExperience"
+                   m."DefaultExperience", p."BusinessDate"
             FROM "WorkspaceAccessContexts" c
             JOIN "AspNetUsers" u ON u."Id" = c."UserId"
-            JOIN "Portfolios" p ON p."Id" = c."PortfolioId" AND p."DeletedAt" IS NULL
+            JOIN effective_portfolio_dates p ON p."Id" = c."PortfolioId"
             LEFT JOIN "WorkspaceMemberships" m
               ON m."AccessContextId" = c."Id" AND m."PortfolioId" = c."PortfolioId"
              AND m."Status" = 'Active' AND m."SuspendedAtUtc" IS NULL AND m."RevokedAtUtc" IS NULL
@@ -90,9 +95,9 @@ internal static class AccessEnvelopeViewSql
                     ON lp."Id" = ta."LeaseManagementPartyId" AND lp."PortfolioId" = ta."PortfolioId"
                   WHERE ta."AccessContextId" = c."Id" AND ta."ApplicationUserId" = c."UserId"
                     AND ta."PortfolioId" = c."PortfolioId" AND ta."RevokedAtUtc" IS NULL
-                    AND lp."EffectiveFrom" <= rc_business_date(c."PortfolioId")
+                    AND lp."EffectiveFrom" <= p."BusinessDate"
                     AND (lp."EffectiveThrough" IS NULL
-                         OR lp."EffectiveThrough" >= rc_business_date(c."PortfolioId"))))
+                         OR lp."EffectiveThrough" >= p."BusinessDate")))
         ), effective_assignments AS (
             SELECT a."Id", a."WorkspaceMembershipId", a."PortfolioId", a."RoleProfileId",
                    a."Status", a."ScopeKind", r."Key" AS "RoleKey",
@@ -150,9 +155,9 @@ internal static class AccessEnvelopeViewSql
                 ON lp."Id" = ta."LeaseManagementPartyId" AND lp."PortfolioId" = ta."PortfolioId"
               WHERE ta."AccessContextId" = ec."Id" AND ta."ApplicationUserId" = ec."UserId"
                 AND ta."PortfolioId" = ec."PortfolioId" AND ta."RevokedAtUtc" IS NULL
-                AND lp."EffectiveFrom" <= rc_business_date(ec."PortfolioId")
+                AND lp."EffectiveFrom" <= ec."BusinessDate"
                 AND (lp."EffectiveThrough" IS NULL
-                     OR lp."EffectiveThrough" >= rc_business_date(ec."PortfolioId")))
+                     OR lp."EffectiveThrough" >= ec."BusinessDate"))
         ), experience_json AS (
             SELECT ec."Id" AS "AccessContextId",
                    jsonb_agg(x."Experience" ORDER BY x."SortOrder") AS "Experiences"

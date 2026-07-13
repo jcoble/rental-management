@@ -32,6 +32,12 @@ public class DocumentTemplate : IAuditable, IPortfolioScoped
     /// <summary>True when this is the portfolio-wide default for its kind.</summary>
     public bool DefaultForPortfolio { get; set; }
 
+    /// <summary>
+    /// Provenance for the disposable template created with sandbox demo facts. User-created templates
+    /// remain false and survive sandbox graduation.
+    /// </summary>
+    public bool IsSandboxSeeded { get; set; }
+
     /// <summary>Optional property-specific default; null means portfolio-wide.</summary>
     public int? PropertyId { get; set; }
 
@@ -48,4 +54,3 @@ public class DocumentTemplate : IAuditable, IPortfolioScoped
     public StoredFile? CompiledStoredFile { get; set; }
     public List<DocumentTemplateField> Fields { get; set; } = [];
 }
-

@@ -86,6 +86,12 @@ public class SandboxServiceTests : IDisposable
         (await _ctx.Db.Units.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.LeaseManagements.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.LeaseAgreements.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.LeaseAgreementSigners.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.LegalDocumentArtifacts.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.SignatureRequests.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.SignatureSigners.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.SignatureAuditEvents.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.StoredFiles.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.TenantAccounts.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.TenantLedgerEntries.IgnoreQueryFilters().CountAsync()).Should().Be(0);
         (await _ctx.Db.Expenses.IgnoreQueryFilters().CountAsync()).Should().Be(0);
@@ -115,6 +121,149 @@ public class SandboxServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GoLive_PreservesIdentityAndUserTemplates_WithTheirFiles()
+    {
+        MarkSandbox(portfolioId: 1, DateTime.UtcNow);
+        SeedRichGraph(portfolioId: 1);
+        var now = DateTime.UtcNow;
+
+        var userTemplateFile = new StoredFile
+        {
+            PortfolioId = 1,
+            FileName = "landlord-lease.pdf",
+            FilePath = "templates/landlord-lease.pdf",
+            ContentType = "application/pdf",
+            FileSize = 25,
+            EntityType = nameof(DocumentTemplate),
+            UploadedAt = now,
+        };
+        var sandboxTemplateFile = new StoredFile
+        {
+            PortfolioId = 1,
+            FileName = "demo-lease.pdf",
+            FilePath = "templates/demo-lease.pdf",
+            ContentType = "application/pdf",
+            FileSize = 20,
+            EntityType = nameof(DocumentTemplate),
+            UploadedAt = now,
+        };
+        var userTemplate = NewTemplate("Landlord lease", userTemplateFile, isSandboxSeeded: false, now);
+        var sandboxTemplate = NewTemplate("Demo lease", sandboxTemplateFile, isSandboxSeeded: true, now);
+        _ctx.Db.DocumentTemplates.AddRange(userTemplate, sandboxTemplate);
+        var sandboxPropertyId = await _ctx.Db.Properties.Select(property => property.Id).FirstAsync();
+        _ctx.Db.TeamRoutingRules.AddRange(
+            new TeamRoutingRule
+            {
+                PortfolioId = 1,
+                Topic = TeamRoutingTopic.WorkOrders,
+                PropertyId = null,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            },
+            new TeamRoutingRule
+            {
+                PortfolioId = 1,
+                Topic = TeamRoutingTopic.ApplicationsAndLeasing,
+                PropertyId = sandboxPropertyId,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            });
+        _ctx.Db.UserAccounts.Add(new UserAccount
+        {
+            PortfolioId = 1,
+            Email = "operator@example.test",
+            DisplayName = "Portfolio operator",
+            PasswordHash = "not-used-by-this-test",
+            Role = UserRole.Admin,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var accountingConnection = new AccountingConnection
+        {
+            PortfolioId = 1,
+            Provider = AccountingProvider.QuickBooks,
+            Status = AccountingConnectionStatus.Connected,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.AccountingConnections.Add(accountingConnection);
+        await _ctx.Db.SaveChangesAsync();
+        var sandboxTenantId = await _ctx.Db.Tenants.Select(tenant => tenant.Id).FirstAsync();
+        var sandboxLedgerEntryId = await _ctx.Db.TenantLedgerEntries.Select(entry => entry.Id).FirstAsync();
+        _ctx.Db.AccountingEntityMappings.AddRange(
+            new AccountingEntityMapping
+            {
+                PortfolioId = 1,
+                AccountingConnectionId = accountingConnection.Id,
+                LocalEntityType = "ScheduleECategory",
+                LocalEnumValue = "Repairs",
+                ExternalType = "Account",
+                ExternalId = "enum-account",
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new AccountingEntityMapping
+            {
+                PortfolioId = 1,
+                AccountingConnectionId = accountingConnection.Id,
+                LocalEntityType = "Tenant",
+                LocalEntityId = sandboxTenantId,
+                ExternalType = "Customer",
+                ExternalId = "sandbox-tenant",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        _ctx.Db.AccountingSyncMaps.AddRange(
+            new AccountingSyncMap
+            {
+                PortfolioId = 1,
+                AccountingConnectionId = accountingConnection.Id,
+                Direction = "Import",
+                ExternalType = "Payment",
+                ExternalId = "parked-payment",
+                Status = "NeedsReview",
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new AccountingSyncMap
+            {
+                PortfolioId = 1,
+                AccountingConnectionId = accountingConnection.Id,
+                Direction = "Import",
+                ExternalType = "Payment",
+                ExternalId = "sandbox-payment",
+                LocalEntityType = "TenantLedgerEntry",
+                LocalEntityId = sandboxLedgerEntryId,
+                Status = "Imported",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _ctx.Db.SaveChangesAsync();
+
+        await BuildService().GoLiveAsync(1, CancellationToken.None);
+
+        (await _ctx.Db.DocumentTemplates.IgnoreQueryFilters().Select(template => template.Name).ToListAsync())
+            .Should().Equal("Landlord lease");
+        (await _ctx.Db.DocumentTemplateFields.IgnoreQueryFilters().Select(field => field.FieldKey).ToListAsync())
+            .Should().Equal("tenant.fullName");
+        (await _ctx.Db.StoredFiles.IgnoreQueryFilters().Select(file => file.FileName).ToListAsync())
+            .Should().Equal("landlord-lease.pdf");
+        (await _ctx.Db.UserAccounts.IgnoreQueryFilters().Select(account => account.Email).ToListAsync())
+            .Should().Equal("operator@example.test");
+        (await _ctx.Db.TeamRoutingRules.IgnoreQueryFilters().Select(rule => new { rule.Topic, rule.PropertyId }).ToListAsync())
+            .Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new { Topic = TeamRoutingTopic.WorkOrders, PropertyId = (int?)null });
+        (await _ctx.Db.AccountingConnections.IgnoreQueryFilters().CountAsync()).Should().Be(1);
+        (await _ctx.Db.AccountingEntityMappings.IgnoreQueryFilters().Select(mapping => mapping.LocalEnumValue).ToListAsync())
+            .Should().Equal("Repairs");
+        (await _ctx.Db.AccountingSyncMaps.IgnoreQueryFilters().Select(mapping => mapping.ExternalId).ToListAsync())
+            .Should().Equal("parked-payment");
+    }
+
+    [Fact]
     public async Task GoLive_UsesDedicatedBypass_OnlyForGraduationLifetime()
     {
         MarkSandbox(portfolioId: 1, DateTime.UtcNow);
@@ -124,6 +273,7 @@ public class SandboxServiceTests : IDisposable
         await BuildService().GoLiveAsync(1, CancellationToken.None);
 
         _rls.Reasons.Should().Equal(RlsBypassReason.SandboxGraduation);
+        _rls.PortfolioIds.Should().Equal(1);
         _rls.IsBypassActive.Should().BeFalse("the reason-coded lease ends with the transaction");
     }
 
@@ -229,6 +379,7 @@ public class SandboxServiceTests : IDisposable
 
         // Demo data was actually seeded.
         (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
+        (await _ctx.Db.DocumentTemplates.SingleAsync()).IsSandboxSeeded.Should().BeTrue();
         _rls.Reasons.Should().BeEmpty("onboarding setup is not the destructive graduation wipe");
 
         var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
@@ -290,25 +441,66 @@ public class SandboxServiceTests : IDisposable
         _ctx.Db.SaveChanges();
     }
 
+    private static DocumentTemplate NewTemplate(
+        string name,
+        StoredFile file,
+        bool isSandboxSeeded,
+        DateTime now)
+    {
+        var template = new DocumentTemplate
+        {
+            PortfolioId = 1,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Active,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = name,
+            OriginalStoredFile = file,
+            IsSandboxSeeded = isSandboxSeeded,
+            Version = 1,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        template.Fields.Add(new DocumentTemplateField
+        {
+            FieldKey = isSandboxSeeded ? "demo.tenantName" : "tenant.fullName",
+            Label = "Tenant full name",
+            Kind = DocumentTemplateFieldKind.Text,
+            PageNumber = 1,
+            XPct = 0.1,
+            YPct = 0.1,
+            WidthPct = 0.4,
+            HeightPct = 0.05,
+        });
+        return template;
+    }
+
     private sealed class RecordingRlsExecutionContext : IRlsExecutionContext
     {
         private RlsBypassReason? _active;
 
         public bool IsBypassActive => _active is not null;
         public RlsBypassReason? ActiveBypassReason => _active;
+        public int? ActivePortfolioId { get; private set; }
         public List<RlsBypassReason> Reasons { get; } = [];
+        public List<int?> PortfolioIds { get; } = [];
 
-        public IDisposable BeginBypass(RlsBypassReason reason)
+        public IDisposable BeginBypass(RlsBypassReason reason, int? portfolioId = null)
         {
             _active.Should().BeNull("the sandbox service must not nest broad RLS bypass leases");
             _active = reason;
+            ActivePortfolioId = portfolioId;
             Reasons.Add(reason);
+            PortfolioIds.Add(portfolioId);
             return new Lease(this);
         }
 
         private sealed class Lease(RecordingRlsExecutionContext owner) : IDisposable
         {
-            public void Dispose() => owner._active = null;
+            public void Dispose()
+            {
+                owner._active = null;
+                owner.ActivePortfolioId = null;
+            }
         }
     }
 
@@ -388,6 +580,7 @@ public class SandboxServiceTests : IDisposable
             PortfolioId = portfolioId,
             FirstName = "T",
             LastName = portfolioId.ToString(),
+            Email = $"tenant-{portfolioId}@example.test",
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -471,6 +664,130 @@ public class SandboxServiceTests : IDisposable
             CreatedByUserId = actor.Id,
         };
         _ctx.Db.LeaseAgreements.Add(agreement);
+        _ctx.Db.SaveChanges();
+
+        var agreementSigner = new LeaseAgreementSigner
+        {
+            PortfolioId = portfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = tenant.Email!,
+            SigningOrder = 1,
+            IsRequired = true,
+        };
+        _ctx.Db.LeaseAgreementSigners.Add(agreementSigner);
+        _ctx.Db.SaveChanges();
+
+        var issuedFile = new StoredFile
+        {
+            PortfolioId = portfolioId,
+            FileName = $"agreement-{portfolioId}-issued.pdf",
+            FilePath = $"legal/{portfolioId}/issued.pdf",
+            ContentType = "application/pdf",
+            FileSize = 100,
+            EntityType = nameof(LeaseAgreement),
+            EntityId = agreement.Id,
+            UploadedAt = now,
+        };
+        var executedFile = new StoredFile
+        {
+            PortfolioId = portfolioId,
+            FileName = $"agreement-{portfolioId}-executed.pdf",
+            FilePath = $"legal/{portfolioId}/executed.pdf",
+            ContentType = "application/pdf",
+            FileSize = 120,
+            EntityType = nameof(LeaseAgreement),
+            EntityId = agreement.Id,
+            UploadedAt = now,
+        };
+        _ctx.Db.StoredFiles.AddRange(issuedFile, executedFile);
+        _ctx.Db.SaveChanges();
+
+        var issuedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            StoredFileId = issuedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = issuedFile.FilePath,
+            FileName = issuedFile.FileName,
+            ContentType = issuedFile.ContentType,
+            ByteLength = issuedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var executedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            StoredFileId = executedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+            StorageKey = executedFile.FilePath,
+            FileName = executedFile.FileName,
+            ContentType = executedFile.ContentType,
+            ByteLength = executedFile.FileSize,
+            ContentSha256 = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        _ctx.Db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _ctx.Db.SaveChanges();
+
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
+        agreement.UpdatedAtUtc = now;
+        _ctx.Db.SaveChanges();
+
+        var signatureRequest = new SignatureRequest
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseAgreementId = agreement.Id,
+            Provider = "native",
+            IdempotencyKey = $"sandbox-signature-{portfolioId}",
+            Status = SignatureRequestStatus.Completed,
+            Subject = "Sandbox executed agreement",
+            IssuedArtifactId = issuedArtifact.Id,
+            ExecutedArtifactId = executedArtifact.Id,
+            PreparedAtUtc = now,
+            CompletedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var signatureSigner = new SignatureSigner
+        {
+            PortfolioId = portfolioId,
+            AgreementSignerId = agreementSigner.Id,
+            NameSnapshot = agreementSigner.NameSnapshot,
+            EmailSnapshot = agreementSigner.EmailSnapshot,
+            SigningOrder = agreementSigner.SigningOrder,
+            IsRequired = true,
+            TokenHash = new string(portfolioId % 2 == 0 ? 'd' : 'c', 64),
+            TokenExpiresAtUtc = now.AddDays(14),
+            Status = SignatureSignerStatus.Signed,
+            ConsentGivenAtUtc = now,
+            ViewedAtUtc = now,
+            SignedAtUtc = now,
+            SignatureType = SignatureSignatureType.Typed,
+            TypedName = agreementSigner.NameSnapshot,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        signatureRequest.Signers.Add(signatureSigner);
+        signatureRequest.AuditEvents.Add(new SignatureAuditEvent
+        {
+            PortfolioId = portfolioId,
+            SignatureSigner = signatureSigner,
+            Type = SignatureAuditEventType.Completed,
+            OccurredAtUtc = now,
+            Detail = "Sandbox signed agreement fixture.",
+        });
+        _ctx.Db.SignatureRequests.Add(signatureRequest);
         _ctx.Db.SaveChanges();
 
         var rentCharge = new TenantLedgerEntry
