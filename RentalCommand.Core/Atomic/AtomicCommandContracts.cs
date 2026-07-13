@@ -106,6 +106,7 @@ public interface IAtomicWriteAttempt
     IAtomicScanConfirmationPersistence ScanConfirmation { get; }
     IAtomicScheduledFinancePersistence ScheduledFinance { get; }
     IAtomicProviderInboxPersistence ProviderInbox { get; }
+    IAtomicProviderPaymentPersistence ProviderPayments { get; }
     IAtomicTenantMoneyPersistence TenantMoney { get; }
     IAtomicPendingFileUploadPersistence PendingFileUploads { get; }
     IAtomicLeaseMutationPersistence Leasing { get; }
@@ -170,6 +171,33 @@ public interface IAtomicProviderInboxPersistence
         long providerInboxEventId,
         string claimOwner,
         Guid claimToken,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// PostgreSQL-fenced state transitions for durable provider payment attempts. The claim and
+/// transition execute inside the owning atomic command transaction; callers never update attempt
+/// state, provider timestamps, retry facts, or claim fields through tracked EF mutations.
+/// </summary>
+public interface IAtomicProviderPaymentPersistence
+{
+    Task<Guid?> ClaimExactAsync(
+        long paymentAttemptId,
+        int tenantAccountId,
+        int portfolioId,
+        string claimOwner,
+        CancellationToken ct = default);
+
+    Task<bool> TransitionAsync(
+        long paymentAttemptId,
+        int tenantAccountId,
+        int portfolioId,
+        Guid claimToken,
+        TenantPaymentAttemptState state,
+        string? providerObjectId,
+        string? failureCode,
+        string? failureReason,
+        DateTime? nextAttemptAtUtc,
         CancellationToken ct = default);
 }
 

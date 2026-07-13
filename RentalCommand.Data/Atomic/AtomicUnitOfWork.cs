@@ -349,6 +349,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicScanConfirmationPersistence _scanConfirmation;
         private readonly IAtomicScheduledFinancePersistence _scheduledFinance;
         private readonly IAtomicProviderInboxPersistence _providerInbox;
+        private readonly IAtomicProviderPaymentPersistence _providerPayments;
         private readonly IAtomicTenantMoneyPersistence _tenantMoney;
         private readonly IAtomicPendingFileUploadPersistence _pendingFileUploads;
         private readonly IAtomicLeaseMutationPersistence _leasing;
@@ -372,6 +373,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _scanConfirmation = new AtomicScanConfirmationPersistence(db, auditScope, _locking);
             _scheduledFinance = new AtomicScheduledFinancePersistence(db, auditScope);
             _providerInbox = new AtomicProviderInboxPersistence(db, auditScope);
+            _providerPayments = new AtomicProviderPaymentPersistence(db, auditScope);
             _tenantMoney = new AtomicTenantMoneyPersistence(db, auditScope);
             _pendingFileUploads = new AtomicPendingFileUploadPersistence(db, auditScope);
             _leasing = new AtomicLeaseMutationPersistence(db, auditScope);
@@ -388,6 +390,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicScanConfirmationPersistence ScanConfirmation => _scanConfirmation;
         public IAtomicScheduledFinancePersistence ScheduledFinance => _scheduledFinance;
         public IAtomicProviderInboxPersistence ProviderInbox => _providerInbox;
+        public IAtomicProviderPaymentPersistence ProviderPayments => _providerPayments;
         public IAtomicTenantMoneyPersistence TenantMoney => _tenantMoney;
         public IAtomicPendingFileUploadPersistence PendingFileUploads => _pendingFileUploads;
         public IAtomicLeaseMutationPersistence Leasing => _leasing;

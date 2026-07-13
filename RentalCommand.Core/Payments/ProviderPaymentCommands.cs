@@ -126,7 +126,14 @@ public sealed record RecordVerifiedProviderPaymentEventCommand(
     string? ProviderCustomerId = null,
     string? ProviderPaymentMethodId = null) : IAtomicCommandData;
 
-public enum RecordProviderPaymentEventOutcome { Applied, Duplicate, Unmatched }
+public enum RecordProviderPaymentEventOutcome
+{
+    Applied,
+    AlreadyInState,
+    Duplicate,
+    Unmatched,
+    Conflict,
+}
 
 public sealed record RecordVerifiedProviderPaymentEventResult(
     RecordProviderPaymentEventOutcome Outcome,
@@ -142,7 +149,14 @@ public sealed record ReconcileClaimedProviderPaymentEventCommand(
     Guid ClaimToken,
     DateTime ReconciledAtUtc) : IAtomicCommandData;
 
-public enum ReconcileProviderPaymentEventOutcome { Applied, RetryScheduled, DeadLettered }
+public enum ReconcileProviderPaymentEventOutcome
+{
+    Applied,
+    AlreadyInState,
+    RetryScheduled,
+    DeadLettered,
+    Conflict,
+}
 
 public sealed record ReconcileClaimedProviderPaymentEventResult(
     ReconcileProviderPaymentEventOutcome Outcome,

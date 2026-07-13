@@ -77,6 +77,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+        foreach (var statement in TenantAccountPostgreSqlContract.CreateStatements)
+            await db.Database.ExecuteSqlRawAsync(statement);
     }
 
     public async Task DisposeAsync()
@@ -191,6 +193,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         {
             var attempt = Attempt(scenario, "checkout:tenant-charge:" + scenario.ChargeId,
                 paymentIntentId, TenantPaymentAttemptState.Submitted);
+            attempt.NextAttemptAtUtc = DateTime.UtcNow.AddDays(1);
             db.TenantPaymentAttempts.Add(attempt);
             await db.SaveChangesAsync();
             attemptId = attempt.Id;
