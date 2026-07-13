@@ -21,7 +21,7 @@ internal static class WorkerWatchdogEligibilityQuery
         var scanCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["ScanProcessingWorker"]);
         var rentCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["RentChargeWorker"]);
         var lateFeeCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["LateFeeWorker"]);
-        var leaseExpiryCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["LeaseExpiryReminderWorker"]);
+        var tenantNoticeCandidateCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["TenantNoticeCandidateWorker"]);
         var autopayCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["AutopayChargeWorker"]);
         var maintenanceCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["RecurringMaintenanceWorker"]);
         var noticeCutoff = nowUtc.AddSeconds(-WorkerHealthThresholds.WatchdogStuckSeconds["NoticeDraftWorker"]);
@@ -40,7 +40,7 @@ internal static class WorkerWatchdogEligibilityQuery
                     (heartbeat.WorkerName == "ScanProcessingWorker" && heartbeat.LastHeartbeatUtc < scanCutoff) ||
                     (heartbeat.WorkerName == "RentChargeWorker" && heartbeat.LastHeartbeatUtc < rentCutoff) ||
                     (heartbeat.WorkerName == "LateFeeWorker" && heartbeat.LastHeartbeatUtc < lateFeeCutoff) ||
-                    (heartbeat.WorkerName == "LeaseExpiryReminderWorker" && heartbeat.LastHeartbeatUtc < leaseExpiryCutoff) ||
+                    (heartbeat.WorkerName == "TenantNoticeCandidateWorker" && heartbeat.LastHeartbeatUtc < tenantNoticeCandidateCutoff) ||
                     (heartbeat.WorkerName == "AutopayChargeWorker" && heartbeat.LastHeartbeatUtc < autopayCutoff) ||
                     (heartbeat.WorkerName == "RecurringMaintenanceWorker" && heartbeat.LastHeartbeatUtc < maintenanceCutoff) ||
                     (heartbeat.WorkerName == "NoticeDraftWorker" && heartbeat.LastHeartbeatUtc < noticeCutoff) ||

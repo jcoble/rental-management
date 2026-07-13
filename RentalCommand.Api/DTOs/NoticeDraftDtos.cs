@@ -46,7 +46,7 @@ public class GenerateNoticeDraftsRequest
     public int? TenantAccountId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
 
-    /// <summary>One of <c>RentReminder</c>, <c>RenewalOffer</c>, <c>MonthToMonthConversion</c>, <c>MoveOutReminder</c>, <c>LateRentNotice</c>; null = all applicable.</summary>
+    /// <summary>Canonical tenant-notice automation key; null = all applicable.</summary>
     public string? NoticeType { get; set; }
 }
 

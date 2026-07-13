@@ -10,7 +10,7 @@ namespace RentalCommand.Engine.Workers;
 /// <see cref="SimWorkerKeys.RunDue"/> key runs the M4 due-order batch and sums the created counts.
 /// Dev-only; registered only when <c>Simulation:Enabled</c>. Method names are hardcoded per service
 /// (verified): rent/debt/recurring → <c>GenerateAsync</c>, late-fee → <c>AssessAsync</c>, autopay →
-/// <c>ChargeDueAsync</c>, lease-expiry → <c>RemindAsync</c>, notice → <c>GenerateAllAsync</c>,
+/// <c>ChargeDueAsync</c>, tenant-notice candidates → <c>GenerateDueAsync</c>, notice → <c>GenerateAllAsync</c>,
 /// daily-briefing → <c>EnqueueDueAsync(null, ct)</c> (null ⇒ use the injected sim clock).
 /// </summary>
 public sealed class SimWorkerRegistry
@@ -23,7 +23,8 @@ public sealed class SimWorkerRegistry
         {
             [SimWorkerKeys.RentCharge]           = (sp, ct) => sp.GetRequiredService<IRentChargeService>().GenerateAsync(ct),
             [SimWorkerKeys.NoticeDraft]          = (sp, ct) => sp.GetRequiredService<INoticeDraftGenerationService>().GenerateAllAsync(ct),
-            [SimWorkerKeys.LeaseExpiryReminder]  = (sp, ct) => sp.GetRequiredService<ILeaseExpiryReminderService>().RemindAsync(ct),
+            [SimWorkerKeys.TenantNoticeCandidates] = (sp, ct) =>
+                sp.GetRequiredService<ITenantNoticeCandidateGenerationService>().GenerateDueAsync(ct),
             [SimWorkerKeys.LateFee]              = (sp, ct) => sp.GetRequiredService<ILateFeeService>().AssessAsync(ct),
             [SimWorkerKeys.Autopay]              = (sp, ct) => sp.GetRequiredService<IAutopayChargeService>().ChargeDueAsync(ct),
             [SimWorkerKeys.DebtService]          = (sp, ct) => sp.GetRequiredService<IDebtServiceService>().GenerateAsync(ct),

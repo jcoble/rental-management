@@ -139,7 +139,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         (await db.AtomicAuditLogs.CountAsync(log => log.EntityType == nameof(ConversationMessage)))
             .Should().Be(2);
         _probe.Commands.Count(sql => sql.Contains(
-            "ScopedNotificationRecipients: tenant lease relationship and assignment scope",
+            "ScopedNotificationRecipients: canonical tenant relationship and assignment scope",
             StringComparison.Ordinal)).Should().Be(2);
     }
 

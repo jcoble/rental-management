@@ -71,11 +71,10 @@ internal static class ScopedNotificationRecipientQuery
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(capabilityKey);
 
-        // The relationship boundary is an effective issued lease for the tenant (primary or
-        // additional household member). The assignment must authorize that same lease property.
-        // Draft, pending-signature, void, expired, terminated, deleted, future, and moved-out leases
-        // cannot widen notification visibility. Active/NoticeGiven remains valid after EndDate for
-        // the existing month-to-month representation, until an authoritative move-out/status fact.
+        // The relationship boundary is an effective party in a reconciled canonical lifecycle with
+        // one governing Agreement and TenantAccount. TenantUserAccess is intentionally not required
+        // here: an inbound SMS participant may be a valid party without portal credentials. Portal
+        // delivery resolves active TenantUserAccess separately.
         return (
             from user in attempt.Persistence.Query<ApplicationUser>()
             join context in attempt.Persistence.Query<WorkspaceAccessContext>()
@@ -105,22 +104,30 @@ internal static class ScopedNotificationRecipientQuery
                     profileCapability.CapabilityDefinition!.Key == capabilityKey
                     && profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
                         CapabilityAuthorizationTargetKind.Property)
-                && attempt.Persistence.Query<Lease>().Any(lease =>
-                    lease.PortfolioId == portfolioId
-                    && lease.DeletedAt == null
-                    && lease.StartDate <= utcNow
-                    && (lease.MoveOutDate == null || lease.MoveOutDate > utcNow)
-                    && (lease.Status == LeaseStatus.Active || lease.Status == LeaseStatus.NoticeGiven)
-                    && (lease.TenantId == tenantId
-                        || lease.LeaseTenants.Any(leaseTenant =>
-                            leaseTenant.PortfolioId == portfolioId && leaseTenant.TenantId == tenantId))
-                    && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                        || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                            && assignment.SelectedProperties.Any(scope =>
-                                scope.PortfolioId == portfolioId
-                                && scope.PropertyId == lease.PropertyId))))
+                && attempt.Persistence.Query<LeaseManagementParty>().Any(party =>
+                    party.PortfolioId == portfolioId
+                    && party.TenantId == tenantId
+                    && attempt.Persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
+                        && lifecycle.CurrentAgreementId != null
+                        && lifecycle.TenantAccountId != null
+                        && !lifecycle.HasReconciliationException
+                        && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                        && attempt.Persistence.Query<LeaseAgreementStatusProjection>().Any(agreement =>
+                            agreement.PortfolioId == portfolioId
+                            && agreement.LeaseManagementId == lifecycle.LeaseManagementId
+                            && agreement.AgreementId == lifecycle.CurrentAgreementId
+                            && agreement.IsGoverning)
+                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                                && assignment.SelectedProperties.Any(scope =>
+                                    scope.PortfolioId == portfolioId
+                                    && scope.PropertyId == lifecycle.PropertyId)))))
             select user.Id)
             .Distinct()
-            .TagWith("ScopedNotificationRecipients: tenant lease relationship and assignment scope");
+            .TagWith("ScopedNotificationRecipients: canonical tenant relationship and assignment scope");
     }
 }

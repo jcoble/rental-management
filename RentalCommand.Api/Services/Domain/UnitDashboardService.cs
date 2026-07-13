@@ -633,7 +633,7 @@ public class UnitDashboardService : IUnitDashboardService
         UnitLifecycleStage.Lease => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.MoveIn => $"/units/{unitId}?tab=lease&action=confirm-move-in",
         UnitLifecycleStage.Active => $"/units/{unitId}?tab=ledger&ledger=rent",
-        UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=RenewalOffer",
+        UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=lease-renewal-offer",
         UnitLifecycleStage.Renewal => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.MoveOut => $"/units/{unitId}?tab=turnover",
         UnitLifecycleStage.Turnover => $"/units/{unitId}?tab=turnover",
