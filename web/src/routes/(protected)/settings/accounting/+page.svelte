@@ -117,7 +117,8 @@
 		switch (type) {
 			case 'Tenant':
 				return 'Tenant';
-			case 'Lease':
+			case 'LeaseManagement':
+			case 'LeaseAgreement':
 				return 'Lease';
 			case 'Vendor':
 				return 'Vendor';

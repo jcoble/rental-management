@@ -12,10 +12,10 @@
 		type DocumentTemplateSignerRole,
 		type UpdateDocumentTemplateFieldRequest
 	} from '$lib/api/endpoints/document-templates';
-	import { leases } from '$lib/api/endpoints/leases';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import { documentFileHref, fileBlob } from '$lib/api/endpoints/documents';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import type { Lease } from '$lib/types';
+	import type { LeaseManagementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -139,9 +139,9 @@
 		queryKey: ['document-template-preview-leases', portfolioId, template?.propertyId ?? null],
 		enabled: viewMode === 'preview' && portfolioId > 0 && !!template,
 		queryFn: () =>
-			leases.listPage(portfolioId, {
+			leaseManagements.listPage({
 				take: 50,
-				sort: '-updatedAt',
+				sort: '-updatedAtUtc',
 				propertyId: template?.propertyId ?? undefined
 			})
 	}));
@@ -149,9 +149,11 @@
 		catalog.find((item) => item.fieldKey === selectedCatalogKey) ?? null
 	);
 	const fields = $derived(template?.fields ?? []);
-	const previewLeases = $derived<Lease[]>(previewLeasesQuery.data?.items ?? []);
+	const previewLeases = $derived<LeaseManagementSummary[]>(
+		(previewLeasesQuery.data?.items ?? []).filter((relationship) => relationship.leaseAgreementId != null)
+	);
 	const selectedPreviewLease = $derived(
-		previewLeases.find((lease) => lease.id === previewLeaseId) ?? null
+		previewLeases.find((relationship) => relationship.leaseAgreementId === previewLeaseId) ?? null
 	);
 	const pageFields = $derived(
 		fields
@@ -215,8 +217,8 @@
 			previewLeaseId = null;
 			return;
 		}
-		if (!previewLeaseId || !leases.some((lease) => lease.id === previewLeaseId)) {
-			previewLeaseId = leases[0].id;
+		if (!previewLeaseId || !leases.some((relationship) => relationship.leaseAgreementId === previewLeaseId)) {
+			previewLeaseId = leases[0].leaseAgreementId ?? null;
 		}
 	});
 
@@ -382,7 +384,7 @@
 
 	async function loadPreviewPdf(leaseId: number, key: string) {
 		try {
-			const blob = await documentTemplates.previewLeasePdf(templateId, leaseId);
+			const blob = await documentTemplates.previewLeaseAgreementPdf(templateId, leaseId);
 			if (loadedPdfKey !== key) {
 				return;
 			}
@@ -884,12 +886,12 @@
 		}
 	}
 
-	function leasePreviewLabel(lease: Lease) {
-		const place = [lease.propertyName, lease.unitNumber ? `Unit ${lease.unitNumber}` : '']
+	function leasePreviewLabel(relationship: LeaseManagementSummary) {
+		const place = [relationship.propertyName, relationship.unitNumber ? `Unit ${relationship.unitNumber}` : '']
 			.filter(Boolean)
 			.join(' · ');
-		const tenant = lease.tenantName ? ` · ${lease.tenantName}` : '';
-		return `${place || `Lease ${lease.leaseNumber}`}${tenant}`;
+		const tenant = relationship.primaryTenantName ? ` · ${relationship.primaryTenantName}` : '';
+		return `${place || relationship.relationshipNumber}${tenant}`;
 	}
 
 	function canvasCursorClass() {
@@ -1084,9 +1086,9 @@
 									disabled={previewLeasesQuery.isLoading || previewLeases.length === 0}
 									data-testid="lease-template-preview-lease-select"
 								>
-									{#each previewLeases as lease (lease.id)}
-										<option value={lease.id}>
-											{leasePreviewLabel(lease)} · {lease.leaseNumber}
+									{#each previewLeases as relationship (relationship.leaseAgreementId)}
+										<option value={relationship.leaseAgreementId}>
+											{leasePreviewLabel(relationship)} · {relationship.agreementNumber}
 										</option>
 									{/each}
 								</select>
@@ -1104,7 +1106,7 @@
 							{:else if selectedPreviewLease}
 								<div class="mt-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
 									<p class="font-semibold">{selectedPreviewLease.propertyName ?? 'Property'}{selectedPreviewLease.unitNumber ? ` · Unit ${selectedPreviewLease.unitNumber}` : ''}</p>
-									<p class="mt-1 text-muted-foreground">{selectedPreviewLease.tenantName ?? 'Tenant'} · {selectedPreviewLease.leaseNumber}</p>
+									<p class="mt-1 text-muted-foreground">{selectedPreviewLease.primaryTenantName ?? 'Tenant'} · {selectedPreviewLease.agreementNumber ?? 'Agreement draft'}</p>
 								</div>
 							{/if}
 

@@ -1,10 +1,13 @@
 import { api } from '../client';
-import type { Appointment, Lease, LeaseQuestionResponse, PaymentStatus, PaymentType, WorkOrder, WorkOrderDetail } from '$lib/types';
 import type {
-	Conversation,
-	ConversationMessage,
-	ConversationSummary
-} from './messages';
+	Appointment,
+	LeaseQuestionResponse,
+	PaymentStatus,
+	PaymentType,
+	WorkOrder,
+	WorkOrderDetail
+} from '$lib/types';
+import type { Conversation, ConversationMessage, ConversationSummary } from './messages';
 
 // Re-export the shared conversation types so portal consumers can import them
 // from here without reaching into the landlord-side module.
@@ -57,17 +60,52 @@ export interface PortalPayment {
 	dueDate: string;
 }
 
+export interface PortalLeaseAgreement {
+	leaseAgreementId: number;
+	versionNumber: number;
+	agreementNumber: string;
+	agreementStatus: string;
+	isGoverning: boolean;
+	changeType: string;
+	termType: string;
+	termStartOn: string;
+	termEndOn?: string | null;
+	baseRentAmount: number;
+	securityDepositObligation: number;
+	lateFeeAmount: number;
+	rentDueDay: number;
+	currency: string;
+	fullyExecutedAtUtc?: string | null;
+	executedStoredFileId?: number | null;
+}
+
+export interface PortalLeaseRelationship {
+	leaseManagementId: number;
+	leaseManagementPublicId: string;
+	portfolioId: number;
+	propertyId: number;
+	unitId: number;
+	tenantId: number;
+	tenantAccountId?: number | null;
+	relationshipNumber: string;
+	lifecycle: string;
+	propertyName: string;
+	unitNumber: string;
+	tenantName: string;
+	agreement?: PortalLeaseAgreement | null;
+}
+
 export const portal = {
 	overview: () => api.get('/portal/overview'),
-	leases: () => api.get<Lease[]>('/portal/leases'),
+	leases: () => api.get<PortalLeaseRelationship[]>('/portal/leases'),
 	/**
 	 * Ask a plain-English question grounded in the tenant's OWN lease. Omit `leaseId` to use the
 	 * tenant's most relevant lease. Scoped server-side to the signed-in tenant; 404 if they have no
 	 * lease (or the lease isn't theirs).
 	 */
-	askLease: (question: string, leaseId?: number) =>
+	askLease: (question: string, leaseManagementId?: number) =>
 		api.post<LeaseQuestionResponse>(
-			`/portal/lease/ask${leaseId != null ? `?leaseId=${leaseId}` : ''}`,
+			`/portal/lease/ask${leaseManagementId != null ? `?leaseManagementId=${leaseManagementId}` : ''}`,
 			{ question }
 		),
 	balance: () => api.get('/portal/balance'),
@@ -112,8 +150,7 @@ export const portal = {
 		/** Fetch one thread's full history. Marks it read for the tenant. */
 		get: (id: number) => api.get<Conversation>(`/portal/conversations/${id}`),
 		/** Start a new thread to the landlord. */
-		start: (data: StartPortalConversationRequest) =>
-			api.post<Conversation>('/portal/conversations', data),
+		start: (data: StartPortalConversationRequest) => api.post<Conversation>('/portal/conversations', data),
 		/** Reply to an existing thread. */
 		sendMessage: (id: number, data: SendPortalMessageRequest) =>
 			api.post<Conversation>(`/portal/conversations/${id}/messages`, data)

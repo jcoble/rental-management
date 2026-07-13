@@ -3,7 +3,7 @@ export { properties } from './endpoints/properties';
 export { owners } from './endpoints/owners';
 export { tenants } from './endpoints/tenants';
 export { vendors } from './endpoints/vendors';
-export { leases } from './endpoints/leases';
+export { leaseManagements } from './endpoints/lease-managements';
 export { documentTemplates } from './endpoints/document-templates';
 export { payments } from './endpoints/payments';
 export { expenses } from './endpoints/expenses';

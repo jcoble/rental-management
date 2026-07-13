@@ -104,7 +104,7 @@
 	function rowHref(draft: ScanBatchDraft): string | null {
 		if (draft.status === 'Reviewing' || draft.status === 'Failed') return `/scan/${draft.id}`;
 		if (draft.status === 'Confirmed' && draft.createdEntityId != null) {
-			return `/leases/${draft.createdEntityId}`;
+			return '/leases';
 		}
 		return null;
 	}
@@ -127,7 +127,7 @@
 	{:else if draft.status === 'Confirmed' && draft.createdEntityId != null}
 		<Button
 			variant="link"
-			href="/leases/{draft.createdEntityId}"
+			href="/leases"
 			class="h-auto p-0"
 			data-testid="batch-draft-view-lease"
 		>

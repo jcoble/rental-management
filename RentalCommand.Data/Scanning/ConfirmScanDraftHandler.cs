@@ -70,13 +70,25 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                             UnitId = (int?)account.LeaseManagement!.UnitId,
                         }).SingleOrDefaultAsync(ct)
                     : null;
+                var existingAgreement = command.Target.Kind == ScanConfirmationTargetKind.LeaseAgreement
+                    ? await (
+                        from agreement in attempt.Persistence.Query<LeaseAgreement>()
+                        where agreement.PortfolioId == command.PortfolioId
+                            && agreement.Id == claim.CanonicalEntityId
+                        select new
+                        {
+                            LeaseManagementId = (int?)agreement.LeaseManagementId,
+                            UnitId = (int?)agreement.LeaseManagement!.UnitId,
+                        }).SingleOrDefaultAsync(ct)
+                    : null;
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.AlreadyConfirmed,
                     command.DraftId,
                     command.Target.EntityType,
                     claim.CanonicalEntityId,
-                    existingReceipt?.UnitId,
-                    LedgerEntryId: existingReceipt?.LedgerEntryId);
+                    existingReceipt?.UnitId ?? existingAgreement?.UnitId,
+                    LedgerEntryId: existingReceipt?.LedgerEntryId,
+                    LeaseManagementId: existingAgreement?.LeaseManagementId);
             case AtomicScanDraftClaimOutcome.Claimed:
                 break;
             default:
@@ -114,7 +126,8 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             command.Target.EntityType,
             target.EntityId,
             target.UnitId,
-            LedgerEntryId: target.LedgerEntryId);
+            LedgerEntryId: target.LedgerEntryId,
+            LeaseManagementId: target.LeaseManagementId);
     }
 
     private static ConfirmScanDraftResult Result(

@@ -13,20 +13,20 @@ export function getTenantNoticeEmptyCopy(forcedNoticeLabel?: string | null): Ten
 	if (forcedNoticeLabel) {
 		return {
 			message: `No ${forcedNoticeLabel.toLowerCase()} could be created.`,
-			description: 'This tenant needs an active eligible lease for that notice type.',
+			description: 'This tenant needs an active eligible lease for that notice type.'
 		};
 	}
 
 	return {
 		message: 'No notices are due for this tenant right now.',
-		description: 'Renewal, late-rent, and move-out notices appear here automatically when they come due.',
+		description: 'Renewal, late-rent, and move-out notices appear here automatically when they come due.'
 	};
 }
 
 export function getTenantNoticeEmptyState({
 	forcedNoticeLabel,
 	activeLeaseCount,
-	tenantId,
+	tenantId
 }: {
 	forcedNoticeLabel?: string | null;
 	activeLeaseCount: number;
@@ -39,20 +39,20 @@ export function getTenantNoticeEmptyState({
 			message: 'No notice can be created yet.',
 			description: 'Create or activate a lease for this tenant before sending renewal or move-out notices.',
 			showForceControls: false,
-			leaseActionHref: safeTenantId ? `/leases?create=1&tenantId=${safeTenantId}` : '/leases?create=1',
-			leaseActionLabel: 'Create lease',
+			leaseActionHref: safeTenantId ? `/applications?prepareMoveIn=1&tenantId=${safeTenantId}` : '/applications',
+			leaseActionLabel: 'Create lease'
 		};
 	}
 
 	if (forcedNoticeLabel) {
 		return {
 			...getTenantNoticeEmptyCopy(forcedNoticeLabel),
-			showForceControls: false,
+			showForceControls: false
 		};
 	}
 
 	return {
 		...getTenantNoticeEmptyCopy(),
-		showForceControls: true,
+		showForceControls: true
 	};
 }

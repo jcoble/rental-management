@@ -7,7 +7,7 @@
 	import { owners } from '$lib/api/endpoints/owners';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import { leases } from '$lib/api/endpoints/leases';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import { scan } from '$lib/api/scan';
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { Owner, Property, Unit, Tenant, OwnerEntityType } from '$lib/types';
@@ -172,8 +172,8 @@
 		queryFn: () => tenants.list(portfolioId, { take: 200 }),
 	}));
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId],
-		queryFn: () => leases.list(portfolioId, { take: 50 }),
+		queryKey: ['lease-managements', 'onboarding'],
+		queryFn: () => leaseManagements.listPage({ take: 50 }),
 	}));
 	const notificationEmailQuery = createQuery(() => ({
 		queryKey: ['notification-email', portfolioId],
@@ -198,7 +198,7 @@
 	const hasExistingOwners = $derived((ownersQuery.data?.length ?? 0) > 0);
 	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
 	const hasExistingTenants = $derived((tenantsQuery.data?.length ?? 0) > 0);
-	const hasExistingLeases = $derived((leasesQuery.data?.length ?? 0) > 0);
+	const hasExistingLeases = $derived((leasesQuery.data?.totalCount ?? 0) > 0);
 	const hasNotificationEmail = $derived(!!notificationEmailQuery.data?.email);
 	const hasTexting = $derived(
 		notificationSettingsQuery.data?.smsCredentialASet === true ||
@@ -233,14 +233,15 @@
 	// chain (property + unit + tenant + lease) in one transaction. Mark the lease done, refresh
 	// the lists so later visits show the saved records, then move to the finished setup state.
 	type LeaseImportCompleteResult = {
-		leaseId?: number | null;
+		leaseManagementId?: number | null;
+		agreementId?: number | null;
 		propertyId?: number | null;
 		unitId?: number | null;
 		tenantId?: number | null;
 	};
 
 	function handleLeaseImportComplete(result: LeaseImportCompleteResult) {
-		if (!result.leaseId) {
+		if (!result.leaseManagementId || !result.agreementId) {
 			showError('The scan finished, but no lease was created. Please review the draft or try again.');
 			return;
 		}
@@ -249,7 +250,7 @@
 		showSuccess('Imported! We created the property, unit, tenant, and lease from your document.');
 		queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
-		queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
 		queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
 		bigFinale();
 		finishFlow();
@@ -1004,13 +1005,13 @@
 				return scan.confirm(prefillDraftId, buildOnboardingLeaseScanOverrides(data));
 			}
 
-			return leases.create(data as unknown as Record<string, unknown>);
+			throw new Error('Prepare a move-in from an approved application, or import an existing signed agreement.');
 		},
 		onSuccess: () => {
 			createdLease = true;
 			leasePrefillDraftId = null;
 			showSuccess('Lease created.');
-			queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			next();
 		},
@@ -1018,6 +1019,11 @@
 	}));
 
 	function submitLease() {
+		if (leasePrefillDraftId == null) {
+			showSuccess('Choose an approved application to prepare the tenant relationship and agreement together.');
+			void goto('/applications');
+			return;
+		}
 		const leaseNumber =
 			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
 		const result = parseForm(leaseSchema, {
@@ -2028,7 +2034,7 @@
 							</Button>
 						{:else}
 							<Button class="gap-1" data-testid="onboarding-finish" disabled={anyPending} onclick={submitLease}>
-								{saveLeaseMutation.isPending ? 'Creating…' : 'Create lease & finish'}
+								{saveLeaseMutation.isPending ? 'Creating…' : leasePrefillDraftId != null ? 'Import agreement & finish' : 'Continue to applications'}
 								<CheckCircle2 class="h-4 w-4" />
 							</Button>
 						{/if}
@@ -2092,4 +2098,3 @@
 	onconfirm={() => unitDeleteTarget && deleteUnitMutation.mutate(unitDeleteTarget.id)}
 	oncancel={() => (unitDeleteTarget = null)}
 />
-

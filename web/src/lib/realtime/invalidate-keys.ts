@@ -21,22 +21,48 @@ const entityQueryKeys: Record<string, string[][]> = {
 	Property: [['properties'], ['units'], ['dashboard']],
 	Unit: [['units'], ['units-for-lease'], ['properties'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Tenant: [['tenants'], ['dashboard'], ['unit-dashboard']],
-	Lease: [['leases'], ['units-for-lease'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	LeaseManagement: [['lease-managements'], ['units-for-lease'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	LeaseAgreement: [['lease-managements'], ['units-for-lease'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	LeaseAddendum: [['lease-managements'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	// Payment/Expense both feed the accounting `/summary` rollup (collected /
 	// outstanding / overdue / total expenses), keyed `['accounting-summary', ...]`
 	// on the accounting page. The earlier `payment-summary` / `expense-summary`
 	// keys matched no query, so the summary cards stayed stale on realtime events.
 	Payment: [['payments'], ['accounting-summary'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
-	Expense: [['expenses'], ['accounting-summary'], ['dashboard'], ['unit-expenses'], ['unit-dashboard'], ['unit-timeline']],
+	Expense: [
+		['expenses'],
+		['accounting-summary'],
+		['dashboard'],
+		['unit-expenses'],
+		['unit-dashboard'],
+		['unit-timeline']
+	],
 	WorkOrder: [['work-orders'], ['dashboard'], ['unit-work-orders'], ['unit-dashboard'], ['unit-timeline']],
 	Inspection: [['inspections'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Appointment: [['appointments'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Vendor: [['vendors']],
 	OwnerEntity: [['owners'], ['dashboard']],
 	OwnerDistribution: [['owner-distributions'], ['owner-statements'], ['owner-statement'], ['report'], ['dashboard']],
-	PropertyDisposition: [['property-dispositions'], ['properties'], ['property'], ['leases'], ['units'], ['capital-assets'], ['accounting-summary'], ['reports'], ['dashboard']],
-	EvictionCase: [['eviction-cases'], ['eviction-case'], ['leases'], ['lease'], ['units'], ['reports'], ['dashboard']],
-	EvictionCaseEvent: [['eviction-cases'], ['eviction-case'], ['leases'], ['lease'], ['units'], ['reports'], ['dashboard']],
+	PropertyDisposition: [
+		['property-dispositions'],
+		['properties'],
+		['property'],
+		['lease-managements'],
+		['units'],
+		['capital-assets'],
+		['accounting-summary'],
+		['reports'],
+		['dashboard']
+	],
+	EvictionCase: [['eviction-cases'], ['eviction-case'], ['lease-managements'], ['units'], ['reports'], ['dashboard']],
+	EvictionCaseEvent: [
+		['eviction-cases'],
+		['eviction-case'],
+		['lease-managements'],
+		['units'],
+		['reports'],
+		['dashboard']
+	],
 	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],
 	// A confirmed scan creates an Expense (the backend also broadcasts that
 	// `Expense` event), so refresh the expense list + accounting summary too -
@@ -60,7 +86,7 @@ const entityDetailKey: Record<string, string> = {
 	Property: 'property',
 	Unit: 'unit',
 	Tenant: 'tenant',
-	Lease: 'lease',
+	LeaseManagement: 'lease-managements',
 	Payment: 'payment',
 	Expense: 'expense',
 	WorkOrder: 'work-order',
@@ -112,11 +138,7 @@ function invalidateDerivedKeys(
 	}
 }
 
-function removeDeletedEntity(
-	queryClient: QueryCacheInvalidator,
-	entityType: string,
-	entityId: number
-): void {
+function removeDeletedEntity(queryClient: QueryCacheInvalidator, entityType: string, entityId: number): void {
 	const detailKey = entityDetailKey[entityType];
 	if (detailKey) {
 		queryClient.removeQueries({ queryKey: [detailKey, entityId] });

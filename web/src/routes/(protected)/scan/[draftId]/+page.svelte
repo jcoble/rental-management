@@ -685,11 +685,11 @@
 			invalidateQueriesAfterScanConfirm(queryClient, result.entityType);
 			// Lease drafts go straight to the new lease detail page.
 			if (isLease) {
-				const leaseId = result.agreementId ?? result.entityId ?? null;
+				const leaseManagementId = result.leaseManagementId ?? null;
 				toast.success('Lease created');
-				if (leaseId) {
+				if (leaseManagementId) {
 					const unitId = result.unitId ?? (selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null) ?? scanContext.unitId ?? null;
-					goto(recordHref('lease', { id: leaseId, unitId }));
+					goto(recordHref('leaseManagement', { id: leaseManagementId, unitId }));
 				} else {
 					goto('/leases');
 				}

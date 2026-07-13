@@ -3,8 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import { leases } from '$lib/api/endpoints/leases';
-	import type { Lease, Tenant } from '$lib/types';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
+	import type { LeaseManagementSummary, Tenant } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
@@ -40,13 +40,13 @@
 	}));
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId, { tenantId: id }],
-		queryFn: () => leases.list(portfolioId, { tenantId: id, take: 100 }),
+		queryKey: ['lease-managements', { tenantId: id }],
+		queryFn: () => leaseManagements.listPage({ tenantId: id, take: 100, sort: '-updatedAtUtc' }),
 		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
 	}));
 
 	const tenant = $derived(tenantQuery.data);
-	const tenantLeases = $derived(leasesQuery.data ?? []);
+	const tenantLeases = $derived(leasesQuery.data?.items ?? []);
 	const activeTenantLeaseCount = $derived(tenant?.activeLeaseCount ?? 0);
 	const fullName = $derived(
 		tenant ? (tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`) : ''
@@ -172,10 +172,11 @@
 	});
 
 	// ── Lease columns ──────────────────────────────────────────────────────────
-	const leaseColumns: ColumnDef<Lease>[] = [
+	const leaseColumns: ColumnDef<LeaseManagementSummary>[] = [
 		{
-			key: 'leaseNumber',
-			title: 'Lease #',
+			key: 'agreementNumber',
+			title: 'Agreement',
+			accessor: (relationship) => relationship.agreementNumber ?? 'No governing agreement',
 			sortable: true,
 			mobileRole: 'title',
 		},
@@ -187,37 +188,37 @@
 			accessor: (l) => l.unitNumber ?? '–',
 		},
 		{
-			key: 'monthlyRent',
+			key: 'baseRentAmount',
 			title: 'Rent',
 			format: 'currency',
 			sortable: true,
 			mobileRole: 'metric',
 		},
 		{
-			key: 'startDate',
+			key: 'termStartOn',
 			title: 'Start',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'endDate',
+			key: 'termEndOn',
 			title: 'End',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'status',
-			title: 'Status',
+			key: 'lifecycle',
+			title: 'Relationship',
 			mobileRole: 'badge',
 			cell: leaseStatusCell,
 		},
 	];
 </script>
 
-{#snippet leaseStatusCell(lease: Lease)}
-	<StatusBadge status={lease.status} />
+{#snippet leaseStatusCell(relationship: LeaseManagementSummary)}
+	<StatusBadge status={relationship.lifecycle} />
 {/snippet}
 
 <svelte:head>
@@ -404,8 +405,8 @@
 				columns={leaseColumns}
 				loading={leasesQuery.isLoading}
 				emptyMessage="No leases found for this tenant."
-				onRowClick={(lease) => goto(recordHref('lease', lease))}
-				getRowKey={(l) => l.id}
+				onRowClick={(relationship) => goto(`/leases/${relationship.leaseManagementId}`)}
+				getRowKey={(relationship) => relationship.leaseManagementId}
 				pageSize={10}
 				data-testid="tenant-leases-grid"
 			/>

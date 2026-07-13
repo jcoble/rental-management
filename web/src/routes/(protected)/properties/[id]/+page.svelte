@@ -5,8 +5,8 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { owners } from '$lib/api/endpoints/owners';
-	import { leases } from '$lib/api/endpoints/leases';
-	import type { Lease, Property, Unit } from '$lib/types';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
+	import type { LeaseManagementSummary, Property, Unit } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -58,8 +58,8 @@
 	}));
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId, { propertyId: id }],
-		queryFn: () => leases.list(portfolioId, { propertyId: id, take: 100 }),
+		queryKey: ['lease-managements', { propertyId: id }],
+		queryFn: () => leaseManagements.listPage({ propertyId: id, take: 100, sort: '-updatedAtUtc' }),
 		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
 	}));
 
@@ -72,7 +72,7 @@
 	const property = $derived(propertyQuery.data);
 	const propertyDeleteState = $derived(property ? getPropertyDeleteState(property) : null);
 	const unitsList = $derived(unitsQuery.data ?? []);
-	const leasesList = $derived(leasesQuery.data ?? []);
+	const leasesList = $derived(leasesQuery.data?.items ?? []);
 
 	// Hero occupancy + context tone: full occupancy reads green, vacancy is neutral.
 	const occupiedUnits = $derived(property?.occupiedUnits ?? 0);
@@ -333,44 +333,45 @@
 	];
 
 	// ── Lease columns ──────────────────────────────────────────────────────────
-	const leaseColumns: ColumnDef<Lease>[] = [
+	const leaseColumns: ColumnDef<LeaseManagementSummary>[] = [
 		{
-			key: 'leaseNumber',
-			title: 'Lease #',
+			key: 'agreementNumber',
+			title: 'Agreement',
+			accessor: (relationship) => relationship.agreementNumber ?? 'No governing agreement',
 			sortable: true,
 			mobileRole: 'title',
 		},
 		{
-			key: 'tenantName',
+			key: 'primaryTenantName',
 			title: 'Tenant',
 			sortable: true,
 			mobileRole: 'subtitle',
-			accessor: (l) => l.tenantName ?? '–',
+			accessor: (relationship) => relationship.primaryTenantName ?? '–',
 		},
 		{
-			key: 'monthlyRent',
+			key: 'baseRentAmount',
 			title: 'Rent',
 			format: 'currency',
 			sortable: true,
 			mobileRole: 'metric',
 		},
 		{
-			key: 'startDate',
+			key: 'termStartOn',
 			title: 'Start',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'endDate',
+			key: 'termEndOn',
 			title: 'End',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'status',
-			title: 'Status',
+			key: 'lifecycle',
+			title: 'Relationship',
 			mobileRole: 'badge',
 			cell: leaseStatusCell,
 		},
@@ -412,8 +413,8 @@
 	</div>
 {/snippet}
 
-{#snippet leaseStatusCell(l: Lease)}
-	<StatusBadge status={l.status} />
+{#snippet leaseStatusCell(relationship: LeaseManagementSummary)}
+	<StatusBadge status={relationship.lifecycle} />
 {/snippet}
 
 <!--
@@ -694,8 +695,8 @@
 				columns={leaseColumns}
 				loading={leasesQuery.isLoading}
 				emptyMessage="No leases for this property."
-				onRowClick={(l) => goto(recordHref('lease', l))}
-				getRowKey={(l) => l.id}
+				onRowClick={(relationship) => goto(`/leases/${relationship.leaseManagementId}`)}
+				getRowKey={(relationship) => relationship.leaseManagementId}
 				pageSize={10}
 				data-testid="property-leases-grid"
 			/>

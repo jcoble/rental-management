@@ -10,11 +10,11 @@
 	const portfolioId = getCurrentPortfolioId();
 	const initialDraftId = parseNewRentalDraftId(page.url.searchParams);
 
-	function onComplete(result: { leaseId?: number | null; unitId?: number | null }) {
-		if (result.leaseId) {
+	function onComplete(result: { leaseManagementId?: number | null; unitId?: number | null }) {
+		if (result.leaseManagementId) {
 			// Existing unit chosen → unit Command Center Lease tab; a freshly created unit
 			// has no id in scope, so recordHref falls back to /leases/{id}.
-			goto(recordHref('lease', { id: result.leaseId, unitId: result.unitId }));
+			goto(recordHref('leaseManagement', { id: result.leaseManagementId, unitId: result.unitId }));
 		} else {
 			goto('/leases');
 		}

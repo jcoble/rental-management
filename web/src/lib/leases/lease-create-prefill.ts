@@ -10,14 +10,14 @@ function positiveIntegerString(value: string | null): string {
 
 export function leaseCreateHrefForApprovedTenant(tenantId: number | string): string {
 	const normalized = positiveIntegerString(String(tenantId));
-	const params = new URLSearchParams({ create: '1' });
+	const params = new URLSearchParams({ prepareMoveIn: '1' });
 	if (normalized) params.set('tenantId', normalized);
-	return `/leases?${params.toString()}`;
+	return `/applications?${params.toString()}`;
 }
 
 export function readLeaseCreatePrefill(params: URLSearchParams): LeaseCreatePrefill | null {
-	if (params.get('create') !== '1') return null;
+	if (params.get('prepareMoveIn') !== '1') return null;
 	return {
-		tenantId: positiveIntegerString(params.get('tenantId')),
+		tenantId: positiveIntegerString(params.get('tenantId'))
 	};
 }

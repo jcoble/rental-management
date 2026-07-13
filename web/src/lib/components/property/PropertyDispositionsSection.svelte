@@ -83,7 +83,7 @@
 		queryClient.invalidateQueries({ queryKey: ['property-dispositions', propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['property', propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['properties'] });
-		queryClient.invalidateQueries({ queryKey: ['leases'] });
+		queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
 		queryClient.invalidateQueries({ queryKey: ['units'] });
 		queryClient.invalidateQueries({ queryKey: ['capital-assets', propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });

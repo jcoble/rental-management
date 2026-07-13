@@ -963,7 +963,7 @@ public class ScanController : ManagementControllerBase
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
-            nameof(LeaseAgreement) => Ok(new { agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            nameof(LeaseAgreement) => Ok(new { leaseManagementId = result.LeaseManagementId, agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };
     }
