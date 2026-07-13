@@ -126,5 +126,16 @@ public sealed class CapabilityAuthorizationPolicyTests
             CallCount++;
             return Task.FromResult(true);
         }
+
+        public Task<bool> HasAnyCapabilityAsync(
+            ActiveAccessContext accessContext,
+            IReadOnlyCollection<string> capabilityKeys,
+            WorkspaceAuthorizationTarget? target,
+            DateTime utcNow,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(true);
+        }
     }
 }

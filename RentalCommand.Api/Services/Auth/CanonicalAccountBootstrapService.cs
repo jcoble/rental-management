@@ -1,11 +1,8 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using RentalCommand.Api.Data;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
-using RentalCommand.Api.Services.Domain;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -36,25 +33,16 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
 {
     private readonly UserManager<ApplicationUser> _users;
     private readonly RentalCommandDbContext _db;
-    private readonly IRlsExecutionContext _rls;
     private readonly TimeProvider _timeProvider;
-    private readonly IInitialWorkspaceAuthorityProvisioner _workspaceAuthority;
-    private readonly INotificationFoundationService _notificationFoundation;
 
     public CanonicalAccountBootstrapService(
         UserManager<ApplicationUser> users,
         RentalCommandDbContext db,
-        IRlsExecutionContext rls,
-        TimeProvider timeProvider,
-        IInitialWorkspaceAuthorityProvisioner workspaceAuthority,
-        INotificationFoundationService notificationFoundation)
+        TimeProvider timeProvider)
     {
         _users = users;
         _db = db;
-        _rls = rls;
         _timeProvider = timeProvider;
-        _workspaceAuthority = workspaceAuthority;
-        _notificationFoundation = notificationFoundation;
     }
 
     public async Task<CanonicalAccountBootstrapResult> CreateAsync(
@@ -64,7 +52,6 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         bool emailConfirmed,
         CancellationToken ct = default)
     {
-        using var rlsBypass = _rls.BeginBypass(RlsBypassReason.RegistrationBootstrap);
         var normalizedEmail = _users.NormalizeEmail(email);
         if (await _db.Users.AsNoTracking()
                 .AnyAsync(user => user.NormalizedEmail == normalizedEmail, ct))
@@ -96,29 +83,29 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
                 createResult.Errors.Select(error => error.Description).ToArray());
         }
 
-        var portfolio = new Portfolio
-        {
-            Name = string.IsNullOrWhiteSpace(user.DisplayName)
-                ? "My Portfolio"
-                : $"{user.DisplayName}'s Portfolio",
-            ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName)
-                ? "My Company"
-                : user.DisplayName,
-            Status = PortfolioStatus.Active,
-            Currency = "USD",
-            IsSandbox = false,
-            SandboxSeededAtUtc = null,
-            Settings = Domain.PortfolioOnboarding.WriteChoice(null, Domain.OnboardingChoice.Pending),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Portfolios.Add(portfolio);
-        await _db.SaveChangesAsync(ct);
-
-        var context = await _workspaceAuthority.ProvisionAsync(user, portfolio, ct);
-
-        await _notificationFoundation.SeedSuppliedTemplatesAsync(portfolio.Id, user.Id, ct);
+        var portfolioName = string.IsNullOrWhiteSpace(user.DisplayName)
+            ? "My Portfolio"
+            : $"{user.DisplayName}'s Portfolio";
+        var managementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName)
+            ? "My Company"
+            : user.DisplayName;
+        var ownerName = string.IsNullOrWhiteSpace(user.DisplayName)
+            ? (user.Email?.Split('@')[0] ?? "Me (primary owner)")
+            : user.DisplayName;
+        var bootstrap = await _db.Database.SqlQuery<InitialWorkspaceBootstrapRow>($"""
+                SELECT * FROM rc_bootstrap_initial_workspace(
+                    {user.Id}, {portfolioName}, {managementCompanyName}, {ownerName},
+                    {user.Email ?? string.Empty}, {now})
+                """)
+            .SingleAsync(ct);
         await transaction.CommitAsync(ct);
-        return new CanonicalAccountBootstrapResult(user, portfolio.Id, context.Id, []);
+        return new CanonicalAccountBootstrapResult(
+            user, bootstrap.PortfolioId, bootstrap.AccessContextId, []);
+    }
+
+    private sealed class InitialWorkspaceBootstrapRow
+    {
+        public int PortfolioId { get; set; }
+        public int AccessContextId { get; set; }
     }
 }

@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -12,6 +15,10 @@ namespace RentalCommand.Api.Services.Domain;
 public class AppointmentService : IAppointmentService
 {
     private const string EntityType = "Appointment";
+    private static readonly string[] ReadCapabilities =
+        [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingShowingsManage];
+    private static readonly string[] WriteCapabilities =
+        [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingShowingsManage];
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -35,6 +42,42 @@ public class AppointmentService : IAppointmentService
         var q = _db.Appointments
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId);
+
+        return await ListPageFromQueryAsync(q, query, ct);
+    }
+
+    public async Task<IReadOnlyList<AppointmentResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        int? tenantId,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(
+            scope,
+            ToAppointmentListQuery(query, propertyId, tenantId),
+            ct);
+        return page.Items;
+    }
+
+    public Task<AppointmentListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        AppointmentListQuery query,
+        CancellationToken ct = default)
+    {
+        var authorized = AuthorizedAppointments(
+            _db.Appointments.AsNoTracking(),
+            scope,
+            ReadCapabilities,
+            _timeProvider.UtcNow());
+        return ListPageFromQueryAsync(authorized, query, ct);
+    }
+
+    private static async Task<AppointmentListResponse> ListPageFromQueryAsync(
+        IQueryable<Appointment> q,
+        AppointmentListQuery query,
+        CancellationToken ct)
+    {
 
         if (query.PropertyId.HasValue)
         {
@@ -143,7 +186,67 @@ public class AppointmentService : IAppointmentService
         return entity == null ? null : AppointmentResponse.FromEntity(entity);
     }
 
+    public async Task<AppointmentResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var entity = await AuthorizedAppointments(
+                _db.Appointments
+                    .AsNoTracking()
+                    .Include(a => a.Property)
+                    .Include(a => a.Unit)
+                    .Include(a => a.Tenant),
+                scope,
+                ReadCapabilities,
+                _timeProvider.UtcNow())
+            .FirstOrDefaultAsync(a => a.Id == id, ct);
+
+        return entity == null ? null : AppointmentResponse.FromEntity(entity);
+    }
+
     public async Task<AppointmentResponse?> CreateAsync(int portfolioId, CreateAppointmentRequest request, CancellationToken ct = default)
+        => await CreateCoreAsync(portfolioId, request, broadcast: true, ct);
+
+    public async Task<AppointmentResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateAppointmentRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var now = _timeProvider.UtcNow();
+            var canCreate = request.PropertyId.HasValue
+                ? await _db.Properties
+                    .AsNoTracking()
+                    .WhereAuthorized(_db, scope, WriteCapabilities, now)
+                    .AnyAsync(property => property.Id == request.PropertyId.Value, innerCt)
+                : await _db.AuthorizedAllPropertyAssignments(
+                        scope,
+                        WriteCapabilities,
+                        CapabilityAuthorizationTargetKind.Property,
+                        now)
+                    .AnyAsync(innerCt);
+
+            return canCreate
+                ? await CreateCoreAsync(scope.PortfolioId, request, broadcast: false, innerCt)
+                : null;
+        }, ct);
+
+        if (response != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<AppointmentResponse?> CreateCoreAsync(
+        int portfolioId,
+        CreateAppointmentRequest request,
+        bool broadcast,
+        CancellationToken ct)
     {
         if (!await ReferencesInScopeAsync(portfolioId, request.PropertyId, request.UnitId, request.LeaseManagementId, request.RentalApplicationId, request.TenantId, ct))
         {
@@ -180,7 +283,11 @@ public class AppointmentService : IAppointmentService
         await _db.SaveChangesAsync(ct);
 
         var response = AppointmentResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
+
         return response;
     }
 
@@ -188,10 +295,63 @@ public class AppointmentService : IAppointmentService
     {
         var entity = await _db.Appointments
             .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity == null)
+        return entity == null
+            ? null
+            : await UpdateCoreAsync(portfolioId, entity, request, broadcast: true, ct);
+    }
+
+    public async Task<AppointmentResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateAppointmentRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
         {
-            return null;
+            var now = _timeProvider.UtcNow();
+            var entity = await AuthorizedAppointments(
+                    _db.Appointments,
+                    scope,
+                    WriteCapabilities,
+                    now)
+                .FirstOrDefaultAsync(a => a.Id == id, innerCt);
+            if (entity == null)
+            {
+                return null;
+            }
+
+            if (request.PropertyId.HasValue)
+            {
+                var destinationAuthorized = await _db.Properties
+                    .AsNoTracking()
+                    .WhereAuthorized(_db, scope, WriteCapabilities, now)
+                    .AnyAsync(property => property.Id == request.PropertyId.Value, innerCt);
+                if (!destinationAuthorized)
+                {
+                    return null;
+                }
+            }
+
+            return await UpdateCoreAsync(
+                scope.PortfolioId, entity, request, broadcast: false, innerCt);
+        }, ct);
+
+        if (response != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
         }
+
+        return response;
+    }
+
+    private async Task<AppointmentResponse?> UpdateCoreAsync(
+        int portfolioId,
+        Appointment entity,
+        UpdateAppointmentRequest request,
+        bool broadcast,
+        CancellationToken ct)
+    {
 
         if (!await ReferencesInScopeAsync(portfolioId, request.PropertyId, request.UnitId, request.LeaseManagementId, request.RentalApplicationId, request.TenantId, ct))
         {
@@ -222,7 +382,11 @@ public class AppointmentService : IAppointmentService
         await _db.SaveChangesAsync(ct);
 
         var response = AppointmentResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
+
         return response;
     }
 
@@ -241,6 +405,37 @@ public class AppointmentService : IAppointmentService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var entity = await AuthorizedAppointments(
+                    _db.Appointments,
+                    scope,
+                    WriteCapabilities,
+                    _timeProvider.UtcNow())
+                .FirstOrDefaultAsync(a => a.Id == id, innerCt);
+            if (entity == null)
+            {
+                return false;
+            }
+
+            _db.Appointments.Remove(entity);
+            await _db.SaveChangesAsync(innerCt);
+            return true;
+        }, ct);
+
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        }
+
+        return deleted;
     }
 
     /// <summary>
@@ -291,5 +486,28 @@ public class AppointmentService : IAppointmentService
         }
 
         return true;
+    }
+
+    private IQueryable<Appointment> AuthorizedAppointments(
+        IQueryable<Appointment> appointments,
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities,
+        DateTime utcNow)
+    {
+        var allProperties = _db.AuthorizedAllPropertyAssignments(
+            scope,
+            capabilities,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, utcNow);
+
+        return appointments.Where(appointment =>
+            appointment.PortfolioId == scope.PortfolioId &&
+            ((appointment.PropertyId == null && allProperties.Any()) ||
+             (appointment.PropertyId != null && authorizedProperties.Any(property =>
+                 property.Id == appointment.PropertyId &&
+                 property.PortfolioId == appointment.PortfolioId))));
     }
 }

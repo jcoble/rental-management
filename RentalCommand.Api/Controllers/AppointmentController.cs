@@ -27,7 +27,8 @@ public class AppointmentController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<AppointmentResponse>>> List(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? tenantId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, tenantId, query, ct);
+        var items = await _service.ListAuthorizedAsync(
+            GetWorkspaceReadScope(), propertyId, tenantId, query, ct);
         return Ok(items);
     }
 
@@ -36,7 +37,7 @@ public class AppointmentController : ManagementControllerBase
     public async Task<ActionResult<AppointmentListResponse>> ListPage(
         [FromQuery] AppointmentListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -45,7 +46,7 @@ public class AppointmentController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<AppointmentResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Appointment not found" }) : Ok(item);
     }
 
@@ -54,7 +55,7 @@ public class AppointmentController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<AppointmentResponse>> Create([FromBody] CreateAppointmentRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, lease relationship, application, or tenant not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -65,7 +66,7 @@ public class AppointmentController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<AppointmentResponse>> Update(int id, [FromBody] UpdateAppointmentRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated == null ? NotFound(new { error = "Appointment not found" }) : Ok(updated);
     }
 
@@ -74,7 +75,7 @@ public class AppointmentController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Appointment not found" });
     }
 }

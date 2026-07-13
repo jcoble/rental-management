@@ -1,4 +1,5 @@
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.TestCommon;
 
@@ -13,8 +14,18 @@ public sealed class NoopTenantPortalProvisioningService : ITenantPortalProvision
         int tenantId, int portfolioId, CancellationToken ct = default)
         => Task.FromResult(new PortalAccountResult(PortalAccountStatus.AlreadyExisted));
 
+    public Task<PortalAccountResult> EnsurePortalAccountForTenantAuthorizedAsync(
+        WorkspaceReadScope scope, int tenantId, CancellationToken ct = default)
+        => Task.FromResult(new PortalAccountResult(PortalAccountStatus.AlreadyExisted));
+
     public Task<SetPortalAccessResult> SetPortalAccessAsync(
         int tenantId, int portfolioId, bool enabled, CancellationToken ct = default)
+        => Task.FromResult(new SetPortalAccessResult(
+            SetPortalAccessOutcome.Updated,
+            enabled ? TenantPortalAccess.Active : TenantPortalAccess.Disabled));
+
+    public Task<SetPortalAccessResult> SetPortalAccessAuthorizedAsync(
+        WorkspaceReadScope scope, int tenantId, bool enabled, CancellationToken ct = default)
         => Task.FromResult(new SetPortalAccessResult(
             SetPortalAccessOutcome.Updated,
             enabled ? TenantPortalAccess.Active : TenantPortalAccess.Disabled));

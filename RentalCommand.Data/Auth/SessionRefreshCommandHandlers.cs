@@ -31,15 +31,6 @@ public sealed class IssueSessionRefreshCredentialHandler
             command.AuthSessionId,
             ct);
 
-        var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffectiveAccess(
-                attempt.Persistence.Query<WorkspaceMembership>(),
-                attempt.Persistence.Query<MembershipRoleAssignment>(),
-                attempt.Persistence.Query<OwnerUserAccess>(),
-                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
-                0,
-                command.IssuedAtUtc);
-
         var session = await attempt.Persistence.Query<AuthSession>()
             .Where(item => item.Id == command.AuthSessionId)
             .Select(item => new SessionTarget(
@@ -51,9 +42,10 @@ public sealed class IssueSessionRefreshCredentialHandler
                 item.RevokedAtUtc == null &&
                 item.ExpiresAtUtc > command.IssuedAtUtc &&
                 command.AbsoluteFamilyExpiresAtUtc <= item.ExpiresAtUtc &&
-                effectiveContexts.Any(context =>
-                    context.Id == item.ActiveAccessContextId &&
-                    context.UserId == item.UserId)))
+                AccessAuthorityDbFunctions.IsEffective(
+                    item.ActiveAccessContextId,
+                    item.UserId,
+                    command.IssuedAtUtc)))
             .SingleOrDefaultAsync(ct);
 
         if (session is null || !session.CanIssue)
@@ -227,7 +219,11 @@ public sealed class RotateSessionRefreshCredentialHandler
                     target.Session.Id,
                     target.Family.Id,
                     target.Credential.Id,
-                    priorReplacementId);
+                    priorReplacementId,
+                    target.Session.UserId,
+                    target.AccessContextId,
+                    target.PortfolioId,
+                    target.AccessRevision);
             }
 
             RevokeForReuse(target, command.PresentedAtUtc, attempt);
@@ -295,7 +291,11 @@ public sealed class RotateSessionRefreshCredentialHandler
             target.Session.Id,
             target.Family.Id,
             target.Credential.Id,
-            replacement.Id);
+            replacement.Id,
+            target.Session.UserId,
+            target.AccessContextId,
+            target.PortfolioId,
+            target.AccessRevision);
     }
 
     private static async Task<RefreshTarget?> LocateAsync(
@@ -304,14 +304,6 @@ public sealed class RotateSessionRefreshCredentialHandler
         DateTime presentedAtUtc,
         CancellationToken ct)
     {
-        var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffectiveAccess(
-                attempt.Persistence.Query<WorkspaceMembership>(),
-                attempt.Persistence.Query<MembershipRoleAssignment>(),
-                attempt.Persistence.Query<OwnerUserAccess>(),
-                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
-                0,
-                presentedAtUtc);
         return await attempt.Persistence.Query<AuthSessionRefreshCredential>()
             .Where(item => item.TokenHash == tokenHash)
             .Select(item => new RefreshTarget(
@@ -320,6 +312,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 item.RefreshTokenFamily!.AuthSession!,
                 item.RefreshTokenFamily!.AuthSession!.ActiveAccessContext!.PortfolioId,
                 item.RefreshTokenFamily!.AuthSession!.ActiveAccessContextId,
+                item.RefreshTokenFamily!.AuthSession!.ActiveAccessContext!.AccessRevision,
                 item.RevokedAtUtc == null &&
                 item.ExpiresAtUtc > presentedAtUtc &&
                 item.RefreshTokenFamily!.RevokedAtUtc == null &&
@@ -327,9 +320,10 @@ public sealed class RotateSessionRefreshCredentialHandler
                 item.RefreshTokenFamily!.AuthSession!.Status == AuthSessionStatus.Active &&
                 item.RefreshTokenFamily!.AuthSession!.RevokedAtUtc == null &&
                 item.RefreshTokenFamily!.AuthSession!.ExpiresAtUtc > presentedAtUtc,
-                effectiveContexts.Any(context =>
-                    context.Id == item.RefreshTokenFamily!.AuthSession!.ActiveAccessContextId &&
-                    context.UserId == item.RefreshTokenFamily!.AuthSession!.UserId),
+                AccessAuthorityDbFunctions.IsEffective(
+                    item.RefreshTokenFamily!.AuthSession!.ActiveAccessContextId,
+                    item.RefreshTokenFamily!.AuthSession!.UserId,
+                    presentedAtUtc),
                 item.RefreshTokenFamily!.Credentials.Any(candidate =>
                     candidate.Id != item.Id &&
                     candidate.ConsumedAtUtc == null &&
@@ -372,6 +366,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         AuthSession Session,
         int PortfolioId,
         int AccessContextId,
+        long AccessRevision,
         bool IsEligible,
         bool HasEffectiveAccess,
         bool AnotherLiveCredentialExists);

@@ -1,8 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Sms;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
@@ -98,17 +96,12 @@ public class SmsDispatcherResolverTests
         }
     }
 
-    private sealed class FakeSettingsService : INotificationSettingsService
+    private sealed class FakeSettingsService : IMessagingProviderSettingsResolver
     {
         private readonly SmsCredentials? _creds;
         public FakeSettingsService(SmsCredentials? creds) => _creds = creds;
 
-        public Task<SmsCredentials?> GetSmsCredentialsAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<SmsCredentials?> ResolvePortfolioSmsAsync(int portfolioId, CancellationToken ct = default) =>
             Task.FromResult(_creds);
-
-        public Task<NotificationSettingsResponse> GetAdminAsync(int portfolioId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<NotificationSettingsResponse> UpdateAsync(int portfolioId, UpdateNotificationSettingsRequest request, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<NotificationsConfig> GetRuntimeAsync(int portfolioId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<TestSmsResponse> SendTestSmsAsync(int portfolioId, TestSmsRequest request, CancellationToken ct = default) => throw new NotSupportedException();
     }
 }

@@ -138,7 +138,8 @@ public class ExpenseController : ManagementControllerBase
                 new RentalCommand.Core.Authorization.PropertyCapabilityAuthorizationTarget(
                     scope.PortfolioId, propertyId), ct))
             return StatusCode(403, new { error = "You can view this expense but cannot capitalize it." });
-        var created = await _capitalAssets.CapitalizeExpenseAsync(GetPortfolioId(), id, request, ct);
+        var created = await _capitalAssets.CapitalizeExpenseAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, ct);
         return created is null
             ? NotFound(new { error = "Expense not found, already capitalized, or not linked to a property" })
             : CreatedAtAction("Get", "CapitalAssets", new { id = created.Id }, created);

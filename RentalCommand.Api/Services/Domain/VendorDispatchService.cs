@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
@@ -9,6 +10,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -39,13 +41,42 @@ public class VendorDispatchService : IVendorDispatchService
         _timeProvider = timeProvider;
     }
 
-    public async Task<DispatchResult> DispatchAsync(int portfolioId, int workOrderId, DispatchWorkOrderRequest request, int? changedByUserId, CancellationToken ct = default)
+    public Task<DispatchResult> DispatchAsync(
+        int portfolioId,
+        int workOrderId,
+        DispatchWorkOrderRequest request,
+        int? changedByUserId,
+        CancellationToken ct = default) =>
+        DispatchCoreAsync(portfolioId, workOrderId, request, changedByUserId, authorizationScope: null, ct);
+
+    public Task<DispatchResult> DispatchAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int workOrderId,
+        DispatchWorkOrderRequest request,
+        int? changedByUserId,
+        CancellationToken ct = default) =>
+        DispatchCoreAsync(scope.PortfolioId, workOrderId, request, changedByUserId, scope, ct);
+
+    private async Task<DispatchResult> DispatchCoreAsync(
+        int portfolioId,
+        int workOrderId,
+        DispatchWorkOrderRequest request,
+        int? changedByUserId,
+        WorkspaceReadScope? authorizationScope,
+        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.IdempotencyKey);
 
-        var workOrder = await _db.WorkOrders
+        var workOrders = _db.WorkOrders
             .AsNoTracking()
-            .FirstOrDefaultAsync(w => w.Id == workOrderId && w.PortfolioId == portfolioId, ct);
+            .Where(workOrder => workOrder.Id == workOrderId && workOrder.PortfolioId == portfolioId);
+        if (authorizationScope is { } scope)
+        {
+            workOrders = workOrders.WhereAuthorized(
+                _db, scope, [CapabilityKeys.WorkManage], _timeProvider.UtcNow());
+        }
+
+        var workOrder = await workOrders.FirstOrDefaultAsync(ct);
         if (workOrder is null)
         {
             return DispatchResult.NotFound();
@@ -96,7 +127,14 @@ public class VendorDispatchService : IVendorDispatchService
                 vendorPhone,
                 message,
                 changedByUserId,
-                now),
+                now,
+                authorizationScope is { } access
+                    ? new DispatchManagementAccess(
+                        access.SessionId,
+                        access.UserId,
+                        access.AccessContextId,
+                        access.AccessRevision)
+                    : null),
             new AtomicJsonResultCodec<DispatchWorkOrderToVendorResult>("vendor-dispatch.create.v1"),
             ct);
         if (outcome.Value.Outcome == DispatchWorkOrderToVendorOutcome.NotFound)
@@ -128,10 +166,28 @@ public class VendorDispatchService : IVendorDispatchService
         return DispatchResult.Ok(response);
     }
 
-    public async Task<VendorRatingResponse?> RateAsync(int portfolioId, int vendorId, CreateVendorRatingRequest request, CancellationToken ct = default)
+    public Task<VendorRatingResponse?> RateAsync(
+        WorkspaceReadScope scope,
+        int vendorId,
+        CreateVendorRatingRequest request,
+        CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
+        var portfolioId = scope.PortfolioId;
+        var allProperties = _db.AuthorizedWorkspaceAssignments(
+            scope,
+            [CapabilityKeys.WorkManage],
+            CapabilityAuthorizationTargetKind.Property,
+            _timeProvider.UtcNow());
+        var authorizedWorkOrders = _db.WorkOrders
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, [CapabilityKeys.WorkManage], _timeProvider.UtcNow());
         var vendor = await _db.Vendors
-            .FirstOrDefaultAsync(v => v.Id == vendorId && v.PortfolioId == portfolioId, ct);
+            .Where(v => v.Id == vendorId && v.PortfolioId == portfolioId &&
+                        (request.WorkOrderId.HasValue
+                            ? authorizedWorkOrders.Any(workOrder => workOrder.Id == request.WorkOrderId.Value)
+                            : allProperties.Any()))
+            .FirstOrDefaultAsync(token);
         if (vendor is null)
         {
             return null;
@@ -141,11 +197,15 @@ public class VendorDispatchService : IVendorDispatchService
         int? workOrderId = null;
         if (request.WorkOrderId.HasValue)
         {
-            var inScope = await _db.WorkOrders
-                .AnyAsync(w => w.Id == request.WorkOrderId.Value && w.PortfolioId == portfolioId, ct);
+            var inScope = await authorizedWorkOrders
+                .AnyAsync(w => w.Id == request.WorkOrderId.Value, token);
             if (inScope)
             {
                 workOrderId = request.WorkOrderId.Value;
+            }
+            else
+            {
+                return null;
             }
         }
 
@@ -160,22 +220,29 @@ public class VendorDispatchService : IVendorDispatchService
             CreatedAtUtc = now,
         };
         _db.VendorRatings.Add(rating);
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
-        await RefreshRatingAggregatesAsync(vendor, ct);
-        await _db.SaveChangesAsync(ct);
+        await RefreshRatingAggregatesAsync(vendor, token);
+        await _db.SaveChangesAsync(token);
 
         await SafeAsync("rating broadcast", () => _dataUpdate.BroadcastEntityUpdateAsync(
-            portfolioId, VendorEntityType, vendor.Id, VendorResponse.FromEntity(vendor), ct));
+            portfolioId, VendorEntityType, vendor.Id, VendorResponse.FromEntity(vendor), token));
 
         return VendorRatingResponse.FromEntity(rating);
-    }
+    }, ct);
 
-    public async Task<VendorScorecardResponse?> GetScorecardAsync(int portfolioId, int vendorId, CancellationToken ct = default)
+    public async Task<VendorScorecardResponse?> GetScorecardAsync(WorkspaceReadScope scope, int vendorId, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
+        var allProperties = _db.AuthorizedWorkspaceAssignments(
+            scope,
+            [CapabilityKeys.WorkRead],
+            CapabilityAuthorizationTargetKind.Property,
+            _timeProvider.UtcNow());
         var vendor = await _db.Vendors
             .AsNoTracking()
-            .FirstOrDefaultAsync(v => v.Id == vendorId && v.PortfolioId == portfolioId, ct);
+            .FirstOrDefaultAsync(v =>
+                v.Id == vendorId && v.PortfolioId == portfolioId && allProperties.Any(), ct);
         if (vendor is null)
         {
             return null;

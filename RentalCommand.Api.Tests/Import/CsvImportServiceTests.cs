@@ -5,7 +5,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Import;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,6 +23,7 @@ public class CsvImportServiceTests : IDisposable
     private readonly SqliteTestContext _ctx;
     private readonly CsvImportService _sut;
     private readonly CapturingAtomicUnitOfWork _atomic = new();
+    private readonly WorkspaceReadScope _scope;
 
     public CsvImportServiceTests()
     {
@@ -37,6 +40,7 @@ public class CsvImportServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
         });
         _ctx.Db.SaveChanges();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(CsvImportServiceTests));
         var noop = new NoopDataUpdateService();
         _sut = new CsvImportService(
             _ctx.Db,
@@ -65,7 +69,7 @@ public class CsvImportServiceTests : IDisposable
             ",NoFirst,bad@example.com,555-0000\n" +         // invalid: missing firstName
             "Jane,Doe,not-an-email,\n";                     // invalid: bad email
 
-        var result = await _sut.ImportAsync(PortfolioId, "tenant", Csv(csv), dryRun: true);
+        var result = await _sut.ImportAsync(_scope, "tenant", Csv(csv), dryRun: true);
 
         result.EntityType.Should().Be("Tenant");
         result.DryRun.Should().BeTrue();
@@ -98,7 +102,7 @@ public class CsvImportServiceTests : IDisposable
             ",NoFirst,,\n" +                                 // invalid: missing firstName
             "Jane,Doe,,555-9999\n";                          // valid
 
-        var result = await _sut.ImportAsync(PortfolioId, "Tenant", Csv(csv), dryRun: false);
+        var result = await _sut.ImportAsync(_scope, "Tenant", Csv(csv), dryRun: false);
 
         result.TotalRows.Should().Be(3);
         result.ValidRows.Should().Be(2);
@@ -130,7 +134,7 @@ public class CsvImportServiceTests : IDisposable
             "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
             "maple court,101,2,1.5,\"$1,200\"\n";   // name differs only in case; quoted currency rent
 
-        var result = await _sut.ImportAsync(PortfolioId, "Unit", Csv(csv), dryRun: false);
+        var result = await _sut.ImportAsync(_scope, "Unit", Csv(csv), dryRun: false);
 
         result.TotalRows.Should().Be(1);
         result.ValidRows.Should().Be(1);
@@ -155,7 +159,7 @@ public class CsvImportServiceTests : IDisposable
             "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
             "Nonexistent Place,101,2,1,1000\n";
 
-        var result = await _sut.ImportAsync(PortfolioId, "Unit", Csv(csv), dryRun: false);
+        var result = await _sut.ImportAsync(_scope, "Unit", Csv(csv), dryRun: false);
 
         result.ValidRows.Should().Be(0);
         result.CreatedRows.Should().Be(0);
@@ -174,7 +178,7 @@ public class CsvImportServiceTests : IDisposable
             "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
             "Maple Court,101,2,1,1000\n";
 
-        var result = await _sut.ImportAsync(PortfolioId, "Unit", Csv(csv), dryRun: true);
+        var result = await _sut.ImportAsync(_scope, "Unit", Csv(csv), dryRun: true);
 
         result.Rows[0].Valid.Should().BeFalse();
         result.Rows[0].Errors.Should().ContainMatch("*ambiguous*");
@@ -192,7 +196,7 @@ public class CsvImportServiceTests : IDisposable
             "House A,1 Main St,Springfield,IL,62701,singlefamily\n" +   // explicit type, lowercase
             "House B,2 Main St,Springfield,IL,62701,\n";                 // blank type → default
 
-        var result = await _sut.ImportAsync(PortfolioId, "Property", Csv(csv), dryRun: false);
+        var result = await _sut.ImportAsync(_scope, "Property", Csv(csv), dryRun: false);
 
         result.CreatedRows.Should().Be(2);
         var props = await _ctx.Db.Properties.OrderBy(p => p.Name).ToListAsync();
@@ -219,7 +223,7 @@ public class CsvImportServiceTests : IDisposable
             OperationKeyDigest: "operation-digest");
 
         var result = await _sut.ImportAsync(
-            PortfolioId, "payments", Csv(csv), dryRun: false, commandContext: context);
+            _scope, "payments", Csv(csv), dryRun: false, commandContext: context);
 
         result.CreatedRows.Should().Be(1);
         result.Rows.Should().ContainSingle().Which.CreatedId.Should().Be(9_000_000_001L);
@@ -246,7 +250,7 @@ public class CsvImportServiceTests : IDisposable
             "Maple Court,MortgageInterest,January mortgage interest,800,2025-01-15,2025-01-15,Imported history\n" +
             "Maple Court,MortgageInterest,January mortgage interest,800,2025-01-15,2025-01-15,Duplicate row\n";
 
-        var first = await _sut.ImportAsync(PortfolioId, "expenses", Csv(csv), dryRun: false);
+        var first = await _sut.ImportAsync(_scope, "expenses", Csv(csv), dryRun: false);
 
         first.EntityType.Should().Be("Expense");
         first.CreatedRows.Should().Be(1);
@@ -258,7 +262,7 @@ public class CsvImportServiceTests : IDisposable
         stored.Status.Should().Be(ExpenseStatus.Paid);
         stored.Amount.Should().Be(800m);
 
-        var second = await _sut.ImportAsync(PortfolioId, "mortgage payments", Csv(csv), dryRun: false);
+        var second = await _sut.ImportAsync(_scope, "mortgage payments", Csv(csv), dryRun: false);
 
         second.CreatedRows.Should().Be(0);
         second.DuplicateRows.Should().Be(2);
@@ -276,7 +280,7 @@ public class CsvImportServiceTests : IDisposable
             "Maple Court,Acme Bank,200000,198500,6.25,360,2024-01-01,1,1231.43,350\n" +
             "Maple Court,Acme Bank,200000,198500,6.25,360,2024-01-01,1,1231.43,350\n";
 
-        var first = await _sut.ImportAsync(PortfolioId, "mortgages", Csv(csv), dryRun: false);
+        var first = await _sut.ImportAsync(_scope, "mortgages", Csv(csv), dryRun: false);
 
         first.EntityType.Should().Be("Loan");
         first.CreatedRows.Should().Be(1);
@@ -288,7 +292,7 @@ public class CsvImportServiceTests : IDisposable
         stored.OriginalAmount.Should().Be(200000m);
         stored.CurrentBalance.Should().Be(198500m);
 
-        var second = await _sut.ImportAsync(PortfolioId, "loan", Csv(csv), dryRun: false);
+        var second = await _sut.ImportAsync(_scope, "loan", Csv(csv), dryRun: false);
 
         second.CreatedRows.Should().Be(0);
         second.DuplicateRows.Should().Be(2);
@@ -314,7 +318,7 @@ public class CsvImportServiceTests : IDisposable
     [Fact]
     public async Task UnsupportedEntityType_Throws()
     {
-        var act = async () => await _sut.ImportAsync(PortfolioId, "vendor", Csv("x\n"), dryRun: true);
+        var act = async () => await _sut.ImportAsync(_scope, "vendor", Csv("x\n"), dryRun: true);
         await act.Should().ThrowAsync<ArgumentException>();
     }
 

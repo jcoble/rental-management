@@ -89,6 +89,69 @@ public static class SuppliedNoticeTemplateBaseline
         FROM "SystemNoticeTemplateVersions" AS system
         WHERE system."Version" = 1
         ON CONFLICT ("PortfolioId", "SystemKey", "Version") DO NOTHING;
+
+        INSERT INTO "TenantNoticePolicies"
+        (
+            "PortfolioId",
+            "AutomationKey",
+            "Mode",
+            "Classification",
+            "LeadDays",
+            "SendHourLocal",
+            "SendTenantPortal",
+            "SendMobilePush",
+            "SendEmail",
+            "SendSms",
+            "IncludePrimaryTenant",
+            "IncludeCoTenant",
+            "IncludeEligibleGuarantor",
+            "IncludeOccupant",
+            "FailureBehavior",
+            "WorkspaceNoticeTemplateVersionId",
+            "ReviewedJurisdictionCode",
+            "JurisdictionReviewedAtUtc",
+            "JurisdictionReviewedByUserId",
+            "CreatedAtUtc",
+            "UpdatedAtUtc"
+        )
+        SELECT
+            workspace."PortfolioId",
+            workspace."SystemKey",
+            'Draft',
+            system."Classification",
+            CASE
+                WHEN workspace."SystemKey" IN ('lease-renewal-offer', 'month-to-month-offer', 'lease-non-renewal') THEN 60
+                ELSE 5
+            END,
+            9,
+            TRUE,
+            FALSE,
+            TRUE,
+            FALSE,
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            'StopAndRequireReview',
+            workspace."Id",
+            NULL,
+            NULL,
+            NULL,
+            {createdAtUtc},
+            {createdAtUtc}
+        FROM "WorkspaceNoticeTemplateVersions" AS workspace
+        JOIN "SystemNoticeTemplateVersions" AS system
+          ON system."Id" = workspace."BasedOnSystemTemplateVersionId"
+        WHERE workspace."PortfolioId" = {portfolioId}
+          AND NOT EXISTS
+          (
+              SELECT 1
+              FROM "WorkspaceNoticeTemplateVersions" AS newer
+              WHERE newer."PortfolioId" = workspace."PortfolioId"
+                AND newer."SystemKey" = workspace."SystemKey"
+                AND newer."Version" > workspace."Version"
+          )
+        ON CONFLICT ("PortfolioId", "AutomationKey") DO NOTHING;
         """;
 }
 

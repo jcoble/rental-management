@@ -11,6 +11,7 @@ import 'token_store.dart';
 /// it sees this header; browsers never send it, so web bodies stay token-free.
 const String clientTypeHeader = 'X-Client-Type';
 const String mobileClientType = 'mobile';
+const String _requestAccessCoordinatesKey = 'requestAccessCoordinates';
 
 /// Resolves the refresh token from a `/auth/login`, `/auth/google`, or
 /// `/auth/refresh` response: the JSON **body** (`refreshToken`) is authoritative
@@ -88,9 +89,18 @@ class AuthInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    final token = await tokenStore.getAccessToken();
+    final values = await Future.wait<Object?>([
+      tokenStore.getAccessToken(),
+      tokenStore.getAccessEnvelope(),
+    ]);
+    final token = values[0] as String?;
     if (token != null) {
       options.headers['Authorization'] = 'Bearer $token';
+    }
+    final envelope = values[1] as Map<String, dynamic>?;
+    final coordinates = _AccessCoordinates.fromEnvelope(envelope);
+    if (coordinates != null) {
+      options.extra[_requestAccessCoordinatesKey] = coordinates;
     }
     handler.next(options);
   }
@@ -132,7 +142,22 @@ class AuthInterceptor extends Interceptor {
     onAccessChanged(refresh.access);
 
     final opts = err.requestOptions;
-    if (_requiresAccessRefresh(response) && _isMutation(opts.method)) {
+    final staleRevisionRecovery = _requiresAccessRefresh(response);
+    final requestCoordinates =
+        opts.extra[_requestAccessCoordinatesKey] as _AccessCoordinates?;
+    final refreshedCoordinates = _AccessCoordinates.fromEnvelope(
+      refresh.access,
+    );
+    if (!_canReplayRequestAfterRefresh(
+      method: opts.method,
+      requestCoordinates: requestCoordinates,
+      refreshedCoordinates: refreshedCoordinates,
+      staleRevisionRecovery: staleRevisionRecovery,
+    )) {
+      final accessBoundaryChanged =
+          requestCoordinates == null ||
+          refreshedCoordinates == null ||
+          requestCoordinates != refreshedCoordinates;
       handler.next(
         DioException.badResponse(
           statusCode: 409,
@@ -140,10 +165,13 @@ class AuthInterceptor extends Interceptor {
           response: Response<dynamic>(
             requestOptions: opts,
             statusCode: 409,
-            data: const {
-              'code': 'ACCESS_REVISION_CHANGED',
-              'error':
-                  'Your access changed while this action was open. Nothing was submitted; review the refreshed screen and try again.',
+            data: {
+              'code': staleRevisionRecovery
+                  ? 'ACCESS_REVISION_CHANGED'
+                  : 'ACCESS_CONTEXT_CHANGED',
+              'error': accessBoundaryChanged
+                  ? 'Your workspace or access changed while this action was open. Nothing was submitted; review the refreshed screen and try again.'
+                  : 'Your access changed while this action was open. Nothing was submitted; review the refreshed screen and try again.',
             },
           ),
         ),
@@ -200,6 +228,38 @@ class AuthInterceptor extends Interceptor {
   @visibleForTesting
   static bool canReplayAfterAccessRefresh(String method) =>
       !_isMutation(method);
+
+  /// Safe reads can follow a refreshed token into the new canonical envelope.
+  /// Mutations are replayed only for ordinary token expiry while the exact
+  /// request-start authority coordinates remain unchanged. Stale-revision
+  /// recovery and missing/changed coordinates always return control to the UI.
+  @visibleForTesting
+  static bool canReplayRequestAfterRefresh({
+    required String method,
+    required Map<String, dynamic>? requestStartAccess,
+    required Map<String, dynamic>? refreshedAccess,
+    required bool staleRevisionRecovery,
+  }) => _canReplayRequestAfterRefresh(
+    method: method,
+    requestCoordinates: _AccessCoordinates.fromEnvelope(requestStartAccess),
+    refreshedCoordinates: _AccessCoordinates.fromEnvelope(refreshedAccess),
+    staleRevisionRecovery: staleRevisionRecovery,
+  );
+
+  static bool _canReplayRequestAfterRefresh({
+    required String method,
+    required _AccessCoordinates? requestCoordinates,
+    required _AccessCoordinates? refreshedCoordinates,
+    required bool staleRevisionRecovery,
+  }) {
+    if (!_isMutation(method)) return true;
+    if (staleRevisionRecovery ||
+        requestCoordinates == null ||
+        refreshedCoordinates == null) {
+      return false;
+    }
+    return requestCoordinates == refreshedCoordinates;
+  }
 
   /// Ensures only one refresh call happens even when multiple 401s arrive
   /// concurrently. All callers await the same [Completer].
@@ -278,4 +338,66 @@ final class _RefreshResult {
 
   final String accessToken;
   final Map<String, dynamic> access;
+}
+
+final class _AccessCoordinates {
+  const _AccessCoordinates({
+    required this.userId,
+    required this.accessContextId,
+    required this.portfolioId,
+    required this.accessRevision,
+    required this.activeExperience,
+  });
+
+  final int userId;
+  final int accessContextId;
+  final int portfolioId;
+  final int accessRevision;
+  final String activeExperience;
+
+  static _AccessCoordinates? fromEnvelope(Map<String, dynamic>? envelope) {
+    if (envelope == null) return null;
+    final identity = envelope['identity'];
+    final selectedContext = envelope['selectedContext'];
+    if (identity is! Map || selectedContext is! Map) return null;
+
+    final userId = identity['userId'];
+    final accessContextId = selectedContext['accessContextId'];
+    final portfolioId = selectedContext['portfolioId'];
+    final accessRevision = selectedContext['accessRevision'];
+    final activeExperience = selectedContext['activeExperience'];
+    if (userId is! num ||
+        accessContextId is! num ||
+        portfolioId is! num ||
+        accessRevision is! num ||
+        activeExperience is! String) {
+      return null;
+    }
+
+    return _AccessCoordinates(
+      userId: userId.toInt(),
+      accessContextId: accessContextId.toInt(),
+      portfolioId: portfolioId.toInt(),
+      accessRevision: accessRevision.toInt(),
+      activeExperience: activeExperience.toLowerCase(),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _AccessCoordinates &&
+      userId == other.userId &&
+      accessContextId == other.accessContextId &&
+      portfolioId == other.portfolioId &&
+      accessRevision == other.accessRevision &&
+      activeExperience == other.activeExperience;
+
+  @override
+  int get hashCode => Object.hash(
+    userId,
+    accessContextId,
+    portfolioId,
+    accessRevision,
+    activeExperience,
+  );
 }

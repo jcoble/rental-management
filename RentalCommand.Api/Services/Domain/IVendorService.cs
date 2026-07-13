@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -8,12 +9,12 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IVendorService
 {
-    Task<IReadOnlyList<VendorResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<VendorListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<VendorResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<VendorResponse> CreateAsync(int portfolioId, CreateVendorRequest request, CancellationToken ct = default);
-    Task<VendorResponse?> UpdateAsync(int portfolioId, int id, UpdateVendorRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<IReadOnlyList<VendorResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<VendorListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<VendorResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<VendorResponse?> CreateAsync(WorkspaceReadScope scope, CreateVendorRequest request, CancellationToken ct = default);
+    Task<VendorResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateVendorRequest request, CancellationToken ct = default);
+    Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
 
     /// <summary>
     /// Enqueue a friendly SMS asking the vendor to send their W-9 for 1099 tax reporting, and audit it.
@@ -21,7 +22,7 @@ public interface IVendorService
     /// the HTTP mapping (not found / no phone on file / queued).
     /// </summary>
     Task<RequestW9Result> RequestW9Async(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int id,
         string clientOperationId,
         int? changedByUserId,

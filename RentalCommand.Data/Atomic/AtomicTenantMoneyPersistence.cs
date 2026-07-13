@@ -62,7 +62,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                   ON account."LeaseManagementId" = management."Id"
                  AND account."PortfolioId" = management."PortfolioId"
                 JOIN "Portfolios" AS portfolio ON portfolio."Id" = agreement."PortfolioId"
-                JOIN "NotificationSettings" AS settings
+                JOIN "AutomationSettings" AS settings
                   ON settings."PortfolioId" = agreement."PortfolioId"
                  AND settings."EnableRentCharges"
                 CROSS JOIN LATERAL (
@@ -112,7 +112,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                              EXTRACT(day FROM candidate.month_end)::numeric, 2)
                        END AS charge_amount
                 FROM candidates AS candidate
-                JOIN "NotificationSettings" AS settings
+                JOIN "AutomationSettings" AS settings
                   ON settings."PortfolioId" = candidate."PortfolioId"
                 WHERE candidate.due_on <= candidate.business_date
                     + GREATEST(settings."RentChargeLeadDays", 0)
@@ -204,7 +204,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                 JOIN "Properties" AS property
                   ON property."Id" = management."PropertyId"
                  AND property."PortfolioId" = management."PortfolioId"
-                JOIN "NotificationSettings" AS settings
+                JOIN "AutomationSettings" AS settings
                   ON settings."PortfolioId" = rent."PortfolioId"
                  AND settings."EnableLateFees"
                 LEFT JOIN caps AS cap ON cap.state = upper(COALESCE(property."State", ''))
@@ -214,7 +214,10 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                 WHERE rent."EntryType" = 'RentCharge'
                   AND balance."OpenAmount" > 0
                   AND rent."DueOn" < effective_date.business_date
-                      - GREATEST(agreement."GracePeriodDays"::integer, 0)
+                      - GREATEST(
+                          agreement."GracePeriodDays"::integer,
+                          settings."LateFeeGraceDays",
+                          0)
                   AND agreement."LateFeeAmount" > 0
                   AND management."CanceledAtUtc" IS NULL
                   AND account."ClosedAtUtc" IS NULL

@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -20,10 +21,12 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     private readonly DocumentTemplateFieldCatalog _catalog = new();
     private readonly InMemoryFileStorage _files = new();
     private readonly DocumentTemplateService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public DocumentTemplateServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(DocumentTemplateServiceTests));
         _sut = new DocumentTemplateService(_ctx.Db, _catalog, _files, TimeProvider.System);
     }
 
@@ -56,7 +59,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             DocumentTemplateKind.Lease,
             status: null,
             propertyId: null,
@@ -99,7 +102,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             DocumentTemplateKind.Lease,
             status: null,
             propertyId: selectedProperty.Id,
@@ -118,14 +121,14 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     [Fact]
     public async Task AddFieldAsync_UsesCatalogLabelAndRequiredFlag_AndBumpsTemplateVersion()
     {
-        var template = (await _sut.CreateAsync(PortfolioId, new CreateDocumentTemplateRequest
+        var template = (await _sut.CreateAsync(_scope, new CreateDocumentTemplateRequest
         {
             Kind = DocumentTemplateKind.Lease,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = "Dad's lease",
         })).Value!;
 
-        var result = await _sut.AddFieldAsync(PortfolioId, template.Id, new CreateDocumentTemplateFieldRequest
+        var result = await _sut.AddFieldAsync(_scope, template.Id, new CreateDocumentTemplateFieldRequest
         {
             FieldKey = "lease.signature.tenant",
             Kind = DocumentTemplateFieldKind.Signature,
@@ -148,14 +151,14 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     [Fact]
     public async Task AddFieldAsync_RejectsCoordinateExtentPastRightEdge()
     {
-        var template = (await _sut.CreateAsync(PortfolioId, new CreateDocumentTemplateRequest
+        var template = (await _sut.CreateAsync(_scope, new CreateDocumentTemplateRequest
         {
             Kind = DocumentTemplateKind.Lease,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = "Overlay lease",
         })).Value!;
 
-        var result = await _sut.AddFieldAsync(PortfolioId, template.Id, new CreateDocumentTemplateFieldRequest
+        var result = await _sut.AddFieldAsync(_scope, template.Id, new CreateDocumentTemplateFieldRequest
         {
             FieldKey = "tenant.fullName",
             Label = "Tenant",
@@ -178,7 +181,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         await using var content = new MemoryStream("%PDF-1.7 sample"u8.ToArray());
 
         var result = await _sut.UploadPdfAsync(
-            PortfolioId,
+            _scope,
             content,
             "dad-lease.pdf",
             "application/pdf",

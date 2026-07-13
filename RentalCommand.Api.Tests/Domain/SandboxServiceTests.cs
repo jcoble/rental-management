@@ -18,7 +18,6 @@ namespace RentalCommand.Api.Tests.Domain;
 public class SandboxServiceTests : IDisposable
 {
     private readonly SqliteTestContext _ctx = new();
-    private readonly RecordingRlsExecutionContext _rls = new();
 
     public void Dispose() => _ctx.Dispose();
 
@@ -31,7 +30,7 @@ public class SandboxServiceTests : IDisposable
             TimeProvider.System,
             new LegalDocumentSourceVersionTestResolver(_ctx.Db));
         return new SandboxService(
-            _ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System, _rls);
+            _ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System);
     }
 
     // -----------------------------------------------------------------------
@@ -120,7 +119,6 @@ public class SandboxServiceTests : IDisposable
         state!.IsSandbox.Should().BeFalse();
         // No-op on an already-live account: data is left intact (we did not wipe a real portfolio).
         (await _ctx.Db.Properties.CountAsync()).Should().Be(propsBefore);
-        _rls.Reasons.Should().BeEmpty("an already-live portfolio performs no destructive graduation");
     }
 
     [Fact]
@@ -254,17 +252,14 @@ public class SandboxServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GoLive_UsesDedicatedBypass_OnlyForGraduationLifetime()
+    public async Task GoLive_CompletesWithoutAnApplicationBypassContext()
     {
         MarkSandbox(portfolioId: 1, DateTime.UtcNow);
         SeedRichGraph(portfolioId: 1);
 
-        _rls.IsBypassActive.Should().BeFalse();
         await BuildService().GoLiveAsync(1, CancellationToken.None);
-
-        _rls.Reasons.Should().Equal(RlsBypassReason.SandboxGraduation);
-        _rls.PortfolioIds.Should().Equal(1);
-        _rls.IsBypassActive.Should().BeFalse("the reason-coded lease ends with the transaction");
+        (await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1)).IsSandbox
+            .Should().BeFalse();
     }
 
     [Fact]
@@ -373,7 +368,6 @@ public class SandboxServiceTests : IDisposable
         // Demo data was actually seeded.
         (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
         (await _ctx.Db.DocumentTemplates.SingleAsync()).IsSandboxSeeded.Should().BeTrue();
-        _rls.Reasons.Should().BeEmpty("onboarding setup is not the destructive graduation wipe");
 
         var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
         portfolio.IsSandbox.Should().BeTrue();
@@ -503,36 +497,6 @@ public class SandboxServiceTests : IDisposable
             HeightPct = 0.05,
         });
         return template;
-    }
-
-    private sealed class RecordingRlsExecutionContext : IRlsExecutionContext
-    {
-        private RlsBypassReason? _active;
-
-        public bool IsBypassActive => _active is not null;
-        public RlsBypassReason? ActiveBypassReason => _active;
-        public int? ActivePortfolioId { get; private set; }
-        public List<RlsBypassReason> Reasons { get; } = [];
-        public List<int?> PortfolioIds { get; } = [];
-
-        public IDisposable BeginBypass(RlsBypassReason reason, int? portfolioId = null)
-        {
-            _active.Should().BeNull("the sandbox service must not nest broad RLS bypass leases");
-            _active = reason;
-            ActivePortfolioId = portfolioId;
-            Reasons.Add(reason);
-            PortfolioIds.Add(portfolioId);
-            return new Lease(this);
-        }
-
-        private sealed class Lease(RecordingRlsExecutionContext owner) : IDisposable
-        {
-            public void Dispose()
-            {
-                owner._active = null;
-                owner.ActivePortfolioId = null;
-            }
-        }
     }
 
     /// <summary>
@@ -852,7 +816,7 @@ public class SandboxServiceTests : IDisposable
             RecipientLeaseManagementPartyId = party.Id,
             LeaseAgreementId = agreement.Id,
             PropertyId = property.Id,
-            NoticeType = "RentReminder",
+            NoticeType = "rent-reminder",
             Status = "Draft",
             Subject = "Rent reminder",
             Body = "Sandbox notice",

@@ -96,7 +96,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         WITH candidates AS (
             SELECT task."Id"
             FROM "RecurringMaintenanceTasks" AS task
-            LEFT JOIN "NotificationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
+            LEFT JOIN "AutomationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
             WHERE task."DeletedAt" IS NULL
               AND task."IsActive"
               AND task."NextDueDate" <= @today
@@ -143,7 +143,7 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         return await _db.RecurringMaintenanceTasks.FromSqlInterpolated($"""
             SELECT task.*
             FROM "RecurringMaintenanceTasks" AS task
-            LEFT JOIN "NotificationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
+            LEFT JOIN "AutomationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
             WHERE task."Id" = ANY({ids})
               AND task."DeletedAt" IS NULL
               AND task."WorkerClaimToken" = {token}

@@ -24,7 +24,8 @@ public class OwnerEntityController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<OwnerEntityResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<OwnerEntityResponse>>> List([FromQuery] OwnerEntityListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var items = await _service.ListAsync(scope, query, ct);
         return Ok(items);
     }
 
@@ -32,7 +33,8 @@ public class OwnerEntityController : ManagementControllerBase
     [ProducesResponseType(typeof(OwnerEntityListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<OwnerEntityListResponse>> ListPage([FromQuery] OwnerEntityListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var page = await _service.ListPageAsync(scope, query, ct);
         return Ok(page);
     }
 
@@ -41,7 +43,8 @@ public class OwnerEntityController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OwnerEntityResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var item = await _service.GetAsync(scope, id, ct);
         return item == null ? NotFound(new { error = "Owner entity not found" }) : Ok(item);
     }
 
@@ -49,7 +52,9 @@ public class OwnerEntityController : ManagementControllerBase
     [ProducesResponseType(typeof(OwnerEntityResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<OwnerEntityResponse>> Create([FromBody] CreateOwnerEntityRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var created = await _service.CreateAsync(scope, request, ct);
+        if (created == null) return NotFound(new { error = "Owner entity not found" });
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
@@ -58,7 +63,8 @@ public class OwnerEntityController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OwnerEntityResponse>> Update(int id, [FromBody] UpdateOwnerEntityRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var updated = await _service.UpdateAsync(scope, id, request, ct);
         return updated == null ? NotFound(new { error = "Owner entity not found" }) : Ok(updated);
     }
 
@@ -70,8 +76,9 @@ public class OwnerEntityController : ManagementControllerBase
         [FromQuery] bool clearPropertyAssignments = false,
         CancellationToken ct = default)
     {
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var deleted = await _service.DeleteAsync(
-            GetPortfolioId(),
+            scope,
             id,
             new DeleteOwnerEntityOptions { ClearPropertyAssignments = clearPropertyAssignments },
             ct);

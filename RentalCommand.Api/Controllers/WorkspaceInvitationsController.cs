@@ -42,66 +42,11 @@ public sealed class WorkspaceInvitationsController : ControllerBase
             return InvalidInvitation();
         }
 
-        var tokenHash = Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(token)))
-            .ToLowerInvariant();
-        await using var transaction = await _db.Database.BeginTransactionAsync(
-            IsolationLevel.ReadCommitted, ct);
-
-        var locked = await _db.Database.SqlQuery<LockedInvitationRow>($"""
-                SELECT "Id", "PortfolioId", clock_timestamp() AS "WallClockUtc"
-                FROM "WorkspaceInvitations"
-                WHERE "TokenHash" = {tokenHash}
-                FOR UPDATE
-                """)
-            .SingleOrDefaultAsync(ct);
-        if (locked is null)
+        ct.ThrowIfCancellationRequested();
+        return StatusCode(StatusCodes.Status503ServiceUnavailable, new
         {
-            return InvalidInvitation();
-        }
-
-        await WorkspaceInvitationActivationRlsScope.ApplyAsync(
-            _db.Database, locked.PortfolioId, ct);
-
-        var invitation = await _db.WorkspaceInvitations
-            .IgnoreQueryFilters()
-            .Include(row => row.InvitedUser)
-            .Include(row => row.WorkspaceMembership)
-                .ThenInclude(membership => membership!.AccessContext)
-            .SingleAsync(row => row.Id == locked.Id, ct);
-        if (invitation.AcceptedAtUtc is not null ||
-            invitation.RevokedAtUtc is not null ||
-            invitation.ExpiresAtUtc <= locked.WallClockUtc ||
-            invitation.WorkspaceMembership?.Status != WorkspaceMembershipStatus.Active ||
-            invitation.WorkspaceMembership.AccessContext?.Status != WorkspaceAccessContextStatus.Active ||
-            invitation.InvitedUser is null ||
-            !string.IsNullOrEmpty(invitation.InvitedUser.PasswordHash))
-        {
-            return InvalidInvitation();
-        }
-
-        var passwordResult = await _users.AddPasswordAsync(
-            invitation.InvitedUser, request.Password);
-        if (!passwordResult.Succeeded)
-        {
-            return ValidationProblem(new ValidationProblemDetails(
-                new Dictionary<string, string[]>
-                {
-                    [nameof(request.Password)] = passwordResult.Errors
-                        .Select(error => error.Description)
-                        .ToArray(),
-                })
-            {
-                Title = "Choose a stronger password.",
-                Status = StatusCodes.Status400BadRequest,
-            });
-        }
-
-        invitation.InvitedUser.EmailConfirmed = true;
-        invitation.AcceptedAtUtc = locked.WallClockUtc;
-        await _db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
-        return Ok(new { activated = true });
+            error = "Workspace invitation activation is temporarily unavailable while token admission is moved to a database-validated command.",
+        });
     }
 
     private IActionResult InvalidInvitation() => BadRequest(new

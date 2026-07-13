@@ -1,4 +1,6 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using RentalCommand.Data;
 
 namespace RentalCommand.Data.Tests;
@@ -91,15 +93,13 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
-    public void DurableDeletePolicy_RequiresExactSandboxReasonAndPortfolioScope()
+    public void DurableDeletePolicy_RequiresDatabaseValidatedSandboxAuthority()
     {
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_delete ON \"TenantLedgerEntries\" FOR DELETE USING\n" +
-            "  (\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
-            "AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation');");
-        CreateSql.Should().NotContain(
-            "CREATE POLICY tenant_delete ON \"TenantLedgerEntries\" FOR DELETE USING\n" +
-            "  (current_setting('app.is_admin', true) = 'true');");
+            "  (rc_sandbox_graduation_allows(\"PortfolioId\"));");
+        CreateSql.Should().NotContain("app.rls_bypass_reason");
+        CreateSql.Should().NotContain("app.is_admin");
     }
 
     [Fact]
@@ -126,6 +126,48 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void RlsClassification_CoversEveryMappedBaseTableExactlyOnce()
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseInMemoryDatabase($"rls-classification-{Guid.NewGuid():N}")
+            .Options;
+        using var db = new RentalCommandDbContext(options);
+
+        var mappedBaseTables = db.Model.GetEntityTypes()
+            .Where(entityType => entityType.GetViewName() is null)
+            .Select(entityType => entityType.GetTableName())
+            .Where(table => table is not null)
+            .Select(table => table!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var direct = FoundationBaselinePostgreSql.DirectPortfolioTables
+            .ToHashSet(StringComparer.Ordinal);
+        var nullable = FoundationBaselinePostgreSql.NullablePortfolioTables
+            .ToHashSet(StringComparer.Ordinal);
+        var children = FoundationBaselinePostgreSql.ChildPortfolioTables
+            .Select(policy => policy.Table)
+            .ToHashSet(StringComparer.Ordinal);
+        var globals = FoundationBaselinePostgreSql.GlobalAuthAndSystemTables
+            .ToHashSet(StringComparer.Ordinal);
+
+        direct.Intersect(nullable).Should().BeEmpty();
+        direct.Intersect(children).Should().BeEmpty();
+        direct.Intersect(globals).Should().BeEmpty();
+        nullable.Intersect(children).Should().BeEmpty();
+        nullable.Intersect(globals).Should().BeEmpty();
+        children.Intersect(globals).Should().BeEmpty();
+
+        direct
+            .Concat(nullable)
+            .Concat(children)
+            .Concat(globals)
+            .Append("Portfolios")
+            .ToHashSet(StringComparer.Ordinal)
+            .Should().BeEquivalentTo(mappedBaseTables,
+                "every mapped table must be deliberately classified before it can enter the clean baseline");
+    }
+
+    [Fact]
     public void SandboxGraduation_PreservesIdentityAndReusableConfiguration()
     {
         FoundationBaselinePostgreSql.SandboxGraduationPreservedTables.Should().Contain(
@@ -139,11 +181,11 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
-    public void GlobalQueueDeletes_RequireTheExactSandboxGraduationReason()
+    public void GlobalQueueDeletes_RequireDatabaseValidatedSandboxAuthority()
     {
         FoundationBaselinePostgreSql.SandboxGraduationGlobalDeleteTables.Should().BeEquivalentTo(
             ["AtomicCommandReceipts", "OutboxMessages", "ProviderInboxEvents"]);
-        CreateSql.Should().Contain("current_setting('app.rls_bypass_reason', true) IS DISTINCT FROM 'SandboxGraduation'");
+        CreateSql.Should().Contain("IF NOT rc_sandbox_graduation_allows(target_portfolio_id) THEN");
         CreateSql.Should().Contain("BEFORE DELETE ON \"AtomicCommandReceipts\"");
         CreateSql.Should().Contain("BEFORE DELETE ON \"OutboxMessages\"");
         CreateSql.Should().Contain("BEFORE DELETE ON \"ProviderInboxEvents\"");

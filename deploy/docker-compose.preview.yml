@@ -19,14 +19,26 @@ services:
     mem_limit: 1g
     cpus: 1.0
 
+  migrate:
+    image: ${API_IMAGE}
+    restart: "no"
+    command: ["--migrate-only"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__MigratorConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_api;Password=${API_DB_PASSWORD:?API_DB_PASSWORD is required}
+      ConnectionStrings__EngineConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [internal]
+
   api:
     image: ${API_IMAGE}
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
-      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
-      ConnectionStrings__MigratorConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_api;Password=${API_DB_PASSWORD:?API_DB_PASSWORD is required}
       Jwt__SecretKey: ${JWT_SECRET_KEY}
       Jwt__Issuer: RentalCommandPreview
       Jwt__Audience: RentalCommandWeb
@@ -44,7 +56,7 @@ services:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
-      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     networks: [edge, internal]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
@@ -60,8 +72,7 @@ services:
     restart: unless-stopped
     environment:
       DOTNET_ENVIRONMENT: Development
-      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
-      ConnectionStrings__MigratorConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=preview;Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
       Upload__BasePath: /var/lib/rentalcommand/uploads
       DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
       Assistant__ApiKey: ""
@@ -76,7 +87,7 @@ services:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
-      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     networks: [edge, internal]
     mem_limit: 1g
     cpus: 1.0

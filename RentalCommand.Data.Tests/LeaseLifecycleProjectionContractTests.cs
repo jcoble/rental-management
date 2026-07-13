@@ -60,4 +60,21 @@ public sealed class LeaseLifecycleProjectionContractTests
         AccessEnvelopeViewSql.Definition.Should().NotContain("rc_business_date(c.\"PortfolioId\")");
         AccessEnvelopeViewSql.Definition.Should().NotContain("rc_business_date(ec.\"PortfolioId\")");
     }
+
+    [Fact]
+    public void Morning_briefing_projection_uses_authoritative_facts_without_baking_in_today()
+    {
+        var definition = MorningBriefingCandidateViewSql.Definition;
+
+        definition.Should().Contain("\"vw_tenant_charge_balances\"");
+        definition.Should().Contain("\"vw_lease_management_lifecycle\"");
+        definition.Should().Contain("\"vw_lease_agreement_status\"");
+        definition.Should().Contain("\"WorkOrders\"");
+        definition.Should().Contain("\"Appointments\"");
+        definition.Should().Contain("\"Inspections\"");
+        definition.Should().Contain("\"RequiredCapability\"");
+        definition.Should().NotContain("\"Notifications\"");
+        definition.Should().NotContain("CURRENT_DATE");
+        definition.Should().NotContain("rc_business_date");
+    }
 }

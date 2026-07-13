@@ -42,23 +42,6 @@ public class DailyBriefingService : IDailyBriefingService
             ct);
     }
 
-    public Task<BriefingResponse> ComposeForSystemAutomationAsync(
-        int portfolioId,
-        CancellationToken ct = default)
-    {
-        var portfolioProperties = _db.Properties
-            .AsNoTracking()
-            .Where(property => property.PortfolioId == portfolioId && property.DeletedAt == null);
-        return ComposeCoreAsync(
-            portfolioId,
-            portfolioProperties,
-            portfolioProperties,
-            portfolioProperties,
-            portfolioProperties,
-            portfolioProperties,
-            ct);
-    }
-
     private async Task<BriefingResponse> ComposeCoreAsync(
         int portfolioId,
         IQueryable<Property> moneyProperties,
@@ -76,252 +59,56 @@ public class DailyBriefingService : IDailyBriefingService
         var sixtyDaysOut = businessDate.AddDays(60);
         var criticalOverdueCutoff = DateOnly.FromDateTime(today.AddDays(-5));
 
-        // --- Rule 1: Emergency maintenance ---
-        var emergencyWorkOrders = _db.WorkOrders
+        // One canonical DB view supplies the authoritative source facts for both the on-demand
+        // Today page and scheduled Morning Briefing. Date-window decisions remain parameterized
+        // here so simulation/business time is never baked into the view definition.
+        var candidates = await _db.MorningBriefingCandidateProjections
             .AsNoTracking()
-            .Where(w =>
-                w.PortfolioId == portfolioId &&
-                workProperties.Any(property => property.Id == w.PropertyId) &&
-                w.Priority == WorkOrderPriority.Emergency &&
-                w.Status != WorkOrderStatus.Completed &&
-                w.Status != WorkOrderStatus.Cancelled &&
-                w.Status != WorkOrderStatus.Archived)
-            .Select(w => new BriefingCandidate
+            .Where(candidate => candidate.PortfolioId == portfolioId)
+            .Where(candidate =>
+                (candidate.RequiredCapability == CapabilityKeys.MoneyBalancesRead
+                    && moneyProperties.Any(property => property.Id == candidate.PropertyId))
+                || (candidate.RequiredCapability == CapabilityKeys.RentalsRead
+                    && rentalProperties.Any(property => property.Id == candidate.PropertyId))
+                || (candidate.RequiredCapability == CapabilityKeys.WorkRead
+                    && workProperties.Any(property => property.Id == candidate.PropertyId))
+                || (candidate.RequiredCapability == CapabilityKeys.LeasingShowingsManage
+                    && showingProperties.Any(property => property.Id == candidate.PropertyId))
+                || (candidate.RequiredCapability == CapabilityKeys.LeasingOnboardingManage
+                    && onboardingProperties.Any(property => property.Id == candidate.PropertyId)))
+            .Where(candidate =>
+                candidate.Category == "Maintenance"
+                || (candidate.Category == "RentLate" && candidate.EventDateOnly < businessDate)
+                || (candidate.Category == "RentDue" && candidate.EventDateOnly == businessDate)
+                || (candidate.Category == "Appointment"
+                    && candidate.EventDateTime >= today && candidate.EventDateTime < tomorrow)
+                || (candidate.Category == "Inspection"
+                    && candidate.EventDateTime >= today && candidate.EventDateTime < nextWeekEnd)
+                || (candidate.Category == "LeaseExpiring"
+                    && candidate.EventDateOnly > businessDate && candidate.EventDateOnly <= sixtyDaysOut))
+            .Select(candidate => new BriefingCandidate
             {
-                SortOrder = 1,
-                SeverityOrder = 0,
-                Category = "Maintenance",
-                EntityType = "WorkOrder",
-                EntityId = w.Id,
-                UnitId = w.UnitId,
-                TitleText = w.Title,
-                DetailText = w.Description,
-                LeaseNumber = null,
-                UnitNumber = null,
-                TenantName = null,
-                PropertyName = null,
-                Amount = 0m,
-                EventDateTime = w.RequestedAt,
-                EventDateOnly = null,
-                TypeValue = 0,
-            });
-
-        // --- Rule 2: Overdue rent ---
-        var overduePayments =
-            from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { charge.PortfolioId, charge.TenantAccountId }
-                equals new { account.PortfolioId, TenantAccountId = account.Id }
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { account.PortfolioId, account.LeaseManagementId }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            join unit in _db.Units.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
-                equals new { unit.PortfolioId, unit.Id }
-            join property in moneyProperties
-                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
-                equals new { property.PortfolioId, property.Id }
-            join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
-                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
-                into agreementRows
-            from agreement in agreementRows.DefaultIfEmpty()
-            where charge.PortfolioId == portfolioId
-                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
-                && charge.IsPastDue
-                && charge.OpenAmount > 0m
-                && charge.DueOn != null
-            select new BriefingCandidate
-            {
-                SortOrder = 2,
-                SeverityOrder = charge.DueOn <= criticalOverdueCutoff ? 0 : 1,
-                Category = "RentLate",
-                EntityType = "TenantAccount",
-                EntityId = account.Id,
-                UnitId = lifecycle.UnitId,
-                TitleText = null,
-                DetailText = null,
-                LeaseNumber = agreement != null ? agreement.AgreementNumber : account.AccountNumber,
-                UnitNumber = unit.UnitNumber,
-                TenantName = lifecycle.CurrentPrimaryTenantName,
-                PropertyName = property.Name,
-                Amount = charge.OpenAmount,
-                EventDateTime = null,
-                EventDateOnly = charge.DueOn,
-                TypeValue = 0,
-            };
-
-        // --- Rule 3: Open rent charges due today ---
-        // Collapse charge rows in PostgreSQL so one tenant account produces one briefing item even
-        // if a corrected agreement caused more than one open rent entry for the same due date.
-        var rentDueAmounts = _db.TenantChargeBalanceProjections
-            .AsNoTracking()
-            .Where(charge =>
-                charge.PortfolioId == portfolioId &&
-                charge.EntryType == nameof(TenantLedgerEntryType.RentCharge) &&
-                charge.DueOn == businessDate &&
-                charge.OpenAmount > 0m)
-            .GroupBy(charge => new { charge.PortfolioId, charge.TenantAccountId, charge.DueOn })
-            .Select(grouped => new
-            {
-                grouped.Key.PortfolioId,
-                grouped.Key.TenantAccountId,
-                grouped.Key.DueOn,
-                OpenAmount = grouped.Sum(charge => charge.OpenAmount),
-            });
-
-        var rentDueAccounts =
-            from due in rentDueAmounts
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { due.PortfolioId, Id = due.TenantAccountId }
-                equals new { account.PortfolioId, account.Id }
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { account.PortfolioId, account.LeaseManagementId }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            join unit in _db.Units.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
-                equals new { unit.PortfolioId, unit.Id }
-            join property in moneyProperties
-                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
-                equals new { property.PortfolioId, property.Id }
-            join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
-                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
-                into agreementRows
-            from agreement in agreementRows.DefaultIfEmpty()
-            where lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending"
-            select new BriefingCandidate
-            {
-                SortOrder = 3,
-                SeverityOrder = 2,
-                Category = "RentDue",
-                EntityType = nameof(TenantAccount),
-                EntityId = account.Id,
-                UnitId = lifecycle.UnitId,
-                TitleText = null,
-                DetailText = null,
-                LeaseNumber = agreement != null ? agreement.AgreementNumber : account.AccountNumber,
-                UnitNumber = unit.UnitNumber,
-                TenantName = lifecycle.CurrentPrimaryTenantName,
-                PropertyName = property.Name,
-                Amount = due.OpenAmount,
-                EventDateTime = null,
-                EventDateOnly = due.DueOn,
-                TypeValue = 0,
-            };
-
-        // --- Rule 4: Appointments today ---
-        var todayAppointments = _db.Appointments
-            .AsNoTracking()
-            .Where(a =>
-                a.PortfolioId == portfolioId &&
-                a.PropertyId != null &&
-                ((a.Type == AppointmentType.Showing &&
-                  showingProperties.Any(property => property.Id == a.PropertyId)) ||
-                 ((a.Type == AppointmentType.MoveIn || a.Type == AppointmentType.MoveOut) &&
-                  onboardingProperties.Any(property => property.Id == a.PropertyId)) ||
-                 ((a.Type == AppointmentType.Inspection || a.Type == AppointmentType.MaintenanceVisit) &&
-                  workProperties.Any(property => property.Id == a.PropertyId)) ||
-                 (a.Type == AppointmentType.OwnerMeeting &&
-                  rentalProperties.Any(property => property.Id == a.PropertyId))) &&
-                (a.Status == AppointmentStatus.Scheduled || a.Status == AppointmentStatus.Confirmed) &&
-                a.ScheduledStart >= today && a.ScheduledStart < tomorrow)
-            .Select(a => new BriefingCandidate
-            {
-                SortOrder = 4,
-                SeverityOrder = 2,
-                Category = "Appointment",
-                EntityType = "Appointment",
-                EntityId = a.Id,
-                UnitId = a.UnitId,
-                TitleText = a.Title,
-                DetailText = null,
-                LeaseNumber = null,
-                UnitNumber = null,
-                TenantName = null,
-                PropertyName = null,
-                Amount = 0m,
-                TypeValue = (int)a.Type,
-                EventDateTime = a.ScheduledStart,
-                EventDateOnly = null,
-            });
-
-        // --- Rule 5: Inspections due within 7 days ---
-        var upcomingInspections = _db.Inspections
-            .AsNoTracking()
-            .Where(i =>
-                i.PortfolioId == portfolioId &&
-                workProperties.Any(property => property.Id == i.PropertyId) &&
-                i.Status == InspectionStatus.Scheduled &&
-                i.ScheduledFor >= today &&
-                i.ScheduledFor < nextWeekEnd)
-            .Select(i => new BriefingCandidate
-            {
-                SortOrder = 5,
-                SeverityOrder = i.ScheduledFor < today.AddDays(2) ? 1 : 2,
-                Category = "Inspection",
-                EntityType = "Inspection",
-                EntityId = i.Id,
-                UnitId = i.UnitId,
-                TitleText = null,
-                DetailText = null,
-                LeaseNumber = null,
-                UnitNumber = null,
-                TenantName = null,
-                PropertyName = null,
-                Amount = 0m,
-                TypeValue = (int)i.Type,
-                EventDateTime = i.ScheduledFor,
-                EventDateOnly = null,
-            });
-
-        // --- Rule 6: Governing agreements expiring within 60 days ---
-        var expiringAgreements =
-            from status in _db.LeaseAgreementStatusProjections.AsNoTracking()
-            join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { status.PortfolioId, Id = status.AgreementId }
-                equals new { agreement.PortfolioId, agreement.Id }
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { status.PortfolioId, status.LeaseManagementId }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            join unit in _db.Units.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
-                equals new { unit.PortfolioId, unit.Id }
-            join property in rentalProperties
-                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
-                equals new { property.PortfolioId, property.Id }
-            where status.PortfolioId == portfolioId
-                && status.IsGoverning
-                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
-                && agreement.TermEndOn != null
-                && agreement.TermEndOn > businessDate
-                && agreement.TermEndOn <= sixtyDaysOut
-            select new BriefingCandidate
-            {
-                SortOrder = 6,
-                SeverityOrder = 1,
-                Category = "LeaseExpiring",
-                EntityType = nameof(LeaseAgreement),
-                EntityId = agreement.Id,
-                UnitId = lifecycle.UnitId,
-                TitleText = null,
-                DetailText = null,
-                LeaseNumber = agreement.AgreementNumber,
-                UnitNumber = unit.UnitNumber,
-                TenantName = lifecycle.CurrentPrimaryTenantName,
-                PropertyName = property.Name,
-                Amount = 0m,
-                EventDateTime = null,
-                EventDateOnly = agreement.TermEndOn,
-                TypeValue = 0,
-            };
-
-        var candidates = await emergencyWorkOrders
-            .Concat(overduePayments)
-            .Concat(rentDueAccounts)
-            .Concat(todayAppointments)
-            .Concat(upcomingInspections)
-            .Concat(expiringAgreements)
+                SortOrder = candidate.SortOrder,
+                SeverityOrder = candidate.Category == "RentLate" && candidate.EventDateOnly <= criticalOverdueCutoff
+                    ? 0
+                    : candidate.Category == "Inspection" && candidate.EventDateTime < today.AddDays(2)
+                        ? 1
+                        : candidate.SeverityOrder,
+                Category = candidate.Category,
+                EntityType = candidate.EntityType,
+                EntityId = candidate.EntityId,
+                UnitId = candidate.UnitId,
+                TitleText = candidate.TitleText,
+                DetailText = candidate.DetailText,
+                LeaseNumber = candidate.LeaseNumber,
+                UnitNumber = candidate.UnitNumber,
+                TenantName = candidate.TenantName,
+                PropertyName = candidate.PropertyName,
+                Amount = candidate.Amount,
+                EventDateTime = candidate.EventDateTime,
+                EventDateOnly = candidate.EventDateOnly,
+                TypeValue = candidate.TypeValue,
+            })
             .OrderBy(c => c.SeverityOrder)
             .ThenBy(c => c.SortOrder)
             // SortOrder uniquely identifies a source category, so each ordered category has

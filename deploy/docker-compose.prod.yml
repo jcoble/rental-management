@@ -125,6 +125,22 @@ services:
           memory: 1G
           cpus: "1.0"
 
+  # One-shot schema migration/provisioning job. The owner password is absent from API and Engine.
+  migrate:
+    image: ghcr.io/jcoble/rentalcommand-api:${IMAGE_TAG:-latest}
+    restart: "no"
+    command: ["--migrate-only"]
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__MigratorConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_api;Password=${API_DB_PASSWORD:?API_DB_PASSWORD is required}
+      - ConnectionStrings__EngineConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
   # ── REST API (also serves /health and the SignalR hubs under /api/v1/hubs) ──
   # Images are built in CI (GitHub Actions) and pulled from GHCR — never built on this box.
   # IMAGE_TAG (a git short-sha) is written to .env by the deploy workflow; falls back to :latest.
@@ -137,8 +153,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_URLS=http://+:8080
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
-      - ConnectionStrings__MigratorConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_api;Password=${API_DB_PASSWORD:?API_DB_PASSWORD is required}
       # ── Auth / JWT ─────────────────────────────────────────────────────────
       - Jwt__SecretKey=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - Jwt__Issuer=${JWT_ISSUER:-RentalCommand}
@@ -195,8 +210,8 @@ services:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - web
       - internal
@@ -235,8 +250,7 @@ services:
       - no-new-privileges:true
     environment:
       - DOTNET_ENVIRONMENT=Production
-      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
-      - ConnectionStrings__MigratorConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
       - App__TimeZone=${APP_TIMEZONE:-America/New_York}
       # Shared with the API: scan processing reads the same upload store + DP keys.
       - Upload__BasePath=/var/lib/rentalcommand/uploads

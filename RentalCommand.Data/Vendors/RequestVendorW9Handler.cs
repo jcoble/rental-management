@@ -4,6 +4,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Outbox;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Vendors;
 
 namespace RentalCommand.Data.Vendors;
@@ -16,6 +17,43 @@ public sealed class RequestVendorW9Handler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        var authorizedAssignments = attempt.Persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId &&
+            assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
+            assignment.Status == MembershipRoleAssignmentStatus.Active &&
+            assignment.SuspendedAtUtc == null &&
+            assignment.RevokedAtUtc == null &&
+            assignment.EffectiveFromUtc <= command.RequestedAtUtc &&
+            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > command.RequestedAtUtc) &&
+            assignment.WorkspaceMembership != null &&
+            assignment.WorkspaceMembership.AccessContextId == command.AccessContextId &&
+            assignment.WorkspaceMembership.PortfolioId == command.PortfolioId &&
+            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
+            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.RevokedAtUtc == null &&
+            assignment.WorkspaceMembership.EffectiveFromUtc <= command.RequestedAtUtc &&
+            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+             assignment.WorkspaceMembership.EffectiveToUtc > command.RequestedAtUtc) &&
+            assignment.WorkspaceMembership.AccessContext != null &&
+            assignment.WorkspaceMembership.AccessContext.UserId == command.ActorUserId &&
+            assignment.WorkspaceMembership.AccessContext.AccessRevision == command.AccessRevision &&
+            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
+            assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
+            attempt.Persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId &&
+                session.UserId == command.ActorUserId &&
+                session.ActiveAccessContextId == command.AccessContextId &&
+                session.Status == AuthSessionStatus.Active &&
+                session.RevokedAtUtc == null &&
+                session.ExpiresAtUtc > command.RequestedAtUtc) &&
+            assignment.RoleProfile != null &&
+            assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                profileCapability.CapabilityDefinition != null &&
+                profileCapability.CapabilityDefinition.Key == CapabilityKeys.WorkManage &&
+                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
+
         // Vendor scope, portfolio existence, destination eligibility, and the message labels are
         // resolved by one translated SQL statement. No load-then-filter or follow-up query.
         var target = await (
@@ -24,6 +62,7 @@ public sealed class RequestVendorW9Handler
                 on vendor.PortfolioId equals portfolio.Id
             where vendor.Id == command.VendorId
                 && vendor.PortfolioId == command.PortfolioId
+                && authorizedAssignments.Any()
             select new
             {
                 vendor.Id,

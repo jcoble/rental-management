@@ -53,7 +53,6 @@ export interface GettingStartedSignalsResponse {
 	tenantCount: number;
 	leaseCount: number;
 	hasNotificationEmail: boolean;
-	hasTexting: boolean;
 	hasAutomations: boolean;
 	isSandbox: boolean;
 }

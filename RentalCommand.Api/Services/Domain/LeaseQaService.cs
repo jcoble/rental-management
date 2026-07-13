@@ -10,11 +10,37 @@ public class LeaseQaService : ILeaseQaService
 {
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
+    private readonly ILeaseManagementQueryService _leaseManagements;
 
-    public LeaseQaService(RentalCommandDbContext db, ILlmProvider llm)
+    public LeaseQaService(
+        RentalCommandDbContext db,
+        ILlmProvider llm,
+        ILeaseManagementQueryService leaseManagements)
     {
         _db = db;
         _llm = llm;
+        _leaseManagements = leaseManagements;
+    }
+
+    /// <summary>
+    /// Staff-facing Q&amp;A. Agreement facts and current capability/property scope are admitted by
+    /// one SQL statement; this path never performs an authorization precheck followed by a broader
+    /// Agreement read.
+    /// </summary>
+    public async Task<LeaseQuestionResponse?> AskManagementAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        string question,
+        CancellationToken ct = default)
+    {
+        question = question.Trim();
+        if (question.Length == 0) return null;
+
+        var agreement = await _leaseManagements.GetLeaseQaAgreementAsync(
+            access, leaseManagementId, ct);
+        return agreement is null
+            ? null
+            : await AnswerAsync(agreement, question, ct);
     }
 
     public async Task<LeaseQuestionResponse?> AskAsync(
@@ -30,6 +56,26 @@ public class LeaseQaService : ILeaseQaService
             .SingleOrDefaultAsync(ct);
         if (agreement == null) return null;
 
+        return await AnswerAsync(new LeaseQaAgreementFacts(
+            agreement.LeaseAgreementId,
+            agreement.LeaseManagementId,
+            agreement.AgreementNumber,
+            agreement.TermStartOn,
+            agreement.TermEndOn,
+            agreement.BaseRentAmount,
+            agreement.SecurityDepositObligation,
+            agreement.LateFeeAmount,
+            agreement.RentDueDay,
+            agreement.TermsPayload,
+            agreement.ExecutedStoredFileId,
+            agreement.ExecutedFileName), question, ct);
+    }
+
+    private async Task<LeaseQuestionResponse> AnswerAsync(
+        LeaseQaAgreementFacts agreement,
+        string question,
+        CancellationToken ct)
+    {
         var sources = new List<string>
         {
             $"Agreement number: {agreement.AgreementNumber}",

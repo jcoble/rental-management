@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Vendors;
@@ -21,6 +22,7 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
     private const int PortfolioId = 1;
     private readonly SqliteTestContext _ctx = new();
     private readonly ServiceProvider _services;
+    private readonly WorkspaceReadScope _scope;
 
     public VendorRequestW9ServiceTests()
     {
@@ -36,6 +38,7 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorRequestW9ServiceTests));
     }
 
     public void Dispose()
@@ -74,8 +77,8 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
         var vendor = SeedVendor("(614) 555-0142");
         var sut = CreateSut();
 
-        var first = await sut.RequestW9Async(PortfolioId, vendor.Id, "stable-op", 7);
-        var replay = await sut.RequestW9Async(PortfolioId, vendor.Id, "stable-op", 7);
+        var first = await sut.RequestW9Async(_scope, vendor.Id, "stable-op", 7);
+        var replay = await sut.RequestW9Async(_scope, vendor.Id, "stable-op", 7);
 
         first.Should().BeEquivalentTo(RequestW9Result.Queued("+16145550142"));
         replay.Should().BeEquivalentTo(first);
@@ -94,8 +97,8 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
         var vendor = SeedVendor("+16145550142");
         var sut = CreateSut();
 
-        await sut.RequestW9Async(PortfolioId, vendor.Id, "first-action", 7);
-        await sut.RequestW9Async(PortfolioId, vendor.Id, "second-action", 7);
+        await sut.RequestW9Async(_scope, vendor.Id, "first-action", 7);
+        await sut.RequestW9Async(_scope, vendor.Id, "second-action", 7);
 
         (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(2);
         (await _ctx.Db.AtomicAuditLogs.CountAsync()).Should().Be(2);
@@ -107,7 +110,7 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
     {
         var vendor = SeedVendor(null);
 
-        var result = await CreateSut().RequestW9Async(PortfolioId, vendor.Id, "no-phone", 7);
+        var result = await CreateSut().RequestW9Async(_scope, vendor.Id, "no-phone", 7);
 
         result.Outcome.Should().Be(RequestW9Outcome.VendorHasNoPhone);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(1);
@@ -125,8 +128,14 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
         var vendor = SeedVendor("+16145550142");
         var vendorId = vendorSelector == 1 ? vendor.Id : vendorSelector;
 
+        var scope = new WorkspaceReadScope(
+            portfolioId,
+            _scope.UserId,
+            _scope.SessionId,
+            _scope.AccessContextId,
+            _scope.AccessRevision);
         var result = await CreateSut().RequestW9Async(
-            portfolioId, vendorId, $"not-found-{portfolioId}", 7);
+            scope, vendorId, $"not-found-{portfolioId}", 7);
 
         result.Outcome.Should().Be(RequestW9Outcome.NotFound);
         (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(0);

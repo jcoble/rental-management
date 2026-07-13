@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/auth/auth_controller.dart';
 import 'core/push/push_service.dart';
+import 'core/realtime/realtime_providers.dart';
 import 'core/realtime/signalr_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
@@ -161,6 +164,17 @@ class RentalCommandApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(appRouterProvider);
+    ref.listen<AuthState>(authControllerProvider, (previous, next) {
+      if (!accessAuthorityChanged(previous, next)) return;
+
+      ref.read(pendingPushLinkProvider.notifier).consume();
+      ref.read(pendingVoiceCommandProvider.notifier).consume();
+      unawaited(resetAccessScopedClient(ref));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        rootNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+        router.go('/');
+      });
+    });
     return MaterialApp.router(
       title: 'Rental Command',
       theme: AppTheme.light,

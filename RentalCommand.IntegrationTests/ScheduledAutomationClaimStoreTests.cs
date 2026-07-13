@@ -136,12 +136,12 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
 
         await using (var seed = NewContext())
         {
-            seed.NotificationSettings.Add(new NotificationSettings
+            seed.AutomationSettings.Add(new AutomationSettings
             {
                 PortfolioId = portfolioId,
                 EnableRecurringMaintenance = false,
-                CreatedAt = now,
-                UpdatedAt = now,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
             });
             seed.RecurringMaintenanceTasks.Add(Maintenance(portfolioId, propertyId, now.AddDays(-1), true));
             await seed.SaveChangesAsync();
@@ -152,21 +152,21 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         (await store.ClaimRecurringMaintenanceAsync(
             "maintenance-disabled", now, TimeSpan.FromMinutes(2), 25)).Should().BeEmpty();
 
-        await db.NotificationSettings
+        await db.AutomationSettings
             .Where(row => row.PortfolioId == portfolioId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(row => row.EnableRecurringMaintenance, true)
-                .SetProperty(row => row.UpdatedAt, now));
+                .SetProperty(row => row.UpdatedAtUtc, now));
 
         var claims = await store.ClaimRecurringMaintenanceAsync(
             "maintenance-enabled", now, TimeSpan.FromMinutes(2), 25);
         claims.Should().ContainSingle();
 
-        await db.NotificationSettings
+        await db.AutomationSettings
             .Where(row => row.PortfolioId == portfolioId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(row => row.EnableRecurringMaintenance, false)
-                .SetProperty(row => row.UpdatedAt, now));
+                .SetProperty(row => row.UpdatedAtUtc, now));
 
         await using var tx = await db.Database.BeginTransactionAsync();
         (await store.LockOwnedRecurringMaintenanceAsync(claims, now)).Should().BeEmpty();

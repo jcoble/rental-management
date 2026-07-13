@@ -7,11 +7,11 @@
 
 import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
+import { safeLandingForAccess } from '$lib/auth/experience-policy';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (locals.user) {
-		const activeExperience = locals.access?.selectedContext.activeExperience;
-		throw redirect(303, activeExperience === 'Tenant' ? '/portal' : '/');
+		throw redirect(303, locals.access ? (safeLandingForAccess(locals.access) ?? '/logout') : '/logout');
 	}
 
 	return {};

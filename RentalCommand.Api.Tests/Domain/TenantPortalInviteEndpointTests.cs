@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -116,6 +117,19 @@ public sealed class TenantPortalInviteEndpointTests : IDisposable
             LastAuthorizedExperience: null,
             WorkspaceMembershipId: null,
             DefaultExperience: null);
+        var authorization = new Mock<IWorkspaceAuthorizationEvaluator>();
+        authorization
+            .Setup(evaluator => evaluator.HasAnyCapabilityAsync(
+                It.IsAny<ActiveAccessContext>(),
+                It.IsAny<IReadOnlyCollection<string>>(),
+                It.IsAny<WorkspaceAuthorizationTarget?>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        httpContext.RequestServices = new ServiceCollection()
+            .AddSingleton(authorization.Object)
+            .AddSingleton(TimeProvider.System)
+            .BuildServiceProvider();
 
         return new TenantController(
             Mock.Of<ITenantService>(),

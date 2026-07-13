@@ -5,6 +5,16 @@ namespace RentalCommand.Api.Services.Domain;
 
 public interface IPropertyDispositionService
 {
+    Task<IReadOnlyList<PropertyDispositionResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default);
+    Task<PropertyDispositionListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default);
+    Task<PropertyDispositionResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<PropertyDispositionResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope, int id, UpdatePropertyDispositionRequest request, CancellationToken ct = default);
+    Task<bool> DeleteAuthorizedAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+
     Task<IReadOnlyList<PropertyDispositionResponse>> ListAsync(
         int portfolioId, PropertyDispositionListQuery query, CancellationToken ct = default);
 

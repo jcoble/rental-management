@@ -71,7 +71,8 @@ public class DailyBriefingServiceTests : IDisposable
         SeedBriefingData();
         _executedSql.Clear();
 
-        var briefing = await _sut.ComposeForSystemAutomationAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeAsync(
+            SeedAdministratorScope(null, DateTime.UtcNow), CancellationToken.None);
 
         briefing.Bullets.Should().Contain(b => b.Category == "Maintenance" && b.Severity == "critical");
         briefing.Bullets.Should().Contain(b => b.Category == "RentLate");
@@ -85,15 +86,12 @@ public class DailyBriefingServiceTests : IDisposable
                 "unit-tied dashboard action items should deep-link into the unit Command Center");
 
         _executedSql.Should().Contain(command =>
-            command.Contains("UNION", StringComparison.OrdinalIgnoreCase)
+            command.Contains("vw_morning_briefing_candidates", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("RequiredCapability", StringComparison.OrdinalIgnoreCase)
             && command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && command.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("vw_tenant_charge_balances", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("vw_lease_management_lifecycle", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("LeaseAgreements", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("Appointments", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("Inspections", StringComparison.OrdinalIgnoreCase),
+            && command.Contains("money.balances.read", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("work.read", StringComparison.OrdinalIgnoreCase),
             "daily briefing candidate ranking and cap must happen in one DB-side query before bullet formatting");
     }
 
@@ -126,7 +124,8 @@ public class DailyBriefingServiceTests : IDisposable
         SeedOpenRentCharge(endedRelationship, 925m, DateOnly.FromDateTime(today.AddMonths(-10)));
         SeedOpenRentCharge(currentRelationship, 975m, DateOnly.FromDateTime(today.AddDays(-7)));
 
-        var briefing = await _sut.ComposeForSystemAutomationAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeAsync(
+            SeedAdministratorScope(null, DateTime.UtcNow), CancellationToken.None);
 
         briefing.Bullets.Should().ContainSingle(b =>
             b.Category == "RentLate" &&
@@ -154,7 +153,8 @@ public class DailyBriefingServiceTests : IDisposable
 
         SeedOpenRentCharge(relationship, 925m, DateOnly.FromDateTime(today.AddDays(-7)));
 
-        var briefing = await _sut.ComposeForSystemAutomationAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeAsync(
+            SeedAdministratorScope(null, DateTime.UtcNow), CancellationToken.None);
 
         var rentBullet = briefing.Bullets.Should().ContainSingle(b => b.Category == "RentLate").Subject;
         rentBullet.Title.Should().Contain("Jordan Smith");
@@ -169,7 +169,7 @@ public class DailyBriefingServiceTests : IDisposable
         var now = DateTime.UtcNow;
         var allowed = SeedBareProperty("Allowed", now);
         var decoy = SeedBareProperty("Decoy", now);
-        var scope = SeedSelectedAdministratorScope(allowed.Id, now);
+        var scope = SeedAdministratorScope(allowed.Id, now);
         _db.WorkOrders.AddRange(
             new WorkOrder
             {
@@ -220,7 +220,7 @@ public class DailyBriefingServiceTests : IDisposable
         return property;
     }
 
-    private WorkspaceReadScope SeedSelectedAdministratorScope(int propertyId, DateTime now)
+    private WorkspaceReadScope SeedAdministratorScope(int? propertyId, DateTime now)
     {
         var user = _db.Users.Single(user => user.Id == ActorUserId);
         var context = new WorkspaceAccessContext
@@ -248,17 +248,22 @@ public class DailyBriefingServiceTests : IDisposable
             RoleProfileId = AccessCatalog.Roles.Single(role =>
                 role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
             Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            ScopeKind = propertyId.HasValue
+                ? MembershipRoleAssignmentScopeKind.SelectedProperties
+                : MembershipRoleAssignmentScopeKind.AllProperties,
             EffectiveFromUtc = now.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
-        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        if (propertyId.HasValue)
         {
-            MembershipRoleAssignment = assignment,
-            PortfolioId = PortfolioId,
-            PropertyId = propertyId,
-        });
+            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignment = assignment,
+                PortfolioId = PortfolioId,
+                PropertyId = propertyId.Value,
+            });
+        }
         var session = new AuthSession
         {
             Id = Guid.NewGuid(),

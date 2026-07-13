@@ -8,6 +8,10 @@ public sealed record RequestVendorW9Command(
     int VendorId,
     string ClientOperationId,
     int? ChangedByUserId,
+    Guid AuthSessionId,
+    int ActorUserId,
+    int AccessContextId,
+    long AccessRevision,
     DateTime RequestedAtUtc) : IAtomicCommandData;
 
 public enum RequestVendorW9Outcome

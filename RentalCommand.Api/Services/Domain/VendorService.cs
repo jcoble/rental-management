@@ -4,12 +4,14 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Core.Vendors;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -37,17 +39,15 @@ public class VendorService : IVendorService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<VendorResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<VendorResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, query, ct);
+        var page = await ListPageAsync(scope, query, ct);
         return page.Items;
     }
 
-    public async Task<VendorListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<VendorListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var q = _db.Vendors
-            .AsNoTracking()
-            .Where(v => v.PortfolioId == portfolioId);
+        var q = AuthorizedVendors(scope, CapabilityKeys.WorkRead).AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
@@ -82,17 +82,23 @@ public class VendorService : IVendorService
         };
     }
 
-    public async Task<VendorResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<VendorResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        var entity = await _db.Vendors
+        var entity = await AuthorizedVendors(scope, CapabilityKeys.WorkRead)
             .AsNoTracking()
-            .FirstOrDefaultAsync(v => v.Id == id && v.PortfolioId == portfolioId, ct);
+            .FirstOrDefaultAsync(v => v.Id == id, ct);
 
         return entity == null ? null : VendorResponse.FromEntity(entity);
     }
 
-    public async Task<VendorResponse> CreateAsync(int portfolioId, CreateVendorRequest request, CancellationToken ct = default)
+    public Task<VendorResponse?> CreateAsync(
+        WorkspaceReadScope scope,
+        CreateVendorRequest request,
+        CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
+        var portfolioId = scope.PortfolioId;
+        if (!await HasAllPropertiesAsync(scope, CapabilityKeys.WorkManage, token)) return null;
         var now = _timeProvider.UtcNow();
         var entity = new Vendor
         {
@@ -116,17 +122,23 @@ public class VendorService : IVendorService
         };
 
         _db.Vendors.Add(entity);
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
         var response = VendorResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
         return response;
-    }
+    }, ct);
 
-    public async Task<VendorResponse?> UpdateAsync(int portfolioId, int id, UpdateVendorRequest request, CancellationToken ct = default)
+    public Task<VendorResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateVendorRequest request,
+        CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
-        var entity = await _db.Vendors
-            .FirstOrDefaultAsync(v => v.Id == id && v.PortfolioId == portfolioId, ct);
+        var portfolioId = scope.PortfolioId;
+        var entity = await AuthorizedVendors(scope, CapabilityKeys.WorkManage)
+            .FirstOrDefaultAsync(v => v.Id == id, token);
         if (entity == null)
         {
             return null;
@@ -148,17 +160,19 @@ public class VendorService : IVendorService
         if (request.Notes != null) entity.Notes = request.Notes;
         entity.UpdatedAt = _timeProvider.UtcNow();
 
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
         var response = VendorResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
         return response;
-    }
+    }, ct);
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
-        var entity = await _db.Vendors
-            .FirstOrDefaultAsync(v => v.Id == id && v.PortfolioId == portfolioId, ct);
+        var portfolioId = scope.PortfolioId;
+        var entity = await AuthorizedVendors(scope, CapabilityKeys.WorkManage)
+            .FirstOrDefaultAsync(v => v.Id == id, token);
         if (entity == null)
         {
             return false;
@@ -174,7 +188,7 @@ public class VendorService : IVendorService
                 && w.PortfolioId == portfolioId
                 && w.Status != WorkOrderStatus.Completed
                 && w.Status != WorkOrderStatus.Cancelled
-                && w.Status != WorkOrderStatus.Archived, ct);
+                && w.Status != WorkOrderStatus.Archived, token);
         if (openWorkOrderCount > 0)
         {
             var plural = openWorkOrderCount == 1 ? "work order" : "work orders";
@@ -183,19 +197,20 @@ public class VendorService : IVendorService
         }
 
         entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, token);
         return true;
-    }
+    }, ct);
 
     public async Task<RequestW9Result> RequestW9Async(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int id,
         string clientOperationId,
         int? changedByUserId,
         CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         ArgumentException.ThrowIfNullOrWhiteSpace(clientOperationId);
         var normalizedOperationId = clientOperationId.Trim();
         if (normalizedOperationId.Length > 160)
@@ -217,6 +232,10 @@ public class VendorService : IVendorService
                 id,
                 normalizedOperationId,
                 changedByUserId,
+                scope.SessionId,
+                scope.UserId,
+                scope.AccessContextId,
+                scope.AccessRevision,
                 _timeProvider.UtcNow()),
             RequestW9Codec,
             ct);
@@ -228,4 +247,26 @@ public class VendorService : IVendorService
             _ => RequestW9Result.NotFound(),
         };
     }
+
+    private IQueryable<Vendor> AuthorizedVendors(WorkspaceReadScope scope, string capabilityKey)
+    {
+        var assignments = _db.AuthorizedWorkspaceAssignments(
+            scope,
+            [capabilityKey],
+            CapabilityAuthorizationTargetKind.Property,
+            _timeProvider.UtcNow());
+        return _db.Vendors.Where(vendor =>
+            vendor.PortfolioId == scope.PortfolioId && assignments.Any());
+    }
+
+    private Task<bool> HasAllPropertiesAsync(
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        CancellationToken ct) =>
+        _db.AuthorizedWorkspaceAssignments(
+                scope,
+                [capabilityKey],
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.UtcNow())
+            .AnyAsync(ct);
 }

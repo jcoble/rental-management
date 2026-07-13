@@ -26,7 +26,7 @@ public class ConversationsController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<ConversationSummary>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ConversationSummary>>> List(CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), ct);
         return Ok(items);
     }
 
@@ -34,7 +34,7 @@ public class ConversationsController : ManagementControllerBase
     [ProducesResponseType(typeof(ConversationListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ConversationListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -42,7 +42,7 @@ public class ConversationsController : ManagementControllerBase
     [ProducesResponseType(typeof(ConversationUnreadCountResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ConversationUnreadCountResponse>> UnreadCount(CancellationToken ct)
     {
-        var count = await _service.GetUnreadCountAsync(GetPortfolioId(), ct);
+        var count = await _service.GetUnreadCountAuthorizedAsync(GetWorkspaceReadScope(), ct);
         return Ok(new ConversationUnreadCountResponse(count));
     }
 
@@ -52,7 +52,7 @@ public class ConversationsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ConversationDetail>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Conversation not found" }) : Ok(item);
     }
 
@@ -70,8 +70,9 @@ public class ConversationsController : ManagementControllerBase
     public async Task<ActionResult<ConversationDetail>> Start(
         [FromBody] StartConversationRequest request, CancellationToken ct)
     {
-        var result = await _service.StartAsync(
-            GetPortfolioId(), request.TenantId, request.Subject, request.Body, request.Channels,
+        var result = await _service.StartAuthorizedAsync(
+            GetWorkspaceReadScope(), request.TenantId, request.PropertyId,
+            request.Subject, request.Body, request.Channels,
             request.OperationKey, request.AcknowledgedFairHousingReview, ct);
 
         return result == null
@@ -87,8 +88,8 @@ public class ConversationsController : ManagementControllerBase
     public async Task<ActionResult<ConversationDetail>> PostMessage(
         int id, [FromBody] PostMessageRequest request, CancellationToken ct)
     {
-        var result = await _service.PostMessageAsync(
-            GetPortfolioId(), id, request.Body, request.Channels, request.OperationKey, ct);
+        var result = await _service.PostMessageAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request.Body, request.Channels, request.OperationKey, ct);
         return result == null ? NotFound(new { error = "Conversation not found" }) : Ok(result);
     }
 }

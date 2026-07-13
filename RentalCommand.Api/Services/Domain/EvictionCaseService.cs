@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -12,6 +14,8 @@ public class EvictionCaseService : IEvictionCaseService
 {
     private const string EntityType = "EvictionCase";
     private const string EventEntityType = "EvictionCaseEvent";
+    private static readonly string[] ReadCapabilities = [CapabilityKeys.RentalsRead];
+    private static readonly string[] WriteCapabilities = [CapabilityKeys.RentalsManage];
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
@@ -27,8 +31,22 @@ public class EvictionCaseService : IEvictionCaseService
         => (await ListPageAsync(portfolioId, query, ct)).Items;
 
     public async Task<EvictionCaseListResponse> ListPageAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
+        => await ListPageFromQueryAsync(BaseQuery(portfolioId), query, ct);
+
+    public async Task<IReadOnlyList<EvictionCaseResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, EvictionCaseListQuery query, CancellationToken ct = default)
+        => (await ListPageAuthorizedAsync(scope, query, ct)).Items;
+
+    public Task<EvictionCaseListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, EvictionCaseListQuery query, CancellationToken ct = default)
+        => ListPageFromQueryAsync(AuthorizedBaseQuery(scope, ReadCapabilities), query, ct);
+
+    private async Task<EvictionCaseListResponse> ListPageFromQueryAsync(
+        IQueryable<EvictionCase> baseQuery,
+        EvictionCaseListQuery query,
+        CancellationToken ct)
     {
-        var filtered = ApplyFilters(BaseQuery(portfolioId), query);
+        var filtered = ApplyFilters(baseQuery, query);
         var totalCount = await filtered.CountAsync(ct);
         var ordered = query.SortField switch
         {
@@ -57,21 +75,71 @@ public class EvictionCaseService : IEvictionCaseService
             .FirstOrDefaultAsync(ct);
     }
 
-    public async Task<EvictionCaseResponse?> CreateAsync(int portfolioId, CreateEvictionCaseRequest request, CancellationToken ct = default)
+    public async Task<EvictionCaseResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        var context = await _db.LeaseManagements.AsNoTracking()
-            .Where(m => m.Id == request.LeaseManagementId && m.PortfolioId == portfolioId)
+        return await ProjectResponses(
+                AuthorizedBaseQuery(scope, ReadCapabilities).Where(e => e.Id == id),
+                includeEvents: true)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    public async Task<EvictionCaseResponse?> CreateAsync(int portfolioId, CreateEvictionCaseRequest request, CancellationToken ct = default)
+        => await CreateCoreAsync(
+            portfolioId,
+            request,
+            _db.LeaseManagements.AsNoTracking().Where(m => m.PortfolioId == portfolioId),
+            broadcast: true,
+            ct);
+
+    public async Task<EvictionCaseResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateEvictionCaseRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var authorizedProperties = _db.Properties
+                .AsNoTracking()
+                .WhereAuthorized(_db, scope, WriteCapabilities, _timeProvider.UtcNow());
+            var managements = _db.LeaseManagements.AsNoTracking().Where(management =>
+                management.PortfolioId == scope.PortfolioId &&
+                authorizedProperties.Any(property =>
+                    property.Id == management.PropertyId &&
+                    property.PortfolioId == management.PortfolioId));
+            return await CreateCoreAsync(
+                scope.PortfolioId, request, managements, broadcast: false, innerCt);
+        }, ct);
+
+        if (response != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<EvictionCaseResponse?> CreateCoreAsync(
+        int portfolioId,
+        CreateEvictionCaseRequest request,
+        IQueryable<LeaseManagement> managements,
+        bool broadcast,
+        CancellationToken ct)
+    {
+        var respondentIds = request.RespondentLeaseManagementPartyIds.Distinct().ToArray();
+        var context = await managements
+            .Where(m => m.Id == request.LeaseManagementId)
             .Select(m => new
             {
                 Management = m,
                 AgreementValid = request.LeaseAgreementId == null || _db.LeaseAgreements.Any(a =>
                     a.Id == request.LeaseAgreementId && a.PortfolioId == portfolioId && a.LeaseManagementId == m.Id),
                 RespondentCount = _db.LeaseManagementParties.Count(p =>
-                    request.RespondentLeaseManagementPartyIds.Contains(p.Id) &&
+                    respondentIds.Contains(p.Id) &&
                     p.PortfolioId == portfolioId && p.LeaseManagementId == m.Id),
             })
             .FirstOrDefaultAsync(ct);
-        var respondentIds = request.RespondentLeaseManagementPartyIds.Distinct().ToArray();
         if (context is null || !context.AgreementValid || context.RespondentCount != respondentIds.Length)
             return null;
 
@@ -97,15 +165,55 @@ public class EvictionCaseService : IEvictionCaseService
             entity.Events.Add(new EvictionCaseEvent { PortfolioId = portfolioId, EventType = initialType.Value, EventDate = eventDate, Notes = entity.Notes ?? "Case opened.", CreatedAt = now, UpdatedAt = now });
         _db.EvictionCases.Add(entity);
         await _db.SaveChangesAsync(ct);
-        var response = await GetAsync(portfolioId, entity.Id, ct);
+        var response = await ProjectResponses(
+                BaseQuery(portfolioId).Where(e => e.Id == entity.Id),
+                includeEvents: true)
+            .FirstOrDefaultAsync(ct);
         if (response is null) return null;
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
 
     public async Task<EvictionCaseResponse?> UpdateAsync(int portfolioId, int id, UpdateEvictionCaseRequest request, CancellationToken ct = default)
+        => await UpdateCoreAsync(
+            portfolioId,
+            _db.EvictionCases.Where(e => e.PortfolioId == portfolioId),
+            id,
+            request,
+            broadcast: true,
+            ct);
+
+    public async Task<EvictionCaseResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateEvictionCaseRequest request,
+        CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases.FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        var response = await _db.ExecuteAuthorizedMutationAsync(
+            innerCt => UpdateCoreAsync(
+                scope.PortfolioId,
+                AuthorizedBaseQuery(scope, WriteCapabilities, tracking: true),
+                id,
+                request,
+                broadcast: false,
+                innerCt),
+            ct);
+
+        if (response != null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
+        return response;
+    }
+
+    private async Task<EvictionCaseResponse?> UpdateCoreAsync(
+        int portfolioId,
+        IQueryable<EvictionCase> cases,
+        int id,
+        UpdateEvictionCaseRequest request,
+        bool broadcast,
+        CancellationToken ct)
+    {
+        var entity = await cases.FirstOrDefaultAsync(e => e.Id == id, ct);
         if (entity is null) return null;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.FiledOnDate.HasValue) entity.FiledOnDate = request.FiledOnDate.Value.ToUtc().Date;
@@ -117,22 +225,87 @@ public class EvictionCaseService : IEvictionCaseService
         if (request.Notes != null) entity.Notes = Normalize(request.Notes);
         entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
-        var response = await GetAsync(portfolioId, id, ct);
-        if (response != null) await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
+        var response = await ProjectResponses(BaseQuery(portfolioId).Where(e => e.Id == id), includeEvents: true)
+            .FirstOrDefaultAsync(ct);
+        if (broadcast && response != null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
         return response;
     }
 
     public async Task<EvictionCaseResponse?> AddEventAsync(int portfolioId, int id, CreateEvictionCaseEventRequest request, CancellationToken ct = default)
+        => await AddEventCoreAsync(
+            portfolioId,
+            _db.EvictionCases.Where(e => e.PortfolioId == portfolioId),
+            id,
+            request,
+            broadcast: true,
+            ct);
+
+    public async Task<EvictionCaseResponse?> AddEventAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CreateEvictionCaseEventRequest request,
+        CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases.FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        EvictionCaseEventResponse? eventResponse = null;
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var result = await AddEventCoreAsync(
+                scope.PortfolioId,
+                AuthorizedBaseQuery(scope, WriteCapabilities, tracking: true),
+                id,
+                request,
+                broadcast: false,
+                innerCt);
+            if (result != null)
+            {
+                eventResponse = await _db.EvictionCaseEvents.AsNoTracking()
+                    .Where(evt => evt.EvictionCaseId == id && evt.PortfolioId == scope.PortfolioId)
+                    .OrderByDescending(evt => evt.Id)
+                    .Select(evt => new EvictionCaseEventResponse
+                    {
+                        Id = evt.Id,
+                        PortfolioId = evt.PortfolioId,
+                        EvictionCaseId = evt.EvictionCaseId,
+                        EventType = evt.EventType,
+                        EventDate = evt.EventDate,
+                        Notes = evt.Notes,
+                        CreatedAt = evt.CreatedAt,
+                        UpdatedAt = evt.UpdatedAt,
+                    })
+                    .FirstAsync(innerCt);
+            }
+            return result;
+        }, ct);
+
+        if (response != null && eventResponse != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EventEntityType, eventResponse.Id, eventResponse, ct);
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, id, response, ct);
+        }
+        return response;
+    }
+
+    private async Task<EvictionCaseResponse?> AddEventCoreAsync(
+        int portfolioId,
+        IQueryable<EvictionCase> cases,
+        int id,
+        CreateEvictionCaseEventRequest request,
+        bool broadcast,
+        CancellationToken ct)
+    {
+        var entity = await cases.FirstOrDefaultAsync(e => e.Id == id, ct);
         if (entity is null) return null;
         var now = _timeProvider.UtcNow();
         var evt = new EvictionCaseEvent { PortfolioId = portfolioId, EvictionCaseId = id, EventType = request.EventType, EventDate = request.EventDate.ToUtc().Date, Notes = Normalize(request.Notes), CreatedAt = now, UpdatedAt = now };
         _db.EvictionCaseEvents.Add(evt);
         ApplyEventToCase(entity, evt, now);
         await _db.SaveChangesAsync(ct);
-        var response = await GetAsync(portfolioId, id, ct);
-        if (response != null)
+        var response = await ProjectResponses(BaseQuery(portfolioId).Where(e => e.Id == id), includeEvents: true)
+            .FirstOrDefaultAsync(ct);
+        if (broadcast && response != null)
         {
             await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EventEntityType, evt.Id, EvictionCaseEventResponse.FromEntity(evt), ct);
             await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
@@ -141,19 +314,67 @@ public class EvictionCaseService : IEvictionCaseService
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+        => await DeleteCoreAsync(
+            portfolioId,
+            _db.EvictionCases.Where(e => e.PortfolioId == portfolioId),
+            id,
+            broadcast: true,
+            ct);
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
     {
-        var entity = await _db.EvictionCases.Include(e => e.Events).FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(
+            innerCt => DeleteCoreAsync(
+                scope.PortfolioId,
+                AuthorizedBaseQuery(scope, WriteCapabilities, tracking: true),
+                id,
+                broadcast: false,
+                innerCt),
+            ct);
+        if (deleted)
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        return deleted;
+    }
+
+    private async Task<bool> DeleteCoreAsync(
+        int portfolioId,
+        IQueryable<EvictionCase> cases,
+        int id,
+        bool broadcast,
+        CancellationToken ct)
+    {
+        var entity = await cases.Include(e => e.Events).FirstOrDefaultAsync(e => e.Id == id, ct);
         if (entity is null) return false;
         var now = _timeProvider.UtcNow();
         entity.DeletedAt = now; entity.UpdatedAt = now;
         foreach (var evt in entity.Events) { evt.DeletedAt = now; evt.UpdatedAt = now; }
         await _db.SaveChangesAsync(ct);
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
     }
 
     private IQueryable<EvictionCase> BaseQuery(int portfolioId) => _db.EvictionCases.AsNoTracking()
         .Where(e => e.PortfolioId == portfolioId);
+
+    private IQueryable<EvictionCase> AuthorizedBaseQuery(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities,
+        bool tracking = false)
+    {
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
+        var cases = tracking ? _db.EvictionCases : _db.EvictionCases.AsNoTracking();
+        return cases.Where(eviction =>
+            eviction.PortfolioId == scope.PortfolioId &&
+            authorizedProperties.Any(property =>
+                property.Id == eviction.PropertyId &&
+                property.PortfolioId == eviction.PortfolioId));
+    }
 
     private static IQueryable<EvictionCaseResponse> ProjectResponses(IQueryable<EvictionCase> query, bool includeEvents)
         => query.Select(e => new EvictionCaseResponse

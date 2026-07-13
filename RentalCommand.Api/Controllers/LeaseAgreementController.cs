@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
@@ -11,7 +10,6 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Esign;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -29,7 +27,6 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
         new("lease-agreement.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
-    private readonly RentalCommandDbContext _db;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly IFileStorage _files;
     private readonly ILegalDocumentIssuancePreparationService _issuancePreparations;
@@ -37,14 +34,12 @@ public sealed class LeaseAgreementController : ManagementControllerBase
 
     public LeaseAgreementController(
         IAtomicUnitOfWork atomic,
-        RentalCommandDbContext db,
         ILeaseManagementQueryService queryService,
         IFileStorage files,
         ILegalDocumentIssuancePreparationService issuancePreparations,
         IConfiguration configuration)
     {
         _atomic = atomic;
-        _db = db;
         _queryService = queryService;
         _files = files;
         _issuancePreparations = issuancePreparations;
@@ -298,13 +293,14 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
-        var signerIds = await _db.LeaseAgreementSigners.AsNoTracking()
-            .Where(signer => signer.PortfolioId == envelope.PortfolioId
-                && signer.LeaseAgreementId == leaseAgreementId)
-            .OrderBy(signer => signer.SigningOrder)
-            .Select(signer => signer.Id)
-            .ToArrayAsync(ct);
-        if (signerIds.Length == 0) return UnprocessableEntity(new { error = "The Agreement has no signer snapshot." });
+        var signerIds = await _queryService.ListAuthorizedAgreementIssueSignerIdsAsync(
+            new LeaseManagementReadContext(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
+                envelope.AccessContextId, envelope.AccessRevision),
+            leaseManagementId,
+            leaseAgreementId,
+            ct);
+        if (signerIds.Count == 0)
+            return UnprocessableEntity(new { error = "The Agreement is unavailable or has no signer snapshot." });
         var command = new IssueLeaseAgreementCommand(
             request.PendingUploadId, request.DocumentSourceVersionId, request.IssuanceFingerprint, envelope.PortfolioId,
             leaseManagementId, leaseAgreementId, request.DraftRevision, envelope.KeyDigest,

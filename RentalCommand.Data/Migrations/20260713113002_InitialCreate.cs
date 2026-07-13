@@ -132,38 +132,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "NotificationSettings",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    SmsProvider = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: true),
-                    SmsCredentialACipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
-                    SmsCredentialBCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
-                    SmsCredentialCCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
-                    SmsFromNumberCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
-                    EnableRentCharges = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableLateFees = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableLeaseExpiryReminders = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
-                    RentChargeLeadDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
-                    LateFeeGraceDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
-                    LeaseExpiryReminderDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 60),
-                    EnableDailyBriefingMessages = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableRecurringMaintenance = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
-                    DailyBriefingSendHourLocal = table.Column<int>(type: "integer", nullable: false),
-                    DailyBriefingIncludeEmpty = table.Column<bool>(type: "boolean", nullable: false),
-                    DailyBriefingSmsRecipientsCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
-                    DailyBriefingEmailRecipientsCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_NotificationSettings", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "Portfolios",
                 columns: table => new
                 {
@@ -540,25 +508,56 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "NotificationPreferences",
+                name: "AutomationSettings",
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    NotificationType = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: false),
-                    EnableInApp = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableEmail = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableSms = table.Column<bool>(type: "boolean", nullable: false),
-                    EnablePush = table.Column<bool>(type: "boolean", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                    EnableRentCharges = table.Column<bool>(type: "boolean", nullable: false),
+                    RentChargeLeadDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
+                    EnableLateFees = table.Column<bool>(type: "boolean", nullable: false),
+                    LateFeeGraceDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
+                    EnableLeaseExpiryReminders = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
+                    LeaseExpiryReminderDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 60),
+                    EnableRecurringMaintenance = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
+                    EnableMorningBriefing = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
+                    MorningBriefingSendHourLocal = table.Column<int>(type: "integer", nullable: false, defaultValue: 8),
+                    MorningBriefingIncludeEmpty = table.Column<bool>(type: "boolean", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_NotificationPreferences", x => x.Id);
+                    table.PrimaryKey("PK_AutomationSettings", x => x.Id);
                     table.ForeignKey(
-                        name: "FK_NotificationPreferences_Portfolios_PortfolioId",
+                        name: "FK_AutomationSettings_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "MessagingProviderSettings",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    SmsProvider = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: true),
+                    SmsCredentialACipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
+                    SmsCredentialBCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
+                    SmsCredentialCCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
+                    SmsFromNumberCipherText = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_MessagingProviderSettings", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_MessagingProviderSettings_Portfolios_PortfolioId",
                         column: x => x.PortfolioId,
                         principalTable: "Portfolios",
                         principalColumn: "Id",
@@ -1843,6 +1842,9 @@ namespace RentalCommand.Data.Migrations
                 {
                     table.PrimaryKey("PK_TeamRoutingRules", x => x.Id);
                     table.UniqueConstraint("AK_TeamRoutingRules_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.CheckConstraint(
+                        "CK_TeamRoutingRules_WorkspaceOnlyTopics",
+                        "\"PropertyId\" IS NULL OR \"Topic\" NOT IN ('AccountAndSecurity', 'MorningBriefing')");
                     table.ForeignKey(
                         name: "FK_TeamRoutingRules_Portfolios_PortfolioId",
                         column: x => x.PortfolioId,
@@ -2010,6 +2012,7 @@ namespace RentalCommand.Data.Migrations
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
                     TenantNoticePolicyId = table.Column<int>(type: "integer", nullable: false),
                     LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
+                    TenantLedgerEntryId = table.Column<long>(type: "bigint", nullable: true),
                     DueAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     Status = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     BusinessKey = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
@@ -6533,14 +6536,18 @@ namespace RentalCommand.Data.Migrations
                 column: "PortfolioId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDrafts_PortfolioId_LeaseManagementId_NoticeType_Status",
+                name: "UX_NoticeDrafts_OpenAgreementNotice",
                 table: "NoticeDrafts",
-                columns: new[] { "PortfolioId", "LeaseManagementId", "NoticeType", "Status" });
+                columns: new[] { "PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType" },
+                unique: true,
+                filter: "\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDrafts_PortfolioId_TenantLedgerEntryId_NoticeType_Sta~",
+                name: "UX_NoticeDrafts_OpenLedgerNotice",
                 table: "NoticeDrafts",
-                columns: new[] { "PortfolioId", "TenantLedgerEntryId", "NoticeType", "Status" });
+                columns: new[] { "PortfolioId", "TenantLedgerEntryId", "NoticeType" },
+                unique: true,
+                filter: "\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_PropertyId",
@@ -6599,9 +6606,9 @@ namespace RentalCommand.Data.Migrations
                 column: "WorkspaceNoticeTemplateVersionId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NotificationPreferences_PortfolioId_NotificationType",
-                table: "NotificationPreferences",
-                columns: new[] { "PortfolioId", "NotificationType" },
+                name: "IX_AutomationSettings_PortfolioId",
+                table: "AutomationSettings",
+                column: "PortfolioId",
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -6625,8 +6632,8 @@ namespace RentalCommand.Data.Migrations
                 column: "UserId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NotificationSettings_PortfolioId",
-                table: "NotificationSettings",
+                name: "IX_MessagingProviderSettings_PortfolioId",
+                table: "MessagingProviderSettings",
                 column: "PortfolioId",
                 unique: true);
 
@@ -7390,7 +7397,15 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_TeamRoutingRules_PortfolioId_Topic_PropertyId",
                 table: "TeamRoutingRules",
                 columns: new[] { "PortfolioId", "Topic", "PropertyId" },
-                unique: true);
+                unique: true,
+                filter: "\"PropertyId\" IS NOT NULL");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TeamRoutingRules_PortfolioId_Topic_Workspace",
+                table: "TeamRoutingRules",
+                columns: new[] { "PortfolioId", "Topic" },
+                unique: true,
+                filter: "\"PropertyId\" IS NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_TeamRoutingRules_PropertyId",
@@ -7642,6 +7657,12 @@ namespace RentalCommand.Data.Migrations
                 table: "TenantNoticeWorkItems",
                 column: "BusinessKey",
                 unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TenantNoticeWorkItems_PortfolioId_TenantLedgerEntryId",
+                table: "TenantNoticeWorkItems",
+                columns: new[] { "PortfolioId", "TenantLedgerEntryId" },
+                filter: "\"TenantLedgerEntryId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_TenantNoticeWorkItems_Status_DueAtUtc_ClaimExpiresAtUtc_Id",
@@ -8313,13 +8334,13 @@ namespace RentalCommand.Data.Migrations
                 name: "NoticeDrafts");
 
             migrationBuilder.DropTable(
-                name: "NotificationPreferences");
+                name: "AutomationSettings");
 
             migrationBuilder.DropTable(
                 name: "Notifications");
 
             migrationBuilder.DropTable(
-                name: "NotificationSettings");
+                name: "MessagingProviderSettings");
 
             migrationBuilder.DropTable(
                 name: "OAuthStates");

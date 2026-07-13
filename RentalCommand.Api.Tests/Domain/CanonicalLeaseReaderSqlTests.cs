@@ -594,6 +594,57 @@ public sealed class CanonicalLeaseReaderSqlTests
     }
 
     [Fact]
+    public void Lease_qa_facts_are_admitted_by_the_same_authorized_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildLeaseQaAgreementQuery(ReadAccess(), 42).ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("AccessRevision");
+        sql.Should().Contain("rentals.read");
+        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("LeaseManagements");
+        sql.Should().Contain("vw_lease_agreement_status");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("LegalDocumentArtifacts");
+        sql.Should().Contain("StoredFiles");
+        sql.Should().NotContain("ClientEvaluation");
+    }
+
+    [Fact]
+    public void Legal_issue_signers_are_exact_target_property_authorized_server_side_queries()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var agreementSql = service
+            .BuildAuthorizedAgreementIssueSignerQuery(ReadAccess(), 42, 73)
+            .ToQueryString();
+        var addendumSql = service
+            .BuildAuthorizedAddendumIssueSignerQuery(ReadAccess(), 42, 74)
+            .ToQueryString();
+
+        foreach (var sql in new[] { agreementSql, addendumSql })
+        {
+            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("AccessRevision");
+            sql.Should().Contain("rentals.manage");
+            sql.Should().Contain("leasing.agreements.prepare");
+            sql.Should().Contain("MembershipRoleAssignmentProperties");
+            sql.Should().Contain("LeaseManagements");
+            sql.Should().Contain("ORDER BY");
+            sql.Should().NotContain("ClientEvaluation");
+        }
+
+        agreementSql.Should().Contain("LeaseAgreements");
+        agreementSql.Should().Contain("LeaseAgreementSigners");
+        addendumSql.Should().Contain("LeaseAddenda");
+        addendumSql.Should().Contain("LeaseAddendumSigners");
+    }
+
+    [Fact]
     public void Agreement_source_scan_uses_the_typed_stored_file_authority_in_sql()
     {
         using var db = NewContext();

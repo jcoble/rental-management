@@ -84,7 +84,6 @@
 		Home,
 		Users,
 		Bell,
-		MessageSquare,
 		ListChecks,
 		PiggyBank,
 	} from '@lucide/svelte';
@@ -94,11 +93,11 @@
 
 	// ---------------------------------------------------------------------------
 	// Step model. The ordered flow is the core entity steps (portfolio → lease)
-	// followed by the optional provider-setup steps (notifications, texting). The
+	// followed by the optional personal-alert step. The
 	// step metadata (titles, explanations, where-to-find, docs links) lives in the
 	// shared registry so Settings can deep-link into the exact same steps.
 	// ---------------------------------------------------------------------------
-	const STEP_ICONS = { Building, UserCircle2, Home, Users, FileText, Bell, MessageSquare } as const;
+	const STEP_ICONS = { Building, UserCircle2, Home, Users, FileText, Bell } as const;
 	const STEPS = WIZARD_STEPS;
 	// Stepper redesign (TSK-602): group the flat 8-step row into labeled sections so it reads as
 	// "where am I in the journey" instead of 8 squeezed, identical-looking circles. Replaces the
@@ -107,7 +106,7 @@
 		{ label: 'Setup', keys: ['portfolio', 'owner'] },
 		{ label: 'Property', keys: ['import', 'property'] },
 		{ label: 'People', keys: ['tenants', 'lease'] },
-		{ label: 'Notify', keys: ['notifications', 'texting'] },
+		{ label: 'Notify', keys: ['notifications'] },
 	];
 
 	let stepIndex = $state(0);
@@ -126,7 +125,6 @@
 	let leaseImportCreatedSpine = $state(false);
 	let portfolioSaved = $state(false);
 	let notificationsSaved = $state(false);
-	let textingSaved = $state(false);
 	let returnToFinishAfterOptional = $state(false);
 
 	// ---------------------------------------------------------------------------
@@ -174,15 +172,10 @@
 		queryKey: ['lease-managements', 'onboarding'],
 		queryFn: () => leaseManagements.listPage({ take: 50 }),
 	}));
-	const notificationEmailQuery = createQuery(() => ({
-		queryKey: ['notification-email', portfolioId],
+	const myAlertsQuery = createQuery(() => ({
+		queryKey: ['notification-settings', 'my-alerts'],
 		enabled: portfolioId > 0,
-		queryFn: () => notifications.getNotificationEmail(),
-	}));
-	const notificationSettingsQuery = createQuery(() => ({
-		queryKey: ['notification-settings'],
-		enabled: portfolioId > 0,
-		queryFn: () => notifications.getSettings(),
+		queryFn: () => notifications.myAlerts.get(),
 	}));
 
 	// Sandbox/example-data state still matters for copy and progress framing, but it must not block
@@ -198,12 +191,6 @@
 	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
 	const hasExistingTenants = $derived((tenantsQuery.data?.length ?? 0) > 0);
 	const hasExistingLeases = $derived((leasesQuery.data?.totalCount ?? 0) > 0);
-	const hasNotificationEmail = $derived(!!notificationEmailQuery.data?.email);
-	const hasTexting = $derived(
-		notificationSettingsQuery.data?.smsCredentialASet === true ||
-			notificationSettingsQuery.data?.smsCredentialBSet === true
-	);
-
 	// A step counts as "done" if the wizard handled it OR data already exists.
 	const stepDone = $derived<Record<WizardStepKey, boolean>>({
 		portfolio: portfolioSaved || !!portfolioQuery.data?.name,
@@ -212,8 +199,7 @@
 		property: leaseImportCreatedSpine || !!createdProperty || hasExistingProperties,
 		tenants: leaseImportCreatedSpine || createdTenants.length > 0 || hasExistingTenants,
 		lease: leaseImportCreatedSpine || createdLease || hasExistingLeases,
-		notifications: notificationsSaved || hasNotificationEmail,
-		texting: textingSaved || hasTexting,
+		notifications: notificationsSaved,
 	});
 
 	// A1: the real "set-up spine" — a property, a tenant, and a lease all exist. The wizard lets a user
@@ -1025,84 +1011,33 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// Step: Notifications (email alerts) — writes the same endpoint as Settings.
+	// Step: My alerts — writes the same canonical per-user endpoint as Settings.
 	// ---------------------------------------------------------------------------
-	let notificationEmail = $state('');
-	let notificationEmailPrefilled = false;
-	$effect(() => {
-		if (notificationEmailQuery.data && !notificationEmailPrefilled) {
-			notificationEmailPrefilled = true;
-			notificationEmail = notificationEmailQuery.data.email ?? '';
-		}
+	let alertForm = $state({
+		enableInApp: true,
+		enableMobilePush: true,
+		enableEmail: true,
+		enableSms: false,
 	});
-	const saveNotificationEmailMutation = createMutation(() => ({
-		mutationFn: () => notifications.setNotificationEmail(notificationEmail.trim() || null),
-		onSuccess: () => {
-			notificationsSaved = true;
-			showSuccess('Alert email saved.');
-			queryClient.invalidateQueries({ queryKey: ['notification-email', portfolioId] });
-			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
-			next();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	// ---------------------------------------------------------------------------
-	// Step: Texting (SignalWire) — writes the same endpoint as Settings. Only the
-	// provider connection fields; keeps every other notification setting intact by
-	// round-tripping the current settings payload.
-	// ---------------------------------------------------------------------------
-	let textingForm = $state({ projectId: '', spaceUrl: '', fromNumber: '' });
-	let textingToken = $state('');
-	let textingPrefilled = false;
+	let alertFormPrefilled = false;
 	$effect(() => {
-		const d = notificationSettingsQuery.data;
-		if (d && !textingPrefilled) {
-			textingPrefilled = true;
-			// Credentials are write-only on the wire (only *Set booleans come back),
-			// so the from-number is the only prefillable connection field.
-			textingForm = {
-				projectId: '',
-				spaceUrl: '',
-				fromNumber: d.smsFromNumber ?? '',
+		const saved = myAlertsQuery.data;
+		if (saved && !alertFormPrefilled) {
+			alertFormPrefilled = true;
+			alertForm = {
+				enableInApp: saved.enableInApp,
+				enableMobilePush: saved.enableMobilePush,
+				enableEmail: saved.enableEmail,
+				enableSms: saved.enableSms,
 			};
 		}
 	});
-	const saveTextingMutation = createMutation(() => ({
-		mutationFn: () => {
-			const d = notificationSettingsQuery.data;
-			if (!d) throw new Error('Settings not loaded yet.');
-			return notifications.setSettings({
-				enableRentCharges: d.enableRentCharges,
-				enableLateFees: d.enableLateFees,
-				enableLeaseExpiryReminders: d.enableLeaseExpiryReminders,
-				notifyTenants: d.notifyTenants,
-				rentChargeLeadDays: d.rentChargeLeadDays,
-				lateFeeGraceDays: d.lateFeeGraceDays,
-				leaseExpiryReminderDays: d.leaseExpiryReminderDays,
-				enableDailyBriefingMessages: d.enableDailyBriefingMessages,
-				dailyBriefingSendHourLocal: d.dailyBriefingSendHourLocal,
-				dailyBriefingIncludeEmpty: d.dailyBriefingIncludeEmpty,
-				dailyBriefingSmsRecipients: d.dailyBriefingSmsRecipients,
-				dailyBriefingEmailRecipients: d.dailyBriefingEmailRecipients,
-				// Wizard's texting step is SignalWire-guided; slots per SmsProviderMeta:
-				// A = Project ID, B = API Token, C = Space URL. undefined = keep saved secret.
-				smsProvider: 'SignalWire',
-				smsFromNumber: textingForm.fromNumber.trim() || null,
-				smsCredentialA: textingForm.projectId.trim() || undefined,
-				smsCredentialB: textingToken.length > 0 ? textingToken : undefined,
-				smsCredentialC: textingForm.spaceUrl.trim() || undefined,
-				autoSendRentReminder: d.autoSendRentReminder,
-				autoSendLateRent: d.autoSendLateRent,
-				leaseEndAutoAction: d.leaseEndAutoAction,
-				channelPreferences: d.channelPreferences ?? [],
-			});
-		},
+	const saveMyAlertsMutation = createMutation(() => ({
+		mutationFn: () => notifications.myAlerts.update(alertForm),
 		onSuccess: () => {
-			textingSaved = true;
-			textingToken = '';
-			showSuccess('Texting connected.');
-			queryClient.invalidateQueries({ queryKey: ['notification-settings'] });
+			notificationsSaved = true;
+			showSuccess('Your alert preferences were saved.');
+			queryClient.invalidateQueries({ queryKey: ['notification-settings', 'my-alerts'] });
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -1139,7 +1074,7 @@
 		if (reachedMilestone) celebratedSteps.add(currentStep.key);
 
 		// The last CORE step (lease) is the natural "done" point — show the finale and offer the
-		// optional provider steps from there rather than forcing the user through them.
+		// optional personal-alert step from there rather than forcing the user through it.
 		if (currentStep.key === 'lease') {
 			bigFinale();
 			finishFlow();
@@ -1204,8 +1139,7 @@
 			deleteUnitMutation.isPending ||
 			saveTenantsMutation.isPending ||
 			saveLeaseMutation.isPending ||
-			saveNotificationEmailMutation.isPending ||
-			saveTextingMutation.isPending
+			saveMyAlertsMutation.isPending
 	);
 
 	// Labels for select triggers.
@@ -1291,13 +1225,7 @@
 						{#if !stepDone.notifications}
 							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => openOptionalStepFromFinished('notifications')}>
 								<Bell class="h-4 w-4" />
-								Set up email alerts
-							</Button>
-						{/if}
-						{#if !stepDone.texting}
-							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-texting" onclick={() => openOptionalStepFromFinished('texting')}>
-								<MessageSquare class="h-4 w-4" />
-								Turn on texting
+								Configure my alerts
 							</Button>
 						{/if}
 					</div>
@@ -1864,44 +1792,21 @@
 							{/if}
 						</WizardStepScaffold>
 
-					<!-- ============ Notifications (email alerts) ============ -->
+					<!-- ============ My alerts ============ -->
 					{:else if currentStep.key === 'notifications'}
 						<WizardStepScaffold step={currentStep}>
-							<div>
-								<label for="ob-notif-email" class="mb-1 block text-xs font-medium text-muted-foreground">Alert email <span class="font-normal">(optional)</span></label>
-								<Input id="ob-notif-email" type="email" autocomplete="email" data-testid="onboarding-notification-email" data-coach="onboarding-notifications" bind:value={notificationEmail} placeholder="your-email@example.com" />
-								<p class="mt-1 text-xs text-muted-foreground">Leave blank to use your login email.</p>
-							</div>
-						</WizardStepScaffold>
-
-					<!-- ============ Texting (SignalWire) ============ -->
-					{:else if currentStep.key === 'texting'}
-						<WizardStepScaffold step={currentStep}>
-							{#if hasTexting}
-								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-texting-existing">
-									Texting is already connected. You can update the details below or skip.
-								</div>
+							{#if myAlertsQuery.data}
+								<p class="mb-3 text-sm text-muted-foreground">
+									For {myAlertsQuery.data.displayName}: {myAlertsQuery.data.email || 'no email'} · {myAlertsQuery.data.phoneNumber || 'no phone'}
+								</p>
 							{/if}
-							<div class="grid gap-4 sm:grid-cols-2">
-								<div>
-									<label for="ob-sw-project" class="mb-1 block text-xs font-medium text-muted-foreground">Project ID</label>
-									<Input id="ob-sw-project" autocomplete="off" data-testid="onboarding-texting-project" data-coach="onboarding-texting" bind:value={textingForm.projectId} />
-								</div>
-								<div>
-									<label for="ob-sw-space" class="mb-1 block text-xs font-medium text-muted-foreground">Space URL</label>
-									<Input id="ob-sw-space" autocomplete="off" data-testid="onboarding-texting-space" bind:value={textingForm.spaceUrl} placeholder="your-space.signalwire.com" />
-								</div>
-								<div>
-									<label for="ob-sw-from" class="mb-1 block text-xs font-medium text-muted-foreground">From number</label>
-									<Input id="ob-sw-from" type="tel" inputmode="tel" autocomplete="off" data-testid="onboarding-texting-from" bind:value={textingForm.fromNumber} placeholder="+13302933081" />
-								</div>
-								<div>
-									<label for="ob-sw-token" class="mb-1 block text-xs font-medium text-muted-foreground">
-										API Token {notificationSettingsQuery.data?.smsCredentialBSet ? '(saved)' : ''}
-									</label>
-									<Input id="ob-sw-token" type="password" autocomplete="new-password" data-testid="onboarding-texting-token" bind:value={textingToken} placeholder={notificationSettingsQuery.data?.smsCredentialBSet ? 'Leave blank to keep saved token' : 'Paste API token'} />
-								</div>
+							<div class="grid gap-3 sm:grid-cols-2" data-coach="onboarding-notifications">
+								<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" bind:checked={alertForm.enableInApp} /> <span>In-app bell and inbox</span></label>
+								<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" bind:checked={alertForm.enableMobilePush} /> <span>Mobile push</span></label>
+								<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" bind:checked={alertForm.enableEmail} /> <span>Email</span></label>
+								<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" bind:checked={alertForm.enableSms} /> <span>SMS</span></label>
 							</div>
+							<p class="mt-3 text-xs text-muted-foreground">These choices are only for you. Team routing and tenant notices are separate.</p>
 						</WizardStepScaffold>
 					{/if}
 				</Card.Content>
@@ -1965,13 +1870,8 @@
 							</Button>
 						{/if}
 					{:else if currentStep.key === 'notifications'}
-						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending} onclick={() => saveNotificationEmailMutation.mutate()}>
-							{saveNotificationEmailMutation.isPending ? 'Saving…' : 'Save & continue'}
-							<ArrowRight class="h-4 w-4" />
-						</Button>
-					{:else if currentStep.key === 'texting'}
-						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending || notificationSettingsQuery.isLoading} onclick={() => saveTextingMutation.mutate()}>
-							{saveTextingMutation.isPending ? 'Saving…' : 'Save & continue'}
+						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending || myAlertsQuery.isLoading} onclick={() => saveMyAlertsMutation.mutate()}>
+							{saveMyAlertsMutation.isPending ? 'Saving…' : 'Save & continue'}
 							<ArrowRight class="h-4 w-4" />
 						</Button>
 					{/if}

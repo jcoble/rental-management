@@ -82,10 +82,10 @@ public sealed class NotifyDataUpdateService : IDataUpdateService
             // pg_notify() (the function form) takes the channel + payload as bind parameters, avoiding
             // the identifier/string-literal escaping that the bare NOTIFY statement would require.
             await using var conn = await _dataSource.OpenConnectionAsync(ct);
-            await using (var roleCommand = new NpgsqlCommand("SET ROLE rentalcommand_engine", conn))
-            {
-                await roleCommand.ExecuteNonQueryAsync(ct);
-            }
+            await RentalCommand.Data.Security.DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(
+                conn,
+                RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole,
+                ct);
             await using var cmd = new NpgsqlCommand("SELECT pg_notify(@channel, @payload)", conn);
             cmd.Parameters.AddWithValue("channel", DataUpdateNotification.ChannelName);
             cmd.Parameters.AddWithValue("payload", payload);

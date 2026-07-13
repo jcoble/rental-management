@@ -13,14 +13,15 @@ import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { serverGet } from '$lib/api/server-fetch';
 import type { SandboxState } from '$lib/types';
+import { safeLandingForAccess } from '$lib/auth/experience-policy';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user || !locals.accessToken) {
 		throw redirect(303, '/login?redirectTo=/choose-setup');
 	}
 
-	if (locals.access?.selectedContext.activeExperience === 'Tenant') {
-		throw redirect(303, '/portal');
+	if (!locals.access || locals.access.selectedContext.activeExperience !== 'Management') {
+		throw redirect(303, locals.access ? (safeLandingForAccess(locals.access) ?? '/logout') : '/logout');
 	}
 
 	const { data: sandbox } = await serverGet<SandboxState>(

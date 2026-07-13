@@ -6,17 +6,25 @@ const protectedLayout = readFileSync(
 	new URL('../../routes/(protected)/+layout.server.ts', import.meta.url),
 	'utf8'
 );
+const appShell = readFileSync(new URL('../components/AppShell.svelte', import.meta.url), 'utf8');
+const experiencePolicy = readFileSync(new URL('./experience-policy.ts', import.meta.url), 'utf8');
 
 test('direct staff routes use the same role-capability gates as navigation', () => {
-	assert.match(protectedLayout, /\['\/admin\/users', \['team\.read', 'team\.manage'\]\]/);
 	assert.match(
 		protectedLayout,
-		/\['\/settings', \['security\.manage', 'billing\.manage', 'integrations\.manage'\]\]/
+		/import \{ canAccessRoute, CAPABILITY \} from '\$lib\/auth\/experience-policy'/
 	);
-	assert.match(protectedLayout, /\['\/onboarding', \['rentals\.manage'\]\]/);
-	assert.match(protectedLayout, /\['\/audit', \['reports\.read'\]\]/);
+	assert.match(protectedLayout, /canAccessRoute\(url\.pathname, activeExperience, effectiveCapabilities\)/);
 	assert.match(
-		protectedLayout,
-		/\['\/ai', \['rentals\.read', 'work\.read', 'leasing\.terms\.read'\]\]/
+		appShell,
+		/import \{ canAccessRoute, CAPABILITY, safeLandingForAccess \} from '\$lib\/auth\/experience-policy'/
 	);
+	assert.match(appShell, /canAccessRoute\(item\.href, activeExperience, activeCapabilities\)/);
+	assert.match(experiencePolicy, /prefix: '\/admin\/users'/);
+	assert.match(experiencePolicy, /prefix: '\/settings'/);
+	assert.match(experiencePolicy, /prefix: '\/settings\/notifications\/my-alerts'/);
+	assert.match(experiencePolicy, /prefix: '\/settings\/notifications\/team-routing'/);
+	assert.match(experiencePolicy, /prefix: '\/onboarding'/);
+	assert.match(experiencePolicy, /prefix: '\/audit'/);
+	assert.match(experiencePolicy, /prefix: '\/ai'/);
 });

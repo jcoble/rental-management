@@ -11,6 +11,7 @@ using PdfSharp.Pdf.IO;
 using QuestPDF.Fluent;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
@@ -33,6 +34,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly InMemoryFileStorage _storage = new();
     private readonly LeaseAgreementRenderer _renderer;
+    private readonly WorkspaceReadScope _scope;
 
     public LeaseAgreementDocumentTests()
     {
@@ -71,6 +73,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             CreatedAt = now,
         });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(LeaseAgreementDocumentTests));
 
         _renderer = new LeaseAgreementRenderer(
             _storage,
@@ -177,7 +180,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     {
         var templates = new DocumentTemplateService(_db, new DocumentTemplateFieldCatalog(), _storage, TimeProvider.System);
 
-        var sql = templates.BuildAgreementPreviewQuery(PortfolioId, 123).ToQueryString();
+        var sql = templates.BuildAgreementPreviewQuery(_scope, 123).ToQueryString();
 
         sql.Should().Contain("LeaseAgreements");
         sql.Should().Contain("LeaseManagements");

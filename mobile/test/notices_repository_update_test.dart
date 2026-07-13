@@ -35,7 +35,7 @@ void main() {
         leaseManagementId: 10,
         tenantAccountId: 12,
         tenantLedgerEntryId: 8,
-        noticeType: 'RentReminder',
+        noticeType: 'rent-reminder',
       );
 
       expect(adapter.method, 'POST');
@@ -44,7 +44,7 @@ void main() {
       expect(adapter.data, containsPair('leaseManagementId', 10));
       expect(adapter.data, containsPair('tenantAccountId', 12));
       expect(adapter.data, containsPair('tenantLedgerEntryId', 8));
-      expect(adapter.data, containsPair('noticeType', 'RentReminder'));
+      expect(adapter.data, containsPair('noticeType', 'rent-reminder'));
       expect(drafts.single.tenantLedgerEntryId, 8);
     },
   );
@@ -76,7 +76,7 @@ class _Adapter implements HttpClientAdapter {
               'tenantLedgerEntryId': 8,
               'recipientTenantId': 3,
               'tenantName': 'Jordan Lee',
-              'noticeType': 'RentReminder',
+              'noticeType': 'rent-reminder',
               'status': 'Draft',
               'subject': 'Upcoming rent',
               'body': 'Rent is due soon.',
@@ -98,7 +98,7 @@ class _Adapter implements HttpClientAdapter {
         'tenantAccountId': 12,
         'recipientTenantId': 3,
         'tenantName': 'Jordan Lee',
-        'noticeType': 'RentReminder',
+        'noticeType': 'rent-reminder',
         'status': 'Draft',
         'subject': 'New subj',
         'body': 'New body',

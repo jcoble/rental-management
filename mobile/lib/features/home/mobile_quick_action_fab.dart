@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/scheduler.dart';
+
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/mobile_access_policy.dart';
 
 class MobileQuickAction {
   const MobileQuickAction({
@@ -185,7 +189,7 @@ class MobileQuickActionFabHost
   }
 }
 
-class MobileQuickActionFab extends StatefulWidget {
+class MobileQuickActionFab extends ConsumerStatefulWidget {
   const MobileQuickActionFab({
     super.key,
     this.primaryAction,
@@ -208,10 +212,11 @@ class MobileQuickActionFab extends StatefulWidget {
   final bool registerWithHost;
 
   @override
-  State<MobileQuickActionFab> createState() => _MobileQuickActionFabState();
+  ConsumerState<MobileQuickActionFab> createState() =>
+      _MobileQuickActionFabState();
 }
 
-class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
+class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
   final Object _scopeOwner = Object();
   MobileQuickActionController? _scopeController;
   MobileQuickActionFabRegistry? _registry;
@@ -289,30 +294,37 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
     ...widget.primaryActions,
   ];
 
-  List<MobileQuickAction> get _actions => [
-    ..._primaryActions,
-    MobileQuickAction(
-      label: 'Chat',
-      icon: Icons.auto_awesome,
-      onPressed: widget.onChat,
-    ),
-    MobileQuickAction(
-      label: 'Record',
-      icon: Icons.mic_none_rounded,
-      onPressed: widget.onRecord,
-    ),
-    MobileQuickAction(
-      label: 'Scan',
-      icon: Icons.document_scanner_outlined,
-      onPressed: widget.onScan,
-    ),
-  ];
-
   @override
   Widget build(BuildContext context) {
     if (_usesScope) return const SizedBox.shrink();
 
-    final actions = _actions;
+    final auth = ref.watch(authControllerProvider);
+    final capabilities = auth is AuthStateAuthenticated
+        ? auth.capabilities
+        : const <String>{};
+    final hasGlobalScan = canUseGlobalScan(capabilities);
+    final actions = <MobileQuickAction>[
+      if (hasGlobalScan)
+        MobileQuickAction(
+          label: 'Scan / Add',
+          icon: Icons.document_scanner_outlined,
+          onPressed: widget.onScan,
+        ),
+      ..._primaryActions,
+      if (canUseVoiceRecord(capabilities))
+        MobileQuickAction(
+          label: 'Record',
+          icon: Icons.mic_none_rounded,
+          onPressed: widget.onRecord,
+        ),
+      if (canUseAssistant(capabilities))
+        MobileQuickAction(
+          label: 'Assistant',
+          icon: Icons.auto_awesome,
+          onPressed: widget.onChat,
+        ),
+    ];
+    if (actions.isEmpty) return const SizedBox.shrink();
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -346,7 +358,11 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
         FloatingActionButton(
           heroTag: widget.heroTag,
           onPressed: _toggle,
-          tooltip: _open ? 'Close quick actions' : 'Open quick actions',
+          tooltip: _open
+              ? 'Close quick actions'
+              : hasGlobalScan
+              ? 'Scan / Add'
+              : 'Open quick actions',
           elevation: 3,
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 160),
@@ -360,8 +376,12 @@ class _MobileQuickActionFabState extends State<MobileQuickActionFab> {
               );
             },
             child: Icon(
-              _open ? Icons.close_rounded : Icons.add_rounded,
-              key: ValueKey(_open),
+              _open
+                  ? Icons.close_rounded
+                  : hasGlobalScan
+                  ? Icons.document_scanner_outlined
+                  : Icons.add_rounded,
+              key: ValueKey((_open, hasGlobalScan)),
             ),
           ),
         ),

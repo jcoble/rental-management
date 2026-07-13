@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Operations;
@@ -9,7 +10,8 @@ using RentalCommand.Core.Outbox;
 namespace RentalCommand.Data.Operations;
 
 public sealed class DispatchWorkOrderToVendorHandler
-    : IAtomicCommandHandler<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>
+    : IAtomicCommandHandler<DispatchWorkOrderToVendorCommand, DispatchWorkOrderToVendorResult>,
+      IAtomicReplayAuthorizer<DispatchWorkOrderToVendorCommand>
 {
     private static readonly VendorDispatchStatus[] OpenStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
@@ -20,9 +22,17 @@ public sealed class DispatchWorkOrderToVendorHandler
         CancellationToken ct)
     {
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
-        var workOrder = await attempt.Persistence.Query<WorkOrder>()
-            .SingleOrDefaultAsync(candidate => candidate.Id == command.WorkOrderId
-                && candidate.PortfolioId == command.PortfolioId, ct);
+        var workOrders = attempt.Persistence.Query<WorkOrder>()
+            .Where(candidate => candidate.Id == command.WorkOrderId
+                && candidate.PortfolioId == command.PortfolioId);
+        if (command.ManagementAccess is not null)
+        {
+            var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+            workOrders = WhereManagementAuthorized(
+                workOrders, attempt.Persistence, command, now);
+        }
+
+        var workOrder = await workOrders.SingleOrDefaultAsync(ct);
         var vendorExists = await attempt.Persistence.Query<Vendor>()
             .AnyAsync(candidate => candidate.Id == command.VendorId
                 && candidate.PortfolioId == command.PortfolioId, ct);
@@ -97,6 +107,84 @@ public sealed class DispatchWorkOrderToVendorHandler
             dispatch.Status,
             dispatch.DispatchedAtUtc,
             dispatch.Message);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        DispatchWorkOrderToVendorCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (command.ManagementAccess is null)
+        {
+            return;
+        }
+
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var authorized = await WhereManagementAuthorized(
+                persistence.Query<WorkOrder>().Where(workOrder =>
+                    workOrder.Id == command.WorkOrderId &&
+                    workOrder.PortfolioId == command.PortfolioId),
+                persistence,
+                command,
+                now)
+            .AnyAsync(ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(
+                "The current workspace access no longer authorizes this work-order dispatch.");
+        }
+    }
+
+    private static IQueryable<WorkOrder> WhereManagementAuthorized(
+        IQueryable<WorkOrder> workOrders,
+        IAtomicPersistenceSession persistence,
+        DispatchWorkOrderToVendorCommand command,
+        DateTime utcNow)
+    {
+        var access = command.ManagementAccess
+            ?? throw new InvalidOperationException("Management access is required for this query.");
+        return workOrders.Where(workOrder =>
+            persistence.Query<AuthSession>().Any(session =>
+                session.Id == access.SessionId &&
+                session.UserId == access.UserId &&
+                session.ActiveAccessContextId == access.AccessContextId &&
+                session.Status == AuthSessionStatus.Active &&
+                session.RevokedAtUtc == null &&
+                session.ExpiresAtUtc > utcNow &&
+                session.ActiveAccessContext != null &&
+                session.ActiveAccessContext.Id == access.AccessContextId &&
+                session.ActiveAccessContext.UserId == access.UserId &&
+                session.ActiveAccessContext.PortfolioId == command.PortfolioId &&
+                session.ActiveAccessContext.AccessRevision == access.AccessRevision &&
+                session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active &&
+                session.ActiveAccessContext.SuspendedAtUtc == null &&
+                session.ActiveAccessContext.RevokedAtUtc == null &&
+                session.ActiveAccessContext.Membership != null &&
+                session.ActiveAccessContext.Membership.PortfolioId == command.PortfolioId &&
+                session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
+                session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
+                session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
+                session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
+                (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
+                 session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow) &&
+                session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
+                    assignment.PortfolioId == command.PortfolioId &&
+                    assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                    assignment.SuspendedAtUtc == null &&
+                    assignment.RevokedAtUtc == null &&
+                    assignment.EffectiveFromUtc <= utcNow &&
+                    (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+                    assignment.RoleProfile != null &&
+                    assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                        profileCapability.CapabilityDefinition != null &&
+                        profileCapability.CapabilityDefinition.Key == CapabilityKeys.WorkManage &&
+                        profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                            CapabilityAuthorizationTargetKind.Property) &&
+                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                      assignment.SelectedProperties.Any(selected =>
+                          selected.PortfolioId == command.PortfolioId &&
+                          selected.PropertyId == workOrder.PropertyId))))));
     }
 
     private static DispatchWorkOrderToVendorResult Empty(

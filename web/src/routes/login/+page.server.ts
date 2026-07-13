@@ -8,10 +8,21 @@
 
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import type { AccessContextSelectionRequiredResponse, LoginResponse, WorkspaceExperience } from '$lib/types/user';
+import type { AccessContextSelectionRequiredResponse, LoginResponse } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { AUTH_COOKIE_NAMES, deleteLegacyAuthCookies } from '$lib/server/auth-cookies';
 import { env } from '$env/dynamic/public';
+import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
+
+function authorizedRedirectPath(
+	path: string | null,
+	fallback: string,
+	access: LoginResponse['access']
+): string {
+	const candidate = safeRedirectPath(path, fallback);
+	const pathname = new URL(candidate, 'https://placeholder.invalid').pathname;
+	return canAccessPathForEnvelope(access, pathname) ? candidate : fallback;
+}
 
 function safeRedirectPath(path: string | null, fallback: string): string {
 	if (!path) return fallback;
@@ -30,16 +41,10 @@ function safeRedirectPath(path: string | null, fallback: string): string {
 	}
 }
 
-/** Where to send a user after login when no explicit redirect is requested. */
-function defaultLandingFor(experience: WorkspaceExperience): string {
-	if (experience === 'Tenant') return '/portal';
-	return '/';
-}
-
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (locals.user) {
-		const fallback = defaultLandingFor(locals.access?.selectedContext.activeExperience ?? 'Management');
-		throw redirect(303, safeRedirectPath(url.searchParams.get('redirectTo'), fallback));
+		const fallback = locals.access ? (safeLandingForAccess(locals.access) ?? '/logout') : '/logout';
+		throw redirect(303, authorizedRedirectPath(url.searchParams.get('redirectTo'), fallback, locals.access!));
 	}
 	return {
 		redirectTo: url.searchParams.get('redirectTo'),
@@ -148,7 +153,7 @@ export const actions: Actions = {
 			return fail(500, { error: userMessage, emailNotVerified: false, email });
 		}
 
-		const fallback = defaultLandingFor(data.access.selectedContext.activeExperience);
-		throw redirect(303, safeRedirectPath(requestedRedirect, fallback));
+		const fallback = safeLandingForAccess(data.access) ?? '/logout';
+		throw redirect(303, authorizedRedirectPath(requestedRedirect, fallback, data.access));
 	}
 };

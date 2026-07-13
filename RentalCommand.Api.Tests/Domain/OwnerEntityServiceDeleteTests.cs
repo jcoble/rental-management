@@ -5,6 +5,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -16,9 +17,11 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
 
     private readonly SqliteTestContext _ctx = new();
     private readonly OwnerEntityService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public OwnerEntityServiceDeleteTests()
     {
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerEntityServiceDeleteTests));
         _sut = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
@@ -30,11 +33,11 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
         var owner = SeedOwner();
         SeedProperty(owner);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, owner.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, owner.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("property").And.Contain("reassign");
-        (await _sut.GetAsync(PortfolioId, owner.Id)).Should().NotBeNull();
+        (await _sut.GetAsync(_scope, owner.Id)).Should().NotBeNull();
     }
 
     [Fact]
@@ -44,13 +47,13 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
         var propertyId = SeedProperty(owner);
 
         var deleted = await _sut.DeleteAsync(
-            PortfolioId,
+            _scope,
             owner.Id,
             new DeleteOwnerEntityOptions { ClearPropertyAssignments = true });
 
         deleted.Should().BeTrue();
         _ctx.Db.ChangeTracker.Clear();
-        (await _sut.GetAsync(PortfolioId, owner.Id)).Should().BeNull();
+        (await _sut.GetAsync(_scope, owner.Id)).Should().BeNull();
         _ctx.Db.Properties.Single(p => p.Id == propertyId).OwnerEntityId.Should().BeNull();
     }
 
@@ -60,11 +63,11 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
         var owner = SeedOwner();
         SeedOwnerDistribution(owner);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, owner.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, owner.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("distribution");
-        (await _sut.GetAsync(PortfolioId, owner.Id)).Should().NotBeNull();
+        (await _sut.GetAsync(_scope, owner.Id)).Should().NotBeNull();
     }
 
     [Fact]
@@ -72,10 +75,10 @@ public sealed class OwnerEntityServiceDeleteTests : IDisposable
     {
         var owner = SeedOwner();
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, owner.Id);
+        var deleted = await _sut.DeleteAsync(_scope, owner.Id);
 
         deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, owner.Id)).Should().BeNull();
+        (await _sut.GetAsync(_scope, owner.Id)).Should().BeNull();
     }
 
     private OwnerEntity SeedOwner()

@@ -19,9 +19,8 @@ namespace RentalCommand.IntegrationTests;
 ///   <item>Spin a real Postgres, apply migrations as the owner/superuser (which creates the
 ///   <c>rentalcommand_api</c> role and the <c>tenant_isolation</c> policies), and seed two
 ///   portfolios' rows.</item>
-///   <item>Switch the connection into the non-superuser <c>rentalcommand_api</c> role and set
-///   <c>app.current_portfolio_id</c> for portfolio A (the exact contract the request-time connection
-///   interceptor applies) — so RLS fires the way it does in production.</item>
+///   <item>Connect directly as the non-superuser <c>rentalcommand_api</c> login and apply the
+///   canonical durable session/access coordinates used by the request interceptor.</item>
 ///   <item>Query WITHOUT a <c>WHERE PortfolioId = ...</c> clause. If RLS were broken or the app
 ///   connected as a superuser, both portfolios' rows would return and the assertion would fail. That
 ///   is the whole point: RLS — not the app filter — does the work here.</item>
@@ -35,6 +34,9 @@ namespace RentalCommand.IntegrationTests;
 public sealed class RlsTenantIsolationTests : IAsyncLifetime
 {
     private const string ApiRole = "rentalcommand_api";
+    private const string EngineRole = "rentalcommand_engine";
+    private const string ApiPassword = "rls-api-test-password";
+    private const string EnginePassword = "rls-engine-test-password";
 
     // Built inside InitializeAsync (not as a field initializer): PostgreSqlBuilder.Build() validates
     // the Docker endpoint eagerly, so building it here lets a missing daemon be caught and skipped
@@ -46,6 +48,10 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
 
     private int _portfolioA;
     private int _portfolioB;
+    private int _isolatedTenantA;
+    private int _isolatedTenantB;
+    private RuntimeScopeSeed _scopeA = null!;
+    private RuntimeScopeSeed _scopeB = null!;
 
     public async Task InitializeAsync()
     {
@@ -74,13 +80,17 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         await using (var ctx = NewContext(_ownerConnString))
         {
             await ctx.Database.MigrateAsync();
+            await ctx.Database.ExecuteSqlRawAsync(
+                $"ALTER ROLE {ApiRole} PASSWORD '{ApiPassword}'; ALTER ROLE {EngineRole} PASSWORD '{EnginePassword}';");
         }
 
         // Seed two portfolios' data as the owner/superuser (which bypasses RLS for the inserts).
         await using (var ctx = NewContext(_ownerConnString))
         {
-            _portfolioA = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio A", "PO-A");
-            _portfolioB = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio B", "PO-B");
+            _scopeA = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio A", "PO-A");
+            _scopeB = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio B", "PO-B");
+            _portfolioA = _scopeA.PortfolioId;
+            _portfolioB = _scopeB.PortfolioId;
             ctx.PlaidTokenExchangeAttempts.AddRange(
                 PlaidAttempt(_portfolioA, "operation-a"),
                 PlaidAttempt(_portfolioB, "operation-b"));
@@ -95,7 +105,12 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             ctx.AccountingMappingPromotionJobs.AddRange(
                 PromotionJob(_portfolioA, connectionA.Id, mappingA.Id),
                 PromotionJob(_portfolioB, connectionB.Id, mappingB.Id));
+            var isolatedA = IsolatedTenant(_portfolioA, "isolated-a");
+            var isolatedB = IsolatedTenant(_portfolioB, "isolated-b");
+            ctx.Tenants.AddRange(isolatedA, isolatedB);
             await ctx.SaveChangesAsync();
+            _isolatedTenantA = isolatedA.Id;
+            _isolatedTenantB = isolatedB.Id;
         }
     }
 
@@ -176,6 +191,75 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Rls_CrossPortfolioSelectUpdateAndDeleteAreInvisible_AndOwnRowCannotMoveWorkspaces()
+    {
+        SkipIfNoDocker();
+
+        await using var conn = await OpenAsApiRoleAsync(_portfolioA);
+
+        (await ExecScalarIntAsync(conn,
+            $"SELECT count(*) FROM \"Tenants\" WHERE \"Id\" = {_isolatedTenantB}"))
+            .Should().Be(0, "another workspace's row must be invisible even when its exact ID is known");
+        (await ExecAffectedAsync(conn,
+            $"UPDATE \"Tenants\" SET \"FirstName\" = 'stolen' WHERE \"Id\" = {_isolatedTenantB}"))
+            .Should().Be(0, "an exact-ID update must not reach another workspace's row");
+        (await ExecAffectedAsync(conn,
+            $"DELETE FROM \"Tenants\" WHERE \"Id\" = {_isolatedTenantB}"))
+            .Should().Be(0, "an exact-ID delete must not reach another workspace's row");
+
+        var moveAcrossWorkspace = async () => await ExecAffectedAsync(conn,
+            $"UPDATE \"Tenants\" SET \"PortfolioId\" = {_portfolioB} WHERE \"Id\" = {_isolatedTenantA}");
+        (await moveAcrossWorkspace.Should().ThrowAsync<PostgresException>())
+            .Which.SqlState.Should().Be(PostgresErrorCodes.InsufficientPrivilege,
+                "WITH CHECK must reject moving an authorized row into another workspace");
+    }
+
+    [SkippableFact]
+    public async Task Rls_EveryClassifiedTableIsEnabledForcedAndHasAPolicy_InTheMigratedDatabase()
+    {
+        SkipIfNoDocker();
+
+        var expected = FoundationBaselinePostgreSql.DirectPortfolioTables
+            .Concat(FoundationBaselinePostgreSql.NullablePortfolioTables)
+            .Concat(FoundationBaselinePostgreSql.ChildPortfolioTables.Select(policy => policy.Table))
+            .Append("Portfolios")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        await using var conn = new NpgsqlConnection(_ownerConnString);
+        await conn.OpenAsync();
+        await using var command = conn.CreateCommand();
+        command.CommandText = """
+            WITH expected(table_name) AS (
+              SELECT unnest($1::text[])
+            )
+            SELECT
+              count(*) FILTER (WHERE relation.oid IS NULL) AS missing_table_count,
+              count(*) FILTER (WHERE relation.oid IS NOT NULL AND NOT relation.relrowsecurity) AS rls_disabled_count,
+              count(*) FILTER (WHERE relation.oid IS NOT NULL AND NOT relation.relforcerowsecurity) AS rls_not_forced_count,
+              count(*) FILTER (WHERE relation.oid IS NOT NULL AND NOT EXISTS (
+                SELECT 1
+                FROM pg_policies policy
+                WHERE policy.schemaname = 'public'
+                  AND policy.tablename = expected.table_name
+              )) AS missing_policy_count
+            FROM expected
+            LEFT JOIN pg_class relation
+              ON relation.relname = expected.table_name
+             AND relation.relnamespace = 'public'::regnamespace
+             AND relation.relkind IN ('r', 'p')
+            """;
+        command.Parameters.AddWithValue(expected);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        (await reader.ReadAsync()).Should().BeTrue();
+        reader.GetInt64(0).Should().Be(0, "every classified table must exist after migration");
+        reader.GetInt64(1).Should().Be(0, "RLS must be enabled on every classified table");
+        reader.GetInt64(2).Should().Be(0, "RLS must be forced even for the table owner");
+        reader.GetInt64(3).Should().Be(0, "every classified table must have an installed policy");
+    }
+
+    [SkippableFact]
     public async Task Rls_PlaidExchangeAdmission_SeesOwnAttempt_AndRejectsCrossPortfolioWrite()
     {
         SkipIfNoDocker();
@@ -215,57 +299,48 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Rls_AdminContext_SeesBothPortfolios()
+    public async Task Rls_ForgedLegacySettings_DoNotWidenApiScope()
     {
         SkipIfNoDocker();
 
-        // app.is_admin = true (the background-worker / platform-admin path) bypasses the portfolio
-        // predicate — both portfolios visible.
-        await using var conn = new NpgsqlConnection(_ownerConnString);
-        await conn.OpenAsync();
-        await ExecAsync(conn, $"SET ROLE {ApiRole}; SET app.current_portfolio_id = '0'; SET app.is_admin = 'true';");
+        await using var conn = await OpenAsApiRoleAsync(_portfolioA);
+        await ExecAsync(conn,
+            "SET app.is_admin = 'true'; SET app.rls_bypass_reason = 'SandboxGraduation';");
 
         await using var ctx = NewContext(conn);
         var relationshipNumbers = await ctx.LeaseManagements
             .Select(relationship => relationship.RelationshipNumber)
             .ToListAsync();
 
-        relationshipNumbers.Should().Contain("PO-A").And.Contain("PO-B",
-            "an admin context bypasses RLS via app.is_admin=true; both portfolios visible");
+        relationshipNumbers.Should().Contain("PO-A");
+        relationshipNumbers.Should().NotContain("PO-B",
+            "caller-controlled legacy settings are not an authorization mechanism");
     }
 
     [SkippableFact]
-    public async Task Rls_DurableDelete_AcceptsOnlySandboxGraduationReason()
+    public async Task Rls_RuntimeLoginsCannotAssumeEachOtherOrTheAuthorityRole()
     {
         SkipIfNoDocker();
 
-        await using var conn = await OpenAsApiRoleAsync(_portfolioA);
-        var deleteSql = $"DELETE FROM \"TenantLedgerEntries\" WHERE \"PortfolioId\" = {_portfolioA}";
+        await using var api = await OpenAsApiRoleAsync(_portfolioA);
+        await using var engine = await OpenDirectRoleAsync(EngineRole, EnginePassword);
 
-        // A normal portfolio session can read its ledger, but DELETE sees no eligible rows.
-        (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
+        foreach (var (connection, targetRole) in new[]
+                 {
+                     (api, EngineRole),
+                     (api, "rentalcommand_rls_authority"),
+                     (engine, ApiRole),
+                     (engine, "rentalcommand_rls_authority"),
+                 })
+        {
+            var assume = async () => await ExecAsync(connection, $"SET ROLE {targetRole}");
+            (await assume.Should().ThrowAsync<PostgresException>()).Which.SqlState
+                .Should().Be(PostgresErrorCodes.InsufficientPrivilege);
+        }
 
-        // Generic worker/admin bypass remains deliberately insufficient for destructive graduation.
-        await ExecAsync(conn,
-            "SET app.current_portfolio_id = '0'; SET app.is_admin = 'true'; " +
-            "SET app.rls_bypass_reason = 'BackgroundWorker';");
-        (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
-
-        await ExecAsync(conn, "SET app.rls_bypass_reason = 'PlatformOperation';");
-        (await ExecAffectedAsync(conn, deleteSql)).Should().Be(0);
-
-        // Only the dedicated reason together with an explicit target portfolio admits the
-        // set-based wipe. Administrative scope alone must never turn this into a global delete.
-        await ExecAsync(conn,
-            $"SET app.current_portfolio_id = '{_portfolioA}'; " +
-            "SET app.is_admin = 'false'; " +
-            "SET app.rls_bypass_reason = 'SandboxGraduation';");
-        (await ExecAffectedAsync(conn, deleteSql)).Should().BeGreaterThan(0);
-
-        // The command remains explicitly scoped; the other portfolio's durable ledger survives.
-        await using var owner = NewContext(_ownerConnString);
-        (await owner.TenantLedgerEntries.CountAsync(row => row.PortfolioId == _portfolioB))
-            .Should().BeGreaterThan(0);
+        (await ExecScalarIntAsync(engine, "SELECT count(*) FROM \"LeaseManagements\""))
+            .Should().BeGreaterThanOrEqualTo(2,
+                "the direct Engine identity has its own cross-workspace policy path");
     }
 
     // ----- helpers -----
@@ -280,16 +355,33 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(conn).Options);
 
     /// <summary>
-    /// Open a fresh connection, switch into the non-superuser rentalcommand_api role and set the
-    /// portfolio GUC — the exact session state the request-time RlsConnectionInterceptor produces.
+    /// Open a fresh connection directly as the non-superuser API login and set the same canonical
+    /// session/access coordinates as the request-time interceptor.
     /// </summary>
     private async Task<NpgsqlConnection> OpenAsApiRoleAsync(int portfolioId)
     {
-        var conn = new NpgsqlConnection(_ownerConnString);
-        await conn.OpenAsync();
+        var scope = portfolioId == _portfolioA ? _scopeA : _scopeB;
+        var conn = await OpenDirectRoleAsync(ApiRole, ApiPassword);
         await ExecAsync(conn,
-            $"SET ROLE {ApiRole}; SET app.current_portfolio_id = '{portfolioId}'; SET app.is_admin = 'false';");
+            $"SET app.auth_session_id = '{scope.AuthSessionId}'; " +
+            $"SET app.current_user_id = '{scope.UserId}'; " +
+            $"SET app.current_access_context_id = '{scope.AccessContextId}'; " +
+            $"SET app.access_revision = '{scope.AccessRevision}'; " +
+            $"SET app.current_portfolio_id = '{portfolioId}';");
         return conn;
+    }
+
+    private async Task<NpgsqlConnection> OpenDirectRoleAsync(string username, string password)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_ownerConnString)
+        {
+            Username = username,
+            Password = password,
+            Pooling = false,
+        };
+        var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync();
+        return connection;
     }
 
     private static async Task ExecAsync(NpgsqlConnection conn, string sql)
@@ -306,7 +398,24 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         return await cmd.ExecuteNonQueryAsync();
     }
 
-    private static async Task<int> SeedPortfolioWithOverdueChargeAsync(
+    private static async Task<int> ExecScalarIntAsync(NpgsqlConnection conn, string sql)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    private static Tenant IsolatedTenant(int portfolioId, string tag) => new()
+    {
+        PortfolioId = portfolioId,
+        FirstName = "RLS",
+        LastName = tag,
+        Email = $"{tag}@example.test",
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow,
+    };
+
+    private static async Task<RuntimeScopeSeed> SeedPortfolioWithOverdueChargeAsync(
         RentalCommandDbContext ctx, string name, string tag)
     {
         var now = DateTime.UtcNow;
@@ -331,6 +440,40 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             CreatedAt = now,
         };
         ctx.Users.Add(actor);
+        await ctx.SaveChangesAsync();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        ctx.WorkspaceAccessContexts.Add(accessContext);
+        await ctx.SaveChangesAsync();
+        ctx.WorkspaceMemberships.Add(new WorkspaceMembership
+        {
+            AccessContextId = accessContext.Id,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+        var authSession = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = actor.Id,
+            ActiveAccessContextId = accessContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        ctx.AuthSessions.Add(authSession);
         await ctx.SaveChangesAsync();
 
         var property = new Property
@@ -449,7 +592,12 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         });
         await ctx.SaveChangesAsync();
 
-        return portfolio.Id;
+        return new RuntimeScopeSeed(
+            portfolio.Id,
+            actor.Id,
+            accessContext.Id,
+            accessContext.AccessRevision,
+            authSession.Id);
     }
 
     private static PlaidTokenExchangeAttempt PlaidAttempt(int portfolioId, string operationId) => new()
@@ -497,4 +645,11 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         MappingRevision = 1,
         CreatedAtUtc = DateTime.UtcNow,
     };
+
+    private sealed record RuntimeScopeSeed(
+        int PortfolioId,
+        int UserId,
+        int AccessContextId,
+        long AccessRevision,
+        Guid AuthSessionId);
 }

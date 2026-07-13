@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -20,13 +19,13 @@ namespace RentalCommand.Api.Services.Sms;
 /// </summary>
 public sealed class SmsDispatcher : ISmsDispatcher
 {
-    private readonly INotificationSettingsService _settings;
+    private readonly IMessagingProviderSettingsResolver _settings;
     private readonly NotificationsConfig _cfg;
     private readonly IReadOnlyDictionary<SmsProviderKey, ISmsProvider> _providers;
     private readonly ILogger<SmsDispatcher> _logger;
 
     public SmsDispatcher(
-        INotificationSettingsService settings,
+        IMessagingProviderSettingsResolver settings,
         IOptions<NotificationsConfig> options,
         IEnumerable<ISmsProvider> providers,
         ILogger<SmsDispatcher> logger)
@@ -79,7 +78,7 @@ public sealed class SmsDispatcher : ISmsDispatcher
     {
         if (portfolioId is int pid)
         {
-            var perPortfolio = await _settings.GetSmsCredentialsAsync(pid, ct);
+            var perPortfolio = await _settings.ResolvePortfolioSmsAsync(pid, ct);
             if (perPortfolio is not null)
                 return perPortfolio;
         }

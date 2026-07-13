@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -92,6 +94,8 @@ public interface ITenantPortalProvisioningService
     /// <see cref="SeedSettings.TenantPassword"/> (same credential the seeder issues).
     /// </summary>
     Task<PortalAccountResult> EnsurePortalAccountForTenantAsync(int tenantId, int portfolioId, CancellationToken ct = default);
+    Task<PortalAccountResult> EnsurePortalAccountForTenantAuthorizedAsync(
+        WorkspaceReadScope scope, int tenantId, CancellationToken ct = default);
 
     /// <summary>
     /// Turns the tenant's portal access on or off (scoped to <paramref name="portfolioId"/> — the IDOR
@@ -99,6 +103,8 @@ public interface ITenantPortalProvisioningService
     /// unrelated workspace access. Enabling ensures a login and current relationship grants exist.
     /// </summary>
     Task<SetPortalAccessResult> SetPortalAccessAsync(int tenantId, int portfolioId, bool enabled, CancellationToken ct = default);
+    Task<SetPortalAccessResult> SetPortalAccessAuthorizedAsync(
+        WorkspaceReadScope scope, int tenantId, bool enabled, CancellationToken ct = default);
 }
 
 /// <inheritdoc cref="ITenantPortalProvisioningService"/>
@@ -124,13 +130,41 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
         _logger = logger;
     }
 
-    public async Task<PortalAccountResult> EnsurePortalAccountForTenantAsync(int tenantId, int portfolioId, CancellationToken ct = default)
+    public Task<PortalAccountResult> EnsurePortalAccountForTenantAsync(
+        int tenantId,
+        int portfolioId,
+        CancellationToken ct = default) =>
+        EnsurePortalAccountForTenantCoreAsync(tenantId, portfolioId, authorizationScope: null, ct);
+
+    public Task<PortalAccountResult> EnsurePortalAccountForTenantAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int tenantId,
+        CancellationToken ct = default) =>
+        EnsurePortalAccountForTenantCoreAsync(tenantId, scope.PortfolioId, scope, ct);
+
+    private async Task<PortalAccountResult> EnsurePortalAccountForTenantCoreAsync(
+        int tenantId,
+        int portfolioId,
+        WorkspaceReadScope? authorizationScope,
+        CancellationToken ct)
     {
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
+
         // Scope the load to the portfolio so a tenant from another portfolio is treated as not-found
         // (the IDOR guard for the controller path; also the per-tenant reload for the seeder loop).
-        var tenant = await _dbContext.Tenants
+        var tenants = _dbContext.Tenants
             .AsNoTracking()
-            .Where(t => t.Id == tenantId && t.PortfolioId == portfolioId)
+            .Where(t => t.Id == tenantId && t.PortfolioId == portfolioId);
+        if (authorizationScope is { } scope)
+        {
+            tenants = tenants.WhereAuthorized(
+                _dbContext,
+                scope,
+                [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+                _timeProvider.UtcNow());
+        }
+
+        var tenant = await tenants
             .Select(t => new { t.Id, t.Email, t.FirstName, t.LastName })
             .FirstOrDefaultAsync(ct);
 
@@ -156,7 +190,6 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
 
         var now = _timeProvider.UtcNow();
         bool created;
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
 
         var identityUser = await _userManager.FindByEmailAsync(email);
         if (identityUser == null)
@@ -266,13 +299,32 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
             displayName);
     }
 
-    public async Task<SetPortalAccessResult> SetPortalAccessAsync(
-        int tenantId, int portfolioId, bool enabled, CancellationToken ct = default)
+    public Task<SetPortalAccessResult> SetPortalAccessAsync(
+        int tenantId,
+        int portfolioId,
+        bool enabled,
+        CancellationToken ct = default) =>
+        SetPortalAccessCoreAsync(tenantId, portfolioId, enabled, authorizationScope: null, ct);
+
+    public Task<SetPortalAccessResult> SetPortalAccessAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int tenantId,
+        bool enabled,
+        CancellationToken ct = default) =>
+        SetPortalAccessCoreAsync(tenantId, scope.PortfolioId, enabled, scope, ct);
+
+    private async Task<SetPortalAccessResult> SetPortalAccessCoreAsync(
+        int tenantId,
+        int portfolioId,
+        bool enabled,
+        WorkspaceReadScope? authorizationScope,
+        CancellationToken ct)
     {
         if (enabled)
         {
             // Enabling ensures the login exists (provisioning one if needed), then clears any lock.
-            var ensure = await EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
+            var ensure = await EnsurePortalAccountForTenantCoreAsync(
+                tenantId, portfolioId, authorizationScope, ct);
             switch (ensure.Status)
             {
                 case PortalAccountStatus.TenantNotFound:
@@ -303,17 +355,29 @@ public class TenantPortalProvisioningService : ITenantPortalProvisioningService
 
         var now = _timeProvider.UtcNow();
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
+        var authorizedTenants = _dbContext.Tenants
+            .AsNoTracking()
+            .Where(tenant => tenant.Id == tenantId && tenant.PortfolioId == portfolioId);
+        if (authorizationScope is { } scope)
+        {
+            authorizedTenants = authorizedTenants.WhereAuthorized(
+                _dbContext,
+                scope,
+                [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+                _timeProvider.UtcNow());
+        }
+
         var targetIdentity = await _dbContext.TenantUserAccesses
             .Where(access => access.PortfolioId == portfolioId && access.RevokedAtUtc == null &&
-                access.LeaseManagementParty!.TenantId == tenantId)
+                access.LeaseManagementParty!.TenantId == tenantId &&
+                authorizedTenants.Any(tenant => tenant.Id == access.LeaseManagementParty.TenantId))
             .OrderBy(access => access.Id)
             .Select(access => new { access.AccessContextId, Email = access.ApplicationUser!.Email })
             .FirstOrDefaultAsync(ct);
 
         if (targetIdentity == null)
         {
-            var tenantExists = await _dbContext.Tenants
-                .AnyAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId, ct);
+            var tenantExists = await authorizedTenants.AnyAsync(ct);
             return tenantExists
                 ? new SetPortalAccessResult(SetPortalAccessOutcome.Updated, TenantPortalAccess.None)
                 : new SetPortalAccessResult(SetPortalAccessOutcome.TenantNotFound, TenantPortalAccess.None);

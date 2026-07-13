@@ -21,7 +21,7 @@ public class EvictionCasesController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<EvictionCaseResponse>>> List(
         [FromQuery] EvictionCaseListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(items);
     }
 
@@ -30,7 +30,7 @@ public class EvictionCasesController : ManagementControllerBase
     public async Task<ActionResult<EvictionCaseListResponse>> ListPage(
         [FromQuery] EvictionCaseListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -39,7 +39,7 @@ public class EvictionCasesController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EvictionCaseResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item is null ? NotFound(new { error = "Eviction case not found" }) : Ok(item);
     }
 
@@ -49,7 +49,7 @@ public class EvictionCasesController : ManagementControllerBase
     public async Task<ActionResult<EvictionCaseResponse>> Create(
         [FromBody] CreateEvictionCaseRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
         return created is null
             ? NotFound(new { error = "Lease relationship, agreement, or respondent party not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -61,7 +61,7 @@ public class EvictionCasesController : ManagementControllerBase
     public async Task<ActionResult<EvictionCaseResponse>> Update(
         int id, [FromBody] UpdateEvictionCaseRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated is null ? NotFound(new { error = "Eviction case not found" }) : Ok(updated);
     }
 
@@ -71,7 +71,7 @@ public class EvictionCasesController : ManagementControllerBase
     public async Task<ActionResult<EvictionCaseResponse>> AddEvent(
         int id, [FromBody] CreateEvictionCaseEventRequest request, CancellationToken ct)
     {
-        var updated = await _service.AddEventAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.AddEventAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated is null
             ? NotFound(new { error = "Eviction case not found" })
             : CreatedAtAction(nameof(Get), new { id = updated.Id }, updated);
@@ -82,7 +82,7 @@ public class EvictionCasesController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Eviction case not found" });
     }
 }

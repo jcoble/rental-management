@@ -402,7 +402,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         SeedCurrentPossession(property, SeedUnit(property.Id, "B"));
         SeedUnit(property.Id, "C");
 
-        var detail = await _properties.GetAsync(PortfolioId, property.Id);
+        var detail = await _properties.GetAsync(_scope, property.Id);
         detail.Should().NotBeNull();
         detail!.PropertyType.Should().Be(PropertyType.MultiFamily);
         detail.UnitCount.Should().Be(3);

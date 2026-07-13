@@ -13,7 +13,7 @@ import 'mobile_quick_action_fab.dart';
 import 'mobile_quick_action_helpers.dart';
 import 'mobile_shell_actions.dart';
 
-class RentalsHubScreen extends StatelessWidget {
+class RentalsHubScreen extends ConsumerWidget {
   const RentalsHubScreen({
     super.key,
     this.onControllerReady,
@@ -24,16 +24,23 @@ class RentalsHubScreen extends StatelessWidget {
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Rentals',
-    subtitle: 'Properties, people, agreements and applications.',
-    destinations: rentalDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    return MobileDomainHubScreen(
+      title: 'Rentals',
+      subtitle: 'Properties, people, agreements and applications.',
+      destinations: rentalHubDestinationsFor(
+        experience: auth.activeExperience,
+        capabilities: auth.capabilities,
+      ),
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+    );
+  }
 }
 
-class MoneyHubScreen extends StatelessWidget {
+class MoneyHubScreen extends ConsumerWidget {
   const MoneyHubScreen({
     super.key,
     this.onControllerReady,
@@ -44,13 +51,20 @@ class MoneyHubScreen extends StatelessWidget {
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Money',
-    subtitle: 'Snapshot, ledger, deposits, banking and reports.',
-    destinations: moneyHubDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    return MobileDomainHubScreen(
+      title: 'Money',
+      subtitle: 'Snapshot, ledger, deposits, banking and reports.',
+      destinations: visibleMobileDestinations(
+        moneyHubDestinations,
+        auth.capabilities,
+      ),
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+    );
+  }
 }
 
 class WorkHubScreen extends ConsumerWidget {
@@ -89,7 +103,7 @@ class WorkHubScreen extends ConsumerWidget {
   }
 }
 
-class InboxHubScreen extends StatelessWidget {
+class InboxHubScreen extends ConsumerWidget {
   const InboxHubScreen({
     super.key,
     this.onControllerReady,
@@ -100,13 +114,20 @@ class InboxHubScreen extends StatelessWidget {
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
   @override
-  Widget build(BuildContext context) => MobileDomainHubScreen(
-    title: 'Inbox',
-    subtitle: 'Messages and notifications in one place.',
-    destinations: inboxHubDestinations,
-    onControllerReady: onControllerReady,
-    onControllerDisposed: onControllerDisposed,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    return MobileDomainHubScreen(
+      title: 'Inbox',
+      subtitle: 'Messages and notifications in one place.',
+      destinations: visibleMobileDestinations(
+        inboxHubDestinations,
+        auth.capabilities,
+      ),
+      onControllerReady: onControllerReady,
+      onControllerDisposed: onControllerDisposed,
+    );
+  }
 }
 
 class MobileDomainHubScreen extends StatefulWidget {
@@ -190,10 +211,21 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     if (oldWidget.onControllerReady != widget.onControllerReady) {
       widget.onControllerReady?.call(_domainNavigator);
     }
-    if (_selectedIndex >= widget.destinations.length) {
-      _selectedIndex = 0;
-      _replaceContentRoot(widget.destinations.first);
+    final previousDestination = _selectedIndex < oldWidget.destinations.length
+        ? oldWidget.destinations[_selectedIndex].id
+        : null;
+    final nextIndex = previousDestination == null
+        ? -1
+        : widget.destinations.indexWhere(
+            (destination) => destination.id == previousDestination,
+          );
+    if (nextIndex >= 0) {
+      _selectedIndex = nextIndex;
+      return;
     }
+
+    _selectedIndex = 0;
+    _replaceContentRoot(widget.destinations.first);
   }
 
   void _selectIndex(int index) {

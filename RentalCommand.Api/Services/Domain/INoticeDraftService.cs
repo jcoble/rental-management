@@ -4,12 +4,18 @@ namespace RentalCommand.Api.Services.Domain;
 
 public interface INoticeDraftService
 {
-    Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(int portfolioId, string? status, CancellationToken ct = default);
+    Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(
+        int portfolioId,
+        string? status,
+        ListQuery query,
+        CancellationToken ct = default);
 
     /// <summary>
-    /// Generates notice drafts. With <paramref name="request"/> null/empty this runs portfolio-wide for
-    /// every applicable lease and late payment. Supplying a tenant id scopes it to that tenant; supplying
-    /// a notice type generates only that type (forcing renewal/move-out outside their usual window).
+    /// Runs one set-based PostgreSQL generation command. With <paramref name="request"/> null/empty
+    /// it evaluates every due enabled policy in the portfolio. Canonical relationship/account/ledger
+    /// identifiers narrow the same server-side command; an explicit lifecycle type in a selected
+    /// tenant/relationship/account scope permits an operator-requested draft outside its scheduled
+    /// lead window.
     /// </summary>
     Task<GenerateNoticeDraftsResponse> GenerateAsync(
         int portfolioId,

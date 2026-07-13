@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -6,18 +7,18 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IDocumentTemplateService
 {
     Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
-        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default);
 
     Task<DocumentTemplateListResponse> ListPageAsync(
-        int portfolioId, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, DocumentTemplateKind? kind, DocumentTemplateStatus? status, int? propertyId, ListQuery query, CancellationToken ct = default);
 
-    Task<DocumentTemplateResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<DocumentTemplateResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> CreateAsync(
-        int portfolioId, CreateDocumentTemplateRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, CreateDocumentTemplateRequest request, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UploadPdfAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         Stream content,
         string fileName,
         string contentType,
@@ -29,19 +30,19 @@ public interface IDocumentTemplateService
         CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
-        int portfolioId, int id, UpdateDocumentTemplateRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, int id, UpdateDocumentTemplateRequest request, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> AddFieldAsync(
-        int portfolioId, int templateId, CreateDocumentTemplateFieldRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, CreateDocumentTemplateFieldRequest request, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> UpdateFieldAsync(
-        int portfolioId, int templateId, int fieldId, UpdateDocumentTemplateFieldRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, int fieldId, UpdateDocumentTemplateFieldRequest request, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<bool>> DeleteFieldAsync(
-        int portfolioId, int templateId, int fieldId, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, int fieldId, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
-        int portfolioId, int templateId, int leaseAgreementId, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, int leaseAgreementId, CancellationToken ct = default);
 }
 
 public sealed record DocumentTemplatePreviewResult(byte[] PdfBytes, string FileName);

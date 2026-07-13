@@ -3,11 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -47,11 +49,45 @@ public class TenantService : ITenantService
         return page.Items;
     }
 
-    public async Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<TenantResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        TenantListQuery query,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(scope, query, ct);
+        return page.Items;
+    }
+
+    public Task<TenantListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        TenantListQuery query,
+        CancellationToken ct = default)
+    {
+        var tenants = _db.Tenants
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingOnboardingManage],
+                _timeProvider.UtcNow());
+        return ListPageFromQueryAsync(tenants, scope.PortfolioId, query, ct);
+    }
+
+    public Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
     {
         var q = _db.Tenants
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
+
+        return ListPageFromQueryAsync(q, portfolioId, query, ct);
+    }
+
+    private async Task<TenantListResponse> ListPageFromQueryAsync(
+        IQueryable<Tenant> q,
+        int portfolioId,
+        TenantListQuery query,
+        CancellationToken ct)
+    {
 
         if (query.UnitId.HasValue)
         {
@@ -315,9 +351,34 @@ public class TenantService : ITenantService
 
     public async Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var row = await _db.Tenants
+        var tenants = _db.Tenants
             .AsNoTracking()
-            .Where(t => t.Id == id && t.PortfolioId == portfolioId)
+            .Where(t => t.Id == id && t.PortfolioId == portfolioId);
+        return await GetFromQueryAsync(tenants, portfolioId, ct);
+    }
+
+    public Task<TenantResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var tenants = _db.Tenants
+            .AsNoTracking()
+            .Where(t => t.Id == id)
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingOnboardingManage],
+                _timeProvider.UtcNow());
+        return GetFromQueryAsync(tenants, scope.PortfolioId, ct);
+    }
+
+    private async Task<TenantResponse?> GetFromQueryAsync(
+        IQueryable<Tenant> tenants,
+        int portfolioId,
+        CancellationToken ct)
+    {
+        var row = await tenants
             .Select(t => new
             {
                 Entity = t,
@@ -394,6 +455,56 @@ public class TenantService : ITenantService
         return response;
     }
 
+    public async Task<TenantResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateTenantRequest request,
+        CancellationToken ct = default)
+    {
+        var entity = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var hasPortfolioWideAccess = await _db.AuthorizedAllPropertyAssignments(
+                    scope,
+                    [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+                    CapabilityAuthorizationTargetKind.Property,
+                    _timeProvider.UtcNow())
+                .AnyAsync(innerCt);
+            if (!hasPortfolioWideAccess)
+            {
+                return null;
+            }
+
+            var now = _timeProvider.UtcNow();
+            var created = new Tenant
+            {
+                PortfolioId = scope.PortfolioId,
+                FirstName = request.FirstName,
+                LastName = request.LastName,
+                Email = request.Email,
+                Phone = request.Phone,
+                EmergencyContact = request.EmergencyContact,
+                DateOfBirth = request.DateOfBirth.ToUtc(),
+                Notes = request.Notes,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Tenants.Add(created);
+            await _db.SaveChangesAsync(innerCt);
+            return created;
+        }, ct);
+
+        if (entity is null)
+        {
+            return null;
+        }
+
+        // Identity provisioning owns its own transaction and therefore begins only after the
+        // authorization-bound tenant insert commits.
+        await TryProvisionPortalAccessAsync(entity.Id, scope.PortfolioId, ct);
+        var response = await GetAsync(scope.PortfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
+        await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, entity.Id, response, ct);
+        return response;
+    }
+
     /// <summary>
     /// Best-effort: ensure a freshly created tenant has a portal login. A failure is logged and
     /// swallowed so it can never fail the tenant creation that already succeeded.
@@ -414,8 +525,44 @@ public class TenantService : ITenantService
 
     public async Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
     {
-        var entity = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
+        var tenants = _db.Tenants.Where(t => t.Id == id && t.PortfolioId == portfolioId);
+        return await UpdateFromQueryAsync(tenants, portfolioId, request, ct);
+    }
+
+    public async Task<TenantResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateTenantRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var tenants = _db.Tenants
+                .Where(t => t.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+                    _timeProvider.UtcNow());
+            return UpdateFromQueryAsync(tenants, scope.PortfolioId, request, innerCt, broadcast: false);
+        }, ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<TenantResponse?> UpdateFromQueryAsync(
+        IQueryable<Tenant> tenants,
+        int portfolioId,
+        UpdateTenantRequest request,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await tenants.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return null;
@@ -433,14 +580,52 @@ public class TenantService : ITenantService
         await _db.SaveChangesAsync(ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
+        var tenants = _db.Tenants.Where(t => t.Id == id && t.PortfolioId == portfolioId);
+        return await DeleteFromQueryAsync(tenants, portfolioId, id, ct);
+    }
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var tenants = _db.Tenants
+                .Where(t => t.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+                    _timeProvider.UtcNow());
+            return DeleteFromQueryAsync(tenants, scope.PortfolioId, id, innerCt, broadcast: false);
+        }, ct);
+
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        }
+
+        return deleted;
+    }
+
+    private async Task<bool> DeleteFromQueryAsync(
+        IQueryable<Tenant> tenants,
+        int portfolioId,
+        int id,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await tenants.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return false;
@@ -477,7 +662,10 @@ public class TenantService : ITenantService
         entity.DeletedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        }
         return true;
     }
 }

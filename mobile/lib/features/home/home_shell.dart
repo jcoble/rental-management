@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/theme/app_recipes.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/auth/auth_controller.dart';
@@ -20,22 +21,20 @@ import '../../core/push/push_service.dart';
 import '../../core/realtime/realtime_providers.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
+import '../../core/router/mobile_access_denied_screen.dart';
 import '../accounting/accounting_repository.dart';
 import '../onboarding/onboarding_repository.dart';
 import '../notifications/notifications_inbox_screen.dart';
 import '../ai/ai_models.dart';
-import '../ai/ai_repository.dart';
 import '../appointments/appointments_screen.dart';
 import '../appointments/tenant_appointments_screen.dart';
 import '../inspections/inspections_list_screen.dart';
 import '../leases/lease_detail_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_unit_aware_loader.dart';
-import '../maintenance/work_orders_repository.dart';
 import '../messages/message_detail_screen.dart';
 import '../messages/message_models.dart';
 import '../messages/messages_list_screen.dart';
-import '../messages/messages_repository.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/money_snapshot_card.dart';
 import '../money/overdue_screen.dart';
@@ -55,39 +54,13 @@ import '../tenants/tenants_list_screen.dart';
 import '../tenants/tenant_lease_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import 'mobile_destination.dart';
+import 'home_access_providers.dart';
 import 'mobile_domain_hub.dart';
 import 'mobile_domain_navigation.dart';
 import 'mobile_quick_action_fab.dart';
 import 'mobile_quick_action_helpers.dart';
 import 'mobile_shell_actions.dart';
-
-// ---------------------------------------------------------------------------
-// Briefing provider (home-tab only, autoDispose)
-// ---------------------------------------------------------------------------
-
-final _briefingProvider = FutureProvider.autoDispose<BriefingResponse>((ref) {
-  return ref.watch(aiRepositoryProvider).briefing();
-});
-
-final _latestMessagesProvider = FutureProvider.autoDispose<List<Conversation>>((
-  ref,
-) async {
-  final conversations = await ref
-      .watch(messagesRepositoryProvider)
-      .listConversations();
-  return conversations.take(5).toList();
-});
-
-final _fieldQueueProvider = FutureProvider.autoDispose<List<WorkOrder>>((
-  ref,
-) async {
-  final page = await ref
-      .watch(workOrdersRepositoryProvider)
-      .listWorkOrdersPage(
-        const WorkOrderListQuery(openOnly: true, take: 5, sort: 'fieldQueue'),
-      );
-  return page.items;
-});
+import 'owner_landing_screen.dart';
 
 Future<void> _openGoLiveSheetAndRefreshHome(
   BuildContext context,
@@ -95,9 +68,9 @@ Future<void> _openGoLiveSheetAndRefreshHome(
 ) async {
   final wentLive = await showGoLiveSheet(context);
   if (wentLive != true) return;
-  ref.invalidate(_briefingProvider);
-  ref.invalidate(_latestMessagesProvider);
-  ref.invalidate(_fieldQueueProvider);
+  ref.invalidate(homeBriefingProvider);
+  ref.invalidate(homeLatestMessagesProvider);
+  ref.invalidate(homeFieldQueueProvider);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,34 +155,25 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   List<MobileShellTabId> _availableLandlordTabs(AuthStateAuthenticated auth) {
     final capabilities = auth.capabilities;
-    bool hasAny(Iterable<String> keys) => keys.any(capabilities.contains);
     final tabs = <MobileShellTabId>[
       if (auth.activeExperience == WorkspaceExperience.management)
         MobileShellTabId.today,
-      if (hasAny(const [
-        'rentals.read',
-        'rentals.manage',
-        'leasing.listings.manage',
-        'leasing.applications.manage',
-      ]))
+      if (canOpenRentalsHubForExperience(
+        experience: auth.activeExperience,
+        capabilities: capabilities,
+      ))
         MobileShellTabId.rentals,
-      if (hasAny(const [
-        'money.balances.read',
-        'money.payments.manage',
-        'money.expenses.manage',
-        'money.owner-reports.read',
-      ]))
+      if (auth.activeExperience == WorkspaceExperience.management &&
+          canOpenMoneyHub(capabilities))
         MobileShellTabId.money,
       if (canOpenWorkHub(capabilities)) MobileShellTabId.work,
-      if (hasAny(const [
-        'rentals.read',
-        'work.read',
-        'leasing.applications.manage',
-        'maintenance.assigned-work.converse',
-      ]))
-        MobileShellTabId.inbox,
+      if (canOpenInboxHub(capabilities)) MobileShellTabId.inbox,
     ];
-    return tabs.isEmpty ? const [MobileShellTabId.today] : tabs;
+    if (tabs.isEmpty &&
+        auth.activeExperience == WorkspaceExperience.management) {
+      return const [MobileShellTabId.today];
+    }
+    return tabs;
   }
 
   void _handleBottomNavigationSelected(
@@ -278,6 +242,16 @@ class _HomeShellState extends ConsumerState<HomeShell>
     if (uri == null) return false;
 
     final path = uri.path;
+    final auth = ref.read(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return false;
+    if (!canOpenMobilePath(
+      experience: auth.activeExperience,
+      capabilities: auth.capabilities,
+      path: path,
+    )) {
+      _showAccessDenied();
+      return true;
+    }
     final segments = uri.pathSegments;
     final id = segments.length >= 2 ? int.tryParse(segments[1]) : null;
 
@@ -298,22 +272,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
         );
         return true;
       case '/work':
-        _openShellTab(
-          MobileShellTabId.work,
-          destination: MobileDestinationId.workOrders,
-        );
+        _openShellTab(MobileShellTabId.work);
         return true;
       case '/money':
-        _openShellTab(
-          MobileShellTabId.money,
-          destination: MobileDestinationId.insights,
-        );
+        _openShellTab(MobileShellTabId.money);
         return true;
       case '/inbox':
-        _openShellTab(
-          MobileShellTabId.inbox,
-          destination: MobileDestinationId.messages,
-        );
+        _openShellTab(MobileShellTabId.inbox);
         return true;
       case '/notifications':
         final auth = ref.read(authControllerProvider);
@@ -397,6 +362,16 @@ class _HomeShellState extends ConsumerState<HomeShell>
     }
 
     return false;
+  }
+
+  void _showAccessDenied() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (deniedContext) => MobileAccessDeniedScreen(
+          onReturn: () => Navigator.of(deniedContext).pop(),
+        ),
+      ),
+    );
   }
 
   @override
@@ -488,10 +463,25 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
       // Voice commands are landlord-facing for now (matches on-device testing).
       final authState = ref.read(authControllerProvider);
-      final isTenant =
-          authState is AuthStateAuthenticated && authState.isTenantExperience;
-      if (isTenant) {
+      if (authState is! AuthStateAuthenticated ||
+          authState.isTenantExperience) {
         toast("Voice commands aren't available for tenant accounts yet.");
+        ref.read(pendingVoiceCommandProvider.notifier).consume();
+        return;
+      }
+
+      final capabilities = authState.capabilities;
+      final allowed = switch (command.action) {
+        VoiceAction.scanDocument => canUseGlobalScan(capabilities),
+        VoiceAction.logExpense => canUseVoiceRecord(capabilities),
+        VoiceAction.showOverdueRent => hasAnyMobileCapability(
+          capabilities,
+          moneyOverviewCapabilityKeys,
+        ),
+        VoiceAction.openWorkOrders => canOpenWorkOrders(capabilities),
+      };
+      if (!allowed) {
+        _showAccessDenied();
         ref.read(pendingVoiceCommandProvider.notifier).consume();
         return;
       }
@@ -606,29 +596,44 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
 
     ref.listen<AuthState>(authControllerProvider, (previous, next) {
-      if (previous is! AuthStateAuthenticated ||
-          next is! AuthStateAuthenticated) {
-        return;
-      }
-      final previousContext = previous.access.selectedContext;
-      final nextContext = next.access.selectedContext;
-      if (previousContext.accessContextId == nextContext.accessContextId &&
-          previousContext.accessRevision == nextContext.accessRevision) {
-        return;
-      }
+      if (!accessAuthorityChanged(previous, next)) return;
       _selectedIndex = 0;
-      unawaited(resetAccessScopedClient(ref));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        for (final navigator in _domainNavigators.values) {
+          navigator.popToCurrentRoot();
+        }
+      });
     });
 
     final authState = ref.watch(authControllerProvider);
     if (authState is! AuthStateAuthenticated) {
       return const SizedBox.shrink();
     }
+
+    if (authState.activeExperience == WorkspaceExperience.owner) {
+      return MobileShellNavigation(
+        controller: _shellNavigator,
+        child: const OwnerLandingScreen(),
+      );
+    }
+
     final user = authState.user;
     final tenantMode = authState.isTenantExperience;
     final landlordTabs = tenantMode
         ? const <MobileShellTabId>[]
         : _availableLandlordTabs(authState);
+    if (!tenantMode && landlordTabs.isEmpty) {
+      return MobileShellNavigation(
+        controller: _shellNavigator,
+        child: MobileAccessDeniedScreen(
+          returnLabel: 'Refresh access',
+          onReturn: () => unawaited(
+            ref.read(authControllerProvider.notifier).restoreSession(),
+          ),
+        ),
+      );
+    }
     final tabs = tenantMode
         ? _tenantTabs
         : landlordTabs
@@ -1925,9 +1930,9 @@ class _HomeTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final briefingAsync = ref.watch(_briefingProvider);
-    final messagesAsync = ref.watch(_latestMessagesProvider);
-    final fieldQueueAsync = ref.watch(_fieldQueueProvider);
+    final briefingAsync = ref.watch(homeBriefingProvider);
+    final messagesAsync = ref.watch(homeLatestMessagesProvider);
+    final fieldQueueAsync = ref.watch(homeFieldQueueProvider);
     final moneyAsync = ref.watch(moneySnapshotProvider);
 
     return Scaffold(
@@ -1937,7 +1942,7 @@ class _HomeTab extends ConsumerWidget {
       ),
       body: RefreshIndicator(
         onRefresh: () async {
-          ref.invalidate(_briefingProvider);
+          ref.invalidate(homeBriefingProvider);
           ref.invalidate(moneySnapshotProvider);
         },
         child: CustomScrollView(
@@ -1997,7 +2002,7 @@ class _HomeTab extends ConsumerWidget {
                 ),
                 error: (e, _) => SliverToBoxAdapter(
                   child: _BriefingError(
-                    onRetry: () => ref.invalidate(_briefingProvider),
+                    onRetry: () => ref.invalidate(homeBriefingProvider),
                   ),
                 ),
                 data: (briefing) => _BriefingContent(briefing: briefing),

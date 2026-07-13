@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
-using RentalCommand.Api.Data;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
@@ -27,20 +26,17 @@ public sealed class DataUpdateService : IDataUpdateService
     private static readonly string[] ShowingReadCapabilities = [CapabilityKeys.LeasingShowingsManage];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IRlsExecutionContext _rlsExecutionContext;
     private readonly IHubContext<DataUpdateHub> _hubContext;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DataUpdateService> _logger;
 
     public DataUpdateService(
         RentalCommandDbContext db,
-        IRlsExecutionContext rlsExecutionContext,
         IHubContext<DataUpdateHub> hubContext,
         TimeProvider timeProvider,
         ILogger<DataUpdateService> logger)
     {
         _db = db;
-        _rlsExecutionContext = rlsExecutionContext;
         _hubContext = hubContext;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -63,10 +59,6 @@ public sealed class DataUpdateService : IDataUpdateService
     {
         try
         {
-            using var rlsLease = _rlsExecutionContext.BeginBypass(
-                RlsBypassReason.BackgroundWorker,
-                portfolioId);
-
             var recipients = string.Equals(entityType, "Notification", StringComparison.Ordinal)
                 ? BuildNotificationRecipientQuery(portfolioId, entityId)
                 : BuildPropertyRecipientQuery(portfolioId, entityType, entityId);

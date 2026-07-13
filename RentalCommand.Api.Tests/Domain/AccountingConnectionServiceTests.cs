@@ -241,7 +241,6 @@ public class AccountingConnectionServiceTests : IDisposable
             _ctx.Db, _dp, providerResolver, settingsResolver, importService,
             TimeProvider.System,
             null!,
-            new RentalCommand.Api.Data.RlsExecutionContext(),
             NullLogger<AccountingConnectionService>.Instance);
     }
 

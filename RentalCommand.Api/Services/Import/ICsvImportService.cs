@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Import;
 
@@ -31,7 +32,7 @@ public interface ICsvImportService
     /// <exception cref="CsvFormatException">The CSV is structurally unusable (no header row).</exception>
     /// <exception cref="ArgumentException">The entity type is not supported.</exception>
     Task<CsvImportResult> ImportAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string entityType,
         Stream csv,
         bool dryRun,

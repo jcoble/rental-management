@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -24,17 +27,15 @@ public class OwnerEntityService : IOwnerEntityService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, query, ct);
+        var page = await ListPageAsync(scope, query, ct);
         return page.Items;
     }
 
-    public async Task<OwnerEntityListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<OwnerEntityListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var q = _db.OwnerEntities
-            .AsNoTracking()
-            .Where(o => o.PortfolioId == portfolioId);
+        var q = AuthorizedOwnersForRead(scope);
 
         if (query is OwnerEntityListQuery { OwnerEntityType: { } ownerEntityType })
         {
@@ -62,7 +63,7 @@ public class OwnerEntityService : IOwnerEntityService
 
         var totalCount = await q.CountAsync(ct);
 
-        var items = await ProjectOwnerResponses(q, portfolioId)
+        var items = await ProjectOwnerResponses(q, AuthorizedProperties(scope, CapabilityKeys.MoneyOwnerReportsRead))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -76,7 +77,9 @@ public class OwnerEntityService : IOwnerEntityService
         };
     }
 
-    private IQueryable<OwnerEntityResponse> ProjectOwnerResponses(IQueryable<OwnerEntity> query, int portfolioId)
+    private IQueryable<OwnerEntityResponse> ProjectOwnerResponses(
+        IQueryable<OwnerEntity> query,
+        IQueryable<Property> authorizedProperties)
     {
         return query.Select(o => new OwnerEntityResponse
         {
@@ -93,31 +96,48 @@ public class OwnerEntityService : IOwnerEntityService
             Address = o.Address,
             Phone = o.Phone,
             Email = o.Email,
-            AssignedPropertyCount = _db.Properties
-                .Count(p => p.PortfolioId == portfolioId && p.OwnerEntityId == o.Id),
+            AssignedPropertyCount = authorizedProperties.Count(p => p.OwnerEntityId == o.Id),
             IsPrimary = o.IsPrimary,
             CreatedAt = o.CreatedAt,
             UpdatedAt = o.UpdatedAt,
         });
     }
 
-    private async Task<OwnerEntityResponse?> GetProjectedAsync(int portfolioId, int id, CancellationToken ct = default)
+    private async Task<OwnerEntityResponse?> GetProjectedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string capabilityKey,
+        CancellationToken ct = default)
     {
         return await ProjectOwnerResponses(
-                _db.OwnerEntities
-                    .AsNoTracking()
-                    .Where(o => o.Id == id && o.PortfolioId == portfolioId),
-                portfolioId)
+                capabilityKey == CapabilityKeys.MoneyOwnerReportsRead
+                    ? AuthorizedOwnersForRead(scope).Where(o => o.Id == id)
+                    : AuthorizedOwnersForMutation(scope, capabilityKey).Where(o => o.Id == id),
+                AuthorizedProperties(scope, capabilityKey))
             .FirstOrDefaultAsync(ct);
     }
 
-    public async Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<OwnerEntityResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        return await GetProjectedAsync(portfolioId, id, ct);
+        return GetProjectedAsync(scope, id, CapabilityKeys.MoneyOwnerReportsRead, ct);
     }
 
-    public async Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default)
+    public Task<OwnerEntityResponse?> CreateAsync(
+        WorkspaceReadScope scope,
+        CreateOwnerEntityRequest request,
+        CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
+        var portfolioId = scope.PortfolioId;
+        if (!await _db.AuthorizedWorkspaceAssignments(
+                scope,
+                [CapabilityKeys.RentalsManage],
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.UtcNow()).AnyAsync(token))
+        {
+            return null;
+        }
+
         var now = _timeProvider.UtcNow();
         var entity = new OwnerEntity
         {
@@ -141,18 +161,24 @@ public class OwnerEntityService : IOwnerEntityService
         };
 
         _db.OwnerEntities.Add(entity);
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
-        var response = await GetProjectedAsync(portfolioId, entity.Id, ct)
+        var response = await GetProjectedAsync(scope, entity.Id, CapabilityKeys.RentalsManage, token)
             ?? OwnerEntityResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
         return response;
-    }
+    }, ct);
 
-    public async Task<OwnerEntityResponse?> UpdateAsync(int portfolioId, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default)
+    public Task<OwnerEntityResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateOwnerEntityRequest request,
+        CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
-        var entity = await _db.OwnerEntities
-            .FirstOrDefaultAsync(o => o.Id == id && o.PortfolioId == portfolioId, ct);
+        var portfolioId = scope.PortfolioId;
+        var entity = await AuthorizedOwnersForMutation(scope, CapabilityKeys.RentalsManage)
+            .FirstOrDefaultAsync(o => o.Id == id, token);
         if (entity == null)
         {
             return null;
@@ -174,22 +200,24 @@ public class OwnerEntityService : IOwnerEntityService
         if (request.Email != null) entity.Email = request.Email;
         entity.UpdatedAt = _timeProvider.UtcNow();
 
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
-        var response = await GetProjectedAsync(portfolioId, entity.Id, ct)
+        var response = await GetProjectedAsync(scope, entity.Id, CapabilityKeys.RentalsManage, token)
             ?? OwnerEntityResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
         return response;
-    }
+    }, ct);
 
-    public async Task<bool> DeleteAsync(
-        int portfolioId,
+    public Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
         int id,
         DeleteOwnerEntityOptions? options = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
-        var entity = await _db.OwnerEntities
-            .FirstOrDefaultAsync(o => o.Id == id && o.PortfolioId == portfolioId, ct);
+        var portfolioId = scope.PortfolioId;
+        var entity = await AuthorizedOwnersForMutation(scope, CapabilityKeys.RentalsManage)
+            .FirstOrDefaultAsync(o => o.Id == id, token);
         if (entity == null)
         {
             return false;
@@ -197,7 +225,7 @@ public class OwnerEntityService : IOwnerEntityService
 
         var propertyCount = await _db.Properties
             .AsNoTracking()
-            .CountAsync(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id, ct);
+            .CountAsync(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id, token);
         if (propertyCount > 0)
         {
             if (options?.ClearPropertyAssignments != true)
@@ -214,12 +242,12 @@ public class OwnerEntityService : IOwnerEntityService
                 .Where(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(p => p.OwnerEntityId, (int?)null)
-                    .SetProperty(p => p.UpdatedAt, now), ct);
+                    .SetProperty(p => p.UpdatedAt, now), token);
         }
 
         var distributionCount = await _db.OwnerDistributions
             .AsNoTracking()
-            .CountAsync(d => d.PortfolioId == portfolioId && d.OwnerEntityId == id, ct);
+            .CountAsync(d => d.PortfolioId == portfolioId && d.OwnerEntityId == id, token);
         if (distributionCount > 0)
         {
             var distributionNoun = distributionCount == 1 ? "distribution" : "distributions";
@@ -230,9 +258,50 @@ public class OwnerEntityService : IOwnerEntityService
 
         entity.DeletedAt = _timeProvider.UtcNow();
         entity.UpdatedAt = entity.DeletedAt.Value;
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, token);
         return true;
+    }, ct);
+
+    private IQueryable<Property> AuthorizedProperties(WorkspaceReadScope scope, string capabilityKey) =>
+        _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilityKey, _timeProvider.UtcNow());
+
+    private IQueryable<OwnerEntity> AuthorizedOwnersForRead(WorkspaceReadScope scope)
+    {
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyOwnerReportsRead);
+        var allProperties = _db.AuthorizedWorkspaceAssignments(
+            scope,
+            [CapabilityKeys.MoneyOwnerReportsRead],
+            CapabilityAuthorizationTargetKind.Property,
+            _timeProvider.UtcNow());
+
+        return _db.OwnerEntities
+            .AsNoTracking()
+            .Where(owner =>
+                owner.PortfolioId == scope.PortfolioId &&
+                (allProperties.Any() || authorizedProperties.Any(property => property.OwnerEntityId == owner.Id)));
+    }
+
+    private IQueryable<OwnerEntity> AuthorizedOwnersForMutation(WorkspaceReadScope scope, string capabilityKey)
+    {
+        var authorizedProperties = AuthorizedProperties(scope, capabilityKey);
+        var allProperties = _db.AuthorizedWorkspaceAssignments(
+            scope,
+            [capabilityKey],
+            CapabilityAuthorizationTargetKind.Property,
+            _timeProvider.UtcNow());
+
+        return _db.OwnerEntities.Where(owner =>
+            owner.PortfolioId == scope.PortfolioId &&
+            (allProperties.Any() ||
+             (_db.Properties.Any(property =>
+                  property.PortfolioId == scope.PortfolioId && property.OwnerEntityId == owner.Id) &&
+              !_db.Properties.Any(property =>
+                  property.PortfolioId == scope.PortfolioId &&
+                  property.OwnerEntityId == owner.Id &&
+                  !authorizedProperties.Any(authorized => authorized.Id == property.Id)))));
     }
 }

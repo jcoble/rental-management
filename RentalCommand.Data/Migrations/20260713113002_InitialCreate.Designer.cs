@@ -2902,6 +2902,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
+                    b.Property<long?>("TenantLedgerEntryId")
+                        .HasColumnType("bigint");
+
                     b.Property<Guid>("PublicId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
@@ -4561,9 +4564,15 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("TenantLedgerEntryId", "TenantAccountId", "PortfolioId");
 
-                    b.HasIndex("PortfolioId", "LeaseManagementId", "NoticeType", "Status");
+                    b.HasIndex("PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType")
+                        .IsUnique()
+                        .HasDatabaseName("UX_NoticeDrafts_OpenAgreementNotice")
+                        .HasFilter("\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
-                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "NoticeType", "Status");
+                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "NoticeType")
+                        .IsUnique()
+                        .HasDatabaseName("UX_NoticeDrafts_OpenLedgerNotice")
+                        .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
                     b.ToTable("NoticeDrafts");
                 });
@@ -4635,7 +4644,7 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("Notifications");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.NotificationPreference", b =>
+            modelBuilder.Entity("RentalCommand.Core.Entities.AutomationSettings", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -4643,72 +4652,18 @@ namespace RentalCommand.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<DateTime>("CreatedAt")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("EnableEmail")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("EnableInApp")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("EnablePush")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("EnableSms")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("NotificationType")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PortfolioId", "NotificationType")
-                        .IsUnique();
-
-                    b.ToTable("NotificationPreferences");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.NotificationSettings", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DailyBriefingEmailRecipientsCipherText")
-                        .HasMaxLength(4000)
-                        .HasColumnType("character varying(4000)");
-
-                    b.Property<bool>("DailyBriefingIncludeEmpty")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("DailyBriefingSendHourLocal")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("DailyBriefingSmsRecipientsCipherText")
-                        .HasMaxLength(4000)
-                        .HasColumnType("character varying(4000)");
-
-                    b.Property<bool>("EnableDailyBriefingMessages")
-                        .HasColumnType("boolean");
 
                     b.Property<bool>("EnableLateFees")
                         .HasColumnType("boolean");
 
                     b.Property<bool>("EnableLeaseExpiryReminders")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnableMorningBriefing")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);
@@ -4731,6 +4686,14 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("integer")
                         .HasDefaultValue(60);
 
+                    b.Property<bool>("MorningBriefingIncludeEmpty")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("MorningBriefingSendHourLocal")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(8);
+
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
@@ -4738,6 +4701,31 @@ namespace RentalCommand.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasDefaultValue(5);
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId")
+                        .IsUnique();
+
+                    b.ToTable("AutomationSettings");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.MessagingProviderSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
 
                     b.Property<string>("SmsCredentialACipherText")
                         .HasMaxLength(4000)
@@ -4759,7 +4747,7 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
-                    b.Property<DateTime>("UpdatedAt")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -4767,7 +4755,7 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId")
                         .IsUnique();
 
-                    b.ToTable("NotificationSettings");
+                    b.ToTable("MessagingProviderSettings");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.OAuthState", b =>
@@ -7647,10 +7635,19 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PropertyId");
 
-                    b.HasIndex("PortfolioId", "Topic", "PropertyId")
-                        .IsUnique();
+                    b.HasIndex("PortfolioId", "Topic")
+                        .IsUnique()
+                        .HasDatabaseName("IX_TeamRoutingRules_PortfolioId_Topic_Workspace")
+                        .HasFilter("\"PropertyId\" IS NULL");
 
-                    b.ToTable("TeamRoutingRules");
+                    b.HasIndex("PortfolioId", "Topic", "PropertyId")
+                        .IsUnique()
+                        .HasFilter("\"PropertyId\" IS NOT NULL");
+
+                    b.ToTable("TeamRoutingRules", t =>
+                        {
+                            t.HasCheckConstraint("CK_TeamRoutingRules_WorkspaceOnlyTopics", "\"PropertyId\" IS NULL OR \"Topic\" NOT IN ('AccountAndSecurity', 'MorningBriefing')");
+                        });
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.TeamRoutingRuleRecipient", b =>
@@ -8315,6 +8312,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("BusinessKey")
                         .IsUnique();
+
+                    b.HasIndex("PortfolioId", "TenantLedgerEntryId")
+                        .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL");
 
                     b.HasIndex("TenantNoticePolicyId", "PortfolioId");
 
@@ -9464,6 +9464,74 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable((string)null);
 
                     b.ToView("vw_lease_agreement_status", (string)null);
+                });
+
+            modelBuilder.Entity("RentalCommand.Data.MorningBriefingCandidateProjection", b =>
+                {
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("DetailText")
+                        .HasColumnType("text");
+
+                    b.Property<int>("EntityId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateOnly?>("EventDateOnly")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EventDateTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LeaseNumber")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PropertyName")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RequiredCapability")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("SeverityOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TenantName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TitleText")
+                        .HasColumnType("text");
+
+                    b.Property<int>("TypeValue")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("UnitId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("UnitNumber")
+                        .HasColumnType("text");
+
+                    b.ToTable((string)null);
+
+                    b.ToView("vw_morning_briefing_candidates", (string)null);
                 });
 
             modelBuilder.Entity("RentalCommand.Data.LeaseManagementLifecycleProjection", b =>
@@ -11320,7 +11388,18 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.NotificationPreference", b =>
+            modelBuilder.Entity("RentalCommand.Core.Entities.AutomationSettings", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Portfolio");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.MessagingProviderSettings", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()

@@ -26,13 +26,11 @@ public sealed class IssueLoginContextSelectionChallengeHandler
         // Team assignments and Owner/Tenant relationships share this one DB-side effective-state predicate.
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
             .AsNoTracking()
-            .WhereEffectiveAccess(
-                attempt.Persistence.Query<WorkspaceMembership>().AsNoTracking(),
-                attempt.Persistence.Query<MembershipRoleAssignment>().AsNoTracking(),
-                attempt.Persistence.Query<OwnerUserAccess>().AsNoTracking(),
-                attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking(),
-                command.UserId,
-                command.IssuedAtUtc);
+            .Where(context => context.UserId == command.UserId &&
+                AccessAuthorityDbFunctions.IsEffective(
+                    context.Id,
+                    command.UserId,
+                    command.IssuedAtUtc));
         var auditRoot = await effectiveContexts
             .OrderBy(context => context.Id)
             .Select(context => new ChallengeAuditRoot(
@@ -123,13 +121,11 @@ public sealed class StartAuthSessionHandler
         }
 
         var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffectiveAccess(
-                attempt.Persistence.Query<WorkspaceMembership>(),
-                attempt.Persistence.Query<MembershipRoleAssignment>(),
-                attempt.Persistence.Query<OwnerUserAccess>(),
-                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
-                command.UserId,
-                command.IssuedAtUtc);
+            .Where(context => context.UserId == command.UserId &&
+                AccessAuthorityDbFunctions.IsEffective(
+                    context.Id,
+                    command.UserId,
+                    command.IssuedAtUtc));
 
         // Selected context and total effective-context count are projected by PostgreSQL together.
         var target = await effectiveContexts

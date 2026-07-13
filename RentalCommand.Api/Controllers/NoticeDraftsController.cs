@@ -5,8 +5,7 @@ using RentalCommand.Api.Services.Domain;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Lease Lifecycle Autopilot: drafts renewal offers, late-rent notices, and move-out reminders
-/// for landlord review. Approval sends through the existing tenant conversation channel fanout.
+/// Tenant-notice drafts generated from enabled policies and canonical lease/account facts.
 /// </summary>
 [ApiController]
 [Route("api/v1/notices")]
@@ -24,16 +23,16 @@ public class NoticeDraftsController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<NoticeDraftResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<NoticeDraftResponse>>> List(
         [FromQuery] string? status,
+        [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        return Ok(await _service.ListAsync(GetPortfolioId(), status, ct));
+        return Ok(await _service.ListAsync(GetPortfolioId(), status, query, ct));
     }
 
     /// <summary>
-    /// Generates notice drafts for the caller's portfolio. With an empty/absent body this runs
-    /// portfolio-wide (every applicable relationship + open tenant charge). Scope with canonical
-    /// recipient, lease-management, tenant-account, or ledger-entry identifiers and optionally
-    /// <c>noticeType</c> to generate just that kind. An absent body requests portfolio-wide generation.
+    /// Runs one PostgreSQL set command for the caller's portfolio. An empty body evaluates every due
+    /// enabled policy; canonical relationship/account/ledger identifiers and <c>noticeType</c> narrow
+    /// the same command without loading candidate ids into application memory.
     /// </summary>
     [HttpPost("generate")]
     [ProducesResponseType(typeof(GenerateNoticeDraftsResponse), StatusCodes.Status200OK)]

@@ -55,12 +55,27 @@ final class AuthStateUnauthenticated extends AuthState {
   final String? error;
 }
 
+bool accessAuthorityChanged(AuthState? previous, AuthState next) {
+  if (previous is! AuthStateAuthenticated || next is! AuthStateAuthenticated) {
+    return false;
+  }
+  final previousContext = previous.access.selectedContext;
+  final nextContext = next.access.selectedContext;
+  return previous.access.identity.userId != next.access.identity.userId ||
+      previousContext.accessContextId != nextContext.accessContextId ||
+      previousContext.portfolioId != nextContext.portfolioId ||
+      previousContext.accessRevision != nextContext.accessRevision ||
+      previous.activeExperience != next.activeExperience;
+}
+
 /// Manages authentication state for the app.
 ///
 /// On startup, call [restoreSession] to check for a stored access token and
 /// verify it against `GET /auth/me`. If valid, transitions to
 /// [AuthStateAuthenticated]; otherwise [AuthStateUnauthenticated].
 class AuthController extends Notifier<AuthState> {
+  Future<void>? _accessSelectionInFlight;
+
   @override
   AuthState build() {
     // React to forced logout signals from the AuthInterceptor.
@@ -311,7 +326,8 @@ class AuthController extends Notifier<AuthState> {
     if (current.access.selectedContext.accessContextId ==
             access.selectedContext.accessContextId &&
         current.access.selectedContext.accessRevision ==
-            access.selectedContext.accessRevision) {
+            access.selectedContext.accessRevision &&
+        current.activeExperience == access.selectedContext.activeExperience) {
       return;
     }
     state = AuthStateAuthenticated(
@@ -323,35 +339,53 @@ class AuthController extends Notifier<AuthState> {
     );
   }
 
-  Future<void> selectExperience(WorkspaceExperience experience) async {
-    final current = state;
-    if (current is! AuthStateAuthenticated ||
-        !current.access.availableExperiences.contains(experience)) {
-      return;
-    }
-    final access = await _repository.selectExperience(experience);
-    final latest = state;
-    if (latest is! AuthStateAuthenticated) return;
-    state = AuthStateAuthenticated(
-      latest.user,
-      access,
-      activeExperience: access.selectedContext.activeExperience,
-      onboardingPending: latest.onboardingPending,
-      onboardingResolved: latest.onboardingResolved,
-    );
-  }
+  Future<void> selectExperience(WorkspaceExperience experience) =>
+      _runAccessSelection(() async {
+        final current = state;
+        if (current is! AuthStateAuthenticated ||
+            !current.access.availableExperiences.contains(experience)) {
+          return;
+        }
+        final access = await _repository.selectExperience(experience);
+        final latest = state;
+        if (latest is! AuthStateAuthenticated) return;
+        state = AuthStateAuthenticated(
+          latest.user,
+          access,
+          activeExperience: access.selectedContext.activeExperience,
+          onboardingPending: latest.onboardingPending,
+          onboardingResolved: latest.onboardingResolved,
+        );
+      });
 
-  Future<void> selectContext(int accessContextId) async {
-    final current = state;
-    if (current is! AuthStateAuthenticated) return;
-    final result = await _repository.selectContext(accessContextId);
-    state = AuthStateAuthenticated(
-      current.user,
-      result.access,
-      activeExperience: result.access.selectedContext.activeExperience,
-      onboardingPending: current.onboardingPending,
-      onboardingResolved: current.onboardingResolved,
-    );
+  Future<void> selectContext(int accessContextId) =>
+      _runAccessSelection(() async {
+        final current = state;
+        if (current is! AuthStateAuthenticated) return;
+        final result = await _repository.selectContext(accessContextId);
+        final latest = state;
+        if (latest is! AuthStateAuthenticated) return;
+        state = AuthStateAuthenticated(
+          latest.user,
+          result.access,
+          activeExperience: result.access.selectedContext.activeExperience,
+          onboardingPending: latest.onboardingPending,
+          onboardingResolved: latest.onboardingResolved,
+        );
+      });
+
+  Future<void> _runAccessSelection(Future<void> Function() selection) {
+    final inFlight = _accessSelectionInFlight;
+    if (inFlight != null) return inFlight;
+
+    late final Future<void> operation;
+    operation = selection().whenComplete(() {
+      if (identical(_accessSelectionInFlight, operation)) {
+        _accessSelectionInFlight = null;
+      }
+    });
+    _accessSelectionInFlight = operation;
+    return operation;
   }
 }
 

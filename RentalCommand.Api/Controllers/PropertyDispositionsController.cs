@@ -21,7 +21,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<PropertyDispositionResponse>>> List(
         [FromQuery] PropertyDispositionListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(items);
     }
 
@@ -30,7 +30,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     public async Task<ActionResult<PropertyDispositionListResponse>> ListPage(
         [FromQuery] PropertyDispositionListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -39,7 +39,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyDispositionResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item is null ? NotFound(new { error = "Property disposition not found" }) : Ok(item);
     }
 
@@ -67,7 +67,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     public async Task<ActionResult<PropertyDispositionResponse>> Update(
         int id, [FromBody] UpdatePropertyDispositionRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated is null ? NotFound(new { error = "Property disposition not found" }) : Ok(updated);
     }
 
@@ -76,7 +76,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property disposition not found" });
     }
 }

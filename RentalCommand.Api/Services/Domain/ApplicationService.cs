@@ -4,11 +4,13 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -310,12 +312,52 @@ public sealed class ApplicationService : IApplicationService
         return page.Items;
     }
 
-    public async Task<ApplicationListResponse> ListPageAsync(
+    public async Task<IReadOnlyList<ApplicationResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        string? status,
+        ListQuery query,
+        int? unitId = null,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(scope, status, query, unitId, ct);
+        return page.Items;
+    }
+
+    public Task<ApplicationListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        string? status,
+        ListQuery query,
+        int? unitId = null,
+        CancellationToken ct = default)
+    {
+        var applications = _db.RentalApplications
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.LeasingApplicationsManage],
+                _timeProvider.UtcNow());
+        return ListPageFromQueryAsync(applications, scope.PortfolioId, status, query, unitId, ct);
+    }
+
+    public Task<ApplicationListResponse> ListPageAsync(
         int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
     {
         var q = _db.RentalApplications
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId);
+
+        return ListPageFromQueryAsync(q, portfolioId, status, query, unitId, ct);
+    }
+
+    private async Task<ApplicationListResponse> ListPageFromQueryAsync(
+        IQueryable<RentalApplication> q,
+        int portfolioId,
+        string? status,
+        ListQuery query,
+        int? unitId,
+        CancellationToken ct)
+    {
 
         // Unit Command Center filter: scope to one unit's applications. Applied DB-side (translates to
         // a WHERE clause), never by materializing the portfolio's apps and filtering in memory.
@@ -382,9 +424,35 @@ public sealed class ApplicationService : IApplicationService
 
     public async Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var item = await _db.RentalApplications
+        var applications = _db.RentalApplications
             .AsNoTracking()
-            .Where(a => a.Id == id && a.PortfolioId == portfolioId)
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await GetFromQueryAsync(applications, portfolioId, id, ct);
+    }
+
+    public Task<ApplicationResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var applications = _db.RentalApplications
+            .AsNoTracking()
+            .Where(a => a.Id == id)
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.LeasingApplicationsManage],
+                _timeProvider.UtcNow());
+        return GetFromQueryAsync(applications, scope.PortfolioId, id, ct);
+    }
+
+    private async Task<ApplicationResponse?> GetFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        int portfolioId,
+        int id,
+        CancellationToken ct)
+    {
+        var item = await applications
             .Select(a => new ApplicationHomeProjection
             {
                 Application = a,
@@ -416,8 +484,61 @@ public sealed class ApplicationService : IApplicationService
         int userId,
         CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        var applications = _db.RentalApplications
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await UpdateFromQueryAsync(applications, null, portfolioId, request, userId, ct);
+    }
+
+    public async Task<ApplicationResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateApplicationRequest request,
+        int userId,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var applications = _db.RentalApplications
+                .Where(a => a.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+
+            if (request.ClearProperty)
+            {
+                var allPropertiesAssignment = _db.AuthorizedAllPropertyAssignments(
+                    scope,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    CapabilityAuthorizationTargetKind.Property,
+                    _timeProvider.UtcNow());
+                applications = applications.Where(_ => allPropertiesAssignment.Any());
+            }
+
+            return UpdateFromQueryAsync(
+                applications, scope, scope.PortfolioId, request, userId, innerCt, broadcast: false);
+        }, ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<ApplicationResponse?> UpdateFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        WorkspaceReadScope? authorizedScope,
+        int portfolioId,
+        UpdateApplicationRequest request,
+        int userId,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
 
@@ -436,9 +557,19 @@ public sealed class ApplicationService : IApplicationService
 
         if (request.PropertyId is > 0)
         {
-            var propertyExists = await _db.Properties
+            var properties = _db.Properties
                 .AsNoTracking()
-                .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
+                .Where(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId);
+            if (authorizedScope.HasValue)
+            {
+                properties = properties.WhereAuthorized(
+                    _db,
+                    authorizedScope.Value,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+            }
+
+            var propertyExists = await properties.AnyAsync(ct);
             if (!propertyExists)
             {
                 throw new DomainValidationException("Selected property was not found in this portfolio.");
@@ -448,12 +579,24 @@ public sealed class ApplicationService : IApplicationService
 
             if (entity.UnitId is > 0)
             {
-                var unitStillMatches = await _db.Units
+                var unitQuery = _db.Units
                     .AsNoTracking()
-                    .AnyAsync(u => u.Id == entity.UnitId
+                    .Where(u => u.Id == entity.UnitId
                         && u.PropertyId == request.PropertyId
                         && u.Property != null
-                        && u.Property.PortfolioId == portfolioId, ct);
+                        && u.Property.PortfolioId == portfolioId);
+                if (authorizedScope.HasValue)
+                {
+                    var authorizedProperties = _db.Properties.AsNoTracking().WhereAuthorized(
+                        _db,
+                        authorizedScope.Value,
+                        [CapabilityKeys.LeasingApplicationsManage],
+                        _timeProvider.UtcNow());
+                    unitQuery = unitQuery.Where(unit => authorizedProperties.Any(property =>
+                        property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId));
+                }
+
+                var unitStillMatches = await unitQuery.AnyAsync(ct);
                 if (!unitStillMatches)
                 {
                     entity.UnitId = null;
@@ -468,11 +611,23 @@ public sealed class ApplicationService : IApplicationService
 
         if (request.UnitId is > 0)
         {
-            var unit = await _db.Units
+            var unitQuery = _db.Units
                 .AsNoTracking()
                 .Where(u => u.Id == request.UnitId
                     && u.Property != null
-                    && u.Property.PortfolioId == portfolioId)
+                    && u.Property.PortfolioId == portfolioId);
+            if (authorizedScope.HasValue)
+            {
+                var authorizedProperties = _db.Properties.AsNoTracking().WhereAuthorized(
+                    _db,
+                    authorizedScope.Value,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+                unitQuery = unitQuery.Where(unit => authorizedProperties.Any(property =>
+                    property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId));
+            }
+
+            var unit = await unitQuery
                 .Select(u => new { u.Id, u.PropertyId })
                 .FirstOrDefaultAsync(ct);
             if (unit == null)
@@ -577,15 +732,57 @@ public sealed class ApplicationService : IApplicationService
 
         var response = await GetAsync(portfolioId, entity.Id, ct)
             ?? ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<ApproveApplicationResult?> ApproveAsync(
         int portfolioId, int id, int userId, CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        var applications = _db.RentalApplications
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await ApproveFromQueryAsync(applications, portfolioId, id, userId, ct);
+    }
+
+    public async Task<ApproveApplicationResult?> ApproveAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        CancellationToken ct = default)
+    {
+        var result = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var applications = _db.RentalApplications
+                .Where(a => a.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+            return ApproveFromQueryAsync(
+                applications, scope.PortfolioId, id, userId, innerCt, broadcast: false);
+        }, ct);
+
+        if (result is not null)
+        {
+            await BroadcastApprovalAsync(scope.PortfolioId, result, ct);
+        }
+
+        return result;
+    }
+
+    private async Task<ApproveApplicationResult?> ApproveFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        int portfolioId,
+        int id,
+        int userId,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
 
@@ -631,11 +828,14 @@ public sealed class ApplicationService : IApplicationService
             changeReason: $"Created from approved rental application #{entity.Id}",
             ct: ct);
 
-        var tenantResponse = TenantResponse.FromEntity(tenant);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Tenant", tenant.Id, tenantResponse, ct);
+        if (broadcast)
+        {
+            var tenantResponse = TenantResponse.FromEntity(tenant);
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Tenant", tenant.Id, tenantResponse, ct);
 
-        var appResponse = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, appResponse, ct);
+            var appResponse = ApplicationResponse.FromEntity(entity);
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, appResponse, ct);
+        }
 
         return new ApproveApplicationResult
         {
@@ -645,11 +845,76 @@ public sealed class ApplicationService : IApplicationService
         };
     }
 
+    private async Task BroadcastApprovalAsync(
+        int portfolioId,
+        ApproveApplicationResult result,
+        CancellationToken ct)
+    {
+        var tenant = await _db.Tenants
+            .AsNoTracking()
+            .FirstOrDefaultAsync(candidate =>
+                candidate.PortfolioId == portfolioId && candidate.Id == result.TenantId, ct);
+        if (tenant is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, "Tenant", tenant.Id, TenantResponse.FromEntity(tenant), ct);
+        }
+
+        var application = await GetAsync(portfolioId, result.ApplicationId, ct);
+        if (application is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, EntityType, application.Id, application, ct);
+        }
+    }
+
     public async Task<ApplicationResponse?> DeclineAsync(
         int portfolioId, int id, int userId, string? reason, CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        var applications = _db.RentalApplications
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await DeclineFromQueryAsync(applications, portfolioId, id, userId, reason, ct);
+    }
+
+    public async Task<ApplicationResponse?> DeclineAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        string? reason,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var applications = _db.RentalApplications
+                .Where(a => a.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+            return DeclineFromQueryAsync(
+                applications, scope.PortfolioId, id, userId, reason, innerCt, broadcast: false);
+        }, ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<ApplicationResponse?> DeclineFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        int portfolioId,
+        int id,
+        int userId,
+        string? reason,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
 
@@ -676,15 +941,57 @@ public sealed class ApplicationService : IApplicationService
             ct: ct);
 
         var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<ApplicationResponse?> WithdrawAsync(
         int portfolioId, int id, int userId, CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        var applications = _db.RentalApplications
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await WithdrawFromQueryAsync(applications, portfolioId, userId, ct);
+    }
+
+    public async Task<ApplicationResponse?> WithdrawAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var applications = _db.RentalApplications
+                .Where(a => a.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+            return WithdrawFromQueryAsync(
+                applications, scope.PortfolioId, userId, innerCt, broadcast: false);
+        }, ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<ApplicationResponse?> WithdrawFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        int portfolioId,
+        int userId,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
 
@@ -698,14 +1005,56 @@ public sealed class ApplicationService : IApplicationService
         await _db.SaveChangesAsync(ct);
 
         var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+        var applications = _db.RentalApplications
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await DeleteFromQueryAsync(applications, portfolioId, id, userId, ct);
+    }
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        CancellationToken ct = default)
+    {
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var applications = _db.RentalApplications
+                .Where(a => a.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    [CapabilityKeys.LeasingApplicationsManage],
+                    _timeProvider.UtcNow());
+            return DeleteFromQueryAsync(
+                applications, scope.PortfolioId, id, userId, innerCt, broadcast: false);
+        }, ct);
+
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        }
+
+        return deleted;
+    }
+
+    private async Task<bool> DeleteFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        int portfolioId,
+        int id,
+        int userId,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return false;
@@ -725,7 +1074,10 @@ public sealed class ApplicationService : IApplicationService
             changeReason: $"Application #{id} deleted",
             ct: ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        }
         return true;
     }
 
