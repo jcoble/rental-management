@@ -503,9 +503,14 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 UpdatedAt = now,
             };
             attempt.Persistence.Add(unit);
-            attempt.BindSemanticAudit(unit, Created(command, nameof(Unit),
-                "Created physical Unit from reviewed lease scan."));
             await attempt.FlushBusinessAsync(ct);
+            // Unit is portfolio-scoped but intentionally does not implement IAuditable, so it has
+            // no tracked mutation for BindSemanticAudit to enrich. Record the exact generated Unit
+            // identity as a semantic event after the insert flush instead of leaving an orphan bind.
+            attempt.StageSemanticEvent(
+                Created(command, nameof(Unit), "Created physical Unit from reviewed lease scan.")
+                    with { EntityId = unit.Id },
+                now);
         }
 
         var currency = await attempt.Persistence.Query<Portfolio>()
