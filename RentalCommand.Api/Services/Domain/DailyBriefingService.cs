@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
@@ -32,7 +33,8 @@ public class DailyBriefingService : IDailyBriefingService
         var today = _timeProvider.UtcNow().Date;
         var tomorrow = today.AddDays(1);
         var nextWeekEnd = today.AddDays(8);
-        var sixtyDaysOut = today.AddDays(60);
+        var businessDate = DateOnly.FromDateTime(today);
+        var sixtyDaysOut = businessDate.AddDays(60);
         var criticalOverdueCutoff = DateOnly.FromDateTime(today.AddDays(-5));
 
         // --- Rule 1: Emergency maintenance ---
@@ -107,32 +109,63 @@ public class DailyBriefingService : IDailyBriefingService
                 TypeValue = 0,
             };
 
-        // --- Rule 3: Rent due today ---
-        var rentDueLeases = _db.Leases
+        // --- Rule 3: Open rent charges due today ---
+        // Collapse charge rows in PostgreSQL so one tenant account produces one briefing item even
+        // if a corrected agreement caused more than one open rent entry for the same due date.
+        var rentDueAmounts = _db.TenantChargeBalanceProjections
             .AsNoTracking()
-            .Where(l =>
-                l.PortfolioId == portfolioId &&
-                l.Status == LeaseStatus.Active &&
-                l.EndDate >= today &&
-                l.RentDueDay == today.Day)
-            .Select(l => new BriefingCandidate
+            .Where(charge =>
+                charge.PortfolioId == portfolioId &&
+                charge.EntryType == nameof(TenantLedgerEntryType.RentCharge) &&
+                charge.DueOn == businessDate &&
+                charge.OpenAmount > 0m)
+            .GroupBy(charge => new { charge.PortfolioId, charge.TenantAccountId, charge.DueOn })
+            .Select(grouped => new
+            {
+                grouped.Key.PortfolioId,
+                grouped.Key.TenantAccountId,
+                grouped.Key.DueOn,
+                OpenAmount = grouped.Sum(charge => charge.OpenAmount),
+            });
+
+        var rentDueAccounts =
+            from due in rentDueAmounts
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { due.PortfolioId, Id = due.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { account.PortfolioId, account.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+                into agreementRows
+            from agreement in agreementRows.DefaultIfEmpty()
+            where lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending"
+            select new BriefingCandidate
             {
                 SortOrder = 3,
                 SeverityOrder = 2,
                 Category = "RentDue",
-                EntityType = "Lease",
-                EntityId = l.Id,
-                UnitId = l.UnitId,
+                EntityType = nameof(TenantAccount),
+                EntityId = account.Id,
+                UnitId = lifecycle.UnitId,
                 TitleText = null,
                 DetailText = null,
-                LeaseNumber = l.LeaseNumber,
-                UnitNumber = l.Unit != null ? l.Unit.UnitNumber : null,
-                TenantName = l.Tenant != null ? (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim() : null,
-                PropertyName = l.Property != null ? l.Property.Name : null,
-                Amount = l.MonthlyRent,
-                EventDate = today,
+                LeaseNumber = agreement != null ? agreement.AgreementNumber : account.AccountNumber,
+                UnitNumber = unit.UnitNumber,
+                TenantName = lifecycle.CurrentPrimaryTenantName,
+                PropertyName = property.Name,
+                Amount = due.OpenAmount,
+                EventDate = due.DueOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                 TypeValue = 0,
-            });
+            };
 
         // --- Rule 4: Appointments today ---
         var todayAppointments = _db.Appointments
@@ -187,39 +220,52 @@ public class DailyBriefingService : IDailyBriefingService
                 EventDate = i.ScheduledFor,
             });
 
-        // --- Rule 6: Leases expiring within 60 days ---
-        var expiringLeases = _db.Leases
-            .AsNoTracking()
-            .Where(l =>
-                l.PortfolioId == portfolioId &&
-                l.Status == LeaseStatus.Active &&
-                l.EndDate > today &&
-                l.EndDate <= sixtyDaysOut)
-            .Select(l => new BriefingCandidate
+        // --- Rule 6: Governing agreements expiring within 60 days ---
+        var expiringAgreements =
+            from status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { status.PortfolioId, Id = status.AgreementId }
+                equals new { agreement.PortfolioId, agreement.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { status.PortfolioId, status.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join unit in _db.Units.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            where status.PortfolioId == portfolioId
+                && status.IsGoverning
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && agreement.TermEndOn != null
+                && agreement.TermEndOn > businessDate
+                && agreement.TermEndOn <= sixtyDaysOut
+            select new BriefingCandidate
             {
                 SortOrder = 6,
                 SeverityOrder = 1,
                 Category = "LeaseExpiring",
-                EntityType = "Lease",
-                EntityId = l.Id,
-                UnitId = l.UnitId,
+                EntityType = nameof(LeaseAgreement),
+                EntityId = agreement.Id,
+                UnitId = lifecycle.UnitId,
                 TitleText = null,
                 DetailText = null,
-                LeaseNumber = l.LeaseNumber,
-                UnitNumber = l.Unit != null ? l.Unit.UnitNumber : null,
-                TenantName = l.Tenant != null ? (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim() : null,
-                PropertyName = l.Property != null ? l.Property.Name : null,
+                LeaseNumber = agreement.AgreementNumber,
+                UnitNumber = unit.UnitNumber,
+                TenantName = lifecycle.CurrentPrimaryTenantName,
+                PropertyName = property.Name,
                 Amount = 0m,
-                EventDate = l.EndDate,
+                EventDate = agreement.TermEndOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                 TypeValue = 0,
-            });
+            };
 
         var candidates = await emergencyWorkOrders
             .Concat(overduePayments)
-            .Concat(rentDueLeases)
+            .Concat(rentDueAccounts)
             .Concat(todayAppointments)
             .Concat(upcomingInspections)
-            .Concat(expiringLeases)
+            .Concat(expiringAgreements)
             .OrderBy(c => c.SeverityOrder)
             .ThenBy(c => c.SortOrder)
             .ThenBy(c => c.EventDate)
