@@ -1,3 +1,6 @@
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core;
@@ -245,6 +248,11 @@ public sealed class CreateWorkspaceMembershipHandler
         {
             throw new DomainValidationException("A valid email and display name are required.");
         }
+        if (!Uri.TryCreate(command.WebBaseUrl, UriKind.Absolute, out var webBaseUri) ||
+            webBaseUri.Scheme is not ("http" or "https"))
+        {
+            throw new DomainValidationException("A valid web application URL is required for account activation.");
+        }
 
         var role = await WorkspaceTeamAuthoritySupport.LoadAndValidateRoleAsync(
             command.RoleProfileKey, command.ScopeKind, command.SelectedPropertyIds,
@@ -328,6 +336,25 @@ public sealed class CreateWorkspaceMembershipHandler
         attempt.Persistence.Add(assignment);
         await attempt.FlushBusinessAsync(ct);
 
+        var requiresAccountActivation = string.IsNullOrEmpty(user.PasswordHash);
+        if (requiresAccountActivation)
+        {
+            var rawToken = CreateInvitationToken();
+            var invitation = new WorkspaceInvitation
+            {
+                PortfolioId = command.PortfolioId,
+                WorkspaceMembershipId = membership.Id,
+                InvitedUserId = user.Id,
+                InvitedByUserId = command.ActorUserId,
+                TokenHash = HashInvitationToken(rawToken),
+                CreatedAtUtc = changedAtUtc,
+                ExpiresAtUtc = changedAtUtc.AddDays(7),
+            };
+            attempt.Persistence.Add(invitation);
+            attempt.StageOutbox(BuildActivationEmail(
+                command, membership, role.DisplayName, user, rawToken, changedAtUtc));
+        }
+
         attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(WorkspaceMembership), membership.Id,
             AuditLogOperation.Created, command.ActorUserId, "Workspace member invited",
@@ -341,12 +368,64 @@ public sealed class CreateWorkspaceMembershipHandler
             }));
         return new CreateWorkspaceMembershipResult(
             user.Id, context.Id, membership.Id, assignment.Id, context.AccessRevision,
-            string.IsNullOrEmpty(user.PasswordHash));
+            requiresAccountActivation);
     }
 
     public Task AuthorizeReplayAsync(CreateWorkspaceMembershipCommand command,
         IAtomicPersistenceSession persistence, CancellationToken ct) =>
         WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+
+    private static string CreateInvitationToken()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    internal static string HashInvitationToken(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+    private static OutboxMessage BuildActivationEmail(
+        CreateWorkspaceMembershipCommand command,
+        WorkspaceMembership membership,
+        string roleDisplayName,
+        ApplicationUser user,
+        string rawToken,
+        DateTime createdAtUtc)
+    {
+        var link = $"{command.WebBaseUrl.TrimEnd('/')}/activate-team?token={Uri.EscapeDataString(rawToken)}";
+        var greeting = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName;
+        var subject = "Activate your Rental Command account";
+        var body = $"""
+            Hi {greeting},
+
+            You've been added to Rental Command as {roleDisplayName}. Set your password to activate your account:
+
+            {link}
+
+            This secure link expires in 7 days. If you weren't expecting this invitation, you can ignore this email.
+
+            – The Rental Command Team
+            """;
+        var htmlBody = $"""
+            <!DOCTYPE html>
+            <html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1a1a2e;">
+              <p>Hi {WebUtility.HtmlEncode(greeting)},</p>
+              <p>You've been added to Rental Command as <strong>{WebUtility.HtmlEncode(roleDisplayName)}</strong>.</p>
+              <p><a href="{WebUtility.HtmlEncode(link)}">Set your password and activate your account</a>.</p>
+              <p style="color:#6b7280;font-size:13px;">This secure link expires in 7 days. If you weren't expecting this invitation, you can ignore this email.</p>
+              <p>– The Rental Command Team</p>
+            </body></html>
+            """;
+        return new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "email",
+            Payload = JsonSerializer.Serialize(new { to = user.Email, subject, body, htmlBody }),
+            IdempotencyKey = $"workspace-invitation:{membership.Id}:activation-v1",
+            CreatedAtUtc = createdAtUtc,
+            NextAttemptAtUtc = createdAtUtc,
+        };
+    }
 }
 
 public sealed class AddWorkspaceRoleAssignmentHandler

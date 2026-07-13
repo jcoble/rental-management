@@ -873,7 +873,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
             $"invite-{Guid.NewGuid():N}@example.test", "Invited Member",
             RoleProfileKeys.LeasingAgent, MembershipRoleAssignmentScopeKind.SelectedProperties,
-            [_leasingPropertyId], _now);
+            [_leasingPropertyId], _now, "https://localhost:5667");
 
         var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamCreateCodec);
         var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command with
@@ -889,6 +889,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             item.AccessContextId == first.Value.AccessContextId)).Should().Be(1);
         (await db.MembershipRoleAssignments.CountAsync(item =>
             item.WorkspaceMembershipId == first.Value.WorkspaceMembershipId)).Should().Be(1);
+        var invitation = await db.WorkspaceInvitations.SingleAsync(item =>
+            item.WorkspaceMembershipId == first.Value.WorkspaceMembershipId);
+        invitation.TokenHash.Should().HaveLength(64);
+        invitation.AcceptedAtUtc.Should().BeNull();
+        invitation.ExpiresAtUtc.Should().BeAfter(invitation.CreatedAtUtc);
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey ==
+            $"workspace-invitation:{first.Value.WorkspaceMembershipId}:activation-v1"))
+            .Should().Be(1);
     }
 
     [SkippableFact]
@@ -950,7 +959,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             new CreateWorkspaceMembershipCommand(
                 pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
                 email, "Owner Becoming Manager", RoleProfileKeys.PropertyManager,
-                MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now),
+                MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now,
+                "https://localhost:5667"),
             TeamCreateCodec);
 
         result.Value.UserId.Should().Be(relationshipUserId);
@@ -981,7 +991,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             new CreateWorkspaceMembershipCommand(
                 pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
                 targetEmail, "Duplicate Team Member", RoleProfileKeys.PropertyManager,
-                MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now),
+                MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now,
+                "https://localhost:5667"),
             TeamCreateCodec);
 
         await act.Should().ThrowAsync<DomainValidationException>()

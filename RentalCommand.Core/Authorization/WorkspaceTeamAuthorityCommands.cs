@@ -28,7 +28,8 @@ public sealed record CreateWorkspaceMembershipCommand(
     string RoleProfileKey,
     MembershipRoleAssignmentScopeKind ScopeKind,
     int[] SelectedPropertyIds,
-    DateTime EffectiveFromUtc) : IWorkspaceTeamAuthorityCommand;
+    DateTime EffectiveFromUtc,
+    string WebBaseUrl) : IWorkspaceTeamAuthorityCommand;
 
 public sealed record AddWorkspaceRoleAssignmentCommand(
     int PortfolioId,

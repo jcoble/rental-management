@@ -12,6 +12,7 @@ internal static class WorkspaceAccessModelConfiguration
         ConfigureAccessContext(modelBuilder);
         ConfigureOwnerRelationshipAccess(modelBuilder);
         ConfigureMembership(modelBuilder);
+        ConfigureInvitations(modelBuilder);
         ConfigureCatalog(modelBuilder);
         ConfigureAssignments(modelBuilder);
         ConfigureAuthSession(modelBuilder);
@@ -153,6 +154,51 @@ internal static class WorkspaceAccessModelConfiguration
                 .HasForeignKey<WorkspaceMembership>(e => new { e.AccessContextId, e.PortfolioId })
                 .HasPrincipalKey<WorkspaceAccessContext>(context => new { context.Id, context.PortfolioId })
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    private static void ConfigureInvitations(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<WorkspaceInvitation>(entity =>
+        {
+            entity.HasKey(invitation => invitation.Id);
+            entity.Property(invitation => invitation.TokenHash).IsRequired().HasMaxLength(64);
+            entity.HasQueryFilter(invitation => invitation.Portfolio!.DeletedAt == null);
+            entity.HasIndex(invitation => invitation.TokenHash).IsUnique();
+            entity.HasIndex(invitation => new
+            {
+                invitation.WorkspaceMembershipId,
+                invitation.AcceptedAtUtc,
+                invitation.RevokedAtUtc,
+            });
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_WorkspaceInvitations_TerminalState",
+                    "NOT (\"AcceptedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_WorkspaceInvitations_ExpiryAfterCreate",
+                    "\"ExpiresAtUtc\" > \"CreatedAtUtc\"");
+            });
+
+            entity.HasOne(invitation => invitation.Portfolio)
+                .WithMany()
+                .HasForeignKey(invitation => invitation.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(invitation => invitation.WorkspaceMembership)
+                .WithMany(membership => membership.Invitations)
+                .HasForeignKey(invitation => new
+                    { invitation.WorkspaceMembershipId, invitation.PortfolioId })
+                .HasPrincipalKey(membership => new { membership.Id, membership.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(invitation => invitation.InvitedUser)
+                .WithMany()
+                .HasForeignKey(invitation => invitation.InvitedUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(invitation => invitation.InvitedByUser)
+                .WithMany()
+                .HasForeignKey(invitation => invitation.InvitedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 
