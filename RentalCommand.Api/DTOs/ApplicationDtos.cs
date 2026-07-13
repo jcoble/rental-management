@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
