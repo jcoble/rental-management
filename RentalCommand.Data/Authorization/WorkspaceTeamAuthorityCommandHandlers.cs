@@ -252,6 +252,7 @@ public sealed class CreateWorkspaceMembershipHandler
         var normalizedEmail = email.ToUpperInvariant();
         var user = await attempt.Persistence.Query<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
+        WorkspaceAccessContext? context = null;
         if (user is null)
         {
             user = new ApplicationUser
@@ -268,13 +269,42 @@ public sealed class CreateWorkspaceMembershipHandler
             };
             attempt.Persistence.Add(user);
         }
-        else if (await attempt.Persistence.Query<WorkspaceAccessContext>()
-                     .AnyAsync(context => context.UserId == user.Id && context.PortfolioId == command.PortfolioId, ct))
+        else
         {
-            throw new DomainValidationException("This person already has an access context in the workspace.");
+            var existingContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
+                .AsNoTracking()
+                .Where(candidate =>
+                    candidate.UserId == user.Id &&
+                    candidate.PortfolioId == command.PortfolioId)
+                .Select(candidate => (int?)candidate.Id)
+                .SingleOrDefaultAsync(ct);
+            if (existingContextId is not null)
+            {
+                await attempt.Locking.AcquireAsync(
+                    AtomicLockResource.WorkspaceAccessContext,
+                    existingContextId.Value,
+                    ct);
+                context = await attempt.Persistence.Query<WorkspaceAccessContext>()
+                    .Include(candidate => candidate.Membership)
+                    .SingleAsync(candidate => candidate.Id == existingContextId.Value, ct);
+                if (context.Membership is not null)
+                {
+                    throw new DomainValidationException("This person is already a Team member in the workspace.");
+                }
+                if (context.Status != WorkspaceAccessContextStatus.Active ||
+                    context.SuspendedAtUtc is not null ||
+                    context.RevokedAtUtc is not null)
+                {
+                    throw new DomainValidationException(
+                        "This person's existing workspace access is not active and cannot receive a Team assignment.");
+                }
+
+                context.UpdatedAtUtc = changedAtUtc;
+                context.AdvanceRevision(context.AccessRevision);
+            }
         }
 
-        var context = new WorkspaceAccessContext
+        context ??= new WorkspaceAccessContext
         {
             User = user,
             PortfolioId = command.PortfolioId,

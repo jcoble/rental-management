@@ -92,7 +92,10 @@
 		<select
 			id="active-experience"
 			value={authState.activeExperience ?? ''}
-			onchange={(event) => selectExperience(event.currentTarget.value as import('$lib/types/user').WorkspaceExperience)}
+			onchange={(event) =>
+				void selectExperience(
+					event.currentTarget.value as import('$lib/types/user').WorkspaceExperience
+				)}
 			class="m3-field-surface h-9 w-full px-3 text-sm text-foreground"
 		>
 			{#each access?.availableExperiences ?? [] as experience}

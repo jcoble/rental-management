@@ -54,8 +54,9 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.access) {
 		throw redirect(303, '/logout');
 	}
+	const activeExperience = locals.access.selectedContext.activeExperience;
 	const effectiveCapabilities = new Set(
-		locals.access.navigation.flatMap((entry) => entry.capabilityKeys)
+		locals.access.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
 	);
 	const routeRule = ROUTE_CAPABILITIES
 		.filter(([prefix]) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))

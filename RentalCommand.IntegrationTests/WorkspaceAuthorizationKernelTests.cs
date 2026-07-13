@@ -892,6 +892,106 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task TeamInvite_ReusesExistingRelationshipContextWithoutCreatingSecondRoot()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"relationship-invite-{Guid.NewGuid():N}");
+        var email = $"owner-team-{Guid.NewGuid():N}@example.test";
+        int relationshipUserId;
+        int relationshipContextId;
+        await using (var seedDb = NewContext())
+        {
+            var user = new ApplicationUser
+            {
+                UserName = email,
+                NormalizedUserName = email.ToUpperInvariant(),
+                Email = email,
+                NormalizedEmail = email.ToUpperInvariant(),
+                DisplayName = "Owner Becoming Manager",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = _now,
+            };
+            var context = new WorkspaceAccessContext
+            {
+                User = user,
+                PortfolioId = pair.PortfolioId,
+                Status = WorkspaceAccessContextStatus.Active,
+                LastAuthorizedExperience = WorkspaceExperience.Owner,
+                CreatedAtUtc = _now,
+                UpdatedAtUtc = _now,
+            };
+            var owner = new OwnerEntity
+            {
+                PortfolioId = pair.PortfolioId,
+                Name = "Relationship Owner",
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var access = new OwnerUserAccess
+            {
+                PortfolioId = pair.PortfolioId,
+                AccessContext = context,
+                ApplicationUser = user,
+                OwnerEntity = owner,
+                EffectiveFromUtc = _now.AddDays(-1),
+                GrantedAtUtc = _now,
+                GrantedByUserId = pair.ActorUserId,
+                Reason = "Existing owner portal access",
+            };
+            seedDb.Add(access);
+            await seedDb.SaveChangesAsync();
+            relationshipUserId = user.Id;
+            relationshipContextId = context.Id;
+        }
+
+        var result = await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.relationship-context-reuse"),
+            new CreateWorkspaceMembershipCommand(
+                pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+                email, "Owner Becoming Manager", RoleProfileKeys.PropertyManager,
+                MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now),
+            TeamCreateCodec);
+
+        result.Value.UserId.Should().Be(relationshipUserId);
+        result.Value.AccessContextId.Should().Be(relationshipContextId);
+        result.Value.AccessRevision.Should().Be(2);
+        await using var verification = NewContext();
+        (await verification.WorkspaceAccessContexts.CountAsync(context =>
+            context.UserId == relationshipUserId && context.PortfolioId == pair.PortfolioId)).Should().Be(1);
+        (await verification.WorkspaceMemberships.CountAsync(membership =>
+            membership.AccessContextId == relationshipContextId)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task TeamInvite_RejectsExistingTeamMembershipInsteadOfAddingDuplicateAuthority()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"duplicate-invite-{Guid.NewGuid():N}");
+        string targetEmail;
+        await using (var db = NewContext())
+        {
+            targetEmail = await db.Users.Where(user => user.Id == pair.TargetUserId)
+                .Select(user => user.Email!)
+                .SingleAsync();
+        }
+
+        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.duplicate-membership"),
+            new CreateWorkspaceMembershipCommand(
+                pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+                targetEmail, "Duplicate Team Member", RoleProfileKeys.PropertyManager,
+                MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now),
+            TeamCreateCodec);
+
+        await act.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("*already a Team member*");
+        await using var verification = NewContext();
+        (await verification.WorkspaceMemberships.CountAsync(membership =>
+            membership.AccessContextId == pair.TargetContextId)).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task TeamAssignment_ReplayPreservesExistingAssignmentsAndReturnsStableRevision()
     {
         SkipIfNoDocker();

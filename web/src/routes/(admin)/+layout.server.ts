@@ -12,7 +12,10 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, `/login?redirectTo=${encodeURIComponent(redirectTo)}`);
 	}
 
-	const capabilities = new Set(locals.access?.navigation.flatMap((item) => item.capabilityKeys) ?? []);
+	const activeExperience = locals.access?.selectedContext.activeExperience;
+	const capabilities = new Set(
+		locals.access?.navigation.find((item) => item.experience === activeExperience)?.capabilityKeys ?? []
+	);
 	if (!capabilities.has('team.manage') && !capabilities.has('security.manage')) {
 		throw error(403, 'Workspace administration access required');
 	}
