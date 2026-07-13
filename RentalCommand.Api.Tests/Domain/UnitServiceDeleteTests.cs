@@ -122,30 +122,18 @@ public sealed class UnitServiceDeleteTests : IDisposable
     private void SeedLease(Unit unit)
     {
         var now = DateTime.UtcNow;
-        var tenant = new Tenant
+        _ctx.Db.LeaseManagements.Add(new LeaseManagement
         {
-            PortfolioId = PortfolioId,
-            FirstName = "History",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.Leases.Add(new Lease
-        {
+            PublicId = Guid.NewGuid(),
             PortfolioId = PortfolioId,
             PropertyId = unit.PropertyId,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "HISTORY-LEASE",
-            Status = LeaseStatus.Expired,
-            StartDate = now.AddYears(-2),
-            EndDate = now.AddYears(-1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            RentDueDay = 1,
-            CreatedAt = now,
-            UpdatedAt = now,
+            UnitId = unit.Id,
+            RelationshipNumber = "HISTORY-RELATIONSHIP",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+            PossessionReturnedAtUtc = now.AddYears(-1),
         });
         _ctx.Db.SaveChanges();
     }

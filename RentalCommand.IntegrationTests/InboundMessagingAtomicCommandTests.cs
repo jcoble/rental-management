@@ -531,19 +531,28 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         };
         db.Units.Add(unit);
         await db.SaveChangesAsync();
-        db.Leases.Add(new Lease
+        var relationship = new LeaseManagement
         {
+            PublicId = Guid.NewGuid(),
             PortfolioId = firstPortfolio.Id,
             PropertyId = property.Id,
             UnitId = unit.Id,
+            RelationshipNumber = "ACTIVE-PRIMARY",
+            CreatedAtUtc = _now,
+            CreatedByUserId = admin.Id,
+            UpdatedAtUtc = _now,
+            RowVersion = Guid.NewGuid(),
+        };
+        db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = firstPortfolio.Id,
+            LeaseManagement = relationship,
             TenantId = tenant.Id,
-            LeaseNumber = "ACTIVE-PRIMARY",
-            Status = LeaseStatus.Active,
-            StartDate = _now.AddMonths(-1),
-            EndDate = _now.AddMonths(11),
-            MonthlyRent = 1000,
-            CreatedAt = _now,
-            UpdatedAt = _now,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(_now.AddMonths(-1)),
+            ChangeReason = "Inbound messaging test fixture",
+            CreatedAtUtc = _now,
+            CreatedByUserId = admin.Id,
         });
 
         var authorizedContext = NewAccessContext(admin.Id, firstPortfolio.Id);

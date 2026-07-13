@@ -171,20 +171,28 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         _db.Units.Add(unit);
         _db.SaveChanges();
 
-        _db.Leases.Add(new Lease
+        var relationship = new LeaseManagement
         {
+            PublicId = Guid.NewGuid(),
             PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitId = unit.Id,
+            RelationshipNumber = $"SMS-{tenant.Id}",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
             TenantId = tenant.Id,
-            LeaseNumber = $"SMS-{tenant.Id}",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date.AddMonths(-1),
-            EndDate = now.Date.AddMonths(11),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            ChangeReason = "Work-order SMS test fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
         });
         _db.SaveChanges();
     }
