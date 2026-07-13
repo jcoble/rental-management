@@ -1,4 +1,11 @@
-import type { AccessEnvelope, EffectiveAccessContextOption, LoginRequest, LoginResponse, User } from '$lib/types/user';
+import type {
+	AccessEnvelope,
+	EffectiveAccessContextOption,
+	LoginRequest,
+	LoginResponse,
+	User,
+	WorkspaceExperience
+} from '$lib/types/user';
 import { api, fetchPublicApi } from '../client';
 
 /**
@@ -21,6 +28,8 @@ export const auth = {
 			'/auth/contexts/select',
 			{ accessContextId }
 		),
+	selectExperience: (experience: WorkspaceExperience) =>
+		api.post<AccessEnvelope>('/auth/experience/select', { experience }),
 	/**
 	 * Re-send the email-verification message. Anonymous endpoint — the API always responds
 	 * with a neutral success (no account enumeration), so callers can fire-and-forget.

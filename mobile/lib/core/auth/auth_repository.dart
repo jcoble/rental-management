@@ -323,6 +323,29 @@ class AuthRepository {
     }
   }
 
+  Future<AccessEnvelope> selectExperience(
+    WorkspaceExperience experience,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/experience/select',
+        data: {'experience': experience.name},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty access response from server.',
+        );
+      }
+      final access = AccessEnvelope.fromJson(data);
+      await _tokenStore.saveAccessEnvelope(access.toJson());
+      return access;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Logs out by revoking the server-side refresh token and clearing local storage.
   Future<void> logout() async {
     try {

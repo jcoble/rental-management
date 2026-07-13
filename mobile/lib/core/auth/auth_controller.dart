@@ -323,18 +323,21 @@ class AuthController extends Notifier<AuthState> {
     );
   }
 
-  void selectExperience(WorkspaceExperience experience) {
+  Future<void> selectExperience(WorkspaceExperience experience) async {
     final current = state;
     if (current is! AuthStateAuthenticated ||
         !current.access.availableExperiences.contains(experience)) {
       return;
     }
+    final access = await _repository.selectExperience(experience);
+    final latest = state;
+    if (latest is! AuthStateAuthenticated) return;
     state = AuthStateAuthenticated(
-      current.user,
-      current.access,
-      activeExperience: experience,
-      onboardingPending: current.onboardingPending,
-      onboardingResolved: current.onboardingResolved,
+      latest.user,
+      access,
+      activeExperience: access.selectedContext.activeExperience,
+      onboardingPending: latest.onboardingPending,
+      onboardingResolved: latest.onboardingResolved,
     );
   }
 

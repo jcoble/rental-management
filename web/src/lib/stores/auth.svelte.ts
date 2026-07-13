@@ -8,6 +8,7 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
+import { auth } from '$lib/api/endpoints/auth';
 import type { AccessEnvelope, User, WorkspaceExperience } from '$lib/types/user';
 import { capabilityKeysForExperience } from '$lib/types/user';
 import { realNow } from '$lib/dev/real-time';
@@ -87,12 +88,14 @@ export function setAccessEnvelope(access: AccessEnvelope) {
 	}
 }
 
-export function selectExperience(experience: WorkspaceExperience) {
+export async function selectExperience(experience: WorkspaceExperience) {
 	assertClientWrite('selectExperience');
 	if (!accessEnvelope?.availableExperiences.includes(experience)) {
 		throw new Error('That experience is not available in the selected workspace.');
 	}
-	activeExperience = experience;
+	const access = await auth.selectExperience(experience);
+	setAccessEnvelope(access);
+	activeExperience = access.selectedContext.activeExperience;
 }
 
 export function currentCapabilities(): ReadonlySet<string> {
