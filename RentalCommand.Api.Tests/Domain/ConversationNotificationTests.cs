@@ -1,12 +1,12 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -18,15 +18,22 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class ConversationNotificationTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class ConversationNotificationTests : IAsyncLifetime
 {
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly ServiceProvider _services;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private ServiceProvider _services = null!;
 
-    public ConversationNotificationTests()
+    public ConversationNotificationTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
@@ -36,15 +43,15 @@ public class ConversationNotificationTests : IDisposable
             SendConversationMessageResult,
             SendConversationMessageHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(_ctx.Connection)
+            builder.UseNpgsql(_ctx.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     private ConversationService CreateSut() => new(
@@ -338,6 +345,7 @@ public class ConversationNotificationTests : IDisposable
 
     private Tenant SeedTenantWithStaffAndTenantUsers()
     {
+        var now = DateTime.UtcNow;
         var tenant = new Tenant
         {
             Id = 8,
@@ -359,6 +367,7 @@ public class ConversationNotificationTests : IDisposable
                 Email = "admin@example.test",
                 NormalizedEmail = "ADMIN@EXAMPLE.TEST",
                 DisplayName = "Admin",
+                CreatedAt = now,
             },
             new ApplicationUser
             {
@@ -368,6 +377,7 @@ public class ConversationNotificationTests : IDisposable
                 Email = "emily@example.test",
                 NormalizedEmail = "EMILY@EXAMPLE.TEST",
                 DisplayName = "Emily Chen",
+                CreatedAt = now,
             },
             new ApplicationUser
             {
@@ -377,8 +387,8 @@ public class ConversationNotificationTests : IDisposable
                 Email = "decoy@example.test",
                 NormalizedEmail = "DECOY@EXAMPLE.TEST",
                 DisplayName = "Unrelated property manager",
+                CreatedAt = now,
             });
-        var now = DateTime.UtcNow;
         var tenantProperty = new Property
         {
             PortfolioId = 1,
@@ -436,6 +446,8 @@ public class ConversationNotificationTests : IDisposable
             PropertyId = tenantProperty.Id,
             UnitId = unit.Id,
             RelationshipNumber = "LM-CONVERSATION-TENANT",
+            PlannedPossessionAtUtc = now.AddMonths(-1),
+            PossessionGivenAtUtc = now.AddMonths(-1),
             CreatedAtUtc = now,
             CreatedByUserId = 10,
             UpdatedAtUtc = now,
@@ -452,6 +464,61 @@ public class ConversationNotificationTests : IDisposable
             CreatedAtUtc = now,
             CreatedByUserId = 10,
         };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            AccountNumber = "TA-CONVERSATION-TENANT",
+            Currency = "USD",
+            OpenedAtUtc = now.AddMonths(-1),
+            CreatedAtUtc = now,
+            CreatedByUserId = 10,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-CONVERSATION-TENANT",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 1000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1000m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(1, 10, now),
+            CreatedAtUtc = now,
+            CreatedByUserId = 10,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.AddRange(relationship, party, account, agreement);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = 1,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = "Emily Chen",
+            EmailSnapshot = "emily@example.test",
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _ctx.Db.SaveChanges();
+
+        IssueAgreement(agreement, now);
+
         _ctx.Db.TenantUserAccesses.Add(new TenantUserAccess
         {
             PublicId = Guid.NewGuid(),
@@ -491,6 +558,57 @@ public class ConversationNotificationTests : IDisposable
 
         return tenant;
     }
+
+    private void IssueAgreement(LeaseAgreement agreement, DateTime now)
+    {
+        var issuedFile = AgreementFile($"agreement-{agreement.Id}-issued.pdf", now);
+        var executedFile = AgreementFile($"agreement-{agreement.Id}-executed.pdf", now);
+        _ctx.Db.StoredFiles.AddRange(issuedFile, executedFile);
+        _ctx.Db.SaveChanges();
+
+        var issuedArtifact = AgreementArtifact(
+            issuedFile, LegalDocumentArtifactKind.IssuedAgreement, new string('a', 64), now);
+        var executedArtifact = AgreementArtifact(
+            executedFile, LegalDocumentArtifactKind.ExecutedAgreement, new string('b', 64), now);
+        issuedArtifact.LegalIssuanceFingerprint = new string('c', 64);
+        _ctx.Db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _ctx.Db.SaveChanges();
+
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
+        _ctx.Db.SaveChanges();
+    }
+
+    private static StoredFile AgreementFile(string fileName, DateTime now) => new()
+    {
+        PortfolioId = 1,
+        FileName = fileName,
+        FilePath = $"legal/{fileName}",
+        ContentType = "application/pdf",
+        FileSize = 1024,
+        UploadedAt = now,
+    };
+
+    private static LegalDocumentArtifact AgreementArtifact(
+        StoredFile file,
+        LegalDocumentArtifactKind kind,
+        string sha256,
+        DateTime now) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = 1,
+        StoredFileId = file.Id,
+        ArtifactKind = kind,
+        StorageKey = file.FilePath,
+        FileName = file.FileName,
+        ContentType = file.ContentType,
+        ByteLength = file.FileSize,
+        ContentSha256 = sha256,
+        CreatedAtUtc = now,
+        CreatedByUserId = 10,
+    };
 
     private static WorkspaceAccessContext NewAccessContext(int userId, DateTime now) => new()
     {

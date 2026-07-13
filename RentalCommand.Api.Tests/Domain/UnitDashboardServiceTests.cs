@@ -85,7 +85,8 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         var seeded = SeedUnitWithTimelineChildren();
         var now = new DateTime(2026, 1, 2, 12, 0, 0, DateTimeKind.Utc);
         var directExpense = ExpenseFor(seeded.Unit, seeded.Property, "Direct unit receipt", 55m, now);
-        var foreignExpense = ExpenseFor(seeded.ForeignUnit, seeded.Property, "Other unit receipt", 75m, now);
+        var foreignExpense = ExpenseFor(
+            seeded.ForeignUnit, seeded.ForeignUnit.Property!, "Other unit receipt", 75m, now);
         _db.Expenses.AddRange(directExpense, foreignExpense);
         _db.SaveChanges();
 
@@ -143,7 +144,10 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     {
         var now = DateTime.UtcNow;
         var (property, unit) = SeedPropertyUnit("Turnover Flats", "7", 1400m, now);
-        SeedOperationalState(unit, UnitOperationalPeriodType.Turnover, now.AddDays(-6));
+        var source = SeedHistoricalRelationship(
+            property, unit, "Former", "Resident", 1400m, now.AddYears(-1), now.AddDays(-6));
+        SeedOperationalState(
+            unit, UnitOperationalPeriodType.Turnover, now.AddDays(-6), source.Relationship);
 
         var openWork = WorkOrderFor(unit, property, "Paint bedrooms", WorkOrderStatus.InProgress,
             now.AddDays(-4), estimatedCost: 200m, scheduledFor: now.AddDays(3));
@@ -257,8 +261,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     {
         var now = DateTime.UtcNow;
         var (property, unit) = SeedPropertyUnit("Cedar Court", "5C", 1000m, now);
-        var prior = SeedHistoricalRelationship(property, unit, "Pat", "Former", 950m, now.AddMonths(-18), now.AddMonths(-6));
-        SeedBalance(prior, 1000m, 1000m, DateOnly.FromDateTime(now.AddMonths(-7)));
+        SeedHistoricalRelationship(property, unit, "Pat", "Former", 950m, now.AddMonths(-18), now.AddMonths(-6));
         var current = SeedRelationshipOnExistingUnit(property, unit, "Pat", "Current", 1000m, now,
             possessionGivenAtUtc: now.AddMonths(-1), agreementEndOn: DateOnly.FromDateTime(now.AddYears(1)),
             receivableBalance: 500m, nextDueOn: DateOnly.FromDateTime(now.AddDays(10)));
@@ -277,9 +280,8 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     {
         var now = DateTime.UtcNow;
         var (property, unit) = SeedPropertyUnit("Historical Flats", "2", 1100m, now);
-        var ended = SeedHistoricalRelationship(property, unit, "Former", "Resident", 1100m,
+        SeedHistoricalRelationship(property, unit, "Former", "Resident", 1100m,
             now.AddYears(-1), now.AddMonths(-1));
-        SeedBalance(ended, 1100m, 1100m, DateOnly.FromDateTime(now.AddMonths(-2)));
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
@@ -333,20 +335,19 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         _db.LeaseManagements.Add(relationship);
         _db.SaveChanges();
 
-        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, now);
         var startOn = DateOnly.FromDateTime(possessionGivenAtUtc ?? plannedPossessionAtUtc ?? now);
         var agreement = Agreement(
             relationship,
             rent,
             startOn,
             agreementEndOn ?? startOn.AddYears(1),
-            issuedArtifact.Id,
-            executedArtifact.Id,
             now);
         var party = Party(relationship, tenant, startOn, now);
         var account = Account(relationship, now);
         _db.AddRange(agreement, party, account);
         _db.SaveChanges();
+        AddResponsibleSigner(agreement, party, tenant);
+        IssueAgreement(agreement, relationship.Id, now);
 
         var graph = new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
         if (receivableBalance != 0m || pastDueAmount != 0m)
@@ -370,27 +371,60 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         _db.Tenants.Add(tenant);
         _db.SaveChanges();
         var relationship = Relationship(property, unit, possessionGivenAtUtc, possessionGivenAtUtc, possessionGivenAtUtc);
-        relationship.PossessionReturnedAtUtc = possessionReturnedAtUtc;
-        relationship.AccountClosedAtUtc = possessionReturnedAtUtc;
         _db.LeaseManagements.Add(relationship);
         _db.SaveChanges();
-        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationship.Id, possessionGivenAtUtc);
         var startOn = DateOnly.FromDateTime(possessionGivenAtUtc);
         var agreement = Agreement(
             relationship,
             rent,
             startOn,
             DateOnly.FromDateTime(possessionReturnedAtUtc),
-            issuedArtifact.Id,
-            executedArtifact.Id,
             possessionGivenAtUtc);
         var party = Party(relationship, tenant, startOn, possessionGivenAtUtc);
-        party.EffectiveThrough = DateOnly.FromDateTime(possessionReturnedAtUtc);
         var account = Account(relationship, possessionGivenAtUtc);
-        account.ClosedAtUtc = possessionReturnedAtUtc;
         _db.AddRange(agreement, party, account);
         _db.SaveChanges();
+        AddResponsibleSigner(agreement, party, tenant);
+        IssueAgreement(agreement, relationship.Id, possessionGivenAtUtc);
+
+        party.EffectiveThrough = DateOnly.FromDateTime(possessionReturnedAtUtc);
+        relationship.PossessionReturnedAtUtc = possessionReturnedAtUtc;
+        relationship.AccountClosedAtUtc = possessionReturnedAtUtc;
+        account.ClosedAtUtc = possessionReturnedAtUtc;
+        account.CloseReasonCode = "MoveOutCompleted";
+        account.CloseNote = "Canonical historical dashboard fixture";
+        _db.SaveChanges();
         return new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
+    }
+
+    private void AddResponsibleSigner(
+        LeaseAgreement agreement,
+        LeaseManagementParty party,
+        Tenant tenant)
+    {
+        _db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = tenant.Email!,
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _db.SaveChanges();
+    }
+
+    private void IssueAgreement(LeaseAgreement agreement, int relationshipId, DateTime now)
+    {
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationshipId, now);
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
+        _db.SaveChanges();
     }
 
     private (LegalDocumentArtifact Issued, LegalDocumentArtifact Executed) SeedAgreementArtifacts(
@@ -442,6 +476,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         {
             AddLedgerEntry(
                 graph.Account,
+                graph.Agreement,
                 TenantLedgerEntryType.RentCharge,
                 TenantLedgerDirection.Debit,
                 pastDue,
@@ -454,6 +489,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         {
             AddLedgerEntry(
                 graph.Account,
+                graph.Agreement,
                 TenantLedgerEntryType.RentCharge,
                 TenantLedgerDirection.Debit,
                 remainingReceivable,
@@ -491,7 +527,11 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         return (property, unit);
     }
 
-    private void SeedOperationalState(Unit unit, UnitOperationalPeriodType type, DateTime startedAtUtc)
+    private void SeedOperationalState(
+        Unit unit,
+        UnitOperationalPeriodType type,
+        DateTime startedAtUtc,
+        LeaseManagement? sourceRelationship = null)
     {
         _db.UnitOperationalPeriods.Add(new UnitOperationalPeriod
         {
@@ -500,6 +540,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
             UnitId = unit.Id,
             Type = type,
             StartedAtUtc = startedAtUtc,
+            SourceLeaseManagementId = sourceRelationship?.Id,
             Reason = "Canonical dashboard fixture",
             CreatedAtUtc = startedAtUtc,
             CreatedByUserId = ActorUserId,
@@ -559,8 +600,6 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         decimal rent,
         DateOnly startOn,
         DateOnly endOn,
-        int issuedArtifactId,
-        int executedArtifactId,
         DateTime now) => new()
     {
         PublicId = Guid.NewGuid(),
@@ -583,10 +622,6 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         TermsPayload = "{}",
         DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
             PortfolioId, ActorUserId, now),
-        IssuedArtifactId = issuedArtifactId,
-        IssuedAtUtc = now,
-        ExecutedArtifactId = executedArtifactId,
-        FullyExecutedAtUtc = now,
         CreatedAtUtc = now,
         CreatedByUserId = ActorUserId,
         UpdatedAtUtc = now,
@@ -622,6 +657,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
 
     private void AddLedgerEntry(
         TenantAccount account,
+        LeaseAgreement agreement,
         TenantLedgerEntryType type,
         TenantLedgerDirection direction,
         decimal amount,
@@ -633,6 +669,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
             PublicId = Guid.NewGuid(),
             PortfolioId = PortfolioId,
             TenantAccountId = account.Id,
+            LeaseAgreementId = agreement.Id,
             EntryType = type,
             Direction = direction,
             Amount = amount,
