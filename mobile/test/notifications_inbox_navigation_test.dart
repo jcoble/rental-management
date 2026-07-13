@@ -19,7 +19,7 @@ void main() {
         title: 'Rent posted',
         message: 'Payment received',
         severity: 'Info',
-        actionUrl: '/payments/8',
+        actionUrl: '/tenant-accounts/42/entries/8',
         isRead: false,
         createdAt: DateTime(2026),
       ),
@@ -43,9 +43,14 @@ void main() {
           ),
         ),
         GoRoute(
-          path: '/payments/:id',
-          builder: (context, state) =>
-              Scaffold(body: Text('Payment ${state.pathParameters['id']}')),
+          path:
+              '/tenant-accounts/:tenantAccountId/entries/:tenantLedgerEntryId',
+          builder: (context, state) => Scaffold(
+            body: Text(
+              'Payment ${state.pathParameters['tenantAccountId']}/'
+              '${state.pathParameters['tenantLedgerEntryId']}',
+            ),
+          ),
         ),
       ],
     );
@@ -64,7 +69,7 @@ void main() {
 
     expect(shellRoutes, isEmpty);
     expect(repo.markedReadIds, [1]);
-    expect(find.text('Payment 8'), findsOneWidget);
+    expect(find.text('Payment 42/8'), findsOneWidget);
 
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();

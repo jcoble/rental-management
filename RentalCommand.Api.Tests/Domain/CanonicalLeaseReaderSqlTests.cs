@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -217,6 +218,32 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("OFFSET");
         sql.Should().NotContain("\"Payments\"");
         sql.Should().NotContain("OpeningBalances");
+    }
+
+    [Fact]
+    public void Tenant_account_ledger_response_carries_exact_account_and_entry_route()
+    {
+        var entry = new LeaseManagementQueryService.CanonicalLedgerEntryReadRow
+        {
+            Id = 812,
+            TenantAccountId = 42,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 1200m,
+            EffectiveOn = new DateOnly(2026, 7, 13),
+            Description = "July rent",
+        };
+        var header = new LeaseManagementQueryService.CanonicalLedgerHeaderReadRow
+        {
+            TenantAccountId = 42,
+            PropertyId = 7,
+            PropertyName = "Maple Ridge",
+        };
+
+        var response = LeaseManagementQueryService.ToLedgerResponse(entry, header);
+
+        response.TenantAccountId.Should().Be(42);
+        response.SourceHref.Should().Be("/tenant-accounts/42/entries/812");
     }
 
     [Fact]

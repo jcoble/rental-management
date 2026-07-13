@@ -118,15 +118,12 @@
 	const moveInMutation = createMutation(() => ({
 		mutationFn: async ({ lease, operationKey }: { lease: UnitLeaseSummary; operationKey: string }) => {
 			if (lease.securityDeposit > 0) {
-				const accounts = await securityDeposits.list(lease.leaseManagementId);
-				const account = accounts.find((candidate) =>
-					lease.tenantAccountId == null || candidate.tenantAccountId === lease.tenantAccountId
-				);
-				if (!account) {
+				if (lease.tenantAccountId == null) {
 					throw new Error('This move-in does not have a prepared security deposit account. Prepare the approved application before recording funds.');
 				}
+				const account = await securityDeposits.get(lease.tenantAccountId);
 				await securityDeposits.fund(account.tenantAccountId, operationKey, {
-					securityDepositAccountId: account.id,
+					securityDepositAccountId: account.securityDepositAccountId,
 					amount: lease.securityDeposit,
 					effectiveOn: moveInDepositEffectiveOn,
 					description: `Security deposit received at move-in for ${lease.leaseNumber}`,

@@ -24,6 +24,8 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
     this.lockTargetEntityType = false,
     this.propertyId,
     this.unitId,
+    this.leaseManagementId,
+    this.tenantAccountId,
     this.sourceLabel,
   });
 
@@ -31,6 +33,8 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
   final bool lockTargetEntityType;
   final int? propertyId;
   final int? unitId;
+  final int? leaseManagementId;
+  final int? tenantAccountId;
   final String? sourceLabel;
 
   @override
@@ -117,6 +121,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             targetEntityType: _targetEntityType,
             propertyId: widget.propertyId,
             unitId: widget.unitId,
+            leaseManagementId: widget.leaseManagementId,
+            tenantAccountId: widget.tenantAccountId,
             sourceLabel: widget.sourceLabel,
             onSendProgress: (progress) {
               if (mounted) setState(() => _uploadProgress = progress);
@@ -502,6 +508,8 @@ Future<int?> showScanCaptureSheet(
   bool lockTargetEntityType = false,
   int? propertyId,
   int? unitId,
+  int? leaseManagementId,
+  int? tenantAccountId,
   String? sourceLabel,
 }) {
   return showModalBottomSheet<int>(
@@ -513,6 +521,8 @@ Future<int?> showScanCaptureSheet(
       lockTargetEntityType: lockTargetEntityType,
       propertyId: propertyId,
       unitId: unitId,
+      leaseManagementId: leaseManagementId,
+      tenantAccountId: tenantAccountId,
       sourceLabel: sourceLabel,
     ),
   );

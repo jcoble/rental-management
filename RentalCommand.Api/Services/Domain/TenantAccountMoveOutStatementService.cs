@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -11,8 +10,8 @@ using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
-/// <inheritdoc cref="ISecurityDepositService"/>
-public class SecurityDepositService : ISecurityDepositService
+/// <inheritdoc cref="ITenantAccountMoveOutStatementService"/>
+public sealed class TenantAccountMoveOutStatementService : ITenantAccountMoveOutStatementService
 {
     /// <summary>StoredFile.EntityType used for photos attached to a security-deposit account.</summary>
     internal const string DepositEntityType = nameof(RentalCommand.Core.Entities.SecurityDepositAccount);
@@ -20,14 +19,14 @@ public class SecurityDepositService : ISecurityDepositService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IMoveOutStatementPdfGenerator _pdf;
-    private readonly ILogger<SecurityDepositService> _logger;
+    private readonly ILogger<TenantAccountMoveOutStatementService> _logger;
     private readonly TimeProvider _timeProvider;
 
-    public SecurityDepositService(
+    public TenantAccountMoveOutStatementService(
         RentalCommandDbContext db,
         IFileStorage storage,
         IMoveOutStatementPdfGenerator pdf,
-        ILogger<SecurityDepositService> logger,
+        ILogger<TenantAccountMoveOutStatementService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
@@ -37,106 +36,12 @@ public class SecurityDepositService : ISecurityDepositService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<SecurityDepositAccountResponse>> ListAsync(WorkspaceReadScope scope, int? leaseManagementId, CancellationToken ct = default)
+    public async Task<byte[]?> GetAsync(
+        WorkspaceReadScope scope,
+        int tenantAccountId,
+        CancellationToken ct = default)
     {
-        var page = await ListPageAsync(scope, leaseManagementId, new ListQuery(), ct);
-        return page.Items;
-    }
-
-    public async Task<SecurityDepositListResponse> ListPageAsync(WorkspaceReadScope scope, int? leaseManagementId, ListQuery query, CancellationToken ct = default)
-    {
-        var q = BuildAccountQuery(scope);
-
-        if (leaseManagementId.HasValue)
-            q = q.Where(row => row.LeaseManagementId == leaseManagementId.Value);
-
-        if (!string.IsNullOrWhiteSpace(query.Search))
-        {
-            var term = query.Search.Trim();
-            var like = $"%{term}%";
-            q = q.Where(row =>
-                EF.Functions.ILike(row.AccountNumber, like) ||
-                EF.Functions.ILike(row.RelationshipNumber, like) ||
-                (row.TenantName != null && EF.Functions.ILike(row.TenantName, like)) ||
-                (row.PropertyName != null && EF.Functions.ILike(row.PropertyName, like)) ||
-                (row.UnitNumber != null && EF.Functions.ILike(row.UnitNumber, like)));
-        }
-
-        q = query.SortField switch
-        {
-            "account" => query.SortDescending ? q.OrderByDescending(row => row.AccountNumber) : q.OrderBy(row => row.AccountNumber),
-            "amount" => query.SortDescending ? q.OrderByDescending(row => row.HeldBalance) : q.OrderBy(row => row.HeldBalance),
-            "createdat" => query.SortDescending ? q.OrderByDescending(row => row.CreatedAtUtc) : q.OrderBy(row => row.CreatedAtUtc),
-            _ => query.SortDescending ? q.OrderBy(row => row.CreatedAtUtc) : q.OrderByDescending(row => row.CreatedAtUtc),
-        };
-
-        var totalCount = await q.CountAsync(ct);
-
-        var items = await q
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
-
-        return new SecurityDepositListResponse
-        {
-            Items = items,
-            TotalCount = totalCount,
-            Skip = query.NormalizedSkip,
-            Take = query.NormalizedTake,
-        };
-    }
-
-    public Task<SecurityDepositAccountResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
-    {
-        return BuildAccountQuery(scope).SingleOrDefaultAsync(row => row.Id == id, ct);
-    }
-
-    internal IQueryable<SecurityDepositAccountResponse> BuildAccountQuery(WorkspaceReadScope scope)
-    {
-        var authorizedProperties = AuthorizedProperties(scope);
-        return
-            from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { balance.PortfolioId, Id = balance.TenantAccountId }
-                equals new { account.PortfolioId, account.Id }
-            join deposit in _db.SecurityDepositAccounts.AsNoTracking()
-                on new { balance.PortfolioId, Id = balance.SecurityDepositAccountId }
-                equals new { deposit.PortfolioId, deposit.Id }
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { account.PortfolioId, Id = account.LeaseManagementId }
-                equals new { management.PortfolioId, management.Id }
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { management.PortfolioId, LeaseManagementId = management.Id }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            where balance.PortfolioId == scope.PortfolioId
-                && authorizedProperties.Any(property => property.Id == management.PropertyId)
-            select new SecurityDepositAccountResponse
-            {
-                Id = deposit.Id,
-                PortfolioId = deposit.PortfolioId,
-                TenantAccountId = account.Id,
-                LeaseManagementId = management.Id,
-                OriginatingAgreementId = deposit.OriginatingAgreementId,
-                PropertyId = management.PropertyId,
-                UnitId = management.UnitId,
-                AccountNumber = account.AccountNumber,
-                RelationshipNumber = management.RelationshipNumber,
-                TenantName = lifecycle.CurrentPrimaryTenantName,
-                PropertyName = management.Property!.Name,
-                UnitNumber = management.Unit!.UnitNumber,
-                Currency = balance.Currency,
-                TotalReceived = balance.TotalReceived,
-                TotalDeductions = balance.TotalDeductions,
-                TotalRefunded = balance.TotalRefunded,
-                HeldBalance = balance.HeldBalance,
-                Status = balance.DepositStatus,
-                CreatedAtUtc = deposit.CreatedAtUtc,
-            };
-    }
-
-    public async Task<byte[]?> GetMoveOutStatementAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
-    {
-        var authorizedProperties = AuthorizedProperties(scope);
+        var authorizedProperties = BuildAuthorizedDepositProperties(scope);
         // The statement header, relationship, legal agreement, party, property, and derived
         // deposit totals are deliberately projected by one translated SQL statement. Do not
         // replace this with navigation loading or per-row lookups.
@@ -162,11 +67,12 @@ public class SecurityDepositService : ISecurityDepositService
                 equals new { unit.PortfolioId, unit.Id }
             join portfolio in _db.Portfolios.AsNoTracking()
                 on deposit.PortfolioId equals portfolio.Id
-            where deposit.Id == id
+            where account.Id == tenantAccountId
                 && deposit.PortfolioId == scope.PortfolioId
                 && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
             select new
             {
+                SecurityDepositAccountId = deposit.Id,
                 portfolio.Name,
                 portfolio.ManagementCompanyName,
                 TenantName = _db.Tenants.IgnoreQueryFilters().AsNoTracking()
@@ -190,9 +96,13 @@ public class SecurityDepositService : ISecurityDepositService
                 agreement.AgreementNumber,
                 management.PossessionReturnedAtUtc,
                 management.PlannedMoveOutAtUtc,
-                balance.TotalDeductions,
-                balance.TotalRefunded,
-                balance.HeldBalance,
+                // Reconstruct the deposit corpus from canonical, reversal-netted subledger
+                // projections in SQL. Deductions and refunds do not reduce the legal statement's
+                // original held amount, while a transfer-out must not be reported as money still
+                // attributable to this relationship.
+                DepositHeld = balance.HeldBalance + balance.TotalDeductions + balance.TotalRefunded < 0m
+                    ? 0m
+                    : balance.HeldBalance + balance.TotalDeductions + balance.TotalRefunded,
                 LastRefundedAtUtc = _db.SecurityDepositEntries.AsNoTracking()
                     .Where(entry => entry.PortfolioId == deposit.PortfolioId
                         && entry.SecurityDepositAccountId == deposit.Id
@@ -203,13 +113,16 @@ public class SecurityDepositService : ISecurityDepositService
         if (header == null)
             return null;
 
+        var securityDepositAccountId = header.SecurityDepositAccountId;
+
         // Reversals stay immutable. Net each original deduction against its reversal entries in
         // SQL so the legal statement never lists a deduction that has been fully undone.
         var deductions = await _db.SecurityDepositEntries
             .AsNoTracking()
             .Where(entry => entry.PortfolioId == scope.PortfolioId
-                && entry.SecurityDepositAccountId == id
-                && AuthorizedDepositTargets(scope).Any(target => target.Id == entry.SecurityDepositAccountId)
+                && entry.SecurityDepositAccountId == securityDepositAccountId
+                && AuthorizedDepositTargets(scope).Any(
+                    target => target.Id == entry.SecurityDepositAccountId)
                 && entry.EntryType == SecurityDepositEntryType.Deduction)
             .Select(entry => new
             {
@@ -229,18 +142,11 @@ public class SecurityDepositService : ISecurityDepositService
             .Select(entry => new DepositDeduction(entry.Description, entry.NetAmount, null))
             .ToListAsync(ct);
 
-        var photos = await LoadDepositPhotosAsync(scope, id, ct);
+        var photos = await LoadDepositPhotosAsync(scope, securityDepositAccountId, ct);
 
         var propertyLine =
             $"{header.PropertyName} — {header.AddressLine1}, {header.City}, {header.State} {header.PostalCode}"
                 .Trim(' ', '—');
-        // Reconstruct the corpus relevant to this relationship. This remains the original held
-        // amount after a tenant refund, while a transfer-out is not misreported as money still
-        // refundable from the source relationship.
-        var depositHeld = Math.Max(
-            header.HeldBalance + header.TotalDeductions + header.TotalRefunded,
-            0m);
-
         var data = new MoveOutStatementData
         {
             ManagementCompanyName = header.ManagementCompanyName,
@@ -251,7 +157,7 @@ public class SecurityDepositService : ISecurityDepositService
             LeaseNumber = header.AgreementNumber,
             StatementDate = header.LastRefundedAtUtc ?? _timeProvider.UtcNow(),
             MoveOutDate = header.PossessionReturnedAtUtc ?? header.PlannedMoveOutAtUtc,
-            DepositHeld = depositHeld,
+            DepositHeld = header.DepositHeld,
             Deductions = deductions,
             Photos = photos,
         };
@@ -300,24 +206,16 @@ public class SecurityDepositService : ISecurityDepositService
         return photos;
     }
 
-    /// <summary>
-    /// Staff deposit reads admit either operational deposit-management authority or the narrower
-    /// leasing deposit-read capability. Both branches retain the full current-session and selected-
-    /// property proof inside the caller's translated SQL.
-    /// </summary>
-    private IQueryable<Property> AuthorizedProperties(WorkspaceReadScope scope)
+    internal IQueryable<Property> BuildAuthorizedDepositProperties(WorkspaceReadScope scope)
     {
-        var properties = _db.Properties.AsNoTracking();
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        return properties
-            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyDepositsManage, utcNow)
-            .Union(properties.WhereAuthorized(
-                _db, scope, CapabilityKeys.LeasingDepositsRead, utcNow));
+        return TenantAccountDepositAuthorization.AuthorizedProperties(_db, scope, utcNow);
     }
 
-    private IQueryable<SecurityDepositAccount> AuthorizedDepositTargets(WorkspaceReadScope scope)
+    private IQueryable<SecurityDepositAccount> AuthorizedDepositTargets(
+        WorkspaceReadScope scope)
     {
-        var authorizedProperties = AuthorizedProperties(scope);
+        var authorizedProperties = BuildAuthorizedDepositProperties(scope);
         return
             from deposit in _db.SecurityDepositAccounts.AsNoTracking()
             join account in _db.TenantAccounts.AsNoTracking()

@@ -692,6 +692,9 @@ internal static class ProviderPaymentHandlerSupport
     private static async Task<(long? ReceiptId, DateTime? PostedAtUtc)> PostReceiptAsync(
         TenantPaymentAttempt paymentAttempt, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
+        if (paymentAttempt.AttemptType != TenantPaymentAttemptType.Charge)
+            throw new AtomicReceiptInvariantException(
+                $"Provider receipt finalization does not support {paymentAttempt.AttemptType} attempts.");
         var alreadyPosted = await attempt.Persistence.Query<TenantLedgerEntry>().AsNoTracking()
             .Where(entry => entry.ProviderPaymentAttemptId == paymentAttempt.Id)
             .Select(entry => new { entry.Id, entry.PostedAtUtc })
@@ -703,28 +706,23 @@ internal static class ProviderPaymentHandlerSupport
         {
             PortfolioId = paymentAttempt.PortfolioId,
             TenantAccountId = paymentAttempt.TenantAccountId,
-            EntryType = paymentAttempt.AttemptType == TenantPaymentAttemptType.Refund
-                ? TenantLedgerEntryType.Refund
-                : TenantLedgerEntryType.PaymentReceipt,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
             Direction = TenantLedgerDirection.Credit,
             Amount = paymentAttempt.Amount,
             Currency = paymentAttempt.Currency,
             EffectiveOn = times.BusinessDate,
             PostedAtUtc = times.WallClockUtc,
-            Description = paymentAttempt.AttemptType == TenantPaymentAttemptType.Refund
-                ? $"{paymentAttempt.Provider} refund"
-                : $"{paymentAttempt.Provider} payment receipt",
+            Description = $"{paymentAttempt.Provider} payment receipt",
             BusinessKey = $"provider-receipt:{paymentAttempt.Id}",
             ProviderPaymentAttemptId = paymentAttempt.Id,
             CreatedByUserId = paymentAttempt.CreatedByUserId,
         };
         attempt.Persistence.Add(receipt);
         await attempt.FlushBusinessAsync(ct);
-        if (paymentAttempt.AttemptType == TenantPaymentAttemptType.Charge)
-            await attempt.TenantMoney.AllocateOldestChargesAsync(paymentAttempt.PortfolioId,
-                paymentAttempt.TenantAccountId, receipt.Id, receipt.Amount,
-                $"provider-receipt:{paymentAttempt.Id}:allocation", paymentAttempt.CreatedByUserId,
-                times.WallClockUtc, null, ct);
+        await attempt.TenantMoney.AllocateOldestChargesAsync(paymentAttempt.PortfolioId,
+            paymentAttempt.TenantAccountId, receipt.Id, receipt.Amount,
+            $"provider-receipt:{paymentAttempt.Id}:allocation", paymentAttempt.CreatedByUserId,
+            times.WallClockUtc, null, ct);
         return (receipt.Id, times.WallClockUtc);
     }
 
@@ -779,6 +777,7 @@ internal static class ProviderPaymentHandlerSupport
             NewValues: JsonSerializer.Serialize(new
             {
                 paymentAttempt.Id, paymentAttempt.Provider, paymentAttempt.ProviderObjectId,
+                paymentAttempt.RefundsPaymentAttemptId,
                 paymentAttempt.IdempotencyKey, paymentAttempt.AttemptType, paymentAttempt.State,
                 paymentAttempt.Amount, paymentAttempt.Currency,
                 InitiatedByUserId = paymentAttempt.CreatedByUserId,

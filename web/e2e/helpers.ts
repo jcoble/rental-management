@@ -127,28 +127,35 @@ export function bearer(token: string): Record<string, string> {
 
 export interface UnitDashboardLite {
 	unit: { id: number; propertyId: number; unitNumber: string };
-	currentLease?: { id: number };
+	currentLease?: { id: number; leaseManagementId: number; tenantAccountId?: number | null };
 }
 
 /**
- * Find a unit (in the caller's portfolio) that has a current lease — required for the Rent tab,
- * which only shows the post-payment affordance and payment list when a lease exists. Walks the
- * units list (newest-id first is irrelevant; the seed has many leased units) and returns the first
- * one whose dashboard carries a `currentLease.id`. Throws if none is found so the test fails loudly
- * rather than silently skipping the most important coverage.
+ * Find a unit (in the caller's portfolio) that has a current tenant account — required for the Rent
+ * tab, which only shows the receipt/charge affordances and ledger when an account exists. Selects
+ * one account from the canonical DB-paged account surface, then loads that unit's dashboard. Throws
+ * if the linked dashboard does not carry the same account so the test fails loudly rather than
+ * silently exercising unrelated seed data.
  */
 export async function findLeasedUnit(
 	request: APIRequestContext,
 	token: string
 ): Promise<UnitDashboardLite> {
-	const listRes = await request.get('/api/v1/units?take=500', { headers: bearer(token) });
-	expect(listRes.ok(), `units list failed: ${listRes.status()}`).toBeTruthy();
-	const list = (await listRes.json()) as Array<{ id: number }>;
-	for (const u of list) {
-		const dRes = await request.get(`/api/v1/units/${u.id}/dashboard`, { headers: bearer(token) });
-		if (!dRes.ok()) continue;
-		const d = (await dRes.json()) as UnitDashboardLite;
-		if (d.currentLease?.id) return d;
-	}
-	throw new Error('No unit with a current lease found in the seeded data');
+	const accountsRes = await request.get('/api/v1/tenant-accounts/page?closed=false&take=1&sort=-openedAtUtc', {
+		headers: bearer(token)
+	});
+	expect(accountsRes.ok(), `tenant-account page failed: ${accountsRes.status()}`).toBeTruthy();
+	const accounts = (await accountsRes.json()) as {
+		items: Array<{ tenantAccountId: number; unitId: number }>;
+	};
+	const account = accounts.items[0];
+	expect(account, 'No tenant account found in the seeded data').toBeTruthy();
+
+	const dashboardRes = await request.get(`/api/v1/units/${account!.unitId}/dashboard`, {
+		headers: bearer(token)
+	});
+	expect(dashboardRes.ok(), `unit dashboard failed: ${dashboardRes.status()}`).toBeTruthy();
+	const dashboard = (await dashboardRes.json()) as UnitDashboardLite;
+	expect(dashboard.currentLease?.tenantAccountId).toBe(account!.tenantAccountId);
+	return dashboard;
 }

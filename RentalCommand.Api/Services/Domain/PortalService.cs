@@ -113,123 +113,533 @@ public class PortalService : IPortalService
                 },
         };
 
-    public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
+    public async Task<PortalTenantAccountPageResponse> ListTenantAccountsPageAsync(
+        PortalTenantReadScope scope,
+        PortalTenantAccountListQuery query,
+        CancellationToken ct = default)
     {
-        var financialRelationships = _db.LeaseManagementParties
-            .AsNoTracking()
-            .Where(party => party.PortfolioId == portfolioId
-                && party.TenantId == tenantId
-                && (party.Role == LeaseManagementPartyRole.PrimaryTenant
-                    || party.Role == LeaseManagementPartyRole.CoTenant
-                    || party.Role == LeaseManagementPartyRole.Guarantor));
+        var rows = BuildTenantAccountQuery(scope, query);
+        var totalCount = await rows.CountAsync(ct);
+        var items = await ApplyTenantAccountSort(rows, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
 
-        // One SQL statement authorizes every account through a party row belonging to this tenant.
-        // Receivable and past-due facts come from the database projections; collected cash is the net
-        // value of immutable receipt credits after any immutable reversals.
-        var rollup = await _db.Tenants
-            .AsNoTracking()
-            .Where(tenant => tenant.PortfolioId == portfolioId && tenant.Id == tenantId)
-            .Select(_ => new
-            {
-                Collected = _db.TenantLedgerEntries
-                    .Where(entry => entry.PortfolioId == portfolioId
-                        && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
-                        && financialRelationships.Any(party =>
-                            party.LeaseManagementId == entry.TenantAccount!.LeaseManagementId))
-                    .Sum(entry => (decimal?)(entry.Amount -
-                        (_db.TenantLedgerEntries
-                            .Where(reversal => reversal.PortfolioId == portfolioId
-                                && reversal.TenantAccountId == entry.TenantAccountId
-                                && reversal.EntryType == TenantLedgerEntryType.Reversal
-                                && reversal.ReversesEntryId == entry.Id)
-                            .Sum(reversal => (decimal?)reversal.Amount) ?? 0m))) ?? 0m,
-                Outstanding = _db.TenantAccountBalanceProjections
-                    .Where(balance => balance.PortfolioId == portfolioId
-                        && financialRelationships.Any(party =>
-                            party.LeaseManagementId == balance.LeaseManagementId))
-                    .Sum(balance => (decimal?)balance.ReceivableBalance) ?? 0m,
-                Overdue = _db.TenantAccountBalanceProjections
-                    .Where(balance => balance.PortfolioId == portfolioId
-                        && financialRelationships.Any(party =>
-                            party.LeaseManagementId == balance.LeaseManagementId))
-                    .Sum(balance => (decimal?)balance.PastDueAmount) ?? 0m,
-                OverdueCount = _db.TenantAccountBalanceProjections
-                    .Where(balance => balance.PortfolioId == portfolioId
-                        && financialRelationships.Any(party =>
-                            party.LeaseManagementId == balance.LeaseManagementId))
-                    .Sum(balance => (int?)balance.PastDueCount) ?? 0,
-            })
-            .SingleOrDefaultAsync(ct);
-
-        return new PortalBalanceResponse
+        return new PortalTenantAccountPageResponse
         {
-            TenantId = tenantId,
-            Collected = rollup?.Collected ?? 0m,
-            Outstanding = rollup?.Outstanding ?? 0m,
-            Overdue = rollup?.Overdue ?? 0m,
-            OverdueCount = rollup?.OverdueCount ?? 0,
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
         };
     }
 
-    public async Task<IReadOnlyList<PortalPaymentResponse>> GetPaymentsAsync(int portfolioId, int tenantId, CancellationToken ct = default)
-    {
-        var financialRelationships = _db.LeaseManagementParties
-            .AsNoTracking()
-            .Where(party => party.PortfolioId == portfolioId
-                && party.TenantId == tenantId
-                && (party.Role == LeaseManagementPartyRole.PrimaryTenant
-                    || party.Role == LeaseManagementPartyRole.CoTenant
-                    || party.Role == LeaseManagementPartyRole.Guarantor));
+    public Task<PortalTenantAccountResponse?> GetTenantAccountAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        CancellationToken ct = default) =>
+        BuildTenantAccountQuery(scope, new PortalTenantAccountListQuery())
+            .SingleOrDefaultAsync(account => account.TenantAccountId == tenantAccountId, ct);
 
-        var payments = await (
-            from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { charge.PortfolioId, charge.TenantAccountId }
-                equals new { account.PortfolioId, TenantAccountId = account.Id }
-            where charge.PortfolioId == portfolioId
-                && financialRelationships.Any(party =>
-                    party.LeaseManagementId == account.LeaseManagementId)
-            orderby (charge.DueOn ?? charge.EffectiveOn) descending, charge.TenantLedgerEntryId descending
-            select new PortalPaymentResponse
-            {
-                Id = charge.TenantLedgerEntryId,
-                TenantAccountId = account.Id,
-                LeaseManagementId = account.LeaseManagementId,
-                PaymentType = charge.EntryType == "RentCharge" ? "Rent"
-                    : charge.EntryType == "DepositCharge" ? "SecurityDeposit"
-                    : charge.EntryType == "LateFeeCharge" ? "LateFee"
-                    : "Other",
-                Status = charge.OriginalAmount - charge.ReversedAmount <= 0m ? "Waived"
-                    : charge.OpenAmount <= 0m ? "Paid"
-                    : charge.NetAllocations > 0m ? "Partial"
-                    : charge.IsPastDue ? "Late"
-                    : "Scheduled",
-                Amount = charge.OriginalAmount - charge.ReversedAmount,
-                DueDate = (charge.DueOn ?? charge.EffectiveOn)
-                    .ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-                PaidDate = charge.OpenAmount <= 0m
-                    ? _db.TenantLedgerAllocations
-                        .Where(allocation => allocation.PortfolioId == portfolioId
-                            && allocation.TenantAccountId == account.Id
-                            && allocation.DebitEntryId == charge.TenantLedgerEntryId
-                            && allocation.CreditEntry!.EntryType == TenantLedgerEntryType.PaymentReceipt)
-                        .Max(allocation => (DateTime?)allocation.CreditEntry!.PostedAtUtc)
-                    : null,
-                Method = _db.TenantLedgerAllocations
-                    .Where(allocation => allocation.PortfolioId == portfolioId
-                        && allocation.TenantAccountId == account.Id
-                        && allocation.DebitEntryId == charge.TenantLedgerEntryId
-                        && allocation.CreditEntry!.EntryType == TenantLedgerEntryType.PaymentReceipt)
-                    .OrderByDescending(allocation => allocation.AllocatedAtUtc)
-                    .ThenByDescending(allocation => allocation.Id)
-                    .Select(allocation => allocation.CreditEntry!.ProviderPaymentAttempt == null
-                        ? null
-                        : allocation.CreditEntry.ProviderPaymentAttempt.PaymentMethodSummary)
-                    .FirstOrDefault(),
-            })
+    public async Task<PortalTenantLedgerEntryPageResponse?> ListTenantAccountEntriesPageAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantLedgerEntryListQuery query,
+        CancellationToken ct = default)
+    {
+        var identity = await BuildTenantAccountIdentityQuery(scope, tenantAccountId)
+            .SingleOrDefaultAsync(ct);
+        if (identity is null)
+        {
+            return null;
+        }
+
+        var rows = BuildTenantLedgerEntryQuery(scope, tenantAccountId, query);
+        var totalCount = await rows.CountAsync(ct);
+        var items = await ApplyTenantEntrySort(rows, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return payments;
+        return new PortalTenantLedgerEntryPageResponse
+        {
+            TenantAccountId = identity.TenantAccountId,
+            LeaseManagementId = identity.LeaseManagementId,
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    public async Task<PortalTenantChargePageResponse?> ListTenantAccountChargesPageAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantChargeListQuery query,
+        CancellationToken ct = default)
+    {
+        var identity = await BuildTenantAccountIdentityQuery(scope, tenantAccountId)
+            .SingleOrDefaultAsync(ct);
+        if (identity is null)
+        {
+            return null;
+        }
+
+        var rows = BuildTenantChargeQuery(scope, tenantAccountId, query);
+        var totalCount = await rows.CountAsync(ct);
+        var items = await ApplyTenantChargeSort(rows, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+
+        return new PortalTenantChargePageResponse
+        {
+            TenantAccountId = identity.TenantAccountId,
+            LeaseManagementId = identity.LeaseManagementId,
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    public Task<PortalTenantAccountDepositResponse?> GetTenantAccountDepositAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        CancellationToken ct = default) =>
+        BuildTenantAccountDepositQuery(scope, tenantAccountId).SingleOrDefaultAsync(ct);
+
+    internal IQueryable<PortalTenantAccountResponse> BuildTenantAccountQuery(
+        PortalTenantReadScope scope,
+        PortalTenantAccountListQuery query)
+    {
+        var rows =
+            from account in BuildAuthorizedTenantAccountQuery(scope)
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { balance.PortfolioId, balance.TenantAccountId }
+            from agreement in _db.LeaseAgreements.AsNoTracking()
+                .Where(item => item.PortfolioId == management.PortfolioId
+                    && item.Id == lifecycle.CurrentAgreementId)
+                .DefaultIfEmpty()
+            from agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                .Where(status => status.PortfolioId == management.PortfolioId
+                    && status.AgreementId == lifecycle.CurrentAgreementId)
+                .Select(status => new
+                {
+                    AgreementStatus = (string?)status.AgreementStatus,
+                    IsGoverning = (bool?)status.IsGoverning,
+                })
+                .DefaultIfEmpty()
+            from depositBalance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+                .Where(deposit => deposit.PortfolioId == account.PortfolioId
+                    && deposit.TenantAccountId == account.Id)
+                .DefaultIfEmpty()
+            from depositAccount in _db.SecurityDepositAccounts.AsNoTracking()
+                .Where(deposit => deposit.PortfolioId == account.PortfolioId
+                    && deposit.Id == depositBalance.SecurityDepositAccountId)
+                .DefaultIfEmpty()
+            select new PortalTenantAccountResponse
+            {
+                TenantAccountId = account.Id,
+                TenantAccountPublicId = account.PublicId,
+                LeaseManagementId = management.Id,
+                LeaseManagementPublicId = management.PublicId,
+                PropertyId = management.PropertyId,
+                PropertyName = management.Property!.Name,
+                UnitId = management.UnitId,
+                UnitNumber = management.Unit!.UnitNumber,
+                AccountNumber = account.AccountNumber,
+                RelationshipNumber = management.RelationshipNumber,
+                Lifecycle = lifecycle.Lifecycle,
+                Currency = balance.Currency,
+                OpenedAtUtc = account.OpenedAtUtc,
+                ClosedAtUtc = account.ClosedAtUtc,
+                EffectiveNowUtc = balance.EffectiveNowUtc,
+                BusinessDate = balance.BusinessDate,
+                TotalDebits = balance.TotalDebits,
+                TotalCredits = balance.TotalCredits,
+                ReceivableBalance = balance.ReceivableBalance,
+                UnappliedCredit = balance.UnappliedCredit,
+                PastDueAmount = balance.PastDueAmount,
+                PastDueCount = balance.PastDueCount,
+                NextDueOn = balance.NextDueOn,
+                NextDueAmount = balance.NextDueAmount,
+                Condition = balance.Condition,
+                LastReceiptOn = balance.LastReceiptOn,
+                LastReceiptAmount = balance.LastReceiptAmount,
+                CurrentAgreement = agreement == null
+                    ? null
+                    : new PortalLeaseAgreementResponse
+                    {
+                        LeaseAgreementId = agreement.Id,
+                        VersionNumber = agreement.VersionNumber,
+                        AgreementNumber = agreement.AgreementNumber,
+                        AgreementStatus = agreementStatus.AgreementStatus ?? string.Empty,
+                        IsGoverning = agreementStatus.IsGoverning ?? false,
+                        ChangeType = agreement.ChangeType,
+                        TermType = agreement.TermType,
+                        TermStartOn = agreement.TermStartOn,
+                        TermEndOn = agreement.TermEndOn,
+                        BaseRentAmount = agreement.BaseRentAmount,
+                        SecurityDepositObligation = agreement.SecurityDepositObligation,
+                        LateFeeAmount = agreement.LateFeeAmount,
+                        RentDueDay = agreement.RentDueDay,
+                        Currency = agreement.Currency,
+                        FullyExecutedAtUtc = agreement.FullyExecutedAtUtc,
+                        ExecutedStoredFileId = agreement.ExecutedArtifact == null
+                            || agreement.ExecutedArtifact.ArtifactKind
+                                != LegalDocumentArtifactKind.ExecutedAgreement
+                            || agreement.ExecutedArtifact.StoredFile == null
+                            || agreement.ExecutedArtifact.StoredFile.DeletedAt != null
+                                ? null
+                                : agreement.ExecutedArtifact.StoredFileId,
+                    },
+                Deposit = depositBalance == null || depositAccount == null
+                    ? null
+                    : new PortalTenantAccountDepositResponse
+                    {
+                        TenantAccountId = account.Id,
+                        LeaseManagementId = management.Id,
+                        SecurityDepositAccountId = depositAccount.Id,
+                        OriginatingAgreementId = depositAccount.OriginatingAgreementId,
+                        Currency = depositBalance.Currency,
+                        CreatedAtUtc = depositAccount.CreatedAtUtc,
+                        EffectiveNowUtc = depositBalance.EffectiveNowUtc,
+                        BusinessDate = depositBalance.BusinessDate,
+                        TotalReceived = depositBalance.TotalReceived,
+                        TotalDeductions = depositBalance.TotalDeductions,
+                        TotalRefunded = depositBalance.TotalRefunded,
+                        TotalTransferredIn = depositBalance.TotalTransferredIn,
+                        TotalTransferredOut = depositBalance.TotalTransferredOut,
+                        NetAdjustments = depositBalance.NetAdjustments,
+                        HeldBalance = depositBalance.HeldBalance,
+                        Status = depositBalance.DepositStatus,
+                    },
+            };
+
+        if (!string.IsNullOrWhiteSpace(query.Lifecycle))
+        {
+            var lifecycle = query.Lifecycle.Trim();
+            rows = rows.Where(row => row.Lifecycle == lifecycle);
+        }
+        if (query.Closed.HasValue)
+        {
+            rows = query.Closed.Value
+                ? rows.Where(row => row.ClosedAtUtc != null)
+                : rows.Where(row => row.ClosedAtUtc == null);
+        }
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var like = $"%{query.Search.Trim()}%";
+            rows = rows.Where(row =>
+                EF.Functions.ILike(row.AccountNumber, like)
+                || EF.Functions.ILike(row.RelationshipNumber, like)
+                || EF.Functions.ILike(row.PropertyName, like)
+                || EF.Functions.ILike(row.UnitNumber, like));
+        }
+        return rows;
+    }
+
+    internal IQueryable<PortalTenantAccountResponse> BuildTenantAccountPageQuery(
+        PortalTenantReadScope scope,
+        PortalTenantAccountListQuery query) =>
+        ApplyTenantAccountSort(BuildTenantAccountQuery(scope, query), query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake);
+
+    internal IQueryable<PortalTenantLedgerEntryResponse> BuildTenantLedgerEntryQuery(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantLedgerEntryListQuery query)
+    {
+        var rows =
+            from account in BuildAuthorizedTenantAccountQuery(scope)
+            join entry in _db.TenantLedgerEntries.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { entry.PortfolioId, entry.TenantAccountId }
+            where account.Id == tenantAccountId
+            select new PortalTenantLedgerEntryResponse
+            {
+                TenantAccountId = account.Id,
+                LeaseManagementId = account.LeaseManagementId,
+                TenantLedgerEntryId = entry.Id,
+                PublicId = entry.PublicId,
+                EntryType = entry.EntryType,
+                Direction = entry.Direction,
+                Amount = entry.Amount,
+                Currency = entry.Currency,
+                EffectiveOn = entry.EffectiveOn,
+                DueOn = entry.DueOn,
+                PostedAtUtc = entry.PostedAtUtc,
+                Description = entry.Description,
+                BusinessKey = entry.BusinessKey,
+                TransferPublicId = entry.TransferPublicId,
+                LeaseAgreementId = entry.LeaseAgreementId,
+                LeaseAddendumId = entry.LeaseAddendumId,
+                ReversesEntryId = entry.ReversesEntryId,
+                ProviderPaymentAttemptId = entry.ProviderPaymentAttemptId,
+                SourceStoredFileId = entry.SourceStoredFileId,
+            };
+
+        if (query.EntryType.HasValue)
+        {
+            rows = rows.Where(row => row.EntryType == query.EntryType.Value);
+        }
+        if (query.Direction.HasValue)
+        {
+            rows = rows.Where(row => row.Direction == query.Direction.Value);
+        }
+        return ApplyTenantEntryFilters(rows, query.Search, query.From, query.To);
+    }
+
+    internal IQueryable<PortalTenantLedgerEntryResponse> BuildTenantLedgerEntryPageQuery(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantLedgerEntryListQuery query) =>
+        ApplyTenantEntrySort(BuildTenantLedgerEntryQuery(scope, tenantAccountId, query), query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake);
+
+    internal IQueryable<PortalTenantChargeResponse> BuildTenantChargeQuery(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantChargeListQuery query)
+    {
+        var rows =
+            from account in BuildAuthorizedTenantAccountQuery(scope)
+            join balance in _db.TenantChargeBalanceProjections.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { balance.PortfolioId, balance.TenantAccountId }
+            join entry in _db.TenantLedgerEntries.AsNoTracking()
+                on new
+                {
+                    balance.PortfolioId,
+                    balance.TenantAccountId,
+                    Id = balance.TenantLedgerEntryId,
+                }
+                equals new { entry.PortfolioId, entry.TenantAccountId, entry.Id }
+            where account.Id == tenantAccountId
+            select new PortalTenantChargeResponse
+            {
+                TenantAccountId = account.Id,
+                LeaseManagementId = account.LeaseManagementId,
+                TenantLedgerEntryId = entry.Id,
+                PublicId = entry.PublicId,
+                EntryType = entry.EntryType,
+                Direction = entry.Direction,
+                Currency = balance.Currency,
+                EffectiveOn = balance.EffectiveOn,
+                DueOn = balance.DueOn,
+                PostedAtUtc = entry.PostedAtUtc,
+                Description = entry.Description,
+                OriginalAmount = balance.OriginalAmount,
+                ReversedAmount = balance.ReversedAmount,
+                NetAllocations = balance.NetAllocations,
+                OpenAmount = balance.OpenAmount,
+                IsPastDue = balance.IsPastDue,
+                TransferPublicId = entry.TransferPublicId,
+                LeaseAgreementId = entry.LeaseAgreementId,
+                LeaseAddendumId = entry.LeaseAddendumId,
+                ReversesEntryId = entry.ReversesEntryId,
+                ProviderPaymentAttemptId = entry.ProviderPaymentAttemptId,
+                SourceStoredFileId = entry.SourceStoredFileId,
+            };
+
+        if (query.EntryType.HasValue)
+        {
+            rows = rows.Where(row => row.EntryType == query.EntryType.Value);
+        }
+        if (query.IsPastDue.HasValue)
+        {
+            rows = rows.Where(row => row.IsPastDue == query.IsPastDue.Value);
+        }
+        return ApplyTenantChargeFilters(rows, query.Search, query.From, query.To);
+    }
+
+    internal IQueryable<PortalTenantChargeResponse> BuildTenantChargePageQuery(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantChargeListQuery query) =>
+        ApplyTenantChargeSort(BuildTenantChargeQuery(scope, tenantAccountId, query), query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake);
+
+    internal IQueryable<PortalTenantAccountDepositResponse> BuildTenantAccountDepositQuery(
+        PortalTenantReadScope scope,
+        int tenantAccountId) =>
+        from account in BuildAuthorizedTenantAccountQuery(scope)
+        join deposit in _db.SecurityDepositAccounts.AsNoTracking()
+            on new { account.PortfolioId, TenantAccountId = account.Id }
+            equals new { deposit.PortfolioId, deposit.TenantAccountId }
+        join balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+            on new { deposit.PortfolioId, SecurityDepositAccountId = deposit.Id }
+            equals new { balance.PortfolioId, balance.SecurityDepositAccountId }
+        where account.Id == tenantAccountId
+        select new PortalTenantAccountDepositResponse
+        {
+            TenantAccountId = account.Id,
+            LeaseManagementId = account.LeaseManagementId,
+            SecurityDepositAccountId = deposit.Id,
+            OriginatingAgreementId = deposit.OriginatingAgreementId,
+            Currency = balance.Currency,
+            CreatedAtUtc = deposit.CreatedAtUtc,
+            EffectiveNowUtc = balance.EffectiveNowUtc,
+            BusinessDate = balance.BusinessDate,
+            TotalReceived = balance.TotalReceived,
+            TotalDeductions = balance.TotalDeductions,
+            TotalRefunded = balance.TotalRefunded,
+            TotalTransferredIn = balance.TotalTransferredIn,
+            TotalTransferredOut = balance.TotalTransferredOut,
+            NetAdjustments = balance.NetAdjustments,
+            HeldBalance = balance.HeldBalance,
+            Status = balance.DepositStatus,
+        };
+
+    internal IQueryable<TenantAccount> BuildAuthorizedTenantAccountQuery(PortalTenantReadScope scope) =>
+        _db.TenantAccounts.AsNoTracking().Where(account =>
+            account.PortfolioId == scope.PortfolioId
+            && _db.EffectiveTenantAccess.AsNoTracking().Any(access =>
+                access.PortfolioId == scope.PortfolioId
+                && access.UserId == scope.UserId
+                && access.AccessContextId == scope.AccessContextId
+                && access.AccessRevision == scope.AccessRevision
+                && access.TenantAccountId == account.Id
+                && access.LeaseManagementId == account.LeaseManagementId));
+
+    private IQueryable<PortalTenantAccountIdentity> BuildTenantAccountIdentityQuery(
+        PortalTenantReadScope scope,
+        int tenantAccountId) =>
+        BuildAuthorizedTenantAccountQuery(scope)
+            .Where(account => account.Id == tenantAccountId)
+            .Select(account => new PortalTenantAccountIdentity
+            {
+                TenantAccountId = account.Id,
+                LeaseManagementId = account.LeaseManagementId,
+            });
+
+    private static IQueryable<PortalTenantLedgerEntryResponse> ApplyTenantEntryFilters(
+        IQueryable<PortalTenantLedgerEntryResponse> rows,
+        string? search,
+        DateTime? from,
+        DateTime? to)
+    {
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var like = $"%{search.Trim()}%";
+            rows = rows.Where(row => EF.Functions.ILike(row.Description, like)
+                || EF.Functions.ILike(row.BusinessKey, like)
+                || EF.Functions.ILike(row.Currency, like));
+        }
+        if (from.HasValue)
+        {
+            var fromOn = DateOnly.FromDateTime(from.Value);
+            rows = rows.Where(row => row.EffectiveOn >= fromOn);
+        }
+        if (to.HasValue)
+        {
+            var throughExclusive = DateOnly.FromDateTime(to.Value.Date.AddDays(1));
+            rows = rows.Where(row => row.EffectiveOn < throughExclusive);
+        }
+        return rows;
+    }
+
+    private static IQueryable<PortalTenantChargeResponse> ApplyTenantChargeFilters(
+        IQueryable<PortalTenantChargeResponse> rows,
+        string? search,
+        DateTime? from,
+        DateTime? to)
+    {
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var like = $"%{search.Trim()}%";
+            rows = rows.Where(row => EF.Functions.ILike(row.Description, like)
+                || EF.Functions.ILike(row.Currency, like));
+        }
+        if (from.HasValue)
+        {
+            var fromOn = DateOnly.FromDateTime(from.Value);
+            rows = rows.Where(row => row.EffectiveOn >= fromOn);
+        }
+        if (to.HasValue)
+        {
+            var throughExclusive = DateOnly.FromDateTime(to.Value.Date.AddDays(1));
+            rows = rows.Where(row => row.EffectiveOn < throughExclusive);
+        }
+        return rows;
+    }
+
+    private static IQueryable<PortalTenantAccountResponse> ApplyTenantAccountSort(
+        IQueryable<PortalTenantAccountResponse> rows,
+        PortalTenantAccountListQuery query) => query.SortField switch
+        {
+            "accountnumber" => query.SortDescending
+                ? rows.OrderByDescending(row => row.AccountNumber).ThenByDescending(row => row.TenantAccountId)
+                : rows.OrderBy(row => row.AccountNumber).ThenBy(row => row.TenantAccountId),
+            "propertyname" => query.SortDescending
+                ? rows.OrderByDescending(row => row.PropertyName)
+                    .ThenByDescending(row => row.UnitNumber)
+                    .ThenByDescending(row => row.TenantAccountId)
+                : rows.OrderBy(row => row.PropertyName)
+                    .ThenBy(row => row.UnitNumber)
+                    .ThenBy(row => row.TenantAccountId),
+            "balance" => query.SortDescending
+                ? rows.OrderByDescending(row => row.ReceivableBalance).ThenByDescending(row => row.TenantAccountId)
+                : rows.OrderBy(row => row.ReceivableBalance).ThenBy(row => row.TenantAccountId),
+            _ => rows.OrderByDescending(row => row.OpenedAtUtc)
+                .ThenByDescending(row => row.TenantAccountId),
+        };
+
+    private static IQueryable<PortalTenantLedgerEntryResponse> ApplyTenantEntrySort(
+        IQueryable<PortalTenantLedgerEntryResponse> rows,
+        PortalTenantLedgerEntryListQuery query) => query.SortField switch
+        {
+            "effectiveon" => query.SortDescending
+                ? rows.OrderByDescending(row => row.EffectiveOn).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.EffectiveOn).ThenBy(row => row.TenantLedgerEntryId),
+            "amount" => query.SortDescending
+                ? rows.OrderByDescending(row => row.Amount).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.Amount).ThenBy(row => row.TenantLedgerEntryId),
+            "dueon" => query.SortDescending
+                ? rows.OrderByDescending(row => row.DueOn).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.DueOn).ThenBy(row => row.TenantLedgerEntryId),
+            "entrytype" => query.SortDescending
+                ? rows.OrderByDescending(row => row.EntryType).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.EntryType).ThenBy(row => row.TenantLedgerEntryId),
+            _ => rows.OrderByDescending(row => row.EffectiveOn)
+                .ThenByDescending(row => row.TenantLedgerEntryId),
+        };
+
+    private static IQueryable<PortalTenantChargeResponse> ApplyTenantChargeSort(
+        IQueryable<PortalTenantChargeResponse> rows,
+        PortalTenantChargeListQuery query) => query.SortField switch
+        {
+            "dueon" => query.SortDescending
+                ? rows.OrderByDescending(row => row.DueOn).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.DueOn).ThenBy(row => row.TenantLedgerEntryId),
+            "effectiveon" => query.SortDescending
+                ? rows.OrderByDescending(row => row.EffectiveOn).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.EffectiveOn).ThenBy(row => row.TenantLedgerEntryId),
+            "originalamount" => query.SortDescending
+                ? rows.OrderByDescending(row => row.OriginalAmount).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.OriginalAmount).ThenBy(row => row.TenantLedgerEntryId),
+            "openamount" => query.SortDescending
+                ? rows.OrderByDescending(row => row.OpenAmount).ThenByDescending(row => row.TenantLedgerEntryId)
+                : rows.OrderBy(row => row.OpenAmount).ThenBy(row => row.TenantLedgerEntryId),
+            _ => rows.OrderBy(row => row.DueOn)
+                .ThenBy(row => row.TenantLedgerEntryId),
+        };
+
+    private sealed class PortalTenantAccountIdentity
+    {
+        public int TenantAccountId { get; init; }
+        public int LeaseManagementId { get; init; }
     }
 
     public async Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(

@@ -2,6 +2,13 @@ using RentalCommand.Api.DTOs;
 
 namespace RentalCommand.Api.Services.Domain;
 
+/// <summary>Database-validated coordinates for one tenant-facing read request.</summary>
+public readonly record struct PortalTenantReadScope(
+    int PortfolioId,
+    int UserId,
+    int AccessContextId,
+    long AccessRevision);
+
 /// <summary>
 /// Tenant-facing access to the portal. Leasing reads retain the validated access-context id through
 /// the translated query so tenant identity alone never broadens relationship access. Tenant messaging
@@ -14,8 +21,28 @@ public interface IPortalService
 
     Task<IReadOnlyList<PortalLeaseRelationshipResponse>> GetLeasesAsync(
         int portfolioId, int accessContextId, int tenantId, CancellationToken ct = default);
-    Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default);
-    Task<IReadOnlyList<PortalPaymentResponse>> GetPaymentsAsync(int portfolioId, int tenantId, CancellationToken ct = default);
+    Task<PortalTenantAccountPageResponse> ListTenantAccountsPageAsync(
+        PortalTenantReadScope scope,
+        PortalTenantAccountListQuery query,
+        CancellationToken ct = default);
+    Task<PortalTenantAccountResponse?> GetTenantAccountAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        CancellationToken ct = default);
+    Task<PortalTenantLedgerEntryPageResponse?> ListTenantAccountEntriesPageAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantLedgerEntryListQuery query,
+        CancellationToken ct = default);
+    Task<PortalTenantChargePageResponse?> ListTenantAccountChargesPageAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantChargeListQuery query,
+        CancellationToken ct = default);
+    Task<PortalTenantAccountDepositResponse?> GetTenantAccountDepositAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        CancellationToken ct = default);
     Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(
         int portfolioId, int accessContextId, int tenantId, CancellationToken ct = default);
     Task<IReadOnlyList<WorkOrderResponse>> GetWorkOrdersAsync(int portfolioId, int tenantId, CancellationToken ct = default);

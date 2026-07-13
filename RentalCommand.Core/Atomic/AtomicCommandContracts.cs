@@ -243,10 +243,14 @@ public interface IAtomicTenantMoneyPersistence
         DateTime allocatedAtUtc,
         CancellationToken ct = default);
 
-    Task<AtomicLedgerAllocationSummary> ReverseChargeAllocationsAsync(
+    /// <summary>
+    /// Appends exact negative compensating rows for every live allocation attached to either side
+    /// of one ledger entry. Selection and insertion are one PostgreSQL statement.
+    /// </summary>
+    Task<AtomicLedgerAllocationSummary> ReverseEntryAllocationsAsync(
         int portfolioId,
         int tenantAccountId,
-        long debitEntryId,
+        long ledgerEntryId,
         string businessKeyPrefix,
         int createdByUserId,
         DateTime allocatedAtUtc,

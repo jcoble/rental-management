@@ -17,7 +17,11 @@ describe('recordHref', () => {
 	});
 	it('falls back to the generic page when unitId is missing/0', () => {
 		assert.equal(recordHref('expense', { id: 7, unitId: 0 }), '/accounting/expenses/7');
-		assert.equal(recordHref('payment', { id: 9 }), '/accounting/payments/9');
+		assert.equal(recordHref('payment', { id: 9, tenantAccountId: 7 }), '/tenant-accounts/7/entries/9');
+		assert.equal(recordHref('payment', { id: 9 }), '/accounting');
 		assert.equal(recordHref('application', { id: 2, unitId: null }), '/applications/2');
+	});
+	it('prefers an exact canonical payment route when account and unit context are both present', () => {
+		assert.equal(recordHref('payment', { id: 9, unitId: 3, tenantAccountId: 7 }), '/tenant-accounts/7/entries/9');
 	});
 });

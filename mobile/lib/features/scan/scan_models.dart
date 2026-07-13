@@ -133,6 +133,18 @@ class ScanLineItem {
 // ScanDraft
 // ---------------------------------------------------------------------------
 
+class ScanCaptureContext {
+  const ScanCaptureContext({this.tenantAccountId});
+
+  final int? tenantAccountId;
+
+  factory ScanCaptureContext.fromJson(Map<String, dynamic> json) {
+    return ScanCaptureContext(
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
+    );
+  }
+}
+
 class ScanDraft {
   const ScanDraft({
     required this.id,
@@ -148,6 +160,7 @@ class ScanDraft {
     this.reviewedAt,
     this.confirmedAt,
     this.leaseProposal,
+    this.captureContext,
   });
 
   final int id;
@@ -174,6 +187,10 @@ class ScanDraft {
   /// Property/unit import preview for a Lease draft (link-existing vs create-new).
   /// Null for non-lease drafts, or when the server didn't attach one.
   final LeaseImportProposal? leaseProposal;
+
+  /// Server-preserved launch context used to preselect the exact account when
+  /// a payment scan starts from a Unit or account surface.
+  final ScanCaptureContext? captureContext;
 
   /// Target is a Payment draft (vs. an Expense draft).
   bool get isPayment => targetEntityType == 'Payment';
@@ -237,6 +254,11 @@ class ScanDraft {
       leaseProposal: json['leaseProposal'] is Map<String, dynamic>
           ? LeaseImportProposal.fromJson(
               json['leaseProposal'] as Map<String, dynamic>,
+            )
+          : null,
+      captureContext: json['captureContext'] is Map<String, dynamic>
+          ? ScanCaptureContext.fromJson(
+              json['captureContext'] as Map<String, dynamic>,
             )
           : null,
     );

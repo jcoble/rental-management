@@ -1,7 +1,8 @@
 /// Maps a server-emitted `actionUrl` to a safe in-app route.
 ///
 /// The server usually emits paths that match mobile go_router routes directly
-/// (`/payments/{id}`, `/work-orders/{id}`, `/expenses/{id}`, `/scan/{id}`,
+/// (`/tenant-accounts/{accountId}/entries/{entryId}`, `/work-orders/{id}`,
+/// `/expenses/{id}`, `/scan/{id}`,
 /// `/messages/{id}`, plus section roots), but older notification emitters still
 /// use query ids such as `/messages?conversationId=...`. Those are normalized
 /// here before allowlist checks. Anything outside the allowlist resolves to
@@ -16,7 +17,6 @@ library;
 /// these are membership tests, not a switch.
 const _allowedPrefixes = <String>[
   '/work-orders/',
-  '/payments/',
   '/expenses/',
   '/scan/',
   '/messages/',
@@ -53,6 +53,10 @@ String resolveNotificationRoute(String? actionUrl) {
 
   if (_allowedExact.contains(path)) return path;
 
+  if (RegExp(r'^/tenant-accounts/[1-9]\d*/entries/[1-9]\d*$').hasMatch(path)) {
+    return path;
+  }
+
   for (final prefix in _allowedPrefixes) {
     if (path.startsWith(prefix) && path.length > prefix.length) {
       return uri.hasQuery ? '$path?${uri.query}' : path;
@@ -68,8 +72,6 @@ String? _normalizeQueryRoute(Uri uri) {
       return _detailRoute('/messages', uri.queryParameters['conversationId']);
     case '/work-orders':
       return _detailRoute('/work-orders', uri.queryParameters['workOrderId']);
-    case '/payments':
-      return _detailRoute('/payments', uri.queryParameters['paymentId']);
     default:
       return null;
   }

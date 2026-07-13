@@ -37,10 +37,11 @@ export function createdRecordLabel(type: string | null | undefined): string {
 export function createdRecordHref(
 	type: string | null | undefined,
 	id: number | null | undefined,
-	unitId?: number | null
+	unitId?: number | null,
+	tenantAccountId?: number | null
 ): string {
 	if (!type || !id) return '/accounting';
-	if (type === 'Payment') return recordHref('payment', { id, unitId });
+	if (type === 'Payment') return recordHref('payment', { id, unitId, tenantAccountId });
 	if (type === 'WorkOrder') return recordHref('workOrder', { id, unitId });
 	if (type === 'LeaseAgreement') return '/leases';
 	if (type === 'Application' || type === 'RentalApplication') return recordHref('application', { id, unitId });

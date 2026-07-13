@@ -1,16 +1,51 @@
-import type { SecurityDepositAccount } from '$lib/types';
 import { api, fetchApi, refreshToken } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
 
-export interface SecurityDepositListParams extends ListParams {
-	leaseManagementId?: number;
+export type SecurityDepositStatus =
+	| 'NotFunded'
+	| 'Held'
+	| 'PartiallyReturned'
+	| 'Returned'
+	| 'Withheld';
+
+/** One canonical deposit projection, keyed by its owning continuous tenant account. */
+export interface TenantAccountDeposit {
+	securityDepositAccountId: number;
+	tenantAccountId: number;
+	leaseManagementId: number;
+	originatingAgreementId: number;
+	propertyId: number;
+	propertyName: string;
+	unitId: number;
+	unitNumber: string;
+	accountNumber: string;
+	relationshipNumber: string;
+	primaryTenantName?: string | null;
+	currency: string;
+	createdAtUtc: string;
+	effectiveNowUtc: string;
+	businessDate: string;
+	totalReceived: number;
+	totalDeductions: number;
+	totalRefunded: number;
+	totalTransferredIn: number;
+	totalTransferredOut: number;
+	netAdjustments: number;
+	heldBalance: number;
+	status: SecurityDepositStatus;
 }
 
-export interface SecurityDepositListResponse {
-	items: SecurityDepositAccount[];
+export interface TenantAccountDepositListParams extends ListParams {
+	tenantAccountId?: number;
+	propertyId?: number;
+	status?: SecurityDepositStatus;
+}
+
+export interface TenantAccountDepositPage {
+	items: TenantAccountDeposit[];
 	totalCount: number;
 	skip: number;
 	take: number;
@@ -69,27 +104,27 @@ function postDepositMutation(
 		`/tenant-accounts/${tenantAccountId}/deposit/${route}`,
 		{
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
+			headers: {
+				'Content-Type': 'application/json',
+				'Idempotency-Key': operationKey,
+			},
 			body: JSON.stringify(body),
 		}
 	);
 }
 
 export const securityDeposits = {
-	/** Canonical account projections, optionally scoped to one continuous lease relationship. */
-	list: (leaseManagementId?: number) =>
-		api.get<SecurityDepositAccount[]>(
-			leaseManagementId != null
-				? `/security-deposits?leaseManagementId=${leaseManagementId}`
-				: '/security-deposits'
+	listPage: (params: TenantAccountDepositListParams = {}) =>
+		api.get<TenantAccountDepositPage>(
+			`/tenant-accounts/deposits/page${buildListQuery(params, {
+				tenantAccountId: params.tenantAccountId,
+				propertyId: params.propertyId,
+				status: params.status,
+			})}`
 		),
 
-	listPage: (params?: SecurityDepositListParams) =>
-		api.get<SecurityDepositListResponse>(
-			`/security-deposits/page${buildListQuery(params, { leaseManagementId: params?.leaseManagementId })}`
-		),
-
-	get: (id: number) => api.get<SecurityDepositAccount>(`/security-deposits/${id}`),
+	get: (tenantAccountId: number) =>
+		api.get<TenantAccountDeposit>(`/tenant-accounts/${tenantAccountId}/deposit`),
 
 	fund: (tenantAccountId: number, operationKey: string, body: FundSecurityDepositRequest) =>
 		postDepositMutation(tenantAccountId, 'fund', operationKey, body),
@@ -105,7 +140,7 @@ export const securityDeposits = {
 };
 
 /** Download the canonical account's move-out statement with the bearer token attached. */
-export async function downloadMoveOutStatement(id: number): Promise<void> {
+export async function downloadMoveOutStatement(tenantAccountId: number): Promise<void> {
 	if (!browser) return;
 
 	if (isTokenExpired(120)) {
@@ -117,10 +152,13 @@ export async function downloadMoveOutStatement(id: number): Promise<void> {
 	}
 
 	const { accessToken } = getAuthState();
-	const response = await fetch(`${CLIENT_API_BASE_URL}/security-deposits/${id}/move-out-statement`, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-	});
+	const response = await fetch(
+		`${CLIENT_API_BASE_URL}/tenant-accounts/${tenantAccountId}/deposit/move-out-statement`,
+		{
+			credentials: 'include',
+			headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+		}
+	);
 
 	if (!response.ok) throw new Error(`Move-out statement download failed (${response.status})`);
 
@@ -128,7 +166,7 @@ export async function downloadMoveOutStatement(id: number): Promise<void> {
 	const objectUrl = URL.createObjectURL(blob);
 	const anchor = document.createElement('a');
 	anchor.href = objectUrl;
-	anchor.download = `move-out-statement-${id}.pdf`;
+	anchor.download = `move-out-statement-${tenantAccountId}.pdf`;
 	document.body.appendChild(anchor);
 	anchor.click();
 	document.body.removeChild(anchor);

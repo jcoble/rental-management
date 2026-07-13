@@ -2,25 +2,35 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/models.dart';
 import '../activity/activity_history_screen.dart';
 import '../money/money_format.dart';
 import 'payments_repository.dart';
 
 final paymentDetailProvider = FutureProvider.autoDispose
-    .family<PaymentReceipt, int>((ref, id) {
-      return ref.read(paymentsRepositoryProvider).getPayment(id);
+    .family<StaffTenantLedgerEntryDetail, ({int accountId, int entryId})>((
+      ref,
+      key,
+    ) {
+      return ref
+          .read(paymentsRepositoryProvider)
+          .getTenantLedgerEntry(key.accountId, key.entryId);
     });
 
 /// Read-only detail for one immutable tenant-account receipt.
 class PaymentDetailScreen extends ConsumerWidget {
-  const PaymentDetailScreen({super.key, required this.paymentId});
+  const PaymentDetailScreen({
+    super.key,
+    required this.tenantAccountId,
+    required this.tenantLedgerEntryId,
+  });
 
-  final int paymentId;
+  final int tenantAccountId;
+  final int tenantLedgerEntryId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(paymentDetailProvider(paymentId));
+    final key = (accountId: tenantAccountId, entryId: tenantLedgerEntryId);
+    final async = ref.watch(paymentDetailProvider(key));
     return Scaffold(
       appBar: AppBar(
         title: const Text('Receipt'),
@@ -32,7 +42,7 @@ class PaymentDetailScreen extends ConsumerWidget {
               MaterialPageRoute<void>(
                 builder: (_) => ActivityHistoryScreen(
                   entityType: 'TenantLedgerEntry',
-                  entityId: paymentId,
+                  entityId: tenantLedgerEntryId,
                   title: 'Receipt activity',
                 ),
               ),
@@ -44,7 +54,7 @@ class PaymentDetailScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => _ErrorView(
           message: error is ApiException ? error.message : error.toString(),
-          onRetry: () => ref.invalidate(paymentDetailProvider(paymentId)),
+          onRetry: () => ref.invalidate(paymentDetailProvider(key)),
         ),
         data: (receipt) => _ReceiptBody(receipt: receipt),
       ),
@@ -55,7 +65,7 @@ class PaymentDetailScreen extends ConsumerWidget {
 class _ReceiptBody extends StatelessWidget {
   const _ReceiptBody({required this.receipt});
 
-  final PaymentReceipt receipt;
+  final StaffTenantLedgerEntryDetail receipt;
 
   @override
   Widget build(BuildContext context) {
@@ -63,9 +73,8 @@ class _ReceiptBody extends StatelessWidget {
     final cs = theme.colorScheme;
     final home = [
       receipt.propertyName,
-      if (receipt.unitNumber?.trim().isNotEmpty == true)
-        'Unit ${receipt.unitNumber}',
-    ].whereType<String>().where((value) => value.trim().isNotEmpty).join(' · ');
+      if (receipt.unitNumber.trim().isNotEmpty) 'Unit ${receipt.unitNumber}',
+    ].where((value) => value.trim().isNotEmpty).join(' · ');
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -85,11 +94,11 @@ class _ReceiptBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 20),
-        _DetailRow(label: 'Received', value: dateFmt(receipt.receivedOn)),
+        _DetailRow(label: 'Received', value: dateFmt(receipt.effectiveOn)),
         _DetailRow(
           label: 'Tenant',
-          value: receipt.tenantName?.trim().isNotEmpty == true
-              ? receipt.tenantName!
+          value: receipt.primaryTenantName?.trim().isNotEmpty == true
+              ? receipt.primaryTenantName!
               : '—',
         ),
         _DetailRow(label: 'Rental', value: home.isEmpty ? '—' : home),

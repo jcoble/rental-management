@@ -5,7 +5,10 @@
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
 	import { recordHref } from '$lib/navigation/record-href';
-	import { payments, type TenantAccountOption } from '$lib/api/endpoints/payments';
+	import {
+		tenantAccounts,
+		type TenantAccountListItem
+	} from '$lib/api/endpoints/tenant-accounts';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
@@ -107,6 +110,10 @@
 	let tenantAccountSearch = $state<string>('');
 	let tenantAccountSkip = $state(0);
 	const TENANT_ACCOUNT_PAGE_SIZE = 25;
+	type TenantAccountChoice = Pick<
+		TenantAccountListItem,
+		'tenantAccountId' | 'propertyName' | 'unitId' | 'unitNumber' | 'relationshipNumber'
+	> & { primaryTenantName?: string | null };
 
 	// Optional property selector for Expense drafts. Sends `propertyId` override.
 	// 'none' is the sentinel for "no property" (empty string conflicts with the
@@ -116,13 +123,43 @@
 
 	const tenantAccountOptionsQuery = createQuery(() => ({
 		queryKey: ['tenant-account-options', getCurrentPortfolioId(), tenantAccountSearch.trim(), tenantAccountSkip],
-		queryFn: () => payments.accountOptions({
+		queryFn: () => tenantAccounts.listPage({
 			skip: tenantAccountSkip,
 			take: TENANT_ACCOUNT_PAGE_SIZE,
 			search: tenantAccountSearch.trim() || undefined
 		}),
 		enabled: isPayment
 	}));
+	const contextualTenantAccountId = $derived(
+		data?.captureContext?.tenantAccountId ?? scanContext.tenantAccountId ?? null
+	);
+	const contextualAccountIsInPage = $derived(
+		!!contextualTenantAccountId &&
+		(tenantAccountOptionsQuery.data?.items.some(
+			(account) => account.tenantAccountId === contextualTenantAccountId
+		) ?? false)
+	);
+	const contextualTenantAccountQuery = createQuery(() => ({
+		queryKey: ['tenant-account', getCurrentPortfolioId(), contextualTenantAccountId],
+		queryFn: () => tenantAccounts.get(contextualTenantAccountId as number),
+		enabled:
+			isPayment &&
+			!!contextualTenantAccountId &&
+			!!tenantAccountOptionsQuery.data &&
+			!contextualAccountIsInPage,
+		retry: false
+	}));
+	const tenantAccountChoices = $derived.by<TenantAccountChoice[]>(() => {
+		const choices: TenantAccountChoice[] = [...(tenantAccountOptionsQuery.data?.items ?? [])];
+		const contextualAccount = contextualTenantAccountQuery.data;
+		if (
+			contextualAccount &&
+			!choices.some((account) => account.tenantAccountId === contextualAccount.tenantAccountId)
+		) {
+			choices.unshift(contextualAccount);
+		}
+		return choices;
+	});
 
 	const propertiesQuery = createQuery(() => ({
 		queryKey: ['properties', getCurrentPortfolioId()],
@@ -314,21 +351,22 @@
 		return sel ? sel.name : '— No property —';
 	});
 
-	function tenantAccountLabel(account: TenantAccountOption): string {
-		const tenant = account.primaryTenantName ? ` — ${account.primaryTenantName}` : '';
+	function tenantAccountLabel(account: TenantAccountChoice): string {
+		const tenantName = account.primaryTenantName;
+		const tenant = tenantName ? ` — ${tenantName}` : '';
 		return `${account.propertyName} · Unit ${account.unitNumber}${tenant} · ${account.relationshipNumber}`;
 	}
 
 	const selectedTenantAccountLabel = $derived.by(() => {
 		if (!selectedTenantAccountId) return '— Select a rental account —';
-		const selected = tenantAccountOptionsQuery.data?.items.find(
+		const selected = tenantAccountChoices.find(
 			(account) => String(account.tenantAccountId) === selectedTenantAccountId);
 		return selected ? tenantAccountLabel(selected) : selectedTenantAccountLabelText || '— Select a rental account —';
 	});
 
 	function selectTenantAccount(value: string | undefined): void {
 		selectedTenantAccountId = value ?? '';
-		const selected = tenantAccountOptionsQuery.data?.items.find(
+		const selected = tenantAccountChoices.find(
 			(account) => String(account.tenantAccountId) === selectedTenantAccountId);
 		selectedTenantAccountLabelText = selected ? tenantAccountLabel(selected) : '';
 	}
@@ -492,9 +530,11 @@
 			}
 			if (data.targetEntityType === 'Payment' && !selectedTenantAccountId && tenantAccountOptionsQuery.data) {
 				const extractedAccountId = Number(fieldValue('tenant_account_id') || 0);
+				const contextAccountId = data.captureContext?.tenantAccountId ?? scanContext.tenantAccountId;
 				const extractedRelationship = fieldValue('relationship_number').trim().toLowerCase();
-				const match = tenantAccountOptionsQuery.data.items.find((account) =>
-					(extractedAccountId > 0 && account.tenantAccountId === extractedAccountId)
+				const match = tenantAccountChoices.find((account) =>
+					(!!contextAccountId && account.tenantAccountId === contextAccountId)
+					|| (extractedAccountId > 0 && account.tenantAccountId === extractedAccountId)
 					|| (!!extractedRelationship && account.relationshipNumber.toLowerCase() === extractedRelationship)
 					|| (!!scanContext.unitId && account.unitId === scanContext.unitId));
 				if (match) {
@@ -643,7 +683,7 @@
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
 		const unitId = confirmedRecord?.unitId ?? data?.createdUnitId ?? scanContext.unitId ?? null;
-		return createdRecordHref(type, id, unitId);
+		return createdRecordHref(type, id, unitId, selectedTenantAccountId ? Number(selectedTenantAccountId) : null);
 	})());
 
 	function formatUsd(val: number | null): string {
@@ -1157,7 +1197,7 @@
 									</Select.Trigger>
 									<Select.Content>
 										{#if tenantAccountOptionsQuery.data}
-											{#each tenantAccountOptionsQuery.data.items as account (account.tenantAccountId)}
+											{#each tenantAccountChoices as account (account.tenantAccountId)}
 												<Select.Item value={String(account.tenantAccountId)} label={tenantAccountLabel(account)}>
 													{tenantAccountLabel(account)}
 												</Select.Item>

@@ -1,36 +1,4 @@
-import type { PaymentReceipt } from '$lib/types';
-import { api, fetchApi } from '../client';
-import {
-	buildPaymentListPagePath,
-	buildPaymentListPath,
-	type PaymentListParams
-} from './payment-list-path';
-
-export interface PaymentReceiptListResponse {
-	items: PaymentReceipt[];
-	totalCount: number;
-	skip: number;
-	take: number;
-}
-
-export interface TenantAccountOption {
-	tenantAccountId: number;
-	leaseManagementId: number;
-	propertyId: number;
-	unitId: number;
-	accountNumber: string;
-	relationshipNumber: string;
-	propertyName: string;
-	unitNumber: string;
-	primaryTenantName?: string | null;
-}
-
-export interface TenantAccountOptionListResponse {
-	items: TenantAccountOption[];
-	totalCount: number;
-	skip: number;
-	take: number;
-}
+import { fetchApi } from '../client';
 
 export interface RecordTenantReceiptRequest {
 	amount: number;
@@ -93,19 +61,6 @@ function append<T>(path: string, operationKey: string, body: unknown) {
 }
 
 export const payments = {
-	accountOptions: (params?: { skip?: number; take?: number; search?: string }) => {
-		const query = new URLSearchParams();
-		if (params?.skip != null) query.set('skip', String(params.skip));
-		if (params?.take != null) query.set('take', String(params.take));
-		if (params?.search) query.set('search', params.search);
-		const suffix = query.size ? `?${query}` : '';
-		return api.get<TenantAccountOptionListResponse>(`/payments/account-options${suffix}`);
-	},
-	list: (portfolioId: number, params?: PaymentListParams) =>
-		api.get<PaymentReceipt[]>(buildPaymentListPath(portfolioId, params)),
-	listPage: (portfolioId: number, params?: PaymentListParams) =>
-		api.get<PaymentReceiptListResponse>(buildPaymentListPagePath(portfolioId, params)),
-	get: (id: number) => api.get<PaymentReceipt>(`/payments/${id}`),
 	recordReceipt: (tenantAccountId: number, operationKey: string, body: RecordTenantReceiptRequest) =>
 		append<TenantMoneyCommandResponse<RecordTenantReceiptResult>>(
 			`/tenant-accounts/${tenantAccountId}/receipts`, operationKey, body),

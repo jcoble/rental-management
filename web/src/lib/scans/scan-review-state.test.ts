@@ -35,7 +35,7 @@ describe("scan review terminal state", () => {
   it("links confirmed application scans to the application record", () => {
     assert.equal(createdRecordLabel("Application"), "Application");
     assert.equal(createdRecordHref("Application", 123), "/applications/123");
-    assert.equal(createdRecordHref("Payment", 45), "/accounting/payments/45");
+    assert.equal(createdRecordHref("Payment", 45, null, 7), "/tenant-accounts/7/entries/45");
     assert.equal(createdRecordHref("WorkOrder", 46), "/maintenance/46");
     assert.equal(createdRecordHref("LeaseAgreement", 47), "/leases/47");
     assert.equal(createdRecordHref("Expense", 48), "/accounting/expenses/48");

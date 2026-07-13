@@ -246,6 +246,10 @@ public class AccountingTransactionResponse
     public string Category { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+
+    /// <summary>Canonical tenant-account id for tenant-ledger rows; null for other source kinds.</summary>
+    public int? TenantAccountId { get; set; }
+
     public int? PropertyId { get; set; }
 
     /// <summary>Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
@@ -308,6 +312,7 @@ public class LedgerTransactionResponse
     public long Id { get; set; }
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+    public int? TenantAccountId { get; set; }
     public int? PropertyId { get; set; }
     public string? PropertyName { get; set; }
     public string? Counterparty { get; set; }

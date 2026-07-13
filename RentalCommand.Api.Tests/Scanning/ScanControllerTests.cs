@@ -444,6 +444,7 @@ public class ScanControllerTests : IDisposable
         var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
         Property(body, "status").Should().Be("alreadyConfirmed");
         Property(body, "receiptId").Should().Be(8_800_000_000L);
+        Property(body, "tenantAccountId").Should().Be(88);
         Property(body, "entityId").Should().Be(88);
         Property(body, "entityType").Should().Be("Payment");
         scan.VerifyAll();

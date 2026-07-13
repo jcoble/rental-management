@@ -15,6 +15,7 @@ public class AccountingService : IAccountingService
     private const int ReportLedgerPreviewTake = 8;
     private const decimal Vendor1099Threshold = 600m;
     private const string KindExpense = "Expense";
+    private const string KindPayment = "Payment";
     private const string KindTenantLedger = "TenantLedger";
     private const string KindBank = "Bank";
     private const string KindApplicationFee = "ApplicationFee";
@@ -431,7 +432,9 @@ public class AccountingService : IAccountingService
                     property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId))
             .Select(entry => new AccountingTransactionView
             {
-                Kind = KindTenantLedger,
+                Kind = entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    ? KindPayment
+                    : KindTenantLedger,
                 Id = entry.Id,
                 PortfolioId = entry.PortfolioId,
                 Date = entry.PostedAtUtc,
@@ -441,6 +444,7 @@ public class AccountingService : IAccountingService
                 Category = entry.EntryType.ToString(),
                 Status = entry.Direction == TenantLedgerDirection.Credit ? "Credit" : "Debit",
                 Amount = entry.Direction == TenantLedgerDirection.Credit ? entry.Amount : -entry.Amount,
+                TenantAccountId = entry.TenantAccountId,
                 PropertyId = entry.TenantAccount!.LeaseManagement!.PropertyId,
                 UnitId = entry.TenantAccount.LeaseManagement.UnitId,
                 PropertyName = entry.TenantAccount.LeaseManagement.Property!.Name,
@@ -474,6 +478,7 @@ public class AccountingService : IAccountingService
                     Category = expense.Category.ToString(),
                     Status = expense.Status.ToString(),
                     Amount = -expense.Amount,
+                    TenantAccountId = null,
                     PropertyId = expense.PropertyId,
                     UnitId = expense.UnitId,
                     PropertyName = expense.Property == null ? null : expense.Property.Name,
@@ -540,6 +545,7 @@ public class AccountingService : IAccountingService
                     Amount = entry.Direction == ApplicationFinancialDirection.Increase
                         ? entry.Amount
                         : -entry.Amount,
+                    TenantAccountId = null,
                     PropertyId = entry.PropertyId,
                     UnitId = entry.UnitId,
                     PropertyName = entry.Property == null ? null : entry.Property.Name,
@@ -565,6 +571,10 @@ public class AccountingService : IAccountingService
             else if (kind.Equals(KindTenantLedger, StringComparison.OrdinalIgnoreCase))
             {
                 rows = rows.Where(r => r.Kind == KindTenantLedger);
+            }
+            else if (kind.Equals(KindPayment, StringComparison.OrdinalIgnoreCase))
+            {
+                rows = rows.Where(r => r.Kind == KindPayment);
             }
             else if (kind.Equals(KindBank, StringComparison.OrdinalIgnoreCase))
             {
@@ -673,11 +683,12 @@ public class AccountingService : IAccountingService
                     Category = r.Category,
                     Status = r.Status,
                     Amount = r.Amount,
+                    TenantAccountId = r.TenantAccountId,
                     PropertyId = r.PropertyId,
                     UnitId = r.UnitId,
                     PropertyName = r.PropertyName,
                     Counterparty = r.Counterparty,
-                    DetailHref = DetailHrefFor(r.Kind, r.Id),
+                    DetailHref = DetailHrefFor(r.Kind, r.Id, r.TenantAccountId),
                     HasReceipt = r.HasReceipt,
                     ReceiptIsImage = r.ReceiptIsImage,
                     Reconciled = r.Reconciled,
@@ -694,9 +705,12 @@ public class AccountingService : IAccountingService
     }
 
     /// <summary>The grid row's deep-link, derived from its source kind + id (was a view column).</summary>
-    private static string DetailHrefFor(string kind, long id) => kind switch
+    internal static string DetailHrefFor(string kind, long id, int? tenantAccountId) => kind switch
     {
-        KindTenantLedger => $"/tenant-accounts/entries/{id}",
+        KindTenantLedger or KindPayment when tenantAccountId.HasValue =>
+            $"/tenant-accounts/{tenantAccountId.Value}/entries/{id}",
+        KindTenantLedger or KindPayment => throw new InvalidOperationException(
+            "A tenant-ledger accounting row must carry TenantAccountId."),
         KindExpense => $"/accounting/expenses/{id}",
         KindApplicationFee => "/applications",
         _ => "/banking",
@@ -959,6 +973,7 @@ public class AccountingService : IAccountingService
             .GroupBy(row => new
             {
                 row.ReceiptId,
+                row.TenantAccountId,
                 row.LeaseManagementId,
                 row.PostedAtUtc,
                 row.Description,
@@ -970,6 +985,7 @@ public class AccountingService : IAccountingService
                 Date = g.Key.PostedAtUtc,
                 Type = KindTenantLedger,
                 Id = g.Key.ReceiptId,
+                TenantAccountId = g.Key.TenantAccountId,
                 Amount = g.Sum(row => row.Amount),
                 PropertyId = g.Key.PropertyId,
                 PropertyName = _db.Properties
@@ -1003,6 +1019,7 @@ public class AccountingService : IAccountingService
                 Id = e.Id,
                 Description = e.Description,
                 Amount = -e.Amount,
+                TenantAccountId = null,
                 PropertyId = e.PropertyId,
                 PropertyName = e.Property != null ? e.Property.Name : null,
                 CounterpartyName = e.Vendor != null ? e.Vendor.Name : null,
@@ -1026,6 +1043,7 @@ public class AccountingService : IAccountingService
                 Date = row.Date,
                 Type = KindTenantLedger,
                 Id = row.Id,
+                TenantAccountId = row.TenantAccountId,
                 Description = row.Description ?? "Tenant receipt",
                 Amount = row.Amount,
                 PropertyId = row.PropertyId,
@@ -1033,7 +1051,7 @@ public class AccountingService : IAccountingService
                 Counterparty = row.CounterpartyName,
                 Category = row.Category,
                 Status = row.Status ?? nameof(TenantLedgerDirection.Credit),
-                SourceHref = $"/tenant-accounts/entries/{row.Id}",
+                SourceHref = $"/tenant-accounts/{row.TenantAccountId}/entries/{row.Id}",
                 Explanation = $"Tenant receipt posted on {row.Date:MMM d, yyyy}.",
             };
         }
@@ -1418,6 +1436,7 @@ public class AccountingService : IAccountingService
         public long Id { get; set; }
         public string? Description { get; set; }
         public decimal Amount { get; set; }
+        public int? TenantAccountId { get; set; }
         public int? PropertyId { get; set; }
         public string? PropertyName { get; set; }
         public string? CounterpartyName { get; set; }

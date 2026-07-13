@@ -23,6 +23,8 @@ Future<void> openMobileScan(
   bool lockTargetEntityType = false,
   int? propertyId,
   int? unitId,
+  int? leaseManagementId,
+  int? tenantAccountId,
   String? sourceLabel,
 }) async {
   final draftId = await showScanCaptureSheet(
@@ -31,6 +33,8 @@ Future<void> openMobileScan(
     lockTargetEntityType: lockTargetEntityType,
     propertyId: propertyId,
     unitId: unitId,
+    leaseManagementId: leaseManagementId,
+    tenantAccountId: tenantAccountId,
     sourceLabel: sourceLabel,
   );
   if (draftId == null || !context.mounted) return;

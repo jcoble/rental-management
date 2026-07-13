@@ -677,13 +677,20 @@ class _TransactionCard extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isPayment = tx.isPayment;
+    final isTenantAccountEntry = tx.isTenantAccountEntry;
     final signColor = isPayment ? Colors.green.shade700 : cs.error;
 
     return MobileM3ListItem(
       position: position,
       onTap: () {
-        final MobileDetailBuilder detailBuilder = isPayment
-            ? (BuildContext _) => PaymentDetailScreen(paymentId: tx.id)
+        final accountId = tx.tenantAccountId;
+        if (isTenantAccountEntry && accountId == null) return;
+        if (!isTenantAccountEntry && !tx.isExpense) return;
+        final MobileDetailBuilder detailBuilder = isTenantAccountEntry
+            ? (BuildContext _) => PaymentDetailScreen(
+                tenantAccountId: accountId!,
+                tenantLedgerEntryId: tx.id,
+              )
             : (BuildContext _) => ExpenseDetailScreen(expenseId: tx.id);
         final shellNavigator = mobileShellNavigatorOf(context);
         if (shellNavigator != null) {
@@ -705,10 +712,13 @@ class _TransactionCard extends StatelessWidget {
           return;
         }
 
-        if (isPayment) {
+        if (isTenantAccountEntry) {
           Navigator.of(context).push<void>(
             MaterialPageRoute<void>(
-              builder: (_) => PaymentDetailScreen(paymentId: tx.id),
+              builder: (_) => PaymentDetailScreen(
+                tenantAccountId: accountId!,
+                tenantLedgerEntryId: tx.id,
+              ),
             ),
           );
         } else {
