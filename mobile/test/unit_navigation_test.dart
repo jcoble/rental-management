@@ -191,8 +191,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(calls, isEmpty);
-    expect(find.text('No lease'), findsOneWidget);
-    expect(find.text('This unit has no current lease.'), findsOneWidget);
+    expect(find.text('No tenant relationship'), findsOneWidget);
+    expect(
+      find.text(
+        'Approve an application and prepare move-in, or scan an existing signed agreement.',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('unit turnover tab shows turnover summary and task controls', (
