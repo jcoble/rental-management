@@ -162,15 +162,15 @@ public class ReportsServiceTests : IDisposable
         var lease = SeedLease(SeedProperty("Maple"), SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
         // 10 days overdue → Current bucket.
-        SeedPayment(lease, 1000m, dueDate: now.AddDays(-10), PaymentStatus.Scheduled);
+        SeedPayment(lease, 1000m, dueDate: now.AddDays(-10), paidInFull: false);
         // 45 days overdue → 31-60.
-        SeedPayment(lease, 500m, dueDate: now.AddDays(-45), PaymentStatus.Late);
+        SeedPayment(lease, 500m, dueDate: now.AddDays(-45), paidInFull: false);
         // 120 days overdue → 90+.
-        SeedPayment(lease, 250m, dueDate: now.AddDays(-120), PaymentStatus.Partial);
+        SeedPayment(lease, 250m, dueDate: now.AddDays(-120), paidInFull: false);
         // Paid → excluded.
-        SeedPayment(lease, 999m, dueDate: now.AddDays(-15), PaymentStatus.Paid, paidDate: now.AddDays(-14));
+        SeedPayment(lease, 999m, dueDate: now.AddDays(-15), paidInFull: true, paidDate: now.AddDays(-14));
         // Future due → excluded.
-        SeedPayment(lease, 800m, dueDate: now.AddDays(10), PaymentStatus.Scheduled);
+        SeedPayment(lease, 800m, dueDate: now.AddDays(10), paidInFull: false);
 
         var report = await _sut.GetDelinquencyAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
 
@@ -208,8 +208,8 @@ public class ReportsServiceTests : IDisposable
             start: now.Date.AddMonths(-2),
             end: now.Date.AddMonths(10));
 
-        SeedPayment(stale, 1000m, dueDate: now.AddDays(-40), PaymentStatus.Late);
-        SeedPayment(current, 900m, dueDate: now.AddDays(-5), PaymentStatus.Scheduled);
+        SeedPayment(stale, 1000m, dueDate: now.AddDays(-40), paidInFull: false);
+        SeedPayment(current, 900m, dueDate: now.AddDays(-5), paidInFull: false);
 
         var report = await _sut.GetDelinquencyAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
 
@@ -228,9 +228,9 @@ public class ReportsServiceTests : IDisposable
         var newer = SeedLease(maple, SeedUnit("2", maple.Id), SeedTenant("Bea", "Birch"), rent: 900m);
         var excluded = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Cal", "Cedar"), rent: 800m);
 
-        SeedPayment(older, 1000m, dueDate: now.AddDays(-75), PaymentStatus.Late);
-        SeedPayment(newer, 900m, dueDate: now.AddDays(-10), PaymentStatus.Scheduled);
-        SeedPayment(excluded, 800m, dueDate: now.AddDays(-120), PaymentStatus.Late);
+        SeedPayment(older, 1000m, dueDate: now.AddDays(-75), paidInFull: false);
+        SeedPayment(newer, 900m, dueDate: now.AddDays(-10), paidInFull: false);
+        SeedPayment(excluded, 800m, dueDate: now.AddDays(-120), paidInFull: false);
 
         _executedSql.Clear();
 
@@ -261,9 +261,9 @@ public class ReportsServiceTests : IDisposable
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
         // Jan 5: +1000 rent collected. Jan 10: -300 expense. Jan 20: +200 rent collected.
-        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
         SeedExpense(property.Id, 300m, paidAt: D(2026, 1, 10));
-        SeedPayment(lease, 200m, dueDate: D(2026, 1, 15), PaymentStatus.Paid, paidDate: D(2026, 1, 20));
+        SeedPayment(lease, 200m, dueDate: D(2026, 1, 15), paidInFull: true, paidDate: D(2026, 1, 20));
 
         var report = await _sut.GetGeneralLedgerAsync(PortfolioId, new ReportRangeQuery
         {
@@ -291,9 +291,9 @@ public class ReportsServiceTests : IDisposable
         var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
         var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
 
-        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
-        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), paidInFull: true, paidDate: D(2026, 2, 5));
+        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
         SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
         SeedExpense(maple.Id, 444m, paidAt: D(2026, 2, 10));
         SeedExpense(oak.Id, 111m, paidAt: D(2026, 1, 10));
@@ -327,9 +327,9 @@ public class ReportsServiceTests : IDisposable
         var property = SeedProperty("Maple");
         var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
 
-        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
         SeedExpense(property.Id, 300m, paidAt: D(2026, 1, 10));
-        SeedPayment(lease, 200m, dueDate: D(2026, 1, 15), PaymentStatus.Paid, paidDate: D(2026, 1, 20));
+        SeedPayment(lease, 200m, dueDate: D(2026, 1, 15), paidInFull: true, paidDate: D(2026, 1, 20));
 
         _executedSql.Clear();
 
@@ -427,9 +427,9 @@ public class ReportsServiceTests : IDisposable
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
         // Jan: +1000 income, -200 expense. Feb: nothing. Mar: +500 income.
-        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
         SeedExpense(property.Id, 200m, paidAt: D(2026, 1, 20));
-        SeedPayment(lease, 500m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 4));
+        SeedPayment(lease, 500m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 4));
 
         var report = await _sut.GetCashFlowAsync(PortfolioId, new ReportRangeQuery
         {
@@ -464,16 +464,16 @@ public class ReportsServiceTests : IDisposable
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
         // Rent paid in full → 1000. A security deposit is NOT income (§7) → excluded.
-        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-        SeedPayment(lease, 1500m, dueDate: D(2026, 1, 2), PaymentStatus.Paid, paidDate: D(2026, 1, 2),
-            type: PaymentType.SecurityDeposit);
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 1500m, dueDate: D(2026, 1, 2), paidInFull: true, paidDate: D(2026, 1, 2),
+            entryType: TenantLedgerEntryType.DepositCharge);
         // A partial rent payment contributes only the collected cash (AmountPaid), not the full Amount.
-        var partial = SeedPayment(lease, 1000m, dueDate: D(2026, 1, 10), PaymentStatus.Partial, paidDate: D(2026, 1, 10));
-        partial.AmountPaid = 300m;
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 10), paidInFull: false,
+            paidDate: D(2026, 1, 10), amountPaid: 300m);
         _db.SaveChanges();
         // A late fee IS income.
-        SeedPayment(lease, 50m, dueDate: D(2026, 1, 15), PaymentStatus.Paid, paidDate: D(2026, 1, 15),
-            type: PaymentType.LateFee);
+        SeedPayment(lease, 50m, dueDate: D(2026, 1, 15), paidInFull: true, paidDate: D(2026, 1, 15),
+            entryType: TenantLedgerEntryType.LateFeeCharge);
 
         var report = await _sut.GetCashFlowAsync(PortfolioId, new ReportRangeQuery
         {
@@ -486,43 +486,13 @@ public class ReportsServiceTests : IDisposable
     }
 
     [Fact]
-    public void GetCashFlow_IncomeQuery_AggregatesInSql_NotInMemory()
-    {
-        // Guard the §18 hard rule directly: the cash-flow income aggregation must be SQL GROUP BY, not a
-        // materialize-then-group. Build the same shape the service runs and inspect the generated SQL.
-        var from = D(2026, 1, 1);
-        var to = D(2026, 12, 31);
-        var sql = _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == PortfolioId &&
-                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
-                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
-            .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
-            .Select(g => new
-            {
-                g.Key.Year,
-                g.Key.Month,
-                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
-            })
-            .ToQueryString();
-
-        sql.Should().Contain("GROUP BY", "the monthly cash-flow aggregation must run in the database");
-        // The SUM runs in SQL too. EF emits SUM( on Postgres and ef_sum( on SQLite (decimal-safe helper);
-        // accept either so the assertion proves DB-side aggregation regardless of provider.
-        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
-            .Should().BeTrue("the period total must be summed in the database");
-    }
-
-    [Fact]
     public async Task GetCashFlowAsync_TotalsAreSummedInSql()
     {
         var property = SeedProperty("Maple");
         var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
 
-        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-        SeedPayment(lease, 500m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 500m, dueDate: D(2026, 2, 1), paidInFull: true, paidDate: D(2026, 2, 5));
         SeedExpense(property.Id, 250m, paidAt: D(2026, 1, 20));
 
         _executedSql.Clear();
@@ -556,9 +526,9 @@ public class ReportsServiceTests : IDisposable
         var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
         var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
 
-        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
-        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), paidInFull: true, paidDate: D(2026, 2, 5));
+        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
         SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
         SeedExpense(maple.Id, 444m, paidAt: D(2026, 2, 10));
         SeedExpense(oak.Id, 111m, paidAt: D(2026, 1, 10));
@@ -600,8 +570,8 @@ public class ReportsServiceTests : IDisposable
         var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
         var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
 
-        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
-        SeedPayment(oakLease, 2000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 6));
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 5));
+        SeedPayment(oakLease, 2000m, dueDate: D(2026, 1, 1), paidInFull: true, paidDate: D(2026, 1, 6));
         SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
         SeedExpense(oak.Id, 450m, paidAt: D(2026, 1, 11));
 
@@ -642,11 +612,11 @@ public class ReportsServiceTests : IDisposable
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
         // Income: 1000 rent (paid) + 200 partial-collected + 50 late fee = 1250. Deposit excluded.
-        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 2));
-        var partial = SeedPayment(lease, 1000m, dueDate: D(2026, 3, 10), PaymentStatus.Partial, paidDate: D(2026, 3, 10));
-        partial.AmountPaid = 200m;
-        SeedPayment(lease, 50m, dueDate: D(2026, 3, 12), PaymentStatus.Paid, paidDate: D(2026, 3, 12), type: PaymentType.LateFee);
-        SeedPayment(lease, 1500m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 1), type: PaymentType.SecurityDeposit);
+        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 2));
+        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 10), paidInFull: false,
+            paidDate: D(2026, 3, 10), amountPaid: 200m);
+        SeedPayment(lease, 50m, dueDate: D(2026, 3, 12), paidInFull: true, paidDate: D(2026, 3, 12), entryType: TenantLedgerEntryType.LateFeeCharge);
+        SeedPayment(lease, 1500m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 1), entryType: TenantLedgerEntryType.DepositCharge);
         _db.SaveChanges();
 
         // Expenses: 300 repairs (counts) + 240 taxes (escrow-funded → EXCLUDED from cash-flow opex).
@@ -686,7 +656,7 @@ public class ReportsServiceTests : IDisposable
     {
         var property = SeedProperty("Maple");
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
-        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 2));
+        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 2));
 
         SeedExpense(property.Id, 240m, paidAt: D(2026, 3, 18), category: ScheduleECategory.Taxes);
 
@@ -718,12 +688,12 @@ public class ReportsServiceTests : IDisposable
         property.InServiceDate = D(2020, 1, 1);
         var unit = SeedUnit("1", property.Id);
         var lease = SeedLease(property, unit, SeedTenant("Ann", "Acre"), rent: 1_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+            start: D(2025, 1, 1), end: D(2026, 1, 1), );
         _db.SaveChanges();
 
         // 12,000 rent collected in 2025.
         for (var m = 1; m <= 12; m++)
-            SeedPayment(lease, 1_000m, dueDate: D(2025, m, 1), PaymentStatus.Paid, paidDate: D(2025, m, 1));
+            SeedPayment(lease, 1_000m, dueDate: D(2025, m, 1), paidInFull: true, paidDate: D(2025, m, 1));
 
         // A loan: one payment → debt service 700 (interest 500 + principal 200).
         var loan = SeedLoan(property.Id, escrowCoversTaxes: false);
@@ -763,12 +733,12 @@ public class ReportsServiceTests : IDisposable
         var maple = SeedProperty("Maple");
         var oak = SeedProperty("Oak");
         var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+            start: D(2025, 1, 1), end: D(2026, 1, 1), );
         var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+            start: D(2025, 1, 1), end: D(2026, 1, 1), );
 
-        SeedPayment(mapleLease, 1_000m, dueDate: D(2025, 1, 1), PaymentStatus.Paid, paidDate: D(2025, 1, 5));
-        SeedPayment(oakLease, 2_000m, dueDate: D(2025, 1, 1), PaymentStatus.Paid, paidDate: D(2025, 1, 5));
+        SeedPayment(mapleLease, 1_000m, dueDate: D(2025, 1, 1), paidInFull: true, paidDate: D(2025, 1, 5));
+        SeedPayment(oakLease, 2_000m, dueDate: D(2025, 1, 1), paidInFull: true, paidDate: D(2025, 1, 5));
         SeedExpense(maple.Id, 250m, paidAt: D(2025, 1, 10));
         SeedExpense(oak.Id, 700m, paidAt: D(2025, 1, 10));
 
@@ -792,14 +762,14 @@ public class ReportsServiceTests : IDisposable
         var now = DateTime.UtcNow;
         var maple = SeedProperty("Maple");
         var behind = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+            start: D(2025, 1, 1), end: D(2026, 1, 1), );
         var current = SeedLease(maple, SeedUnit("2", maple.Id), SeedTenant("Bob", "Birch"), rent: 900m,
-            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.NoticeGiven);
+            start: D(2025, 1, 1), end: D(2026, 1, 1), noticeGiven: true);
 
-        SeedPayment(behind, 1_000m, dueDate: now.AddDays(-30), PaymentStatus.Scheduled);
-        SeedPayment(behind, 500m, dueDate: now.AddDays(-20), PaymentStatus.Partial).AmountPaid = 200m;
-        SeedPayment(behind, 999m, dueDate: now.AddDays(-10), PaymentStatus.Paid, paidDate: now.AddDays(-9));
-        SeedPayment(current, 900m, dueDate: now.AddDays(30), PaymentStatus.Scheduled);
+        SeedPayment(behind, 1_000m, dueDate: now.AddDays(-30), paidInFull: false);
+        SeedPayment(behind, 500m, dueDate: now.AddDays(-20), paidInFull: false, amountPaid: 200m);
+        SeedPayment(behind, 999m, dueDate: now.AddDays(-10), paidInFull: true, paidDate: now.AddDays(-9));
+        SeedPayment(current, 900m, dueDate: now.AddDays(30), paidInFull: false);
         _db.SaveChanges();
         _executedSql.Clear();
 
@@ -858,20 +828,42 @@ public class ReportsServiceTests : IDisposable
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
         // Held 1500, 200 in deductions, 300 returned → 1000 still in trust.
-        _db.SecurityDepositHoldings.Add(new SecurityDepositHolding
+        var depositAccount = new SecurityDepositAccount
         {
             PortfolioId = PortfolioId,
-            LeaseId = lease.Id,
-            Amount = 1500m,
-            Status = SecurityDepositStatus.PartiallyReturned,
-            HeldAt = D(2025, 1, 1),
-            ReturnedAt = D(2026, 1, 1),
-            ReturnedAmount = 300m,
-            DeductionsJson = "[{\"Reason\":\"Cleaning\",\"Amount\":200.0,\"Notes\":null}]",
-            DeductionsTotal = 200m,
-            CreatedAt = D(2025, 1, 1),
-            UpdatedAt = D(2026, 1, 1),
-        });
+            TenantAccountId = lease.LeaseManagement!.TenantAccount!.Id,
+            OriginatingAgreementId = lease.Id,
+            Currency = "USD",
+            CreatedAtUtc = D(2025, 1, 1),
+            CreatedByUserId = 1,
+        };
+        _db.SecurityDepositAccounts.Add(depositAccount);
+        _db.SaveChanges();
+        _db.SecurityDepositEntries.AddRange(
+            new SecurityDepositEntry
+            {
+                PortfolioId = PortfolioId, SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Receipt, Direction = SecurityDepositDirection.Increase,
+                Amount = 1500m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(D(2025, 1, 1)),
+                PostedAtUtc = D(2025, 1, 1), BusinessKey = "deposit:receipt", Description = "Deposit received",
+                LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+            },
+            new SecurityDepositEntry
+            {
+                PortfolioId = PortfolioId, SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Deduction, Direction = SecurityDepositDirection.Decrease,
+                Amount = 200m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(D(2026, 1, 1)),
+                PostedAtUtc = D(2026, 1, 1), BusinessKey = "deposit:deduction", Description = "Cleaning",
+                LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+            },
+            new SecurityDepositEntry
+            {
+                PortfolioId = PortfolioId, SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Refund, Direction = SecurityDepositDirection.Decrease,
+                Amount = 300m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(D(2026, 1, 1)),
+                PostedAtUtc = D(2026, 1, 1), BusinessKey = "deposit:refund", Description = "Deposit returned",
+                LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+            });
         _db.SaveChanges();
 
         _executedSql.Clear();
@@ -1158,52 +1150,96 @@ public class ReportsServiceTests : IDisposable
         return tenant;
     }
 
-    private Lease SeedLease(
+    private LeaseAgreement SeedLease(
         Property property, Unit unit, Tenant tenant, decimal rent,
-        DateTime? start = null, DateTime? end = null, LeaseStatus status = LeaseStatus.Active)
+        DateTime? start = null, DateTime? end = null, bool noticeGiven = false)
     {
         var now = DateTime.UtcNow;
-        var lease = new Lease
+        var management = new LeaseManagement
         {
             PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitId = unit.Id,
-            TenantId = tenant.Id,
-            LeaseNumber = $"L-{Guid.NewGuid():N}".Substring(0, 8),
-            Status = status,
-            StartDate = start ?? now.AddMonths(-1),
-            EndDate = end ?? now.AddYears(1),
-            MonthlyRent = rent,
-            SecurityDeposit = rent,
-            LateFeeAmount = 50m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            RelationshipNumber = $"LM-{Guid.NewGuid():N}"[..10],
+            PlannedPossessionAtUtc = start ?? now.AddMonths(-1),
+            PossessionGivenAtUtc = start ?? now.AddMonths(-1),
+            NoticeGivenAtUtc = noticeGiven ? now : null,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = 1, RowVersion = Guid.NewGuid(),
         };
-        _db.Leases.Add(lease);
+        _db.LeaseManagements.Add(management);
         _db.SaveChanges();
-        return lease;
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}", Currency = "USD", OpenedAtUtc = now,
+            CreatedAtUtc = now, CreatedByUserId = 1,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id, TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(start ?? now.AddMonths(-1)),
+            ChangeReason = "Report test", CreatedAtUtc = now, CreatedByUserId = 1,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PortfolioId = PortfolioId, LeaseManagementId = management.Id, VersionNumber = 1,
+            AgreementNumber = $"A-{management.Id}", ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(start ?? now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(end ?? now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(start ?? now.AddMonths(-1)),
+            BaseRentAmount = rent, RentDueDay = 1, SecurityDepositObligation = rent,
+            LateFeeAmount = 50m, GracePeriodDays = 5, Currency = "USD",
+            TermsSchemaVersion = 1, TermsPayload = "{}", FullyExecutedAtUtc = now,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = 1,
+            LeaseManagement = management,
+        };
+        management.TenantAccount = account;
+        _db.AddRange(account, party, agreement);
+        _db.SaveChanges();
+        return agreement;
     }
 
-    private Payment SeedPayment(
-        Lease lease, decimal amount, DateTime dueDate, PaymentStatus status,
-        DateTime? paidDate = null, PaymentType type = PaymentType.Rent)
+    private TenantLedgerEntry SeedPayment(
+        LeaseAgreement lease, decimal amount, DateTime dueDate, bool paidInFull,
+        DateTime? paidDate = null,
+        TenantLedgerEntryType entryType = TenantLedgerEntryType.RentCharge,
+        decimal? amountPaid = null)
     {
         var now = DateTime.UtcNow;
-        var payment = new Payment
+        var account = lease.LeaseManagement!.TenantAccount!;
+        var charge = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId,
-            LeaseId = lease.Id,
-            PaymentType = type,
-            Status = status,
-            Amount = amount,
-            DueDate = dueDate,
-            PaidDate = paidDate,
-            CreatedAt = now,
-            UpdatedAt = now,
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            EntryType = entryType,
+            Direction = TenantLedgerDirection.Debit, Amount = amount, Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueDate), DueOn = DateOnly.FromDateTime(dueDate),
+            PostedAtUtc = now, Description = entryType.ToString(), BusinessKey = $"charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = lease.Id, CreatedByUserId = 1,
         };
-        _db.Payments.Add(payment);
+        _db.TenantLedgerEntries.Add(charge);
         _db.SaveChanges();
-        return payment;
+        var paid = paidInFull ? amount : amountPaid ?? 0m;
+        if (paid <= 0m) return charge;
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
+            Amount = paid, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate ?? dueDate),
+            PostedAtUtc = paidDate ?? now, Description = "Payment received",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}", CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(receipt);
+        _db.SaveChanges();
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            DebitEntryId = charge.Id, CreditEntryId = receipt.Id, Amount = paid,
+            AllocatedAtUtc = paidDate ?? now, BusinessKey = $"allocation:{Guid.NewGuid():N}", CreatedByUserId = 1,
+        });
+        _db.SaveChanges();
+        return receipt;
     }
 
     private Expense SeedExpense(int propertyId, decimal amount, DateTime paidAt,

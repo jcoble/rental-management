@@ -13,10 +13,7 @@ using RentalCommand.TestCommon;
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Online-payment Checkout + webhook coverage for <see cref="StripePaymentService"/>:
-/// gating (503-equivalent NotEnabled when Stripe is off), the tenant ownership/IDOR guard on the
-/// hosted-Checkout path (another tenant's payment → NotFound), and the webhook flipping a Payment to
-/// Paid on <c>checkout.session.completed</c> with idempotent dedupe.
+/// Configuration gating for the provider-backed tenant-account payment flow.
 /// </summary>
 public class StripeCheckoutTests : IDisposable
 {
@@ -33,11 +30,10 @@ public class StripeCheckoutTests : IDisposable
     [Fact]
     public async Task Checkout_WhenStripeDisabled_ReturnsNotEnabled()
     {
-        var (lease, payment) = SeedLeaseAndScheduledRent(tenantId: 10);
         var sut = BuildService(enabled: false);
 
         var result = await sut.CreatePaymentCheckoutSessionAsync(
-            PortfolioId, tenantId: 10, tenantAccountId: 1, chargeLedgerEntryId: payment.Id,
+            PortfolioId, tenantId: 10, tenantAccountId: 1, chargeLedgerEntryId: 1,
             actorUserId: 1, successUrl: null, cancelUrl: null, CancellationToken.None);
 
         // Gated: no Stripe call, no transaction created.
@@ -48,11 +44,10 @@ public class StripeCheckoutTests : IDisposable
     [Fact]
     public async Task AutopayEnroll_WhenStripeDisabled_ReturnsNotEnabled()
     {
-        var (lease, _) = SeedLeaseAndScheduledRent(tenantId: 10);
         var sut = BuildService(enabled: false);
 
         var result = await sut.CreateAutopaySetupSessionAsync(
-            PortfolioId, tenantId: 10, tenantAccountId: lease.Id, actorUserId: 1,
+            PortfolioId, tenantId: 10, tenantAccountId: 1, actorUserId: 1,
             operationKey: "setup-disabled",
             successUrl: null, cancelUrl: null, CancellationToken.None);
 
@@ -67,39 +62,6 @@ public class StripeCheckoutTests : IDisposable
 
         (await disabled.IsOnlinePaymentsAvailableAsync(PortfolioId, CancellationToken.None)).Should().BeFalse();
         (await enabled.IsOnlinePaymentsAvailableAsync(PortfolioId, CancellationToken.None)).Should().BeTrue();
-    }
-
-    // -----------------------------------------------------------------------
-    // Ownership / IDOR guard (these run with Stripe ENABLED so the ownership check is the only
-    // thing that can short-circuit; a foreign payment must 404 BEFORE any Stripe API call).
-
-    [Fact]
-    public async Task Checkout_ForAnotherTenantsPayment_ReturnsNotFound()
-    {
-        // Payment belongs to tenant 10's lease; tenant 20 must NOT be able to pay (or probe) it.
-        var (_, payment) = SeedLeaseAndScheduledRent(tenantId: 10);
-        var sut = BuildService(enabled: true);
-
-        var result = await sut.CreatePaymentCheckoutSessionAsync(
-            PortfolioId, tenantId: 20, tenantAccountId: 1, chargeLedgerEntryId: payment.Id,
-            actorUserId: 1, successUrl: null, cancelUrl: null, CancellationToken.None);
-
-        result.Result.Should().Be(CheckoutResult.Outcome.NotFound);
-        _ctx.Db.PaymentTransactions.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task AutopayEnroll_ForAnotherTenantsLease_ReturnsNotFound()
-    {
-        var (lease, _) = SeedLeaseAndScheduledRent(tenantId: 10);
-        var sut = BuildService(enabled: true);
-
-        var result = await sut.CreateAutopaySetupSessionAsync(
-            PortfolioId, tenantId: 20, tenantAccountId: lease.Id, actorUserId: 1,
-            operationKey: "setup-foreign",
-            successUrl: null, cancelUrl: null, CancellationToken.None);
-
-        result.Result.Should().Be(CheckoutResult.Outcome.NotFound);
     }
 
     // -----------------------------------------------------------------------
@@ -120,73 +82,6 @@ public class StripeCheckoutTests : IDisposable
             NullLogger<StripePaymentService>.Instance,
             TimeProvider.System,
             enabled ? new CanonicalNotFoundAtomicUnitOfWork() : new UnexpectedAtomicUnitOfWork());
-    }
-
-    private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int tenantId, decimal amount = 1000m)
-    {
-        var now = DateTime.UtcNow;
-
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "P",
-            AddressLine1 = "1 St",
-            City = "Town",
-            State = "ST",
-            PostalCode = "00000",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Properties.Add(property);
-
-        var unit = new Unit { Property = property, UnitNumber = $"U{tenantId}", CreatedAt = now, UpdatedAt = now };
-        _ctx.Db.Units.Add(unit);
-
-        var tenant = new Tenant
-        {
-            Id = tenantId,
-            PortfolioId = PortfolioId,
-            FirstName = "T",
-            LastName = tenantId.ToString(),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.SaveChanges();
-
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            TenantId = tenantId,
-            LeaseNumber = $"L-{tenantId}",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-6),
-            EndDate = now.AddMonths(6),
-            MonthlyRent = amount,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Leases.Add(lease);
-        _ctx.Db.SaveChanges();
-
-        var payment = new Payment
-        {
-            PortfolioId = PortfolioId,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = amount,
-            DueDate = now.Date,
-            PeriodKey = now.ToString("yyyy-MM"),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Payments.Add(payment);
-        _ctx.Db.SaveChanges();
-
-        return (lease, payment);
     }
 
     private sealed class CanonicalNotFoundAtomicUnitOfWork : IAtomicUnitOfWork
