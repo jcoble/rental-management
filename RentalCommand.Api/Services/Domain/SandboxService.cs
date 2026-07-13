@@ -158,7 +158,10 @@ public sealed class SandboxService : ISandboxService
     /// ignored so soft-deleted rows go too) keeps the wipe fast and avoids loading thousands of entities.
     ///
     /// FK-order notes (the constraints that force ordering — the rest is plain child→parent):
-    ///   * PaymentTransaction → Payment is RESTRICT → must delete transactions before payments.
+    ///   * NoticeDraft references the canonical relationship, account, and optional ledger entry, so
+    ///     drafts must be deleted before any of those parents.
+    ///   * Canonical ledger/deposit rows and agreement signers are deleted before their accounts,
+    ///     agreements, parties, and relationship parents.
     ///   * Conversation → Tenant is RESTRICT → must delete conversations (+ their messages) before tenants.
     ///   * Unit / ConversationMessage carry no PortfolioId → deleted via a join on their parent.
     /// The Portfolio row itself and account-level rows (the user's ApplicationUser/UserAccount, audit
@@ -166,20 +169,14 @@ public sealed class SandboxService : ISandboxService
     /// </summary>
     private async Task WipePortfolioDataAsync(int portfolioId, CancellationToken ct)
     {
-        // 1. Online-payment + autopay rows (PaymentTransaction RESTRICTs Payment).
-        await _db.PaymentTransactions.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.AutopayEnrollments.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-
-        // 2. Conversations + their messages (Conversation RESTRICTs Tenant; messages have no PortfolioId).
+        // 1. Conversations + their messages (Conversation RESTRICTs Tenant; messages have no PortfolioId).
         await _db.ConversationMessages.IgnoreQueryFilters()
             .Where(m => _db.Conversations.Any(c => c.Id == m.ConversationId && c.PortfolioId == portfolioId))
             .ExecuteDeleteAsync(ct);
         await _db.Conversations.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 3. Tenant-screening chain (AdverseActionNotice / ApplicantScreening → RentalApplication).
+        // 2. Tenant-screening chain (AdverseActionNotice / ApplicantScreening → RentalApplication).
         await _db.AdverseActionNotices.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.ApplicantScreeningMilestones.IgnoreQueryFilters()
@@ -189,14 +186,16 @@ public sealed class SandboxService : ISandboxService
         await _db.RentalApplications.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 4. Inspections (items first → inspection).
+        // 3. Inspections (items first → inspection).
         await _db.InspectionItems.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Inspections.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 5. Appointments, canonical tenant/deposit ledgers, payments, and notices.
+        // 4. Appointments and the canonical relationship/account/legal graph.
         await _db.Appointments.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.NoticeDrafts.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.SecurityDepositEntries.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
@@ -234,18 +233,14 @@ public sealed class SandboxService : ISandboxService
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.LeaseManagements.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.Payments.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.NoticeDrafts.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 6. Bank feed (transactions → connection).
+        // 5. Bank feed (transactions → connection).
         await _db.BankTransactions.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.BankConnections.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 7. Work-order graph (status events → expenses → ratings/dispatches → work orders).
+        // 6. Work-order graph (status events → expenses → ratings/dispatches → work orders).
         await _db.WorkOrderStatusEvents.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Expenses.IgnoreQueryFilters()
@@ -259,18 +254,14 @@ public sealed class SandboxService : ISandboxService
         await _db.WorkOrders.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 8. Leases (now free of payments/deposits/work-orders/appointments referencing them).
-        await _db.Leases.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-
-        // 9. Units (no PortfolioId → join via Property) then Properties.
+        // 7. Units (no PortfolioId → join via Property) then Properties.
         await _db.Units.IgnoreQueryFilters()
             .Where(u => _db.Properties.IgnoreQueryFilters().Any(p => p.Id == u.PropertyId && p.PortfolioId == portfolioId))
             .ExecuteDeleteAsync(ct);
         await _db.Properties.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 10. People + companies (tenants now unreferenced by conversations/leases).
+        // 8. People + companies (tenants now unreferenced by conversations/relationships).
         await _db.Tenants.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Vendors.IgnoreQueryFilters()
@@ -280,7 +271,7 @@ public sealed class SandboxService : ISandboxService
         await _db.Owners.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 11. Files, scan drafts/batches, activity (uploaded/captured demo artifacts).
+        // 9. Files, scan drafts/batches, activity (uploaded/captured demo artifacts).
         await _db.ScanDrafts.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.ScanBatches.IgnoreQueryFilters()
