@@ -24,10 +24,6 @@
 	} from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import {
-		openingBalances,
-		type OpeningBalanceResponse,
-	} from '$lib/api/endpoints/opening-balances';
 	import type { Lease } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseSchema, parseForm } from '$lib/schemas';
@@ -45,11 +41,8 @@
 	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import LeaseEvictionCasesSection from '$lib/components/records/LeaseEvictionCasesSection.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Select from '$lib/components/ui/select';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
 	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink, Mail, RefreshCw, Copy, BellRing } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
@@ -124,107 +117,6 @@
 		if (ledger.balance < -0.005) return `Paid ahead by ${formatCurrency(Math.abs(ledger.balance))} (credit on the account).`;
 		return 'All caught up — nothing owed.';
 	});
-
-	// --- Opening balance (carried-over tenant balance from before Rental Command) ---
-	const openingBalanceQuery = createQuery(() => ({
-		queryKey: ['opening-balance', leaseId],
-		queryFn: () => openingBalances.list(leaseId),
-		enabled: leaseId > 0,
-	}));
-	const openingBalance = $derived<OpeningBalanceResponse | undefined>(openingBalanceQuery.data?.[0]);
-
-	function invalidateOpeningBalance() {
-		queryClient.invalidateQueries({ queryKey: ['opening-balance', leaseId] });
-		// Refresh the Account History so the auto-rendered "Opening" entry updates.
-		queryClient.invalidateQueries({ queryKey: ['lease-ledger', leaseId] });
-	}
-
-	// Dialog state. We keep the UI sign-positive (always a non-negative amount the
-	// user types) and capture direction with a select: "owed" → +, "credit" → -.
-	let showOpeningDialog = $state(false);
-	let openingDirection = $state<'owed' | 'credit'>('owed');
-	let openingAmount = $state('');
-	let openingAsOfDate = $state('');
-	let openingNote = $state('');
-	let openingErrors = $state<{ amount?: string; asOfDate?: string }>({});
-	let showOpeningDeleteConfirm = $state(false);
-
-	const directionOptions = [
-		{ value: 'owed', label: 'Tenant owed' },
-		{ value: 'credit', label: 'Tenant credit' },
-	];
-	const openingDirectionLabel = $derived(
-		directionOptions.find((o) => o.value === openingDirection)?.label ?? 'Tenant owed'
-	);
-
-	function openOpeningDialog() {
-		if (openingBalance) {
-			openingDirection = openingBalance.amount < 0 ? 'credit' : 'owed';
-			openingAmount = String(Math.abs(openingBalance.amount));
-			openingAsOfDate = openingBalance.asOfDate?.slice(0, 10) ?? '';
-			openingNote = openingBalance.note ?? '';
-		} else {
-			openingDirection = 'owed';
-			openingAmount = '';
-			// Default the as-of date to the lease start, falling back to today.
-			openingAsOfDate = lease?.startDate?.slice(0, 10) ?? new Date().toISOString().slice(0, 10);
-			openingNote = '';
-		}
-		openingErrors = {};
-		showOpeningDialog = true;
-	}
-	function closeOpeningDialog() {
-		openingErrors = {};
-		showOpeningDialog = false;
-	}
-
-	const saveOpeningMutation = createMutation(() => ({
-		mutationFn: (body: { amount: number; asOfDate: string; note?: string }) =>
-			openingBalance
-				? openingBalances.update(openingBalance.id, body)
-				: openingBalances.create({ leaseId, ...body }),
-		onSuccess: () => {
-			showSuccess(openingBalance ? 'Opening balance updated.' : 'Opening balance saved.');
-			closeOpeningDialog();
-			invalidateOpeningBalance();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const deleteOpeningMutation = createMutation(() => ({
-		mutationFn: (id: number) => openingBalances.remove(id),
-		onSuccess: () => {
-			showSuccess('Opening balance removed.');
-			showOpeningDeleteConfirm = false;
-			invalidateOpeningBalance();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitOpeningBalance() {
-		const errors: { amount?: string; asOfDate?: string } = {};
-		const rawAmount = String(openingAmount ?? '').trim();
-		const magnitude = Number(rawAmount);
-		if (!rawAmount || Number.isNaN(magnitude) || magnitude < 0) {
-			errors.amount = 'Enter an amount of 0 or more.';
-		}
-		if (!openingAsOfDate) {
-			errors.asOfDate = 'Pick an as-of date.';
-		}
-		if (errors.amount || errors.asOfDate) {
-			openingErrors = errors;
-			return;
-		}
-		openingErrors = {};
-		const signed = openingDirection === 'credit' ? -Math.abs(magnitude) : Math.abs(magnitude);
-		const body: { amount: number; asOfDate: string; note?: string } = {
-			amount: signed,
-			asOfDate: openingAsOfDate,
-		};
-		const note = openingNote.trim();
-		if (note) body.note = note;
-		saveOpeningMutation.mutate(body);
-	}
 
 	// Form (edit dialog) state
 	const propertiesQuery = createQuery(() => ({
@@ -1384,51 +1276,6 @@
 						{/if}
 					</div>
 
-					<!-- Opening balance control (carried-over balance from before Rental Command) -->
-					<div class="mb-4 rounded-md border border-dashed border-border bg-muted/20 p-3" data-testid="lease-opening-balance">
-						{#if openingBalanceQuery.isLoading}
-							<div class="h-9 w-full animate-pulse rounded bg-muted"></div>
-						{:else if openingBalance}
-							<div class="flex flex-wrap items-center justify-between gap-3">
-								<div class="min-w-0">
-									<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Opening balance</p>
-									<p class="mt-0.5 text-sm font-medium" data-testid="lease-opening-balance-value">
-										{#if openingBalance.amount < -0.005}
-											Tenant credit of <span class="font-mono tabular-nums">{formatCurrency(Math.abs(openingBalance.amount))}</span>
-										{:else if openingBalance.amount > 0.005}
-											Tenant owed <span class="font-mono tabular-nums">{formatCurrency(openingBalance.amount)}</span>
-										{:else}
-											<span class="font-mono tabular-nums">{formatCurrency(0)}</span>
-										{/if}
-										<span class="text-muted-foreground"> · as of {formatDate(openingBalance.asOfDate)}</span>
-									</p>
-									{#if openingBalance.note}
-										<p class="mt-0.5 text-xs text-muted-foreground">{openingBalance.note}</p>
-									{/if}
-								</div>
-								<div class="flex items-center gap-2">
-									<Button variant="outline" size="sm" class="gap-1.5" onclick={openOpeningDialog} data-testid="lease-opening-balance-edit">
-										<Pencil class="h-4 w-4" />
-										Edit
-									</Button>
-									<Button variant="outline" size="sm" class="gap-1.5 hover:text-destructive" onclick={() => (showOpeningDeleteConfirm = true)} data-testid="lease-opening-balance-remove">
-										<Trash2 class="h-4 w-4" />
-										Remove
-									</Button>
-								</div>
-							</div>
-						{:else}
-							<div class="flex flex-wrap items-center justify-between gap-3">
-								<p class="min-w-0 text-xs text-muted-foreground">
-									Carrying a balance from before Rental Command? Set the tenant's starting balance so the ledger is accurate.
-								</p>
-								<Button variant="outline" size="sm" onclick={openOpeningDialog} data-testid="lease-opening-balance-set">
-									Set opening balance
-								</Button>
-							</div>
-						{/if}
-					</div>
-
 					{#if ledgerTotal === 0}
 						<p class="text-sm text-muted-foreground">No charges or payments recorded yet.</p>
 					{:else}
@@ -1562,81 +1409,3 @@
 		activeLeaseCount={visibleStatus === 'Active' ? 1 : 0}
 	/>
 {/if}
-
-<!-- Opening balance dialog (set / edit) -->
-<Dialog.Root open={showOpeningDialog} onOpenChange={(v) => { if (!v) closeOpeningDialog(); }}>
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>{openingBalance ? 'Edit opening balance' : 'Set opening balance'}</Dialog.Title>
-			<Dialog.Description>
-				Did this tenant already owe you (or have a credit) before you started using Rental Command?
-				Enter the starting balance so the ledger is accurate.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="lease-opening-balance-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Direction</span>
-				<Select.Root type="single" bind:value={openingDirection}>
-					<Select.Trigger class="w-full" data-testid="lease-opening-balance-direction">
-						{openingDirectionLabel}
-					</Select.Trigger>
-					<Select.Content>
-						{#each directionOptions as option}
-							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<p class="mt-1 text-xs text-muted-foreground">
-					"Tenant owed" means they were behind; "Tenant credit" means they were paid ahead.
-				</p>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
-				<Input
-					data-testid="lease-opening-balance-amount"
-					bind:value={openingAmount}
-					type="text"
-					inputmode="decimal"
-					mask="currency"
-					placeholder="0.00"
-				/>
-				{#if openingErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="lease-opening-balance-amount-error">{openingErrors.amount}</p>{/if}
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">As of date</span>
-				<DatePicker
-					testid="lease-opening-balance-date"
-					bind:value={openingAsOfDate}
-					placeholder="As of date"
-				/>
-				{#if openingErrors.asOfDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-opening-balance-date-error">{openingErrors.asOfDate}</p>{/if}
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Note (optional)</span>
-				<textarea
-					data-testid="lease-opening-balance-note"
-					bind:value={openingNote}
-					rows="2"
-					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={closeOpeningDialog} data-testid="lease-opening-balance-cancel">Cancel</Button>
-			<Button onclick={submitOpeningBalance} disabled={saveOpeningMutation.isPending} data-testid="lease-opening-balance-save">
-				{saveOpeningMutation.isPending ? 'Saving…' : openingBalance ? 'Save changes' : 'Save opening balance'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<ConfirmDialog
-	open={showOpeningDeleteConfirm}
-	title="Remove opening balance"
-	message="Remove the opening balance for this lease? The ledger will no longer show the carried-over starting balance."
-	confirmLabel="Remove"
-	busy={deleteOpeningMutation.isPending}
-	testid="lease-opening-balance-delete-confirm"
-	onconfirm={() => { if (openingBalance) deleteOpeningMutation.mutate(openingBalance.id); }}
-	oncancel={() => (showOpeningDeleteConfirm = false)}
-/>

@@ -195,7 +195,7 @@ public sealed class SandboxService : ISandboxService
         await _db.Inspections.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
 
-        // 5. Appointments, canonical tenant/deposit ledgers, opening balances, payments, and notices.
+        // 5. Appointments, canonical tenant/deposit ledgers, payments, and notices.
         await _db.Appointments.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.SecurityDepositEntries.IgnoreQueryFilters()
@@ -233,8 +233,6 @@ public sealed class SandboxService : ISandboxService
         await _db.UnitOperationalPeriods.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.LeaseManagements.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.OpeningBalances.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Payments.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);

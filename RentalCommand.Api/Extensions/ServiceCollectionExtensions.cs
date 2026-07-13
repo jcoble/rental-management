@@ -91,9 +91,6 @@ public static class ServiceCollectionExtensions
         // refresh-on-401 and the Engine's AccountingTokenRefreshWorker.
         services.AddScoped<AccountingTokenService>();
         services.AddAccountingProviders();
-        // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
-        services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
-
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();
         services.AddScoped<IRecurringMaintenanceTaskService, RecurringMaintenanceTaskService>();
