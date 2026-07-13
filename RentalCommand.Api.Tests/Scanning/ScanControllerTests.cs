@@ -160,6 +160,17 @@ public class ScanControllerTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         });
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 7,
+            PortfolioId = 42,
+            UserName = "scan-controller@example.test",
+            NormalizedUserName = "SCAN-CONTROLLER@EXAMPLE.TEST",
+            Email = "scan-controller@example.test",
+            NormalizedEmail = "SCAN-CONTROLLER@EXAMPLE.TEST",
+            DisplayName = "Scan Controller",
+            CreatedAt = now,
+        });
         _db.Properties.Add(new Property
         {
             Id = 10,
@@ -175,6 +186,7 @@ public class ScanControllerTests : IDisposable
         _db.Units.Add(new Unit
         {
             Id = 11,
+            PortfolioId = 42,
             PropertyId = 10,
             UnitNumber = "A",
             CreatedAt = now,
@@ -189,30 +201,90 @@ public class ScanControllerTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         });
-        _db.Leases.Add(new Lease
+        await _db.SaveChangesAsync();
+
+        _db.LeaseManagements.Add(new LeaseManagement
         {
             Id = 13,
+            PublicId = Guid.NewGuid(),
             PortfolioId = 42,
             PropertyId = 10,
             UnitId = 11,
-            TenantId = 12,
-            LeaseNumber = "L-13",
-            Status = LeaseStatus.Active,
-            StartDate = now.Date,
-            EndDate = now.Date.AddYears(1),
-            MonthlyRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            RelationshipNumber = "LM-13",
+            PossessionGivenAtUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 7,
+            RowVersion = Guid.NewGuid(),
         });
-        _db.Payments.Add(new Payment
+        await _db.SaveChangesAsync();
+
+        _db.TenantAccounts.Add(new TenantAccount
         {
             Id = 14,
+            PublicId = Guid.NewGuid(),
             PortfolioId = 42,
-            LeaseId = 13,
+            LeaseManagementId = 13,
+            AccountNumber = "TA-14",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = 7,
+        });
+        _db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            Id = 16,
+            PortfolioId = 42,
+            LeaseManagementId = 13,
+            TenantId = 12,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now),
+            ChangeReason = "Canonical scan-list fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = 7,
+        });
+        _db.LeaseAgreements.Add(new LeaseAgreement
+        {
+            Id = 18,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 42,
+            LeaseManagementId = 13,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-18",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now),
+            BaseRentAmount = 1200m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 0m,
+            LateFeeAmount = 0m,
+            GracePeriodDays = 0,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 7,
+        });
+        await _db.SaveChangesAsync();
+
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            Id = 17,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 42,
+            TenantAccountId = 14,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
             Amount = 1200m,
-            DueDate = now.Date,
-            CreatedAt = now,
-            UpdatedAt = now,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Scanned rent receipt",
+            BusinessKey = "scan-receipt:21",
+            CreatedByUserId = 7,
         });
         _db.RentalApplications.Add(new RentalApplication
         {
@@ -259,7 +331,7 @@ public class ScanControllerTests : IDisposable
         body.Items.Should().HaveCount(2);
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Payment" &&
-            i.CreatedEntityId == 14 &&
+            i.CreatedEntityId == 17 &&
             i.CreatedUnitId == 11);
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Application" &&

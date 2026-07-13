@@ -148,7 +148,7 @@ public class SandboxGuardAndSeederTests : IDisposable
     public async Task StripeCheckout_Suppressed_WhenPortfolioIsSandbox()
     {
         // Stripe is ENABLED, ownership is valid — only the sandbox guard can short-circuit here.
-        var (lease, payment) = SeedLeaseAndScheduledRent(portfolioId: 1, tenantId: 10);
+        var (account, charge) = SeedTenantAccountAndRentCharge(portfolioId: 1, tenantId: 10);
         var p = _ctx.Db.Portfolios.Single(x => x.Id == 1);
         p.IsSandbox = true;
         _ctx.Db.SaveChanges();
@@ -156,19 +156,19 @@ public class SandboxGuardAndSeederTests : IDisposable
         var sut = BuildStripeService(enabled: true);
 
         var result = await sut.CreatePaymentCheckoutSessionAsync(
-            portfolioId: 1, tenantId: 10, tenantAccountId: 1,
-            chargeLedgerEntryId: payment.Id, actorUserId: 1,
+            portfolioId: 1, tenantId: 10, tenantAccountId: account.Id,
+            chargeLedgerEntryId: charge.Id, actorUserId: 1,
             successUrl: null, cancelUrl: null, CancellationToken.None);
 
         // Suppressed: returns NotEnabled WITHOUT contacting Stripe or creating a transaction.
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
-        _ctx.Db.PaymentTransactions.Should().BeEmpty();
+        _ctx.Db.TenantPaymentAttempts.Should().BeEmpty();
     }
 
     [Fact]
     public async Task StripeAutopay_Suppressed_WhenPortfolioIsSandbox()
     {
-        var (lease, _) = SeedLeaseAndScheduledRent(portfolioId: 1, tenantId: 10);
+        var (account, _) = SeedTenantAccountAndRentCharge(portfolioId: 1, tenantId: 10);
         var p = _ctx.Db.Portfolios.Single(x => x.Id == 1);
         p.IsSandbox = true;
         _ctx.Db.SaveChanges();
@@ -176,7 +176,7 @@ public class SandboxGuardAndSeederTests : IDisposable
         var sut = BuildStripeService(enabled: true);
 
         var result = await sut.CreateAutopaySetupSessionAsync(
-            portfolioId: 1, tenantId: 10, tenantAccountId: lease.Id, actorUserId: 1,
+            portfolioId: 1, tenantId: 10, tenantAccountId: account.Id, actorUserId: 1,
             operationKey: "sandbox-setup",
             successUrl: null, cancelUrl: null, CancellationToken.None);
 
@@ -203,9 +203,25 @@ public class SandboxGuardAndSeederTests : IDisposable
             new UnexpectedAtomicUnitOfWork());
     }
 
-    private (Lease lease, Payment payment) SeedLeaseAndScheduledRent(int portfolioId, int tenantId, decimal amount = 1000m)
+    private (TenantAccount account, TenantLedgerEntry charge) SeedTenantAccountAndRentCharge(
+        int portfolioId,
+        int tenantId,
+        decimal amount = 1000m)
     {
         var now = DateTime.UtcNow;
+
+        var actor = new ApplicationUser
+        {
+            Id = 1,
+            PortfolioId = portfolioId,
+            UserName = "sandbox-payment@example.test",
+            NormalizedUserName = "SANDBOX-PAYMENT@EXAMPLE.TEST",
+            Email = "sandbox-payment@example.test",
+            NormalizedEmail = "SANDBOX-PAYMENT@EXAMPLE.TEST",
+            DisplayName = "Sandbox Payment Actor",
+            CreatedAt = now,
+        };
+        _ctx.Db.Users.Add(actor);
 
         var property = new Property
         {
@@ -220,7 +236,14 @@ public class SandboxGuardAndSeederTests : IDisposable
         };
         _ctx.Db.Properties.Add(property);
 
-        var unit = new Unit { Property = property, UnitNumber = $"U{tenantId}", CreatedAt = now, UpdatedAt = now };
+        var unit = new Unit
+        {
+            PortfolioId = portfolioId,
+            Property = property,
+            UnitNumber = $"U{tenantId}",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
         _ctx.Db.Units.Add(unit);
 
         var tenant = new Tenant
@@ -235,38 +258,91 @@ public class SandboxGuardAndSeederTests : IDisposable
         _ctx.Db.Tenants.Add(tenant);
         _ctx.Db.SaveChanges();
 
-        var lease = new Lease
+        var relationship = new LeaseManagement
         {
+            PublicId = Guid.NewGuid(),
             PortfolioId = portfolioId,
             PropertyId = property.Id,
             UnitId = unit.Id,
-            TenantId = tenantId,
-            LeaseNumber = $"L-{tenantId}",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-6),
-            EndDate = now.AddMonths(6),
-            MonthlyRent = amount,
-            CreatedAt = now,
-            UpdatedAt = now,
+            RelationshipNumber = $"LM-{tenantId}",
+            PossessionGivenAtUtc = now.AddMonths(-6),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+            RowVersion = Guid.NewGuid(),
         };
-        _ctx.Db.Leases.Add(lease);
+        _ctx.Db.LeaseManagements.Add(relationship);
         _ctx.Db.SaveChanges();
 
-        var payment = new Payment
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagementId = relationship.Id,
+            AccountNumber = $"TA-{tenantId}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagementId = relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{tenantId}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now.AddMonths(-6)),
+            TermEndOn = DateOnly.FromDateTime(now.AddMonths(6)),
+            GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-6)),
+            BaseRentAmount = amount,
+            RentDueDay = 1,
+            SecurityDepositObligation = amount,
+            LateFeeAmount = 0m,
+            GracePeriodDays = 0,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = actor.Id,
+        };
+        var party = new LeaseManagementParty
         {
             PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = amount,
-            DueDate = now.Date,
-            PeriodKey = now.ToString("yyyy-MM"),
-            CreatedAt = now,
-            UpdatedAt = now,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenantId,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-6)),
+            ChangeReason = "Canonical sandbox payment fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = actor.Id,
         };
-        _ctx.Db.Payments.Add(payment);
+        _ctx.Db.AddRange(account, agreement, party);
         _ctx.Db.SaveChanges();
 
-        return (lease, payment);
+        var charge = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            DueOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Scheduled rent charge",
+            BusinessKey = $"rent:{now:yyyy-MM}:{tenantId}",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = actor.Id,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(charge);
+        _ctx.Db.SaveChanges();
+
+        return (account, charge);
     }
 }
