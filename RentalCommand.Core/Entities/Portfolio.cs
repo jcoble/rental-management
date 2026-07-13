@@ -47,6 +47,7 @@ public class Portfolio
     public List<OwnerUserAccess> OwnerUserAccesses { get; set; } = [];
     public List<UnitOperationalPeriod> UnitOperationalPeriods { get; set; } = [];
     public List<LegalDocumentArtifact> LegalDocumentArtifacts { get; set; } = [];
+    public List<LegalDocumentSourceVersion> LegalDocumentSourceVersions { get; set; } = [];
     public List<LeaseAgreement> LeaseAgreements { get; set; } = [];
     public List<LeaseAddendum> LeaseAddenda { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];

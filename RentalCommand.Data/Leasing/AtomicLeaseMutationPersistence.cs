@@ -73,9 +73,8 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             new("LeaseAddendumSigners", AtomicRawDmlOperation.Insert),
             new("LeaseAddendumFinancialEffects", AtomicRawDmlOperation.Insert),
             new("LeaseRenewalAddendumDecisions", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SqlQueryRaw<RenewalAddendumDraftRow>(
-                CreateRenewalAddendumDraftsSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<RenewalAddendumDraftRow>(
+            CreateRenewalAddendumDraftsSql, parameters, ct);
         return new(
             row.InputValid,
             DeserializeIds(row.DecisionIdsJson),
@@ -113,9 +112,8 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         using var lease = _auditScope.BeginInternalRawDmlBatch(
             new("LeaseAgreementSigners", AtomicRawDmlOperation.Delete),
             new("LeaseAgreementSigners", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SqlQueryRaw<AgreementSignerReplacementRow>(
-                ReplaceAgreementDraftSignersSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<AgreementSignerReplacementRow>(
+            ReplaceAgreementDraftSignersSql, parameters, ct);
         if (!row.Eligible)
         {
             throw new InvalidOperationException(
@@ -140,15 +138,39 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         };
         using var lease = _auditScope.BeginInternalRawDml(
             "LeaseAgreementSigners", AtomicRawDmlOperation.Insert);
-        var row = await _db.Database.SqlQueryRaw<AgreementSignerCopyRow>(
-                CopyAgreementDraftSignersSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<AgreementSignerCopyRow>(
+            CopyAgreementDraftSignersSql, parameters, ct);
         if (!row.Eligible)
         {
             throw new InvalidOperationException(
                 "Source or successor Agreement changed before signer copy completed.");
         }
         return DeserializeIds(row.CreatedSignerIdsJson);
+    }
+
+    public async Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAddendumId,
+        int correctionAddendumId,
+        CancellationToken ct = default)
+    {
+        var parameters = new NpgsqlParameter[]
+        {
+            Integer("portfolioId", portfolioId),
+            Integer("leaseManagementId", leaseManagementId),
+            Integer("sourceAddendumId", sourceAddendumId),
+            Integer("correctionAddendumId", correctionAddendumId),
+        };
+        using var lease = _auditScope.BeginInternalRawDmlBatch(
+            new("LeaseAddendumSigners", AtomicRawDmlOperation.Insert),
+            new("LeaseAddendumFinancialEffects", AtomicRawDmlOperation.Insert));
+        var row = await _db.Database.SingleTopLevelResultAsync<AddendumCorrectionChildCopyRow>(
+            CopyAddendumCorrectionChildrenSql, parameters, ct);
+        return new(
+            row.Eligible,
+            DeserializeIds(row.CreatedSignerIdsJson),
+            DeserializeIds(row.CreatedFinancialEffectIdsJson));
     }
 
     public async Task<AtomicTenantAccessTransitionResult> TransitionTenantAccessAsync(
@@ -187,9 +209,8 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         using var lease = _auditScope.BeginInternalRawDmlBatch(
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
             new("TenantUserAccesses", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SqlQueryRaw<AccessTransitionRow>(
-                AccessTransitionSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<AccessTransitionRow>(
+            AccessTransitionSql, parameters, ct);
         if (!row.InputValid)
         {
             throw new InvalidOperationException(
@@ -252,9 +273,8 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
             new("LeaseManagements", AtomicRawDmlOperation.Update),
             new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SqlQueryRaw<ReturnPossessionRow>(
-                ReturnPossessionSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<ReturnPossessionRow>(
+            ReturnPossessionSql, parameters, ct);
         return new(
             (ReturnPossessionOutcome)row.Outcome,
             row.TurnoverPeriodId,
@@ -308,9 +328,8 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
             new("TenantAccounts", AtomicRawDmlOperation.Update),
             new("LeaseManagements", AtomicRawDmlOperation.Update));
-        var row = await _db.Database.SqlQueryRaw<CancelPlannedRelationshipRow>(
-                CancelPlannedRelationshipSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<CancelPlannedRelationshipRow>(
+            CancelPlannedRelationshipSql, parameters, ct);
         return new(
             (CancelPlannedRelationshipOutcome)row.Outcome,
             row.CanceledAtUtc,
@@ -376,6 +395,13 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
     {
         public bool Eligible { get; set; }
         public string CreatedSignerIdsJson { get; set; } = "[]";
+    }
+
+    private sealed class AddendumCorrectionChildCopyRow
+    {
+        public bool Eligible { get; set; }
+        public string CreatedSignerIdsJson { get; set; } = "[]";
+        public string CreatedFinancialEffectIdsJson { get; set; } = "[]";
     }
 
     private sealed class ReturnPossessionRow
@@ -594,10 +620,20 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         effective_source AS MATERIALIZED (
             SELECT source.*
             FROM "LeaseAddenda" AS source
+            INNER JOIN "LeaseAgreements" AS source_base
+              ON source_base."Id" = source."BaseAgreementId"
+             AND source_base."PortfolioId" = source."PortfolioId"
+             AND source_base."LeaseManagementId" = source."LeaseManagementId"
+             AND source_base."FullyExecutedAtUtc" IS NOT NULL
+             AND source_base."ExecutedArtifactId" IS NOT NULL
+             AND source_base."VoidedAtUtc" IS NULL
+             AND source_base."DraftCanceledAtUtc" IS NULL
             WHERE source."PortfolioId" = @portfolioId
               AND source."LeaseManagementId" = @leaseManagementId
               AND source."FullyExecutedAtUtc" IS NOT NULL
+              AND source."ExecutedArtifactId" IS NOT NULL
               AND source."VoidedAtUtc" IS NULL
+              AND source."DraftCanceledAtUtc" IS NULL
               AND source."EffectiveFromOn" <= rc_business_date(@portfolioId)
               AND (source."EffectiveThroughOn" IS NULL
                    OR source."EffectiveThroughOn" >= rc_business_date(@portfolioId))
@@ -606,10 +642,27 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
               AND NOT EXISTS (
                   SELECT 1
                   FROM "LeaseAddenda" AS newer
+                  INNER JOIN "LeaseAgreements" AS newer_base
+                    ON newer_base."Id" = newer."BaseAgreementId"
+                   AND newer_base."PortfolioId" = newer."PortfolioId"
+                   AND newer_base."LeaseManagementId" = newer."LeaseManagementId"
+                   AND newer_base."FullyExecutedAtUtc" IS NOT NULL
+                   AND newer_base."ExecutedArtifactId" IS NOT NULL
+                   AND newer_base."VoidedAtUtc" IS NULL
+                   AND newer_base."DraftCanceledAtUtc" IS NULL
                   WHERE newer."PortfolioId" = source."PortfolioId"
                     AND newer."LeaseManagementId" = source."LeaseManagementId"
                     AND newer."SeriesPublicId" = source."SeriesPublicId"
-                    AND newer."VersionNumber" > source."VersionNumber")
+                    AND newer."VersionNumber" > source."VersionNumber"
+                    AND newer."FullyExecutedAtUtc" IS NOT NULL
+                    AND newer."ExecutedArtifactId" IS NOT NULL
+                    AND newer."VoidedAtUtc" IS NULL
+                    AND newer."DraftCanceledAtUtc" IS NULL
+                    AND newer."EffectiveFromOn" <= rc_business_date(@portfolioId)
+                    AND (newer."EffectiveThroughOn" IS NULL
+                         OR newer."EffectiveThroughOn" >= rc_business_date(@portfolioId))
+                    AND (newer."SupersededEffectiveOn" IS NULL
+                         OR newer."SupersededEffectiveOn" > rc_business_date(@portfolioId)))
         ),
         validation AS MATERIALIZED (
             SELECT
@@ -632,25 +685,37 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                     SELECT "SeriesPublicId" FROM effective_source
                     EXCEPT SELECT source_addendum_series_public_id FROM input) AS decisions_valid
         ),
+        next_versions AS MATERIALIZED (
+            SELECT source."Id" AS source_addendum_id,
+                   max(existing."VersionNumber") + 1 AS next_version_number
+            FROM effective_source AS source
+            INNER JOIN "LeaseAddenda" AS existing
+                ON existing."PortfolioId" = source."PortfolioId"
+               AND existing."LeaseManagementId" = source."LeaseManagementId"
+               AND existing."SeriesPublicId" = source."SeriesPublicId"
+            GROUP BY source."Id"
+        ),
         replacements AS (
             INSERT INTO "LeaseAddenda"
                 ("PublicId", "SeriesPublicId", "PortfolioId", "LeaseManagementId",
                  "BaseAgreementId", "VersionNumber", "AddendumNumber", "Purpose",
                  "ReplacesAddendumId", "EffectiveFromOn", "EffectiveThroughOn",
-                 "TermsSchemaVersion", "TermsPayload", "DocumentTemplateId",
-                 "DocumentTemplateVersion", "CreatedAtUtc", "CreatedByUserId",
+                 "TermsSchemaVersion", "TermsPayload", "DocumentSourceVersionId",
+                 "CreatedAtUtc", "CreatedByUserId",
                  "UpdatedAtUtc", "DraftRevision")
             SELECT gen_random_uuid(), source."SeriesPublicId", @portfolioId, @leaseManagementId,
-                   @renewalAgreementId, source."VersionNumber" + 1, source."AddendumNumber",
+                   @renewalAgreementId, next_versions.next_version_number, source."AddendumNumber",
                    source."Purpose", source."Id", @governingFromOn,
                    CASE WHEN source."EffectiveThroughOn" IS NULL
                              OR source."EffectiveThroughOn" >= @governingFromOn
                         THEN source."EffectiveThroughOn" ELSE NULL END,
-                   source."TermsSchemaVersion", source."TermsPayload", source."DocumentTemplateId",
-                   source."DocumentTemplateVersion", @createdAt, @actorUserId, @createdAt, 1
+                   source."TermsSchemaVersion", source."TermsPayload", source."DocumentSourceVersionId",
+                   @createdAt, @actorUserId, @createdAt, 1
             FROM input
             INNER JOIN effective_source AS source
                 ON source."SeriesPublicId" = input.source_addendum_series_public_id
+            INNER JOIN next_versions
+                ON next_versions.source_addendum_id = source."Id"
             CROSS JOIN validation
             WHERE validation.renewal_valid AND validation.decisions_valid
               AND input.decision = @reissue
@@ -756,6 +821,80 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         SELECT EXISTS (SELECT 1 FROM eligible) AS "Eligible",
                COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted), '[]'::jsonb)::text
                    AS "CreatedSignerIdsJson"
+        """;
+
+    private const string CopyAddendumCorrectionChildrenSql = """
+        WITH eligible AS MATERIALIZED (
+            SELECT source."Id" AS source_id, correction."Id" AS correction_id
+            FROM "LeaseAddenda" AS source
+            INNER JOIN "LeaseAddenda" AS correction
+                ON correction."Id" = @correctionAddendumId
+               AND correction."PortfolioId" = @portfolioId
+               AND correction."LeaseManagementId" = @leaseManagementId
+               AND correction."SeriesPublicId" = source."SeriesPublicId"
+               AND correction."ReplacesAddendumId" = source."Id"
+               AND correction."IssuedAtUtc" IS NULL
+               AND correction."IssuedArtifactId" IS NULL
+               AND correction."FullyExecutedAtUtc" IS NULL
+               AND correction."ExecutedArtifactId" IS NULL
+               AND correction."VoidedAtUtc" IS NULL
+               AND correction."DraftCanceledAtUtc" IS NULL
+               AND correction."EffectiveFromOn" > source."EffectiveFromOn"
+               AND (source."EffectiveThroughOn" IS NULL
+                    OR correction."EffectiveFromOn" <= source."EffectiveThroughOn")
+            WHERE source."Id" = @sourceAddendumId
+              AND source."PortfolioId" = @portfolioId
+              AND source."LeaseManagementId" = @leaseManagementId
+              AND source."FullyExecutedAtUtc" IS NOT NULL
+              AND source."ExecutedArtifactId" IS NOT NULL
+              AND source."VoidedAtUtc" IS NULL
+              AND source."DraftCanceledAtUtc" IS NULL
+              AND source."SupersededByAddendumId" IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "LeaseAddendumSigners" AS existing
+                  WHERE existing."PortfolioId" = @portfolioId
+                    AND existing."LeaseAddendumId" = correction."Id")
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "LeaseAddendumFinancialEffects" AS existing
+                  WHERE existing."PortfolioId" = @portfolioId
+                    AND existing."LeaseAddendumId" = correction."Id")
+            FOR UPDATE OF source, correction
+        ),
+        inserted_signers AS (
+            INSERT INTO "LeaseAddendumSigners"
+                ("PortfolioId", "LeaseAddendumId", "LeaseManagementPartyId", "TenantId",
+                 "SignerRole", "NameSnapshot", "EmailSnapshot", "SigningOrder", "IsRequired")
+            SELECT source."PortfolioId", eligible.correction_id, source."LeaseManagementPartyId",
+                   source."TenantId", source."SignerRole", source."NameSnapshot",
+                   source."EmailSnapshot", source."SigningOrder", source."IsRequired"
+            FROM eligible
+            INNER JOIN "LeaseAddendumSigners" AS source
+                ON source."PortfolioId" = @portfolioId
+               AND source."LeaseAddendumId" = eligible.source_id
+            ORDER BY source."SigningOrder", source."Id"
+            RETURNING "Id"
+        ),
+        inserted_effects AS (
+            INSERT INTO "LeaseAddendumFinancialEffects"
+                ("PortfolioId", "LeaseAddendumId", "EffectType", "Amount", "Currency",
+                 "ChargeCode", "EffectiveFromOn", "EffectiveThroughOn", "DueOn", "Description")
+            SELECT source."PortfolioId", eligible.correction_id, source."EffectType", source."Amount",
+                   source."Currency", source."ChargeCode", source."EffectiveFromOn",
+                   source."EffectiveThroughOn", source."DueOn", source."Description"
+            FROM eligible
+            INNER JOIN "LeaseAddendumFinancialEffects" AS source
+                ON source."PortfolioId" = @portfolioId
+               AND source."LeaseAddendumId" = eligible.source_id
+            ORDER BY source."Id"
+            RETURNING "Id"
+        )
+        SELECT EXISTS (SELECT 1 FROM eligible) AS "Eligible",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted_signers), '[]'::jsonb)::text
+                   AS "CreatedSignerIdsJson",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted_effects), '[]'::jsonb)::text
+                   AS "CreatedFinancialEffectIdsJson"
         """;
 
     private const string ReturnPossessionSql = """

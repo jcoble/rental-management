@@ -377,7 +377,7 @@ class PaymentsRepository {
       '${value.month.toString().padLeft(2, '0')}-'
       '${value.day.toString().padLeft(2, '0')}';
 
-  /// GET /accounting/summary — JWT-scoped, no portfolioId param needed.
+  /// GET /accounting/summary — canonical-access-scoped, no portfolioId param needed.
   Future<AccountingSummary> accountingSummary() async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(

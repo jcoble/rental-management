@@ -2,8 +2,8 @@ namespace RentalCommand.Core.Configuration;
 
 /// <summary>
 /// Platform super-admin allowlist (IA Wave 1, F6 / TSK-212). Operator-only endpoints
-/// (Engine Health, etc.) are gated by this email allowlist rather than a role — Rental
-/// Command has no super-admin role. Bound from the "PlatformAdmin" configuration section.
+/// (Engine Health, etc.) resolve the canonical user subject to its current database email and
+/// evaluate this allowlist. Bound from the "PlatformAdmin" configuration section.
 ///
 /// When <see cref="Emails"/> is empty, no one is a platform admin (fail closed).
 /// </summary>

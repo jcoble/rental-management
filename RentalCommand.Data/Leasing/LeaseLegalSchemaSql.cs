@@ -13,15 +13,19 @@ internal static class LeaseLegalSchemaSql
         CreateExclusionsAndFunctionalIndexes,
         CreateVersionTriggers,
         CreateArtifactAndAgreementProtection,
+        CreateReciprocalLineageValidators,
         CreateChildFreezeAndSignerValidators,
         CreateSignatureAuditAppendOnly,
+        CreateDocumentSourceVersionImmutability,
     ];
 
     /// <summary>Drop order before the migration removes the relational tables.</summary>
     public static IReadOnlyList<string> DropStatements { get; } =
     [
         DropSignatureAuditAppendOnly,
+        DropDocumentSourceVersionImmutability,
         DropChildFreezeAndSignerValidators,
+        DropReciprocalLineageValidators,
         DropArtifactAndAgreementProtection,
         DropVersionTriggers,
         DropExclusionsAndFunctionalIndexes,
@@ -96,9 +100,18 @@ internal static class LeaseLegalSchemaSql
 
         CREATE UNIQUE INDEX "IX_LeaseAddendumSigners_LeaseAddendumId_EmailSnapshot_CI"
           ON "LeaseAddendumSigners" ("LeaseAddendumId", lower("EmailSnapshot"));
+
+        CREATE UNIQUE INDEX "IX_LeaseAgreements_DurableDirectSuccessor"
+          ON "LeaseAgreements" (
+            "LeaseManagementId",
+            COALESCE("ReplacesAgreementId", "RenewsAgreementId"))
+          WHERE COALESCE("ReplacesAgreementId", "RenewsAgreementId") IS NOT NULL
+            AND "DraftCanceledAtUtc" IS NULL
+            AND ("VoidedAtUtc" IS NULL OR "FullyExecutedAtUtc" IS NOT NULL);
         """;
 
     public const string DropExclusionsAndFunctionalIndexes = """
+        DROP INDEX IF EXISTS "IX_LeaseAgreements_DurableDirectSuccessor";
         DROP INDEX IF EXISTS "IX_LeaseAddendumSigners_LeaseAddendumId_EmailSnapshot_CI";
         DROP INDEX IF EXISTS "IX_LeaseAgreementSigners_LeaseAgreementId_EmailSnapshot_CI";
         ALTER TABLE IF EXISTS "TenantAccountConditionPeriods"
@@ -376,8 +389,8 @@ internal static class LeaseLegalSchemaSql
               NEW."TermStartOn", NEW."TermEndOn", NEW."GoverningFromOn",
               NEW."BaseRentAmount", NEW."RentDueDay", NEW."SecurityDepositObligation",
               NEW."LateFeeAmount", NEW."GracePeriodDays", NEW."Currency",
-              NEW."TermsSchemaVersion", NEW."TermsPayload", NEW."DocumentTemplateId",
-              NEW."DocumentTemplateVersion", NEW."IssuedArtifactId", NEW."IssuedAtUtc",
+              NEW."TermsSchemaVersion", NEW."TermsPayload", NEW."DocumentSourceVersionId",
+              NEW."IssuedArtifactId", NEW."IssuedAtUtc",
               NEW."DraftCanceledAtUtc", NEW."DraftCancellationReason",
               NEW."CreatedAtUtc", NEW."CreatedByUserId", NEW."DraftRevision")
             IS DISTINCT FROM ROW(
@@ -387,8 +400,8 @@ internal static class LeaseLegalSchemaSql
               OLD."TermStartOn", OLD."TermEndOn", OLD."GoverningFromOn",
               OLD."BaseRentAmount", OLD."RentDueDay", OLD."SecurityDepositObligation",
               OLD."LateFeeAmount", OLD."GracePeriodDays", OLD."Currency",
-              OLD."TermsSchemaVersion", OLD."TermsPayload", OLD."DocumentTemplateId",
-              OLD."DocumentTemplateVersion", OLD."IssuedArtifactId", OLD."IssuedAtUtc",
+              OLD."TermsSchemaVersion", OLD."TermsPayload", OLD."DocumentSourceVersionId",
+              OLD."IssuedArtifactId", OLD."IssuedAtUtc",
               OLD."DraftCanceledAtUtc", OLD."DraftCancellationReason",
               OLD."CreatedAtUtc", OLD."CreatedByUserId", OLD."DraftRevision") THEN
             RAISE EXCEPTION 'Issued LeaseAgreement contractual fields are immutable';
@@ -444,16 +457,16 @@ internal static class LeaseLegalSchemaSql
               NEW."PublicId", NEW."SeriesPublicId", NEW."PortfolioId", NEW."LeaseManagementId",
               NEW."BaseAgreementId", NEW."VersionNumber", NEW."AddendumNumber", NEW."Purpose",
               NEW."ReplacesAddendumId", NEW."EffectiveFromOn", NEW."EffectiveThroughOn",
-              NEW."TermsSchemaVersion", NEW."TermsPayload", NEW."DocumentTemplateId",
-              NEW."DocumentTemplateVersion", NEW."IssuedArtifactId", NEW."IssuedAtUtc",
+              NEW."TermsSchemaVersion", NEW."TermsPayload", NEW."DocumentSourceVersionId",
+              NEW."IssuedArtifactId", NEW."IssuedAtUtc",
               NEW."DraftCanceledAtUtc", NEW."DraftCancellationReason",
               NEW."CreatedAtUtc", NEW."CreatedByUserId", NEW."DraftRevision")
             IS DISTINCT FROM ROW(
               OLD."PublicId", OLD."SeriesPublicId", OLD."PortfolioId", OLD."LeaseManagementId",
               OLD."BaseAgreementId", OLD."VersionNumber", OLD."AddendumNumber", OLD."Purpose",
               OLD."ReplacesAddendumId", OLD."EffectiveFromOn", OLD."EffectiveThroughOn",
-              OLD."TermsSchemaVersion", OLD."TermsPayload", OLD."DocumentTemplateId",
-              OLD."DocumentTemplateVersion", OLD."IssuedArtifactId", OLD."IssuedAtUtc",
+              OLD."TermsSchemaVersion", OLD."TermsPayload", OLD."DocumentSourceVersionId",
+              OLD."IssuedArtifactId", OLD."IssuedAtUtc",
               OLD."DraftCanceledAtUtc", OLD."DraftCancellationReason",
               OLD."CreatedAtUtc", OLD."CreatedByUserId", OLD."DraftRevision") THEN
             RAISE EXCEPTION 'Issued LeaseAddendum contractual fields are immutable';
@@ -500,6 +513,148 @@ internal static class LeaseLegalSchemaSql
         DROP FUNCTION IF EXISTS rc_protect_lease_agreement();
         DROP TRIGGER IF EXISTS "TR_LegalDocumentArtifacts_Immutable" ON "LegalDocumentArtifacts";
         DROP FUNCTION IF EXISTS rc_reject_legal_artifact_mutation();
+        """;
+
+    public const string CreateReciprocalLineageValidators = """
+        CREATE OR REPLACE FUNCTION rc_validate_lease_agreement_reciprocal_lineage()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          IF NEW."SupersededByAgreementId" IS NOT NULL AND NOT EXISTS (
+              SELECT 1
+              FROM "LeaseAgreements" AS successor
+              WHERE successor."Id" = NEW."SupersededByAgreementId"
+                AND successor."PortfolioId" = NEW."PortfolioId"
+                AND successor."LeaseManagementId" = NEW."LeaseManagementId"
+                AND COALESCE(successor."ReplacesAgreementId", successor."RenewsAgreementId") = NEW."Id"
+                AND successor."GoverningFromOn" = NEW."SupersededEffectiveOn") THEN
+            RAISE EXCEPTION 'LeaseAgreement supersession must point to its reciprocal direct successor';
+          END IF;
+
+          IF NEW."FullyExecutedAtUtc" IS NOT NULL
+             AND COALESCE(NEW."ReplacesAgreementId", NEW."RenewsAgreementId") IS NOT NULL
+             AND NOT EXISTS (
+              SELECT 1
+              FROM "LeaseAgreements" AS predecessor
+              WHERE predecessor."Id" = COALESCE(NEW."ReplacesAgreementId", NEW."RenewsAgreementId")
+                AND predecessor."PortfolioId" = NEW."PortfolioId"
+                AND predecessor."LeaseManagementId" = NEW."LeaseManagementId"
+                AND predecessor."SupersededByAgreementId" = NEW."Id"
+                AND predecessor."SupersededEffectiveOn" = NEW."GoverningFromOn") THEN
+            RAISE EXCEPTION 'Executed LeaseAgreement successor requires reciprocal predecessor supersession';
+          END IF;
+
+          RETURN NULL;
+        END;
+        $function$;
+
+        CREATE CONSTRAINT TRIGGER "TR_LeaseAgreements_ValidateReciprocalLineage"
+          AFTER INSERT OR UPDATE ON "LeaseAgreements"
+          DEFERRABLE INITIALLY DEFERRED
+          FOR EACH ROW EXECUTE FUNCTION rc_validate_lease_agreement_reciprocal_lineage();
+
+        CREATE OR REPLACE FUNCTION rc_validate_lease_addendum_reciprocal_lineage()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          IF NEW."SupersededEffectiveOn" IS NOT NULL
+             AND NEW."SupersededByAddendumId" IS NOT NULL
+             AND NOT EXISTS (
+              SELECT 1
+              FROM "LeaseAddenda" AS successor
+              WHERE successor."Id" = NEW."SupersededByAddendumId"
+                AND successor."PortfolioId" = NEW."PortfolioId"
+                AND successor."LeaseManagementId" = NEW."LeaseManagementId"
+                AND successor."SeriesPublicId" = NEW."SeriesPublicId"
+                AND successor."ReplacesAddendumId" = NEW."Id"
+                AND successor."EffectiveFromOn" = NEW."SupersededEffectiveOn") THEN
+            RAISE EXCEPTION 'LeaseAddendum supersession must point to its reciprocal replacement';
+          END IF;
+
+          IF NEW."SupersededEffectiveOn" IS NOT NULL
+             AND NEW."SupersededByAddendumId" IS NULL
+             AND NOT EXISTS (
+              SELECT 1
+              FROM "LeaseRenewalAddendumDecisions" AS decision
+              INNER JOIN "LeaseAgreements" AS renewal
+                ON renewal."Id" = decision."RenewalAgreementId"
+               AND renewal."PortfolioId" = decision."PortfolioId"
+               AND renewal."LeaseManagementId" = decision."LeaseManagementId"
+              WHERE decision."PortfolioId" = NEW."PortfolioId"
+                AND decision."LeaseManagementId" = NEW."LeaseManagementId"
+                AND decision."SourceAddendumSeriesPublicId" = NEW."SeriesPublicId"
+                AND decision."Decision" IN ('End', 'IncorporateIntoBase')
+                AND renewal."RenewsAgreementId" = NEW."BaseAgreementId"
+                AND renewal."FullyExecutedAtUtc" IS NOT NULL
+                AND renewal."GoverningFromOn" = NEW."SupersededEffectiveOn") THEN
+            RAISE EXCEPTION 'Terminal LeaseAddendum supersession requires an executed renewal decision';
+          END IF;
+
+          IF NEW."FullyExecutedAtUtc" IS NOT NULL
+             AND NEW."ReplacesAddendumId" IS NOT NULL
+             AND NOT EXISTS (
+              SELECT 1
+              FROM "LeaseAddenda" AS predecessor
+              WHERE predecessor."Id" = NEW."ReplacesAddendumId"
+                AND predecessor."PortfolioId" = NEW."PortfolioId"
+                AND predecessor."LeaseManagementId" = NEW."LeaseManagementId"
+                AND predecessor."SeriesPublicId" = NEW."SeriesPublicId"
+                AND predecessor."SupersededByAddendumId" = NEW."Id"
+                AND predecessor."SupersededEffectiveOn" = NEW."EffectiveFromOn")
+             AND NOT EXISTS (
+              SELECT 1
+              FROM "LeaseRenewalAddendumDecisions" AS decision
+              INNER JOIN "LeaseAgreements" AS renewal
+                ON renewal."Id" = decision."RenewalAgreementId"
+               AND renewal."PortfolioId" = decision."PortfolioId"
+               AND renewal."LeaseManagementId" = decision."LeaseManagementId"
+              INNER JOIN "LeaseAddenda" AS predecessor
+                ON predecessor."Id" = NEW."ReplacesAddendumId"
+               AND predecessor."PortfolioId" = NEW."PortfolioId"
+               AND predecessor."LeaseManagementId" = NEW."LeaseManagementId"
+               AND predecessor."SeriesPublicId" = NEW."SeriesPublicId"
+               AND predecessor."FullyExecutedAtUtc" IS NOT NULL
+               AND predecessor."ExecutedArtifactId" IS NOT NULL
+               AND predecessor."VoidedAtUtc" IS NULL
+               AND predecessor."DraftCanceledAtUtc" IS NULL
+               AND predecessor."SupersededEffectiveOn" IS NULL
+               AND predecessor."SupersededByAddendumId" IS NULL
+              WHERE decision."PortfolioId" = NEW."PortfolioId"
+                AND decision."LeaseManagementId" = NEW."LeaseManagementId"
+                AND decision."Decision" = 'ReissueAsAddendum'
+                AND decision."ReplacementAddendumId" = NEW."Id"
+                AND decision."SourceAddendumSeriesPublicId" = NEW."SeriesPublicId"
+                AND renewal."Id" = NEW."BaseAgreementId"
+                AND renewal."ChangeType" IN ('Renewal', 'MonthToMonth')
+                AND renewal."RenewsAgreementId" = predecessor."BaseAgreementId"
+                AND renewal."GoverningFromOn" = NEW."EffectiveFromOn"
+                AND predecessor."EffectiveFromOn" < renewal."GoverningFromOn"
+                AND (predecessor."EffectiveThroughOn" IS NULL
+                     OR predecessor."EffectiveThroughOn" >= renewal."GoverningFromOn")
+                AND renewal."IssuedAtUtc" IS NOT NULL
+                AND renewal."IssuedArtifactId" IS NOT NULL
+                AND renewal."VoidedAtUtc" IS NULL
+                AND renewal."DraftCanceledAtUtc" IS NULL) THEN
+            RAISE EXCEPTION 'Executed LeaseAddendum replacement requires reciprocal predecessor supersession';
+          END IF;
+
+          RETURN NULL;
+        END;
+        $function$;
+
+        CREATE CONSTRAINT TRIGGER "TR_LeaseAddenda_ValidateReciprocalLineage"
+          AFTER INSERT OR UPDATE ON "LeaseAddenda"
+          DEFERRABLE INITIALLY DEFERRED
+          FOR EACH ROW EXECUTE FUNCTION rc_validate_lease_addendum_reciprocal_lineage();
+        """;
+
+    public const string DropReciprocalLineageValidators = """
+        DROP TRIGGER IF EXISTS "TR_LeaseAddenda_ValidateReciprocalLineage" ON "LeaseAddenda";
+        DROP FUNCTION IF EXISTS rc_validate_lease_addendum_reciprocal_lineage();
+        DROP TRIGGER IF EXISTS "TR_LeaseAgreements_ValidateReciprocalLineage" ON "LeaseAgreements";
+        DROP FUNCTION IF EXISTS rc_validate_lease_agreement_reciprocal_lineage();
         """;
 
     public const string CreateChildFreezeAndSignerValidators = """
@@ -682,6 +837,26 @@ internal static class LeaseLegalSchemaSql
         CREATE TRIGGER "TR_SignatureAuditEvents_AppendOnly"
           BEFORE UPDATE OR DELETE ON "SignatureAuditEvents"
           FOR EACH ROW EXECUTE FUNCTION rc_reject_signature_audit_mutation();
+        """;
+
+    public const string CreateDocumentSourceVersionImmutability = """
+        CREATE OR REPLACE FUNCTION rc_reject_legal_document_source_version_mutation()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          RAISE EXCEPTION 'LegalDocumentSourceVersions are immutable';
+        END;
+        $function$;
+
+        CREATE TRIGGER "TR_LegalDocumentSourceVersions_Immutable"
+          BEFORE UPDATE OR DELETE ON "LegalDocumentSourceVersions"
+          FOR EACH ROW EXECUTE FUNCTION rc_reject_legal_document_source_version_mutation();
+        """;
+
+    public const string DropDocumentSourceVersionImmutability = """
+        DROP TRIGGER IF EXISTS "TR_LegalDocumentSourceVersions_Immutable" ON "LegalDocumentSourceVersions";
+        DROP FUNCTION IF EXISTS rc_reject_legal_document_source_version_mutation();
         """;
 
     public const string DropSignatureAuditAppendOnly = """

@@ -10,6 +10,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -29,11 +30,11 @@ public class NoticeDraftServiceTests : IDisposable
 
         result.CreatedCount.Should().Be(2);
         result.Drafts.Should().Contain(d =>
-            d.LeaseManagementId == near.Management.Id && d.NoticeType == "RenewalOffer");
+            d.LeaseManagementId == near.Management.Id && d.NoticeType == "lease-renewal-offer");
         result.Drafts.Should().Contain(d =>
-            d.LeaseManagementId == near.Management.Id && d.NoticeType == "MonthToMonthConversion");
+            d.LeaseManagementId == near.Management.Id && d.NoticeType == "month-to-month-offer");
         result.Drafts.Should().NotContain(d => d.LeaseManagementId == far.Management.Id);
-        result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
+        result.Drafts.Should().NotContain(d => d.NoticeType == "rent-reminder");
     }
 
     [Fact]
@@ -48,7 +49,7 @@ public class NoticeDraftServiceTests : IDisposable
                 RecipientTenantId = relationship.Tenant.Id,
                 LeaseManagementId = relationship.Management.Id,
                 TenantAccountId = relationship.Account.Id,
-                NoticeType = "MoveOutReminder",
+                NoticeType = "lease-non-renewal",
             });
 
         result.CreatedCount.Should().Be(1);
@@ -56,11 +57,11 @@ public class NoticeDraftServiceTests : IDisposable
             d.LeaseManagementId == relationship.Management.Id &&
             d.TenantAccountId == relationship.Account.Id &&
             d.RecipientTenantId == relationship.Tenant.Id &&
-            d.NoticeType == "MoveOutReminder");
+            d.NoticeType == "lease-non-renewal");
     }
 
     [Fact]
-    public async Task GenerateAsync_ForcedRenewalFallsBackQuicklyWhenLlmIsSlow()
+    public async Task GenerateAsync_ForcedRenewalUsesSuppliedTemplateWithoutCallingLlm()
     {
         var relationship = _fixture.SeedRelationship("Morgan", "Pierce", 1450m, 120);
         var slowLlm = new SlowLlmProvider();
@@ -72,7 +73,7 @@ public class NoticeDraftServiceTests : IDisposable
             new GenerateNoticeDraftsRequest
             {
                 LeaseManagementId = relationship.Management.Id,
-                NoticeType = "RenewalOffer",
+                NoticeType = "lease-renewal-offer",
             },
             timeout.Token);
         elapsed.Stop();
@@ -80,9 +81,9 @@ public class NoticeDraftServiceTests : IDisposable
         result.CreatedCount.Should().Be(1);
         result.Drafts.Should().ContainSingle(d =>
             d.LeaseManagementId == relationship.Management.Id &&
-            d.Subject.Contains("Lease renewal for", StringComparison.Ordinal));
-        slowLlm.ChatCalls.Should().Be(1);
-        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+            d.Subject == "Lease renewal offer");
+        slowLlm.ChatCalls.Should().Be(0);
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1));
     }
 
     [Fact]
@@ -97,7 +98,7 @@ public class NoticeDraftServiceTests : IDisposable
             TenantAccountId = relationship.Account.Id,
             RecipientTenantId = relationship.Tenant.Id,
             PropertyId = relationship.Property.Id,
-            NoticeType = "RenewalOffer",
+            NoticeType = "lease-renewal-offer",
             Status = "Draft",
             Subject = "Existing renewal draft",
             Body = "Existing body",
@@ -114,7 +115,7 @@ public class NoticeDraftServiceTests : IDisposable
             new GenerateNoticeDraftsRequest
             {
                 LeaseManagementId = relationship.Management.Id,
-                NoticeType = "RenewalOffer",
+                NoticeType = "lease-renewal-offer",
             });
 
         result.CreatedCount.Should().Be(0);
@@ -133,11 +134,11 @@ public class NoticeDraftServiceTests : IDisposable
 
         var result = await CreateService().GenerateAsync(
             1,
-            new GenerateNoticeDraftsRequest { NoticeType = "LateRentNotice" });
+            new GenerateNoticeDraftsRequest { NoticeType = "late-rent-late-fee" });
 
         result.CreatedCount.Should().Be(1);
         result.Drafts.Should().ContainSingle(d =>
-            d.LeaseManagementId == current.Management.Id && d.NoticeType == "LateRentNotice");
+            d.LeaseManagementId == current.Management.Id && d.NoticeType == "late-rent-late-fee");
         result.Drafts.Should().NotContain(d => d.LeaseManagementId == closed.Management.Id);
     }
 
@@ -148,7 +149,7 @@ public class NoticeDraftServiceTests : IDisposable
         var customized = new WorkspaceNoticeTemplateVersion
         {
             PortfolioId = 1,
-            SystemKey = "RenewalOffer",
+            SystemKey = "lease-renewal-offer",
             Version = 2,
             BasedOnSystemTemplateVersionId = 1,
             IsCustomized = true,
@@ -160,7 +161,7 @@ public class NoticeDraftServiceTests : IDisposable
         _fixture.Db.WorkspaceNoticeTemplateVersions.Add(customized);
         await _fixture.Db.SaveChangesAsync();
         var policy = await _fixture.Db.TenantNoticePolicies
-            .SingleAsync(candidate => candidate.PortfolioId == 1 && candidate.AutomationKey == "RenewalOffer");
+            .SingleAsync(candidate => candidate.PortfolioId == 1 && candidate.AutomationKey == "lease-renewal-offer");
         policy.WorkspaceNoticeTemplateVersionId = customized.Id;
         policy.UpdatedAtUtc = DateTime.UtcNow;
         await _fixture.Db.SaveChangesAsync();
@@ -171,7 +172,7 @@ public class NoticeDraftServiceTests : IDisposable
             new GenerateNoticeDraftsRequest
             {
                 RecipientTenantId = relationship.Tenant.Id,
-                NoticeType = "RenewalOffer",
+                NoticeType = "lease-renewal-offer",
             });
 
         var draft = result.Drafts.Should().ContainSingle().Which;
@@ -183,6 +184,11 @@ public class NoticeDraftServiceTests : IDisposable
     public async Task GenerateAsync_ManualRentReminderUsesRelationshipAgreementTerms()
     {
         var relationship = _fixture.SeedRelationship("Sam", "Rivera", 1500m, 300);
+        var rentCharge = _fixture.AddCharge(
+            relationship,
+            TenantLedgerEntryType.RentCharge,
+            1500m,
+            5);
 
         var result = await CreateService().GenerateAsync(
             1,
@@ -191,11 +197,12 @@ public class NoticeDraftServiceTests : IDisposable
                 RecipientTenantId = relationship.Tenant.Id,
                 LeaseManagementId = relationship.Management.Id,
                 TenantAccountId = relationship.Account.Id,
-                NoticeType = "RentReminder",
+                TenantLedgerEntryId = rentCharge.Id,
+                NoticeType = "rent-reminder",
             });
 
         var draft = result.Drafts.Should().ContainSingle().Which;
-        draft.NoticeType.Should().Be("RentReminder");
+        draft.NoticeType.Should().Be("rent-reminder");
         draft.LeaseManagementId.Should().Be(relationship.Management.Id);
         draft.TenantAccountId.Should().Be(relationship.Account.Id);
         draft.RecipientTenantId.Should().Be(relationship.Tenant.Id);
@@ -210,14 +217,14 @@ public class NoticeDraftServiceTests : IDisposable
 
         var first = await CreateService().GenerateAsync(1);
 
-        var reminder = first.Drafts.Should().ContainSingle(d => d.NoticeType == "RentReminder").Which;
+        var reminder = first.Drafts.Should().ContainSingle(d => d.NoticeType == "rent-reminder").Which;
         reminder.TenantLedgerEntryId.Should().Be(charge.Id);
         reminder.TenantAccountId.Should().Be(relationship.Account.Id);
         reminder.TriggerDate.Date.Should().Be(charge.DueOn!.Value.ToDateTime(TimeOnly.MinValue));
 
         _fixture.Db.ChangeTracker.Clear();
         var second = await CreateService().GenerateAsync(1);
-        second.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
+        second.Drafts.Should().NotContain(d => d.NoticeType == "rent-reminder");
     }
 
     [Fact]
@@ -236,7 +243,7 @@ public class NoticeDraftServiceTests : IDisposable
                 LeaseManagementId = target.Management.Id,
                 TenantAccountId = target.Account.Id,
                 TenantLedgerEntryId = targetCharge.Id,
-                NoticeType = "RentReminder",
+                NoticeType = "rent-reminder",
             });
 
         var draft = result.Drafts.Should().ContainSingle().Which;
@@ -259,7 +266,7 @@ public class NoticeDraftServiceTests : IDisposable
             new GenerateNoticeDraftsRequest
             {
                 TenantLedgerEntryId = rent.Id,
-                NoticeType = "LateRentNotice",
+                NoticeType = "late-rent-late-fee",
             });
 
         var draft = result.Drafts.Should().ContainSingle().Which;
@@ -283,7 +290,7 @@ public class NoticeDraftServiceTests : IDisposable
                 RecipientTenantId = target.Tenant.Id,
                 LeaseManagementId = target.Management.Id,
                 TenantAccountId = target.Account.Id,
-                NoticeType = "LateRentNotice",
+                NoticeType = "late-rent-late-fee",
             });
 
         var draft = result.Drafts.Should().ContainSingle().Which;
@@ -307,7 +314,7 @@ public class NoticeDraftServiceTests : IDisposable
             TenantLedgerEntryId = charge.Id,
             RecipientTenantId = relationship.Tenant.Id,
             PropertyId = relationship.Property.Id,
-            NoticeType = "RentReminder",
+            NoticeType = "rent-reminder",
             Status = "Approved",
             Subject = "Existing reminder",
             Body = "Existing body",
@@ -324,7 +331,7 @@ public class NoticeDraftServiceTests : IDisposable
             new GenerateNoticeDraftsRequest
             {
                 TenantLedgerEntryId = charge.Id,
-                NoticeType = "RentReminder",
+                NoticeType = "rent-reminder",
             });
 
         result.CreatedCount.Should().Be(0);
@@ -356,6 +363,7 @@ public class NoticeDraftServiceTests : IDisposable
                 .Options;
             Db = new FixtureDbContext(options);
             Db.Database.EnsureCreated();
+            Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
             Db.Portfolios.Add(new Portfolio
             {
@@ -378,7 +386,7 @@ public class NoticeDraftServiceTests : IDisposable
                 ConcurrencyStamp = Guid.NewGuid().ToString(),
                 CreatedAt = DateTime.UtcNow,
             });
-            Db.DocumentTemplates.Add(new DocumentTemplate
+            var agreementTemplate = new DocumentTemplate
             {
                 Id = 1,
                 PortfolioId = 1,
@@ -386,42 +394,53 @@ public class NoticeDraftServiceTests : IDisposable
                 Version = 1,
                 CreatedAtUtc = DateTime.UtcNow,
                 UpdatedAtUtc = DateTime.UtcNow,
+            };
+            Db.DocumentTemplates.Add(agreementTemplate);
+            Db.LegalDocumentSourceVersions.Add(new LegalDocumentSourceVersion
+            {
+                Id = 1,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = 1,
+                SourceKind = LegalDocumentSourceKind.AuthoredTemplateSnapshot,
+                BusinessKey = "template:1:v1",
+                DocumentTemplate = agreementTemplate,
+                DocumentTemplateVersion = 1,
+                RendererKey = "lease-agreement-overlay",
+                RendererVersion = 1,
+                SnapshotPayload = "{}",
+                CreatedAtUtc = DateTime.UtcNow,
+                CreatedByUserId = 1,
             });
             Db.SaveChanges();
 
             var now = DateTime.UtcNow;
             var automationKeys = new[]
             {
-                "RenewalOffer",
-                "MonthToMonthConversion",
-                "MoveOutReminder",
-                "LateRentNotice",
-                "RentReminder",
+                "lease-renewal-offer",
+                "month-to-month-offer",
+                "lease-non-renewal",
+                "late-rent-late-fee",
+                "rent-reminder",
             };
+            var suppliedTemplates = Db.SystemNoticeTemplateVersions
+                .AsNoTracking()
+                .ToDictionary(template => template.SystemKey);
             for (var index = 0; index < automationKeys.Length; index++)
             {
-                var templateId = index + 1;
+                // IDs 1-5 are the deterministic Rental Command supplied-template baseline.
+                // Keep these scenario-specific fixture templates outside that immutable range.
+                var templateId = index + 101;
                 var automationKey = automationKeys[index];
-                Db.SystemNoticeTemplateVersions.Add(new SystemNoticeTemplateVersion
-                {
-                    Id = templateId,
-                    SystemKey = automationKey,
-                    Version = 1,
-                    Classification = NoticeClassification.Operational,
-                    Subject = $"{automationKey} for {{{{tenant_name}}}}",
-                    Body = "Hi {{tenant_name}}, this notice concerns {{property_address}} and {{portfolio_name}}.",
-                    Provenance = "canonical notice test fixture",
-                    PublishedAtUtc = now,
-                });
+                var suppliedTemplate = suppliedTemplates[automationKey];
                 Db.WorkspaceNoticeTemplateVersions.Add(new WorkspaceNoticeTemplateVersion
                 {
                     Id = templateId,
                     PortfolioId = 1,
                     SystemKey = automationKey,
                     Version = 1,
-                    BasedOnSystemTemplateVersionId = templateId,
-                    Subject = $"{automationKey} for {{{{tenant_name}}}}",
-                    Body = "Hi {{tenant_name}}, this notice concerns {{property_address}} and {{portfolio_name}}.",
+                    BasedOnSystemTemplateVersionId = suppliedTemplate.Id,
+                    Subject = suppliedTemplate.Subject,
+                    Body = suppliedTemplate.Body,
                     CreatedByUserId = 1,
                     CreatedAtUtc = now,
                 });
@@ -500,6 +519,10 @@ public class NoticeDraftServiceTests : IDisposable
                 CreatedByUserId = 1,
                 RowVersion = Guid.NewGuid(),
             };
+            if (lifecycle == "Closed")
+            {
+                management.PossessionReturnedAtUtc = now.AddDays(-1);
+            }
             var party = new LeaseManagementParty
             {
                 Id = id,
@@ -533,8 +556,9 @@ public class NoticeDraftServiceTests : IDisposable
                 Currency = "USD",
                 TermsSchemaVersion = 1,
                 TermsPayload = "{}",
-                DocumentTemplateId = 1,
-                DocumentTemplateVersion = 1,
+                DocumentSourceVersionId = 1,
+                IssuedAtUtc = now.AddMonths(-6),
+                FullyExecutedAtUtc = now.AddMonths(-6),
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
                 CreatedByUserId = 1,

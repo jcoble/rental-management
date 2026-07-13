@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -34,15 +37,15 @@ public class SecurityDepositService : ISecurityDepositService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<SecurityDepositAccountResponse>> ListAsync(int portfolioId, int? leaseManagementId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SecurityDepositAccountResponse>> ListAsync(WorkspaceReadScope scope, int? leaseManagementId, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, leaseManagementId, new ListQuery(), ct);
+        var page = await ListPageAsync(scope, leaseManagementId, new ListQuery(), ct);
         return page.Items;
     }
 
-    public async Task<SecurityDepositListResponse> ListPageAsync(int portfolioId, int? leaseManagementId, ListQuery query, CancellationToken ct = default)
+    public async Task<SecurityDepositListResponse> ListPageAsync(WorkspaceReadScope scope, int? leaseManagementId, ListQuery query, CancellationToken ct = default)
     {
-        var q = BuildAccountQuery(portfolioId);
+        var q = BuildAccountQuery(scope);
 
         if (leaseManagementId.HasValue)
             q = q.Where(row => row.LeaseManagementId == leaseManagementId.Value);
@@ -83,13 +86,14 @@ public class SecurityDepositService : ISecurityDepositService
         };
     }
 
-    public Task<SecurityDepositAccountResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<SecurityDepositAccountResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        return BuildAccountQuery(portfolioId).SingleOrDefaultAsync(row => row.Id == id, ct);
+        return BuildAccountQuery(scope).SingleOrDefaultAsync(row => row.Id == id, ct);
     }
 
-    internal IQueryable<SecurityDepositAccountResponse> BuildAccountQuery(int portfolioId)
+    internal IQueryable<SecurityDepositAccountResponse> BuildAccountQuery(WorkspaceReadScope scope)
     {
+        var authorizedProperties = AuthorizedProperties(scope);
         return
             from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
             join account in _db.TenantAccounts.AsNoTracking()
@@ -104,7 +108,8 @@ public class SecurityDepositService : ISecurityDepositService
             join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            where balance.PortfolioId == portfolioId
+            where balance.PortfolioId == scope.PortfolioId
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
             select new SecurityDepositAccountResponse
             {
                 Id = deposit.Id,
@@ -129,8 +134,9 @@ public class SecurityDepositService : ISecurityDepositService
             };
     }
 
-    public async Task<byte[]?> GetMoveOutStatementAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<byte[]?> GetMoveOutStatementAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
+        var authorizedProperties = AuthorizedProperties(scope);
         // The statement header, relationship, legal agreement, party, property, and derived
         // deposit totals are deliberately projected by one translated SQL statement. Do not
         // replace this with navigation loading or per-row lookups.
@@ -156,7 +162,9 @@ public class SecurityDepositService : ISecurityDepositService
                 equals new { unit.PortfolioId, unit.Id }
             join portfolio in _db.Portfolios.AsNoTracking()
                 on deposit.PortfolioId equals portfolio.Id
-            where deposit.Id == id && deposit.PortfolioId == portfolioId
+            where deposit.Id == id
+                && deposit.PortfolioId == scope.PortfolioId
+                && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
             select new
             {
                 portfolio.Name,
@@ -199,8 +207,9 @@ public class SecurityDepositService : ISecurityDepositService
         // SQL so the legal statement never lists a deduction that has been fully undone.
         var deductions = await _db.SecurityDepositEntries
             .AsNoTracking()
-            .Where(entry => entry.PortfolioId == portfolioId
+            .Where(entry => entry.PortfolioId == scope.PortfolioId
                 && entry.SecurityDepositAccountId == id
+                && AuthorizedDepositTargets(scope).Any(target => target.Id == entry.SecurityDepositAccountId)
                 && entry.EntryType == SecurityDepositEntryType.Deduction)
             .Select(entry => new
             {
@@ -220,7 +229,7 @@ public class SecurityDepositService : ISecurityDepositService
             .Select(entry => new DepositDeduction(entry.Description, entry.NetAmount, null))
             .ToListAsync(ct);
 
-        var photos = await LoadDepositPhotosAsync(portfolioId, id, ct);
+        var photos = await LoadDepositPhotosAsync(scope, id, ct);
 
         var propertyLine =
             $"{header.PropertyName} — {header.AddressLine1}, {header.City}, {header.State} {header.PostalCode}"
@@ -254,13 +263,17 @@ public class SecurityDepositService : ISecurityDepositService
     /// Loads decoded image bytes for photos attached to this deposit account (StoredFile rows with
     /// EntityType=SecurityDepositAccount). Best-effort: a file that fails to load is skipped, never fatal.
     /// </summary>
-    private async Task<IReadOnlyList<byte[]>> LoadDepositPhotosAsync(int portfolioId, int depositId, CancellationToken ct)
+    private async Task<IReadOnlyList<byte[]>> LoadDepositPhotosAsync(
+        WorkspaceReadScope scope,
+        int depositId,
+        CancellationToken ct)
     {
         var files = await _db.StoredFiles
             .AsNoTracking()
-            .Where(f => f.PortfolioId == portfolioId
+            .Where(f => f.PortfolioId == scope.PortfolioId
                         && f.EntityType == DepositEntityType
                         && f.EntityId == depositId
+                        && AuthorizedDepositTargets(scope).Any(target => target.Id == f.EntityId)
                         && f.DeletedAt == null
                         && f.ContentType.StartsWith("image/"))
             .OrderBy(f => f.UploadedAt)
@@ -285,5 +298,36 @@ public class SecurityDepositService : ISecurityDepositService
         }
 
         return photos;
+    }
+
+    /// <summary>
+    /// Staff deposit reads admit either operational deposit-management authority or the narrower
+    /// leasing deposit-read capability. Both branches retain the full current-session and selected-
+    /// property proof inside the caller's translated SQL.
+    /// </summary>
+    private IQueryable<Property> AuthorizedProperties(WorkspaceReadScope scope)
+    {
+        var properties = _db.Properties.AsNoTracking();
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        return properties
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyDepositsManage, utcNow)
+            .Union(properties.WhereAuthorized(
+                _db, scope, CapabilityKeys.LeasingDepositsRead, utcNow));
+    }
+
+    private IQueryable<SecurityDepositAccount> AuthorizedDepositTargets(WorkspaceReadScope scope)
+    {
+        var authorizedProperties = AuthorizedProperties(scope);
+        return
+            from deposit in _db.SecurityDepositAccounts.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { deposit.PortfolioId, Id = deposit.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            where deposit.PortfolioId == scope.PortfolioId
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
+            select deposit;
     }
 }

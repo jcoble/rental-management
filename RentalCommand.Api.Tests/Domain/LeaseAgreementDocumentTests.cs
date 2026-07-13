@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using PdfSharp.Pdf.Content;
 using PdfSharp.Pdf.IO;
 using QuestPDF.Fluent;
@@ -11,7 +13,9 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -69,9 +73,9 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         _db.SaveChanges();
 
         _renderer = new LeaseAgreementRenderer(
-            _db,
             _storage,
             new LeaseAgreementPdfGenerator(),
+            new LegalDocumentSourceVersionTestResolver(_db),
             NullLogger<LeaseAgreementRenderer>.Instance);
     }
 
@@ -86,11 +90,12 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     {
         var fixture = await SeedExecutedAgreementGraphAsync();
 
-        var rendered = await _renderer.RenderAsync(PortfolioId, fixture.RenderData);
+        var rendered = await _renderer.RenderAsync(PortfolioId, ActorUserId, fixture.RenderData);
 
         Encoding.ASCII.GetString(rendered.PdfBytes, 0, 4).Should().Be("%PDF");
-        rendered.DocumentTemplateId.Should().BeNull();
-        rendered.DocumentTemplateVersion.Should().BeNull();
+        rendered.DocumentSourceVersionId.Should().BePositive();
+        (await _db.LegalDocumentSourceVersions.FindAsync(rendered.DocumentSourceVersionId))!
+            .SourceKind.Should().Be(LegalDocumentSourceKind.BuiltInRenderer);
         ExtractPdfText(rendered.PdfBytes).Should().Contain("Residential Lease Agreement");
     }
 
@@ -100,16 +105,71 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         var fixture = await SeedExecutedAgreementGraphAsync();
         var template = await SeedActiveOverlayTemplateAsync(fixture.Property.Id);
 
-        var rendered = await _renderer.RenderAsync(PortfolioId, fixture.RenderData);
+        var rendered = await _renderer.RenderAsync(PortfolioId, ActorUserId, fixture.RenderData);
 
-        rendered.DocumentTemplateId.Should().Be(template.Id);
-        rendered.DocumentTemplateVersion.Should().Be(template.Version);
+        var source = (await _db.LegalDocumentSourceVersions.FindAsync(rendered.DocumentSourceVersionId))!;
+        source.DocumentTemplateId.Should().Be(template.Id);
+        source.DocumentTemplateVersion.Should().Be(template.Version);
+        source.BusinessKey.Should().Be($"template:{template.Id}:v{template.Version}");
+        using var snapshot = JsonDocument.Parse(source.SnapshotPayload);
+        snapshot.RootElement.GetProperty("documentTemplateId").GetInt32().Should().Be(template.Id);
+        snapshot.RootElement.GetProperty("fields").GetArrayLength().Should().Be(2);
         var text = ExtractPdfText(rendered.PdfBytes);
         text.Should().Contain("Custom Landlord Lease");
         text.Should().Contain("Marcus");
         text.Should().Contain("Williams");
         text.Should().Contain("$1,450.00");
         text.Should().NotContain("Residential Lease Agreement");
+    }
+
+    [Fact]
+    public async Task RenderExactAsync_ImportedSourceRejectsBytesThatDoNotMatchImmutableArtifactHash()
+    {
+        const int sourceVersionId = 37;
+        const string storagePath = "immutable/imported-lease.pdf";
+        var admittedBytes = "%PDF-admitted-source"u8.ToArray();
+        var alteredBytes = "%PDF-altered-source"u8.ToArray();
+        var admittedHash = Convert.ToHexString(SHA256.HashData(admittedBytes)).ToLowerInvariant();
+        var source = new ResolvedExactLegalDocumentSourceVersion(
+            sourceVersionId,
+            LegalDocumentSourceKind.ImportedExternalDocument,
+            "imported:lease:37",
+            RendererKey: null,
+            RendererVersion: null,
+            SnapshotPayload: "{}",
+            SourceStoredFileId: 41,
+            SourceLegalDocumentArtifactId: 43,
+            SourceContentSha256: admittedHash,
+            SourceArtifactContentSha256: admittedHash,
+            SourceStoragePath: storagePath);
+        var sourceVersions = new Mock<ILegalDocumentSourceVersionResolver>(MockBehavior.Strict);
+        sourceVersions.Setup(resolver => resolver.ResolveExactAsync(
+                PortfolioId, sourceVersionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(source);
+        var storage = new Mock<IFileStorage>(MockBehavior.Strict);
+        storage.Setup(files => files.DownloadAsync(storagePath, It.IsAny<CancellationToken>()))
+            .Returns(() => Task.FromResult<Stream>(new MemoryStream(alteredBytes)));
+        var renderer = new LeaseAgreementRenderer(
+            storage.Object,
+            Mock.Of<ILeaseAgreementPdfGenerator>(),
+            sourceVersions.Object,
+            NullLogger<LeaseAgreementRenderer>.Instance);
+        var renderData = new LeaseAgreementRenderData
+        {
+            PropertyId = 5,
+            AgreementNumber = "A-37",
+            TermStartOn = new DateOnly(2026, 8, 1),
+            BaseRentAmount = 1450m,
+            SecurityDepositObligation = 1450m,
+            LateFeeAmount = 50m,
+            RentDueDay = 1,
+        };
+
+        var action = () => renderer.RenderExactAsync(
+            PortfolioId, sourceVersionId, renderData, () => admittedBytes);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*bytes do not match its immutable content hash*");
     }
 
     [Fact]
@@ -306,7 +366,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     {
         var fixture = await SeedExecutedAgreementGraphAsync(yearBuilt: yearBuilt);
 
-        var rendered = await _renderer.RenderAsync(PortfolioId, fixture.RenderData);
+        var rendered = await _renderer.RenderAsync(PortfolioId, ActorUserId, fixture.RenderData);
         var text = ExtractPdfText(rendered.PdfBytes);
 
         if (expected)
@@ -415,6 +475,11 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId,
+                ActorUserId,
+                now,
+                "lease-agreement-document-test"),
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,
@@ -504,6 +569,9 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             ContentType = file.ContentType,
             ByteLength = file.FileSize,
             ContentSha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            LegalIssuanceFingerprint = kind == LegalDocumentArtifactKind.IssuedAgreement
+                ? new string('c', 64)
+                : null,
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
         };

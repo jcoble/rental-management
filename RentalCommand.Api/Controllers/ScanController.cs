@@ -1,5 +1,4 @@
 using System.Linq.Expressions;
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,8 +18,8 @@ using RentalCommand.Data.Documents;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Upload-and-scan intake endpoints. All routes are scoped to the caller's portfolio
-/// via the JWT <c>portfolioId</c> claim — no <c>{portfolioId}</c> route parameter.
+/// Upload-and-scan intake endpoints. All routes are scoped to the caller's server-validated
+/// workspace context — no <c>{portfolioId}</c> route parameter.
 /// </summary>
 [ApiController]
 [Route("api/v1/scans")]
@@ -899,18 +898,16 @@ public class ScanController : ManagementControllerBase
             || preparation.Command is null)
             return BadRequest(new { error = preparation.Error ?? "Scan confirmation request is invalid." });
 
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var authSessionId)
-            || !int.TryParse(User.FindFirstValue("ctx"), out var accessContextId)
-            || !long.TryParse(User.FindFirstValue("ar"), out var accessRevision))
+        if (!TryGetActiveAccessContext(out var active))
             return Forbid();
         var operationDigest = Convert.ToHexString(SHA256.HashData(
                 Encoding.UTF8.GetBytes(body.ClientOperationId.Trim())))
             .ToLowerInvariant();
         var command = preparation.Command with
         {
-            AuthSessionId = authSessionId,
-            AccessContextId = accessContextId,
-            ExpectedAccessRevision = accessRevision,
+            AuthSessionId = active.SessionId,
+            AccessContextId = active.AccessContextId,
+            ExpectedAccessRevision = active.AccessRevision,
             DeliveryIdempotencyKey = $"scan-confirm:{portfolioId}:{id}:{operationDigest}",
         };
 

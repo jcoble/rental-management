@@ -13,8 +13,10 @@ public static class NoticeMergeFields
     public const string LeaseEndDate = "lease_end_date";
     public const string RentAmount = "rent_amount";
     public const string RentDueDate = "rent_due_date";
+    public const string RenewalStartDate = "renewal_start_date";
     public const string OverdueAmount = "overdue_amount";
     public const string LateFeeAmount = "late_fee_amount";
+    public const string Today = "today";
     public const string LandlordName = "landlord_name";
     public const string PortfolioName = "portfolio_name";
 
@@ -24,14 +26,15 @@ public static class NoticeMergeFields
     public static IReadOnlyList<string> ForType(string noticeType) => noticeType switch
     {
         "rent-reminder" => [.. Common, RentAmount, RentDueDate],
-        "lease-renewal-offer" => [.. Common, LeaseStartDate, LeaseEndDate, RentAmount],
+        "lease-renewal-offer" => [.. Common, LeaseStartDate, LeaseEndDate, RenewalStartDate, RentAmount],
         "month-to-month-offer" => [.. Common, LeaseEndDate, RentAmount],
         "lease-non-renewal" => [.. Common, LeaseEndDate],
-        "late-rent-late-fee" => [.. Common, OverdueAmount, RentDueDate, LateFeeAmount],
+        "late-rent-late-fee" => [.. Common, OverdueAmount, RentDueDate, LateFeeAmount, Today],
         _ => Common,
     };
 
     public static IReadOnlyList<string> All =>
         [TenantName, PropertyAddress, UnitNumber, LeaseStartDate, LeaseEndDate,
-         RentAmount, RentDueDate, OverdueAmount, LateFeeAmount, LandlordName, PortfolioName];
+         RentAmount, RentDueDate, RenewalStartDate, OverdueAmount, LateFeeAmount, Today,
+         LandlordName, PortfolioName];
 }

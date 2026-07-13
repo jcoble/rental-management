@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -22,12 +23,18 @@ public class DemoDataSeeder
     private readonly RentalCommandDbContext _db;
     private readonly ILogger<DemoDataSeeder> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly ILegalDocumentSourceVersionResolver _sourceVersions;
 
-    public DemoDataSeeder(RentalCommandDbContext db, ILogger<DemoDataSeeder> logger, TimeProvider timeProvider)
+    public DemoDataSeeder(
+        RentalCommandDbContext db,
+        ILogger<DemoDataSeeder> logger,
+        TimeProvider timeProvider,
+        ILegalDocumentSourceVersionResolver sourceVersions)
     {
         _db = db;
         _logger = logger;
         _timeProvider = timeProvider;
+        _sourceVersions = sourceVersions;
     }
 
     /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
@@ -337,7 +344,16 @@ public class DemoDataSeeder
 
         // ── 5. Canonical lease, agreement, account, and ledger graph ──────────────────
         var leaseSeed = await CanonicalDemoLeaseSeeder.SeedAsync(
-            _db, portfolioId, actorUserId, currency, now, occupiedUnits, vacantUnits, tenants, ct);
+            _db,
+            _sourceVersions,
+            portfolioId,
+            actorUserId,
+            currency,
+            now,
+            occupiedUnits,
+            vacantUnits,
+            tenants,
+            ct);
         var activeLeaseManagements = leaseSeed.ActiveManagements;
 
         // ── 8. Expenses (~35) ─────────────────────────────────────────────────────────

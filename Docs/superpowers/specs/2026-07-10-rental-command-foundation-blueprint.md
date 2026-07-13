@@ -103,6 +103,7 @@ Users do not navigate through every node. A global payment, application, work or
 | TenantAccount | Continuous financial account for the LeaseManagement episode | “Tenant account” |
 | Workspace role | Job performed inside the management business | Team role |
 | Job assignment | One role profile plus its property/work scope for a team member | Team access and responsibility |
+| Work-order responsibility | One effective-dated primary or collaborator assignment linking a WorkOrder to an exact team job assignment | Technician assignment and history |
 | Relationship access | Records someone owns or occupies | Owner portal or Tenant portal access |
 | Experience | Purpose-built application shell | Management, Leasing, Maintenance, Owner, Tenant |
 
@@ -364,6 +365,16 @@ One person may hold Leasing Agent for Property A and Maintenance Technician for 
 - On revision change, connected clients suspend mutations, refresh their access envelope, rebuild the shell, remove unauthorized routes, purge affected caches/files, reconnect realtime, and discard invalid pending navigation intents.
 - A disconnected device cannot be forced to forget data already displayed. Restricted mobile caches therefore contain the minimum projection, are encrypted and short-lived, and sensitive access instructions are fetched just in time where possible. Every queued mutation is reauthorized by the server at sync time.
 
+### Work-order responsibility schema and authorization
+
+- `WorkOrderResponsibility` is an effective-dated, normalized link from one WorkOrder to one `WorkspaceMembership` and the exact `MembershipRoleAssignment` that supplies Maintenance Technician capability and `AssignedWorkOrders` scope. It records `Primary` or `Collaborator`, assigned/ended actor context, reason, and PostgreSQL wall-clock timestamps; no display name, email, or mutable user label is an authorization key.
+- A WorkOrder may have zero or one current primary and multiple current collaborators. Reassignment, promotion, demotion, and unassignment close the current row and insert a new row so responsibility history is never overwritten or deleted.
+- Composite foreign keys prove WorkOrder, Property, Portfolio, membership, and role assignment agree. Partial unique indexes enforce one current primary and one current responsibility per member/WorkOrder; an effective-period exclusion prevents overlapping history for that member/WorkOrder.
+- Assignment and every later read or mutation revalidate the referenced membership and the same effective role-assignment row. The row must supply the requested `maintenance.assigned-work.*` capability and `AssignedWorkOrders` scope; capability from one assignment can never combine with responsibility or Property scope from another.
+- Workspace Administrators and in-scope Property Managers assign or reassign existing eligible members through one atomic command. It locks the WorkOrder and affected access contexts in deterministic order, reauthorizes the actor against the WorkOrder Property, closes/inserts responsibility rows, advances every affected technician `AccessRevision` exactly once, and stages audit, outbox, realtime, and cache invalidation in the same transaction. Receipt replay reauthorizes the actor before returning a stored result.
+- `WorkOrderConversationLink`, normalized WorkOrder attachment links, and time/material/status attribution join back to the WorkOrder and responsible membership/role assignment. A conversation cannot be shared across WorkOrders, and generic Portfolio-level document or conversation access never substitutes for assignment authorization.
+- Once this schema lands, it cleanly replaces the current fail-closed WorkOrder authorization placeholder and old Portfolio-only service/controller signatures. There is no overload bridge, display-name fallback, broad staff shortcut, or dual authorization path.
+
 ### Active experience
 
 Each membership has a default experience. A valid deep link may select another authorized experience; otherwise the last authorized choice is restored, then the fallback order is Management, Leasing, Maintenance, Owner, Tenant. `Switch experience` appears only when more than one experience is available. A sole landlord with Administrator and Owner access enters Management without being asked.
@@ -418,6 +429,8 @@ For Maintenance Technicians:
 - Profile
 
 A technician opens a purpose-built assignment containing the problem, address/Unit, safe access instructions, permitted contact, schedule, notes, photos, time, materials, and status. The management Unit workspace and management DTO are never exposed.
+
+Technician list, detail, conversation, attachment, time, material, and status routes all begin from the same assignment-scoped SQL predicate. Their DTOs omit owner/financial data, costs, expenses, vendor administration, raw Tenant/lease identifiers, scan extraction data, and unrelated documents. Technicians may perform only explicitly permitted operational status transitions, record their own time/material quantities, add assignment photos, and participate in the uniquely linked WorkOrder conversation; they cannot create/delete WorkOrders, schedule or reassign staff, dispatch vendors, edit priority/financial fields, or browse unrelated Property/Unit records.
 
 ### Owner
 
@@ -673,6 +686,7 @@ Use one visible `How this works` link at a section/header and focused field help
 - Section lists use dedicated server-paged endpoints.
 - All filtering, joins, grouping, aggregation, sorting, authorization scope, and paging execute DB-side as one translated SQL statement or database view.
 - No client-side Unit/lease joins, allowed-ID materialization, per-row authorization, N+1 follow-ups, or in-memory worker candidate filtering.
+- WorkOrder list/detail/mutation and realtime-recipient queries use independent management-Property and technician-responsibility `EXISTS` branches. Each branch requires one effective role-assignment row to supply both capability and matching scope before search, sort, count, projection, or paging.
 - Engine candidate selection, recurrence eligibility, retry eligibility, ordering, paging, and atomic claiming execute DB-side.
 - Outbox delivery uses atomic claim/update semantics and idempotent handlers.
 - Notification recipient resolution returns the final eligible deduplicated users/destinations directly from SQL.
@@ -713,8 +727,10 @@ Implementation uses one active isolated integration worktree at a time with chec
 
 ### Checkpoint 4 — maintenance and access-revocation slice
 
-- Build management work orders/inspections/turnover, Technician assignments and restricted projections, reassignment, conversations, photos, time/materials, and canonical per-experience routes.
+- Add effective `WorkOrderResponsibility` with exact-role-assignment composite keys, primary/collaborator uniqueness, non-overlapping effective history, assignment-safe conversation/attachment links, and time/material/status attribution.
+- Build management work orders/inspections/turnover, Technician assignment-only queries and restricted projections, atomic reassignment, conversations, photos, time/materials, and canonical per-experience routes.
 - Prove role/scope revision, connected cache/stack/realtime purge, offline TTL/re-sync rejection, and safe deep-link fallback on both clients.
+- Replace the fail-closed WorkOrder authorization placeholder, Portfolio-only signatures, and generic broad-staff WorkOrder document/conversation access; do not retain compatibility overloads or route aliases.
 - Delete embedded duplicate Unit/global detail implementations.
 - Route work receipts, estimates, photos, and inspection documents through assignment-safe contextual capture.
 
@@ -773,6 +789,7 @@ Implementation uses one active isolated integration worktree at a time with chec
 - Overlapping Unit occupancy cannot commit.
 - Duplicate monthly charges and provider transactions cannot commit.
 - Expense allocations balance exactly and cannot partially commit apart from the expense.
+- Concurrent responsibility changes cannot produce two current primaries, duplicate current member responsibility, overlapping history, cross-Portfolio links, or a partially applied reassignment/access-revision/audit/outbox result.
 - Injected exceptions cannot leave business data without audit/ledger/outbox companions.
 - Reconciliation identifies missing provider payments and missing contractual charges.
 - Parallel Engine workers claim bounded candidates once; no eligibility or retry selection occurs in memory.
@@ -783,7 +800,8 @@ Implementation uses one active isolated integration worktree at a time with chec
 - One member can hold two differently scoped job assignments without capability/scope leakage between them.
 - Property Manager can operate and reconcile money for assigned properties but cannot connect/remove banks, change payouts/integrations, disburse funds, change Team/security/billing, or expand scope.
 - Leasing Agent cannot retrieve accounting/owner data.
-- Technician can retrieve and update only assigned-work context.
+- Technician can retrieve and update only WorkOrders having an effective responsibility tied to the same effective role assignment that supplies the requested assigned-work capability; mixed-role assignments never union capability and scope.
+- Unassigned, expired, suspended, revoked, cross-Property, cross-Portfolio, unrelated-conversation, and unrelated-attachment decoys return no technician data, and reassignment invalidates the old and new assignees' access revisions immediately.
 - Owner access is limited by effective ownership and OwnerUserAccess; one co-owner cannot infer another owner’s private financial/contact data.
 - Owner and Tenant relationships do not grant management access and never appear as Team roles unless that login separately has membership.
 - Direct URL/API requests and revoked access fail safely; connected clients purge immediately, while disconnected clients use minimum encrypted short-TTL projections and every later sync is reauthorized.
@@ -819,6 +837,7 @@ Implementation uses one active isolated integration worktree at a time with chec
 ### Query and accessibility proof
 
 - Generated SQL proves scope, filter, join, grouping, sorting, paging, candidate selection, and recipient resolution occur DB-side.
+- PostgreSQL adversarial tests prove WorkOrder responsibility composite keys, partial uniqueness, effective-period exclusion, atomic replay/concurrency, same-assignment authorization, restricted-column projection, query budgets, existence-safe detail/mutations, and realtime recipient selection.
 - Server-searched remote selectors never preload the first 100/200 records and pretend that is the data set.
 - Web is verified at its intended desktop widths plus a narrow fallback sanity pass; Flutter is verified on small phones, dynamic text, screen readers, keyboard/focus where applicable, loading, empty, retry, 403, revoked, and stale/offline states.
 

@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
-using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
@@ -39,19 +38,22 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
     private readonly RentalCommandDbContext _db;
     private readonly IRlsExecutionContext _rls;
     private readonly TimeProvider _timeProvider;
-    private readonly INotificationFoundationService? _notificationFoundation;
+    private readonly IInitialWorkspaceAuthorityProvisioner _workspaceAuthority;
+    private readonly INotificationFoundationService _notificationFoundation;
 
     public CanonicalAccountBootstrapService(
         UserManager<ApplicationUser> users,
         RentalCommandDbContext db,
         IRlsExecutionContext rls,
         TimeProvider timeProvider,
-        INotificationFoundationService? notificationFoundation = null)
+        IInitialWorkspaceAuthorityProvisioner workspaceAuthority,
+        INotificationFoundationService notificationFoundation)
     {
         _users = users;
         _db = db;
         _rls = rls;
         _timeProvider = timeProvider;
+        _workspaceAuthority = workspaceAuthority;
         _notificationFoundation = notificationFoundation;
     }
 
@@ -113,66 +115,9 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         _db.Portfolios.Add(portfolio);
         await _db.SaveChangesAsync(ct);
 
-        var owner = new OwnerEntity
-        {
-            PortfolioId = portfolio.Id,
-            OwnerEntityType = OwnerEntityType.Person,
-            Name = string.IsNullOrWhiteSpace(user.DisplayName) ? email.Split('@')[0] : user.DisplayName,
-            Email = email,
-            IsPrimary = true,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var context = new WorkspaceAccessContext
-        {
-            User = user,
-            PortfolioId = portfolio.Id,
-            Status = WorkspaceAccessContextStatus.Active,
-            LastAuthorizedExperience = WorkspaceExperience.Management,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var membership = new WorkspaceMembership
-        {
-            AccessContext = context,
-            PortfolioId = portfolio.Id,
-            Status = WorkspaceMembershipStatus.Active,
-            DefaultExperience = WorkspaceExperience.Management,
-            EffectiveFromUtc = now,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var administratorAssignment = new MembershipRoleAssignment
-        {
-            WorkspaceMembership = membership,
-            PortfolioId = portfolio.Id,
-            RoleProfileId = AccessCatalog.Roles.Single(role =>
-                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
-            Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = now,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var ownerAccess = new OwnerUserAccess
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = portfolio.Id,
-            AccessContext = context,
-            ApplicationUser = user,
-            OwnerEntity = owner,
-            EffectiveFromUtc = now,
-            GrantedAtUtc = now,
-            GrantedByUser = user,
-            Reason = "Initial workspace owner relationship",
-        };
-        _db.AddRange(owner, administratorAssignment, ownerAccess);
-        await _db.SaveChangesAsync(ct);
+        var context = await _workspaceAuthority.ProvisionAsync(user, portfolio, ct);
 
-        if (_notificationFoundation is not null)
-        {
-            await _notificationFoundation.SeedSuppliedTemplatesAsync(portfolio.Id, user.Id, ct);
-        }
+        await _notificationFoundation.SeedSuppliedTemplatesAsync(portfolio.Id, user.Id, ct);
         await transaction.CommitAsync(ct);
         return new CanonicalAccountBootstrapResult(user, portfolio.Id, context.Id, []);
     }

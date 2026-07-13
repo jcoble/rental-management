@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Esign;
@@ -32,6 +32,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly IFileStorage _files;
+    private readonly ILegalDocumentIssuancePreparationService _issuancePreparations;
     private readonly string _webBaseUrl;
 
     public LeaseAgreementController(
@@ -39,12 +40,14 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         RentalCommandDbContext db,
         ILeaseManagementQueryService queryService,
         IFileStorage files,
+        ILegalDocumentIssuancePreparationService issuancePreparations,
         IConfiguration configuration)
     {
         _atomic = atomic;
         _db = db;
         _queryService = queryService;
         _files = files;
+        _issuancePreparations = issuancePreparations;
         _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
     }
 
@@ -151,7 +154,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             request.GoverningFromOn, request.BaseRentAmount, request.RentDueDay,
             request.SecurityDepositObligation, request.LateFeeAmount, request.GracePeriodDays,
             request.TermsSchemaVersion, request.TermsPayload.GetRawText(), request.DocumentTemplateId,
-            request.DocumentTemplateVersion, request.Signers.Select(signer =>
+            request.Signers.Select(signer =>
                 new LeaseAgreementDraftSignerInput(signer.LeaseManagementPartyId, signer.TenantId,
                     signer.SignerRole!.Value, signer.NameSnapshot, signer.EmailSnapshot,
                     signer.SigningOrder, signer.IsRequired)).ToArray(), envelope.UserId,
@@ -204,6 +207,36 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             command, SuccessorCodec, StatusCodes.Status201Created, ct);
     }
 
+    [HttpPost("{leaseAgreementId:int}/issuance-preparations")]
+    [ProducesResponseType(typeof(LegalDocumentIssuancePreparationResponse), StatusCodes.Status201Created)]
+    public async Task<IActionResult> PrepareIssuance(
+        int leaseManagementId,
+        int leaseAgreementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PrepareLegalDocumentIssuanceRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        try
+        {
+            var prepared = await _issuancePreparations.PrepareAgreementAsync(
+                new WorkspaceReadScope(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
+                    envelope.AccessContextId, envelope.AccessRevision),
+                leaseManagementId,
+                leaseAgreementId,
+                request.DraftRevision,
+                envelope.KeyDigest,
+                ct);
+            return StatusCode(StatusCodes.Status201Created,
+                LegalDocumentIssuancePreparationResponse.From(prepared));
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
+        catch (RentalCommand.Data.Documents.UploadOperationConflictException exception)
+        { return Conflict(new { error = exception.Message }); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
     [HttpPost("{leaseAgreementId:int}/issue")]
     [ProducesResponseType(typeof(IssueLeaseAgreementResponse), StatusCodes.Status201Created)]
     public async Task<IActionResult> Issue(
@@ -222,10 +255,10 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             .ToArrayAsync(ct);
         if (signerIds.Length == 0) return UnprocessableEntity(new { error = "The Agreement has no signer snapshot." });
         var command = new IssueLeaseAgreementCommand(
-            request.PendingUploadId, request.RequestFingerprint, envelope.PortfolioId,
+            request.PendingUploadId, request.DocumentSourceVersionId, request.IssuanceFingerprint, envelope.PortfolioId,
             leaseManagementId, leaseAgreementId, request.DraftRevision, envelope.KeyDigest,
             request.Subject, request.StorageKey, request.FileName, request.FileSize,
-            request.ContentSha256.ToLowerInvariant(), _webBaseUrl,
+            request.ContentSha256, _webBaseUrl,
             signerIds.Select(id => new NativeEsignSignerCommand(id)).ToArray(), envelope.UserId,
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision);
         try
@@ -315,14 +348,13 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             error = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
             return false;
         }
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId)
-            || !int.TryParse(User.FindFirstValue("ctx"), out var contextId)
-            || !long.TryParse(User.FindFirstValue("ar"), out var revision))
+        if (!TryGetActiveAccessContext(out var active))
         {
             error = Forbid();
             return false;
         }
-        envelope = new(GetPortfolioId(), GetUserId(), sessionId, contextId, revision,
+        envelope = new(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant());
         return true;
     }

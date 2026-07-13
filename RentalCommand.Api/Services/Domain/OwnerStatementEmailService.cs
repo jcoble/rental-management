@@ -1,9 +1,12 @@
 using System.Text;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -14,64 +17,97 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
     private readonly IOwnerStatementService _statements;
     private readonly IMessagePublisher _publisher;
     private readonly ILogger<OwnerStatementEmailService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public OwnerStatementEmailService(
         RentalCommandDbContext db,
         IOwnerStatementService statements,
         IMessagePublisher publisher,
-        ILogger<OwnerStatementEmailService> logger)
+        ILogger<OwnerStatementEmailService> logger,
+        TimeProvider timeProvider)
     {
         _db = db;
         _statements = statements;
         _publisher = publisher;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
     public async Task<StatementEmailResult> SendOwnerStatementAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int ownerId,
         int year,
         CancellationToken ct = default)
     {
-        // ── Load owner (must be in portfolio) ──────────────────────────────────────────────────
-        var owner = await _db.OwnerEntities
+        var authorizedProperties = _db.Properties
             .AsNoTracking()
-            .Where(o => o.PortfolioId == portfolioId && o.Id == ownerId && o.DeletedAt == null)
-            .Select(o => new { o.Id, o.Name, o.Email })
-            .FirstOrDefaultAsync(ct);
-
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.MoneyOwnerReportsRead,
+                _timeProvider.UtcNow());
+        var owner = await LoadOwnerAsync(scope.PortfolioId, ownerId, authorizedProperties, ct);
         if (owner is null)
             return new StatementEmailResult(false, "Owner not found in portfolio");
-
         if (string.IsNullOrWhiteSpace(owner.Email))
             return new StatementEmailResult(false, "Owner has no email address");
 
-        // ── Build the statement ────────────────────────────────────────────────────────────────
-        var report = await _statements.GetForOwnerAsync(portfolioId, ownerId, year, ct);
+        var report = await _statements.GetForOwnerAsync(scope, ownerId, year, ct);
         if (report is null)
             return new StatementEmailResult(false, "No statement data for that year");
 
-        // ── Render plain-text body ─────────────────────────────────────────────────────────────
-        var body = RenderStatementText(report);
+        return await EnqueueAsync(
+            scope.PortfolioId,
+            owner,
+            year,
+            report,
+            OutboxIdempotency.Create("owner-statement", scope.PortfolioId, ownerId, year, owner.Email),
+            ct);
+    }
 
-        // ── Enqueue via outbox ─────────────────────────────────────────────────────────────────
+    private Task<OwnerEmailRecipient?> LoadOwnerAsync(
+        int portfolioId,
+        int ownerId,
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct) =>
+        _db.OwnerEntities
+            .AsNoTracking()
+            .Where(o =>
+                o.PortfolioId == portfolioId &&
+                o.Id == ownerId &&
+                o.DeletedAt == null &&
+                authorizedProperties.Any(property => property.OwnerEntityId == o.Id))
+            .Select(o => new OwnerEmailRecipient(o.Id, o.Name, o.Email))
+            .FirstOrDefaultAsync(ct);
+
+    private async Task<StatementEmailResult> EnqueueAsync(
+        int portfolioId,
+        OwnerEmailRecipient owner,
+        int year,
+        DTOs.OwnerStatementReport report,
+        string idempotencyKey,
+        CancellationToken ct)
+    {
+        var body = RenderStatementText(report);
         var subject = $"Your {year} owner statement";
+
         await _publisher.PublishAsync(
             portfolioId,
             "email",
-            RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                "owner-statement", portfolioId, ownerId, year, owner.Email),
+            idempotencyKey,
             new { to = owner.Email, subject, body },
             ct);
         await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
             "Enqueued owner statement email for owner {OwnerId} ({Name}), year {Year}, portfolio {PortfolioId}.",
-            ownerId, owner.Name, year, portfolioId);
+            owner.Id, owner.Name, year, portfolioId);
 
         return new StatementEmailResult(true);
     }
+
+    private sealed record OwnerEmailRecipient(int Id, string Name, string? Email);
 
     // ── Plain-text renderer ──────────────────────────────────────────────────────────────────────
 

@@ -29,7 +29,6 @@ public sealed record PrepareMoveInCommand(
     DateOnly PartyEffectiveFrom,
     IReadOnlyList<PrepareMoveInParty> Parties,
     int DocumentTemplateId,
-    int DocumentTemplateVersion,
     LeaseAgreementTermType TermType,
     DateOnly TermStartOn,
     DateOnly? TermEndOn,

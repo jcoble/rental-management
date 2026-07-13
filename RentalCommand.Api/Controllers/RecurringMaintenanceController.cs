@@ -7,8 +7,8 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CRUD for standing recurring-maintenance chores within the caller's portfolio (HVAC filter every
 /// 90 days, quarterly gutter cleaning, …). The Engine's recurring-maintenance worker turns each due
-/// task into a <see cref="Core.Entities.WorkOrder"/> per period. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;activeOnly&amp;skip&amp;take&amp;search&amp;sort</c>.
+/// task into a <see cref="Core.Entities.WorkOrder"/> per period. Scope comes from the canonical
+/// workspace and property access context; the list supports <c>?propertyId&amp;activeOnly&amp;skip&amp;take&amp;search&amp;sort</c>.
 /// Create/update validate the referenced property/unit/vendor are in the portfolio. Delete is a soft
 /// delete; <c>PATCH {id}/active</c> flips the per-task on/off switch.
 /// </summary>

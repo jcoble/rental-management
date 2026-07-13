@@ -327,6 +327,17 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         var executedFile = StoredFile(portfolio.Id, $"executed-{suffix}.pdf", frozenAtUtc);
         db.AddRange(unit, template, issuedFile, executedFile);
         await db.SaveChangesAsync();
+        var documentSourceVersion = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
+            SourceKind = LegalDocumentSourceKind.AuthoredTemplateSnapshot,
+            BusinessKey = $"template:{template.Id}:v{template.Version}",
+            DocumentTemplateId = template.Id, DocumentTemplateVersion = template.Version,
+            RendererKey = "lease-agreement-overlay", RendererVersion = 1,
+            SnapshotPayload = "{}", CreatedAtUtc = frozenAtUtc, CreatedByUserId = user.Id,
+        };
+        db.Add(documentSourceVersion);
+        await db.SaveChangesAsync();
 
         var issuedArtifact = Artifact(
             portfolio.Id, user.Id, issuedFile.Id, LegalDocumentArtifactKind.IssuedAgreement,
@@ -381,8 +392,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
-            DocumentTemplateId = template.Id,
-            DocumentTemplateVersion = template.Version,
+            DocumentSourceVersionId = documentSourceVersion.Id,
             IssuedArtifactId = issuedArtifact.Id,
             IssuedAtUtc = frozenAtUtc.AddDays(-10),
             ExecutedArtifactId = executedArtifact.Id,
@@ -435,6 +445,9 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         ContentType = "application/pdf",
         ByteLength = 100,
         ContentSha256 = new string(kind == LegalDocumentArtifactKind.IssuedAgreement ? 'a' : 'b', 64),
+        LegalIssuanceFingerprint = kind == LegalDocumentArtifactKind.IssuedAgreement
+            ? new string('c', 64)
+            : null,
         CreatedAtUtc = now,
         CreatedByUserId = userId,
     };

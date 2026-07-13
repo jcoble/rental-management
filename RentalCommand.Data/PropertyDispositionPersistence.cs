@@ -55,8 +55,8 @@ internal sealed partial class AtomicLeaseMutationPersistence
             new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert),
             new("Units", AtomicRawDmlOperation.Update),
             new("CapitalAssets", AtomicRawDmlOperation.Update));
-        var row = await _db.Database.SqlQueryRaw<PropertyDispositionMutationRow>(CreateSql, parameters)
-            .SingleOrDefaultAsync(ct);
+        var row = await _db.Database.SingleOrDefaultTopLevelResultAsync<PropertyDispositionMutationRow>(
+            CreateSql, parameters, ct);
         return row is null ? null : new AtomicPropertyDispositionMutationResult(
             row.DispositionId,
             DeserializeIds(row.LeaseManagementIdsJson),

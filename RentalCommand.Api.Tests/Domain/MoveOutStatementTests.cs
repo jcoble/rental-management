@@ -1,13 +1,22 @@
+using System.Data.Common;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Moq;
+using RentalCommand.Api.Auth;
+using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -63,21 +72,6 @@ public sealed class MoveOutStatementTests : IDisposable
             "Refund paid by ACH",
             new DateOnly(2026, 6, 5),
             postedAtUtc: new DateTime(2026, 6, 5, 14, 30, 0, DateTimeKind.Utc));
-        _ctx.Db.SecurityDepositBalanceProjections.Add(new SecurityDepositBalanceProjection
-        {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = graph.Management.Id,
-            TenantAccountId = graph.DepositAccount.TenantAccountId,
-            SecurityDepositAccountId = graph.DepositAccount.Id,
-            EffectiveNowUtc = new DateTime(2026, 6, 5, 14, 30, 0, DateTimeKind.Utc),
-            BusinessDate = new DateOnly(2026, 6, 5),
-            Currency = "USD",
-            TotalReceived = 1_500m,
-            TotalDeductions = 500m,
-            TotalRefunded = 1_000m,
-            HeldBalance = 0m,
-            DepositStatus = "PartiallyReturned",
-        });
         var matchingKey = await _storage.UploadAsync(
             new MemoryStream(OnePixelPng),
             "matching.png",
@@ -91,7 +85,9 @@ public sealed class MoveOutStatementTests : IDisposable
             CreatePhoto(graph.DepositAccount.Id + 10_000, "other-account.png", otherKey));
         await _ctx.Db.SaveChangesAsync();
 
-        var result = await CreateSut().GetMoveOutStatementAsync(PortfolioId, graph.DepositAccount.Id);
+        var scope = SeedAdministratorScope();
+        _ctx.Commands.Clear();
+        var result = await CreateSut().GetMoveOutStatementAsync(scope, graph.DepositAccount.Id);
 
         result.Should().Equal(CapturingPdfGenerator.PdfBytes);
         _pdf.LastData.Should().NotBeNull();
@@ -110,6 +106,87 @@ public sealed class MoveOutStatementTests : IDisposable
             options => options.WithStrictOrdering());
         _pdf.LastData.Photos.Should().ContainSingle();
         _pdf.LastData.Photos[0].Should().Equal(OnePixelPng);
+
+        _ctx.Commands.Should().HaveCount(3,
+            "the PDF path is one authorized header query, one authorized deduction query, and one authorized photo-metadata query");
+        _ctx.Commands.Should().OnlyContain(sql =>
+            sql.Contains("AuthSessions", StringComparison.Ordinal) &&
+            sql.Contains("AccessRevision", StringComparison.Ordinal) &&
+            sql.Contains("RoleProfileCapabilities", StringComparison.Ordinal) &&
+            sql.Contains("CapabilityDefinitions", StringComparison.Ordinal) &&
+            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.Ordinal) &&
+            sql.Contains("Properties", StringComparison.Ordinal) &&
+            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase),
+            "every move-out read must prove current capability and property scope in its SQL");
+        _ctx.Commands.Count(sql => sql.Contains("SecurityDepositEntries", StringComparison.Ordinal))
+            .Should().Be(2, "deductions are one set query and the header computes its refund date without per-row lookups");
+        _ctx.Commands.Count(sql => sql.Contains("StoredFiles", StringComparison.Ordinal))
+            .Should().Be(1, "all authorized photo metadata must load in one ordered query");
+    }
+
+    [Fact]
+    public async Task MoveOutStatement_OutOfScopeDepositReturns404WithoutReadingDeductionsOrPhotos()
+    {
+        var decoy = SeedCanonicalChain();
+        AddEntry(
+            decoy,
+            SecurityDepositEntryType.Deduction,
+            SecurityDepositDirection.Decrease,
+            275m,
+            "Decoy deduction",
+            new DateOnly(2026, 6, 2));
+        var photoKey = await _storage.UploadAsync(
+            new MemoryStream(OnePixelPng),
+            "decoy.png",
+            "image/png");
+        _ctx.Db.StoredFiles.Add(CreatePhoto(decoy.DepositAccount.Id, "decoy.png", photoKey));
+        var allowedProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Authorized property",
+            AddressLine1 = "99 Allowed Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Properties.Add(allowedProperty);
+        _ctx.Db.SaveChanges();
+        var scope = SeedSelectedPropertyManagerScope(allowedProperty.Id);
+        var controller = new SecurityDepositsController(CreateSut())
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext(),
+            },
+        };
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            scope.SessionId,
+            scope.UserId,
+            scope.AccessContextId,
+            scope.PortfolioId,
+            scope.AccessRevision,
+            WorkspaceExperience.Management,
+            WorkspaceMembershipId: null,
+            DefaultExperience: WorkspaceExperience.Management);
+        _ctx.Commands.Clear();
+
+        var result = await controller.MoveOutStatement(
+            decoy.DepositAccount.Id,
+            CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>(
+            "an unauthorized deposit must be indistinguishable from a missing deposit");
+        _ctx.Commands.Should().ContainSingle(
+            "the denied header query must stop the PDF path before deduction and photo metadata reads");
+        _ctx.Commands[0].Should().Contain("AuthSessions");
+        _ctx.Commands[0].Should().Contain("AccessRevision");
+        _ctx.Commands[0].Should().Contain("MembershipRoleAssignmentProperties");
+        _ctx.Commands[0].Should().Contain("RoleProfileCapabilities");
+        _ctx.Commands.Should().NotContain(sql => sql.Contains("StoredFiles", StringComparison.Ordinal));
+        _storage.DownloadCount.Should().Be(0);
+        _pdf.LastData.Should().BeNull();
     }
 
     private SecurityDepositService CreateSut() => new(
@@ -118,6 +195,78 @@ public sealed class MoveOutStatementTests : IDisposable
         _pdf,
         Mock.Of<ILogger<SecurityDepositService>>(),
         TimeProvider.System);
+
+    private WorkspaceReadScope SeedAdministratorScope()
+        => SeedWorkspaceScope(
+            RoleProfileKeys.WorkspaceAdministrator,
+            MembershipRoleAssignmentScopeKind.AllProperties,
+            selectedPropertyId: null);
+
+    private WorkspaceReadScope SeedSelectedPropertyManagerScope(int propertyId)
+        => SeedWorkspaceScope(
+            RoleProfileKeys.PropertyManager,
+            MembershipRoleAssignmentScopeKind.SelectedProperties,
+            propertyId);
+
+    private WorkspaceReadScope SeedWorkspaceScope(
+        string roleKey,
+        MembershipRoleAssignmentScopeKind scopeKind,
+        int? selectedPropertyId)
+    {
+        var now = DateTime.UtcNow;
+        var context = new WorkspaceAccessContext
+        {
+            UserId = ActorUserId,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleKey).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = scopeKind,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        if (selectedPropertyId.HasValue)
+        {
+            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignment = assignment,
+                PortfolioId = PortfolioId,
+                PropertyId = selectedPropertyId.Value,
+            });
+        }
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = ActorUserId,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AddRange(assignment, session);
+        _ctx.Db.SaveChanges();
+        return new WorkspaceReadScope(
+            PortfolioId, ActorUserId, session.Id, context.Id, context.AccessRevision);
+    }
 
     private CanonicalDepositGraph SeedCanonicalChain()
     {
@@ -168,6 +317,22 @@ public sealed class MoveOutStatementTests : IDisposable
         _ctx.Db.Tenants.Add(tenant);
         _ctx.Db.Properties.Add(property);
         _ctx.Db.DocumentTemplates.Add(template);
+        _ctx.Db.SaveChanges();
+        var documentSourceVersion = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SourceKind = LegalDocumentSourceKind.AuthoredTemplateSnapshot,
+            BusinessKey = $"template:{template.Id}:v{template.Version}",
+            DocumentTemplateId = template.Id,
+            DocumentTemplateVersion = template.Version,
+            RendererKey = "lease-agreement-overlay",
+            RendererVersion = 1,
+            SnapshotPayload = "{}",
+            CreatedAtUtc = createdAtUtc,
+            CreatedByUserId = ActorUserId,
+        };
+        _ctx.Db.LegalDocumentSourceVersions.Add(documentSourceVersion);
         _ctx.Db.SaveChanges();
 
         var unit = new Unit
@@ -221,8 +386,7 @@ public sealed class MoveOutStatementTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
-            DocumentTemplateId = template.Id,
-            DocumentTemplateVersion = 1,
+            DocumentSourceVersionId = documentSourceVersion.Id,
             CreatedAtUtc = createdAtUtc,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = createdAtUtc,
@@ -345,6 +509,7 @@ public sealed class MoveOutStatementTests : IDisposable
     private sealed class InMemoryFileStorage : IFileStorage
     {
         private readonly Dictionary<string, byte[]> _files = [];
+        internal int DownloadCount { get; private set; }
 
         public async Task<string> UploadAsync(
             Stream content,
@@ -361,6 +526,7 @@ public sealed class MoveOutStatementTests : IDisposable
 
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
         {
+            DownloadCount++;
             if (!_files.TryGetValue(path, out var bytes))
                 throw new FileNotFoundException(path);
 
@@ -376,12 +542,19 @@ public sealed class MoveOutStatementTests : IDisposable
 
     private sealed class MoveOutStatementTestContext : IDisposable
     {
+        private readonly SqliteConnection _connection;
+
         internal MoveOutStatementTestContext()
         {
+            _connection = new SqliteConnection("DataSource=:memory:");
+            _connection.Open();
             var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-                .UseInMemoryDatabase($"moveout-{Guid.NewGuid():N}")
+                .UseSqlite(_connection)
+                .AddInterceptors(new MoveOutRecordingCommandInterceptor(Commands))
                 .Options;
             Db = new MoveOutStatementTestDbContext(options);
+            Db.Database.EnsureCreated();
+            Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
             Db.Portfolios.Add(new Portfolio
             {
                 Id = PortfolioId,
@@ -395,10 +568,35 @@ public sealed class MoveOutStatementTests : IDisposable
         }
 
         internal RentalCommandDbContext Db { get; }
+        internal List<string> Commands { get; } = [];
 
         public void Dispose()
         {
             Db.Dispose();
+            _connection.Dispose();
+        }
+    }
+
+    private sealed class MoveOutRecordingCommandInterceptor(List<string> commands)
+        : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 

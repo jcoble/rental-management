@@ -17,21 +17,36 @@ namespace RentalCommand.Data.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AlterDatabase()
-                .Annotation("Npgsql:PostgresExtension:btree_gist", ",,");
+                .Annotation("Npgsql:PostgresExtension:btree_gist", ",,")
+                .Annotation("Npgsql:PostgresExtension:pg_trgm", ",,");
 
             migrationBuilder.CreateTable(
-                name: "AspNetRoles",
+                name: "AspNetUsers",
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    Name = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
-                    NormalizedName = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
-                    ConcurrencyStamp = table.Column<string>(type: "text", nullable: true)
+                    DisplayName = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    LastLoginAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    UserName = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
+                    NormalizedUserName = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
+                    Email = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
+                    NormalizedEmail = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
+                    EmailConfirmed = table.Column<bool>(type: "boolean", nullable: false),
+                    PasswordHash = table.Column<string>(type: "text", nullable: true),
+                    SecurityStamp = table.Column<string>(type: "text", nullable: true),
+                    ConcurrencyStamp = table.Column<string>(type: "text", nullable: true),
+                    PhoneNumber = table.Column<string>(type: "text", nullable: true),
+                    PhoneNumberConfirmed = table.Column<bool>(type: "boolean", nullable: false),
+                    TwoFactorEnabled = table.Column<bool>(type: "boolean", nullable: false),
+                    LockoutEnd = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                    LockoutEnabled = table.Column<bool>(type: "boolean", nullable: false),
+                    AccessFailedCount = table.Column<int>(type: "integer", nullable: false)
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_AspNetRoles", x => x.Id);
+                    table.PrimaryKey("PK_AspNetUsers", x => x.Id);
                 });
 
             migrationBuilder.CreateTable(
@@ -208,31 +223,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "RenderedNotices",
-                columns: table => new
-                {
-                    Id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    NoticeDraftId = table.Column<int>(type: "integer", nullable: false),
-                    WorkspaceNoticeTemplateVersionId = table.Column<int>(type: "integer", nullable: false),
-                    LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
-                    Subject = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    Body = table.Column<string>(type: "character varying(8000)", maxLength: 8000, nullable: false),
-                    ContentSha256 = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
-                    TemplateProvenance = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: false),
-                    JurisdictionCode = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: true),
-                    RenderedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    ApprovedByUserId = table.Column<int>(type: "integer", nullable: true),
-                    ApprovedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_RenderedNotices", x => x.Id);
-                    table.UniqueConstraint("AK_RenderedNotices_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
-                });
-
-            migrationBuilder.CreateTable(
                 name: "RoleProfiles",
                 columns: table => new
                 {
@@ -291,8 +281,7 @@ namespace RentalCommand.Data.Migrations
                 name: "SystemNoticeTemplateVersions",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    Id = table.Column<int>(type: "integer", nullable: false),
                     SystemKey = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: false),
                     Version = table.Column<int>(type: "integer", nullable: false),
                     Classification = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
@@ -308,22 +297,115 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "AspNetRoleClaims",
+                name: "AspNetUserClaims",
                 columns: table => new
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    RoleId = table.Column<int>(type: "integer", nullable: false),
+                    UserId = table.Column<int>(type: "integer", nullable: false),
                     ClaimType = table.Column<string>(type: "text", nullable: true),
                     ClaimValue = table.Column<string>(type: "text", nullable: true)
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_AspNetRoleClaims", x => x.Id);
+                    table.PrimaryKey("PK_AspNetUserClaims", x => x.Id);
                     table.ForeignKey(
-                        name: "FK_AspNetRoleClaims_AspNetRoles_RoleId",
-                        column: x => x.RoleId,
-                        principalTable: "AspNetRoles",
+                        name: "FK_AspNetUserClaims_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "AspNetUserLogins",
+                columns: table => new
+                {
+                    LoginProvider = table.Column<string>(type: "text", nullable: false),
+                    ProviderKey = table.Column<string>(type: "text", nullable: false),
+                    ProviderDisplayName = table.Column<string>(type: "text", nullable: true),
+                    UserId = table.Column<int>(type: "integer", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AspNetUserLogins", x => new { x.LoginProvider, x.ProviderKey });
+                    table.ForeignKey(
+                        name: "FK_AspNetUserLogins_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "AspNetUserTokens",
+                columns: table => new
+                {
+                    UserId = table.Column<int>(type: "integer", nullable: false),
+                    LoginProvider = table.Column<string>(type: "text", nullable: false),
+                    Name = table.Column<string>(type: "text", nullable: false),
+                    Value = table.Column<string>(type: "text", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AspNetUserTokens", x => new { x.UserId, x.LoginProvider, x.Name });
+                    table.ForeignKey(
+                        name: "FK_AspNetUserTokens_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "AuditLogs",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    UserId = table.Column<int>(type: "integer", nullable: true),
+                    ActorLabel = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
+                    EntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
+                    EntityId = table.Column<int>(type: "integer", nullable: false),
+                    Operation = table.Column<int>(type: "integer", nullable: false),
+                    OldValues = table.Column<string>(type: "jsonb", nullable: true),
+                    NewValues = table.Column<string>(type: "jsonb", nullable: true),
+                    ChangeReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
+                    Timestamp = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    IpAddress = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AuditLogs", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_AuditLogs_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "LoginContextSelectionChallenges",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    UserId = table.Column<int>(type: "integer", nullable: false),
+                    TokenHash = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ConsumedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_LoginContextSelectionChallenges", x => x.Id);
+                    table.CheckConstraint("CK_LoginContextSelectionChallenges_ConsumedFacts", "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"CreatedAtUtc\"");
+                    table.CheckConstraint("CK_LoginContextSelectionChallenges_Expiry", "\"ExpiresAtUtc\" > \"CreatedAtUtc\"");
+                    table.ForeignKey(
+                        name: "FK_LoginContextSelectionChallenges_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                 });
@@ -374,42 +456,6 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "Portfolios",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AspNetUsers",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: true),
-                    DisplayName = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    LastLoginAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    UserName = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
-                    NormalizedUserName = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
-                    Email = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
-                    NormalizedEmail = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
-                    EmailConfirmed = table.Column<bool>(type: "boolean", nullable: false),
-                    PasswordHash = table.Column<string>(type: "text", nullable: true),
-                    SecurityStamp = table.Column<string>(type: "text", nullable: true),
-                    ConcurrencyStamp = table.Column<string>(type: "text", nullable: true),
-                    PhoneNumber = table.Column<string>(type: "text", nullable: true),
-                    PhoneNumberConfirmed = table.Column<bool>(type: "boolean", nullable: false),
-                    TwoFactorEnabled = table.Column<bool>(type: "boolean", nullable: false),
-                    LockoutEnd = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
-                    LockoutEnabled = table.Column<bool>(type: "boolean", nullable: false),
-                    AccessFailedCount = table.Column<int>(type: "integer", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AspNetUsers", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_AspNetUsers_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
                 });
 
             migrationBuilder.CreateTable(
@@ -698,6 +744,37 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "RenderedNotices",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    NoticeDraftId = table.Column<int>(type: "integer", nullable: false),
+                    WorkspaceNoticeTemplateVersionId = table.Column<int>(type: "integer", nullable: false),
+                    LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
+                    Subject = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                    Body = table.Column<string>(type: "character varying(8000)", maxLength: 8000, nullable: false),
+                    ContentSha256 = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                    TemplateProvenance = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: false),
+                    JurisdictionCode = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: true),
+                    RenderedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ApprovedByUserId = table.Column<int>(type: "integer", nullable: true),
+                    ApprovedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_RenderedNotices", x => x.Id);
+                    table.UniqueConstraint("AK_RenderedNotices_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.ForeignKey(
+                        name: "FK_RenderedNotices_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "ScanBatches",
                 columns: table => new
                 {
@@ -780,6 +857,38 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "UserAlertPreferences",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    UserId = table.Column<int>(type: "integer", nullable: false),
+                    EnableInApp = table.Column<bool>(type: "boolean", nullable: false),
+                    EnableMobilePush = table.Column<bool>(type: "boolean", nullable: false),
+                    EnableEmail = table.Column<bool>(type: "boolean", nullable: false),
+                    EnableSms = table.Column<bool>(type: "boolean", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_UserAlertPreferences", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_UserAlertPreferences_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_UserAlertPreferences_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "Vendors",
                 columns: table => new
                 {
@@ -813,6 +922,44 @@ namespace RentalCommand.Data.Migrations
                     table.PrimaryKey("PK_Vendors", x => x.Id);
                     table.ForeignKey(
                         name: "FK_Vendors_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "WorkspaceAccessContexts",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    UserId = table.Column<int>(type: "integer", nullable: false),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    Status = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: false),
+                    AccessRevision = table.Column<long>(type: "bigint", nullable: false),
+                    LastAuthorizedExperience = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    SuspendedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    RevokedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_WorkspaceAccessContexts", x => x.Id);
+                    table.UniqueConstraint("AK_WorkspaceAccessContexts_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.UniqueConstraint("AK_WorkspaceAccessContexts_Id_UserId", x => new { x.Id, x.UserId });
+                    table.UniqueConstraint("AK_WorkspaceAccessContexts_Id_UserId_PortfolioId", x => new { x.Id, x.UserId, x.PortfolioId });
+                    table.CheckConstraint("CK_WorkspaceAccessContexts_AccessRevision_Positive", "\"AccessRevision\" > 0");
+                    table.CheckConstraint("CK_WorkspaceAccessContexts_StatusFacts", "(\"Status\" = 'Active' AND \"SuspendedAtUtc\" IS NULL AND \"RevokedAtUtc\" IS NULL) OR (\"Status\" = 'Suspended' AND \"SuspendedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NULL) OR (\"Status\" = 'Revoked' AND \"RevokedAtUtc\" IS NOT NULL)");
+                    table.ForeignKey(
+                        name: "FK_WorkspaceAccessContexts_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_WorkspaceAccessContexts_Portfolios_PortfolioId",
                         column: x => x.PortfolioId,
                         principalTable: "Portfolios",
                         principalColumn: "Id",
@@ -957,243 +1104,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "AspNetUserClaims",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    ClaimType = table.Column<string>(type: "text", nullable: true),
-                    ClaimValue = table.Column<string>(type: "text", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AspNetUserClaims", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_AspNetUserClaims_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AspNetUserLogins",
-                columns: table => new
-                {
-                    LoginProvider = table.Column<string>(type: "text", nullable: false),
-                    ProviderKey = table.Column<string>(type: "text", nullable: false),
-                    ProviderDisplayName = table.Column<string>(type: "text", nullable: true),
-                    UserId = table.Column<int>(type: "integer", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AspNetUserLogins", x => new { x.LoginProvider, x.ProviderKey });
-                    table.ForeignKey(
-                        name: "FK_AspNetUserLogins_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AspNetUserRoles",
-                columns: table => new
-                {
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    RoleId = table.Column<int>(type: "integer", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AspNetUserRoles", x => new { x.UserId, x.RoleId });
-                    table.ForeignKey(
-                        name: "FK_AspNetUserRoles_AspNetRoles_RoleId",
-                        column: x => x.RoleId,
-                        principalTable: "AspNetRoles",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_AspNetUserRoles_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AspNetUserTokens",
-                columns: table => new
-                {
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    LoginProvider = table.Column<string>(type: "text", nullable: false),
-                    Name = table.Column<string>(type: "text", nullable: false),
-                    Value = table.Column<string>(type: "text", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AspNetUserTokens", x => new { x.UserId, x.LoginProvider, x.Name });
-                    table.ForeignKey(
-                        name: "FK_AspNetUserTokens_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AuditLogs",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    UserId = table.Column<int>(type: "integer", nullable: true),
-                    ActorLabel = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
-                    EntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
-                    EntityId = table.Column<int>(type: "integer", nullable: false),
-                    Operation = table.Column<int>(type: "integer", nullable: false),
-                    OldValues = table.Column<string>(type: "jsonb", nullable: true),
-                    NewValues = table.Column<string>(type: "jsonb", nullable: true),
-                    ChangeReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
-                    Timestamp = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    IpAddress = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AuditLogs", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_AuditLogs_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "LoginContextSelectionChallenges",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    TokenHash = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    ExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    ConsumedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_LoginContextSelectionChallenges", x => x.Id);
-                    table.CheckConstraint("CK_LoginContextSelectionChallenges_ConsumedFacts", "\"ConsumedAtUtc\" IS NULL OR \"ConsumedAtUtc\" >= \"CreatedAtUtc\"");
-                    table.CheckConstraint("CK_LoginContextSelectionChallenges_Expiry", "\"ExpiresAtUtc\" > \"CreatedAtUtc\"");
-                    table.ForeignKey(
-                        name: "FK_LoginContextSelectionChallenges_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "RefreshTokens",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    Token = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
-                    TokenHash = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
-                    ExpiresAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    IssuedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    IsRevoked = table.Column<bool>(type: "boolean", nullable: false),
-                    IsUsed = table.Column<bool>(type: "boolean", nullable: false),
-                    GraceExpiresAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    IpAddress = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true),
-                    UserAgent = table.Column<string>(type: "character varying(512)", maxLength: 512, nullable: true),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_RefreshTokens", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_RefreshTokens_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "UserAlertPreferences",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    EnableInApp = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableMobilePush = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableEmail = table.Column<bool>(type: "boolean", nullable: false),
-                    EnableSms = table.Column<bool>(type: "boolean", nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_UserAlertPreferences", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_UserAlertPreferences_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_UserAlertPreferences_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "WorkspaceAccessContexts",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    Status = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: false),
-                    AccessRevision = table.Column<long>(type: "bigint", nullable: false),
-                    LastAuthorizedExperience = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: true),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    SuspendedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    RevokedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_WorkspaceAccessContexts", x => x.Id);
-                    table.UniqueConstraint("AK_WorkspaceAccessContexts_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
-                    table.UniqueConstraint("AK_WorkspaceAccessContexts_Id_UserId", x => new { x.Id, x.UserId });
-                    table.UniqueConstraint("AK_WorkspaceAccessContexts_Id_UserId_PortfolioId", x => new { x.Id, x.UserId, x.PortfolioId });
-                    table.CheckConstraint("CK_WorkspaceAccessContexts_AccessRevision_Positive", "\"AccessRevision\" > 0");
-                    table.CheckConstraint("CK_WorkspaceAccessContexts_StatusFacts", "(\"Status\" = 'Active' AND \"SuspendedAtUtc\" IS NULL AND \"RevokedAtUtc\" IS NULL) OR (\"Status\" = 'Suspended' AND \"SuspendedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NULL) OR (\"Status\" = 'Revoked' AND \"RevokedAtUtc\" IS NOT NULL)");
-                    table.ForeignKey(
-                        name: "FK_WorkspaceAccessContexts_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_WorkspaceAccessContexts_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "PlaidTokenExchangeAttempts",
                 columns: table => new
                 {
@@ -1260,39 +1170,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "NoticeDeliveryEvidence",
-                columns: table => new
-                {
-                    Id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
-                    RecipientTenantId = table.Column<int>(type: "integer", nullable: false),
-                    RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
-                    OutboxMessageId = table.Column<long>(type: "bigint", nullable: false),
-                    IdempotencyKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_NoticeDeliveryEvidence", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_OutboxMessages_OutboxMessageId",
-                        column: x => x.OutboxMessageId,
-                        principalTable: "OutboxMessages",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_RenderedNotices_RenderedNoticeId_Por~",
-                        columns: x => new { x.RenderedNoticeId, x.PortfolioId },
-                        principalTable: "RenderedNotices",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "Properties",
                 columns: table => new
                 {
@@ -1346,6 +1223,39 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "NoticeDeliveryEvidence",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
+                    RecipientTenantId = table.Column<int>(type: "integer", nullable: false),
+                    RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                    OutboxMessageId = table.Column<long>(type: "bigint", nullable: false),
+                    IdempotencyKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_NoticeDeliveryEvidence", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_OutboxMessages_OutboxMessageId",
+                        column: x => x.OutboxMessageId,
+                        principalTable: "OutboxMessages",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_RenderedNotices_RenderedNoticeId_Por~",
+                        columns: x => new { x.RenderedNoticeId, x.PortfolioId },
+                        principalTable: "RenderedNotices",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "LegalDocumentArtifacts",
                 columns: table => new
                 {
@@ -1360,6 +1270,7 @@ namespace RentalCommand.Data.Migrations
                     ContentType = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     ByteLength = table.Column<long>(type: "bigint", nullable: false),
                     ContentSha256 = table.Column<string>(type: "char(64)", nullable: false),
+                    LegalIssuanceFingerprint = table.Column<string>(type: "char(64)", nullable: true),
                     CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "clock_timestamp()"),
                     CreatedByUserId = table.Column<int>(type: "integer", nullable: false)
                 },
@@ -1367,8 +1278,10 @@ namespace RentalCommand.Data.Migrations
                 {
                     table.PrimaryKey("PK_LegalDocumentArtifacts", x => x.Id);
                     table.UniqueConstraint("AK_LegalDocumentArtifacts_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.UniqueConstraint("AK_LegalDocumentArtifacts_Id_StoredFileId_PortfolioId", x => new { x.Id, x.StoredFileId, x.PortfolioId });
                     table.CheckConstraint("CK_LegalDocumentArtifact_ByteLength", "\"ByteLength\" > 0");
                     table.CheckConstraint("CK_LegalDocumentArtifact_ContentSha256", "\"ContentSha256\" ~ '^[0-9a-f]{64}$'");
+                    table.CheckConstraint("CK_LegalDocumentArtifact_IssuanceBinding", "(\"ArtifactKind\" IN ('IssuedAgreement', 'IssuedAddendum') AND \"LegalIssuanceFingerprint\" ~ '^[0-9a-f]{64}$') OR (\"ArtifactKind\" NOT IN ('IssuedAgreement', 'IssuedAddendum') AND \"LegalIssuanceFingerprint\" IS NULL)");
                     table.CheckConstraint("CK_LegalDocumentArtifact_ContentType", "\"ContentType\" IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/gif')");
                     table.CheckConstraint("CK_LegalDocumentArtifact_Kind", "\"ArtifactKind\" IN ('IssuedAgreement', 'ExecutedAgreement', 'IssuedAddendum', 'ExecutedAddendum', 'CompletionCertificate')");
                     table.ForeignKey(
@@ -1485,129 +1398,6 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "StoredFiles",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "UserAccounts",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    OwnerId = table.Column<int>(type: "integer", nullable: true),
-                    TenantId = table.Column<int>(type: "integer", nullable: true),
-                    Email = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    DisplayName = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    PasswordHash = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
-                    Role = table.Column<int>(type: "integer", nullable: false),
-                    IsActive = table.Column<bool>(type: "boolean", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    LastLoginAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_UserAccounts", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_UserAccounts_Owners_OwnerId",
-                        column: x => x.OwnerId,
-                        principalTable: "Owners",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_UserAccounts_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_UserAccounts_Tenants_TenantId",
-                        column: x => x.TenantId,
-                        principalTable: "Tenants",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "TenantNoticePolicies",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    AutomationKey = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: false),
-                    Mode = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
-                    Classification = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    LeadDays = table.Column<int>(type: "integer", nullable: false),
-                    SendHourLocal = table.Column<int>(type: "integer", nullable: false),
-                    SendTenantPortal = table.Column<bool>(type: "boolean", nullable: false),
-                    SendMobilePush = table.Column<bool>(type: "boolean", nullable: false),
-                    SendEmail = table.Column<bool>(type: "boolean", nullable: false),
-                    SendSms = table.Column<bool>(type: "boolean", nullable: false),
-                    IncludePrimaryTenant = table.Column<bool>(type: "boolean", nullable: false),
-                    IncludeCoTenant = table.Column<bool>(type: "boolean", nullable: false),
-                    IncludeEligibleGuarantor = table.Column<bool>(type: "boolean", nullable: false),
-                    IncludeOccupant = table.Column<bool>(type: "boolean", nullable: false),
-                    FailureBehavior = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: false),
-                    WorkspaceNoticeTemplateVersionId = table.Column<int>(type: "integer", nullable: false),
-                    ReviewedJurisdictionCode = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: true),
-                    JurisdictionReviewedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    JurisdictionReviewedByUserId = table.Column<int>(type: "integer", nullable: true),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_TenantNoticePolicies", x => x.Id);
-                    table.UniqueConstraint("AK_TenantNoticePolicies_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
-                    table.ForeignKey(
-                        name: "FK_TenantNoticePolicies_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_TenantNoticePolicies_WorkspaceNoticeTemplateVersions_Worksp~",
-                        columns: x => new { x.WorkspaceNoticeTemplateVersionId, x.PortfolioId },
-                        principalTable: "WorkspaceNoticeTemplateVersions",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AccountingMappingPromotionJobs",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    AccountingConnectionId = table.Column<int>(type: "integer", nullable: false),
-                    AccountingEntityMappingId = table.Column<int>(type: "integer", nullable: false),
-                    MappingRevision = table.Column<long>(type: "bigint", nullable: false),
-                    PromotedCount = table.Column<int>(type: "integer", nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    CompletedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AccountingMappingPromotionJobs", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_AccountingMappingPromotionJobs_AccountingConnections_Accoun~",
-                        column: x => x.AccountingConnectionId,
-                        principalTable: "AccountingConnections",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_AccountingMappingPromotionJobs_AccountingEntityMappings_Acc~",
-                        column: x => x.AccountingEntityMappingId,
-                        principalTable: "AccountingEntityMappings",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_AccountingMappingPromotionJobs_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
                 });
 
             migrationBuilder.CreateTable(
@@ -1738,6 +1528,88 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "TenantNoticePolicies",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    AutomationKey = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: false),
+                    Mode = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
+                    Classification = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    LeadDays = table.Column<int>(type: "integer", nullable: false),
+                    SendHourLocal = table.Column<int>(type: "integer", nullable: false),
+                    SendTenantPortal = table.Column<bool>(type: "boolean", nullable: false),
+                    SendMobilePush = table.Column<bool>(type: "boolean", nullable: false),
+                    SendEmail = table.Column<bool>(type: "boolean", nullable: false),
+                    SendSms = table.Column<bool>(type: "boolean", nullable: false),
+                    IncludePrimaryTenant = table.Column<bool>(type: "boolean", nullable: false),
+                    IncludeCoTenant = table.Column<bool>(type: "boolean", nullable: false),
+                    IncludeEligibleGuarantor = table.Column<bool>(type: "boolean", nullable: false),
+                    IncludeOccupant = table.Column<bool>(type: "boolean", nullable: false),
+                    FailureBehavior = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: false),
+                    WorkspaceNoticeTemplateVersionId = table.Column<int>(type: "integer", nullable: false),
+                    ReviewedJurisdictionCode = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: true),
+                    JurisdictionReviewedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    JurisdictionReviewedByUserId = table.Column<int>(type: "integer", nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TenantNoticePolicies", x => x.Id);
+                    table.UniqueConstraint("AK_TenantNoticePolicies_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.ForeignKey(
+                        name: "FK_TenantNoticePolicies_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_TenantNoticePolicies_WorkspaceNoticeTemplateVersions_Worksp~",
+                        columns: x => new { x.WorkspaceNoticeTemplateVersionId, x.PortfolioId },
+                        principalTable: "WorkspaceNoticeTemplateVersions",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "AccountingMappingPromotionJobs",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    AccountingConnectionId = table.Column<int>(type: "integer", nullable: false),
+                    AccountingEntityMappingId = table.Column<int>(type: "integer", nullable: false),
+                    MappingRevision = table.Column<long>(type: "bigint", nullable: false),
+                    PromotedCount = table.Column<int>(type: "integer", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    CompletedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AccountingMappingPromotionJobs", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_AccountingMappingPromotionJobs_AccountingConnections_Accoun~",
+                        column: x => x.AccountingConnectionId,
+                        principalTable: "AccountingConnections",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_AccountingMappingPromotionJobs_AccountingEntityMappings_Acc~",
+                        column: x => x.AccountingEntityMappingId,
+                        principalTable: "AccountingEntityMappings",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_AccountingMappingPromotionJobs_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "Conversations",
                 columns: table => new
                 {
@@ -1793,6 +1665,7 @@ namespace RentalCommand.Data.Migrations
                     DraftHtml = table.Column<string>(type: "text", nullable: true),
                     CompiledStoredFileId = table.Column<int>(type: "integer", nullable: true),
                     DefaultForPortfolio = table.Column<bool>(type: "boolean", nullable: false),
+                    IsSandboxSeeded = table.Column<bool>(type: "boolean", nullable: false, defaultValue: false),
                     PropertyId = table.Column<int>(type: "integer", nullable: true),
                     Version = table.Column<int>(type: "integer", nullable: false),
                     CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
@@ -2014,35 +1887,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "TenantNoticeWorkItems",
-                columns: table => new
-                {
-                    Id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    TenantNoticePolicyId = table.Column<int>(type: "integer", nullable: false),
-                    LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
-                    DueAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    Status = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
-                    BusinessKey = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    AttemptCount = table.Column<int>(type: "integer", nullable: false),
-                    ClaimOwner = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
-                    ClaimToken = table.Column<Guid>(type: "uuid", nullable: true),
-                    ClaimExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_TenantNoticeWorkItems", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_TenantNoticeWorkItems_TenantNoticePolicies_TenantNoticePoli~",
-                        columns: x => new { x.TenantNoticePolicyId, x.PortfolioId },
-                        principalTable: "TenantNoticePolicies",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "AuthSessionRefreshTokenFamilies",
                 columns: table => new
                 {
@@ -2108,6 +1952,82 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "WorkspaceInvitations",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    WorkspaceMembershipId = table.Column<int>(type: "integer", nullable: false),
+                    InvitedUserId = table.Column<int>(type: "integer", nullable: false),
+                    InvitedByUserId = table.Column<int>(type: "integer", nullable: false),
+                    TokenHash = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                    ExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    AcceptedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    RevokedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_WorkspaceInvitations", x => x.Id);
+                    table.CheckConstraint("CK_WorkspaceInvitations_ExpiryAfterCreate", "\"ExpiresAtUtc\" > \"CreatedAtUtc\"");
+                    table.CheckConstraint("CK_WorkspaceInvitations_TerminalState", "NOT (\"AcceptedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NOT NULL)");
+                    table.ForeignKey(
+                        name: "FK_WorkspaceInvitations_AspNetUsers_InvitedByUserId",
+                        column: x => x.InvitedByUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkspaceInvitations_AspNetUsers_InvitedUserId",
+                        column: x => x.InvitedUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkspaceInvitations_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_WorkspaceInvitations_WorkspaceMemberships_WorkspaceMembersh~",
+                        columns: x => new { x.WorkspaceMembershipId, x.PortfolioId },
+                        principalTable: "WorkspaceMemberships",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "TenantNoticeWorkItems",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    TenantNoticePolicyId = table.Column<int>(type: "integer", nullable: false),
+                    LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
+                    DueAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    Status = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
+                    BusinessKey = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                    AttemptCount = table.Column<int>(type: "integer", nullable: false),
+                    ClaimOwner = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
+                    ClaimToken = table.Column<Guid>(type: "uuid", nullable: true),
+                    ClaimExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TenantNoticeWorkItems", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_TenantNoticeWorkItems_TenantNoticePolicies_TenantNoticePoli~",
+                        columns: x => new { x.TenantNoticePolicyId, x.PortfolioId },
+                        principalTable: "TenantNoticePolicies",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "ConversationMessages",
                 columns: table => new
                 {
@@ -2167,6 +2087,66 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "DocumentTemplates",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "LegalDocumentSourceVersions",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PublicId = table.Column<Guid>(type: "uuid", nullable: false, defaultValueSql: "gen_random_uuid()"),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    SourceKind = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: false),
+                    BusinessKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
+                    DocumentTemplateId = table.Column<int>(type: "integer", nullable: true),
+                    DocumentTemplateVersion = table.Column<int>(type: "integer", nullable: true),
+                    RendererKey = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                    RendererVersion = table.Column<int>(type: "integer", nullable: true),
+                    SnapshotPayload = table.Column<string>(type: "jsonb", nullable: false),
+                    SourceStoredFileId = table.Column<int>(type: "integer", nullable: true),
+                    SourceLegalDocumentArtifactId = table.Column<int>(type: "integer", nullable: true),
+                    SourceContentSha256 = table.Column<string>(type: "char(64)", nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "clock_timestamp()"),
+                    CreatedByUserId = table.Column<int>(type: "integer", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_LegalDocumentSourceVersions", x => x.Id);
+                    table.UniqueConstraint("AK_LegalDocumentSourceVersions_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.CheckConstraint("CK_LegalDocumentSourceVersion_Kind", "\"SourceKind\" IN ('AuthoredTemplateSnapshot', 'BuiltInRenderer', 'ImportedExternalDocument')");
+                    table.CheckConstraint("CK_LegalDocumentSourceVersion_Snapshot", "jsonb_typeof(\"SnapshotPayload\") = 'object'");
+                    table.CheckConstraint("CK_LegalDocumentSourceVersion_SourceShape", "(\"SourceKind\" = 'AuthoredTemplateSnapshot' AND \"DocumentTemplateId\" IS NOT NULL AND \"DocumentTemplateVersion\" >= 1 AND \"RendererKey\" IS NOT NULL AND \"RendererVersion\" >= 1 AND \"SourceStoredFileId\" IS NULL AND \"SourceLegalDocumentArtifactId\" IS NULL AND \"SourceContentSha256\" IS NULL) OR (\"SourceKind\" = 'BuiltInRenderer' AND \"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL AND \"RendererKey\" IS NOT NULL AND \"RendererVersion\" >= 1 AND \"SourceStoredFileId\" IS NULL AND \"SourceLegalDocumentArtifactId\" IS NULL AND \"SourceContentSha256\" IS NULL) OR (\"SourceKind\" = 'ImportedExternalDocument' AND \"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL AND \"RendererKey\" IS NULL AND \"RendererVersion\" IS NULL AND \"SourceStoredFileId\" IS NOT NULL AND \"SourceLegalDocumentArtifactId\" IS NOT NULL AND \"SourceContentSha256\" ~ '^[0-9a-f]{64}$')");
+                    table.ForeignKey(
+                        name: "FK_LegalDocumentSourceVersions_AspNetUsers_CreatedByUserId",
+                        column: x => x.CreatedByUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LegalDocumentSourceVersions_DocumentTemplates_DocumentTempl~",
+                        columns: x => new { x.DocumentTemplateId, x.PortfolioId },
+                        principalTable: "DocumentTemplates",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LegalDocumentSourceVersions_LegalDocumentArtifacts_SourceLe~",
+                        columns: x => new { x.SourceLegalDocumentArtifactId, x.SourceStoredFileId, x.PortfolioId },
+                        principalTable: "LegalDocumentArtifacts",
+                        principalColumns: new[] { "Id", "StoredFileId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LegalDocumentSourceVersions_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LegalDocumentSourceVersions_StoredFiles_SourceStoredFileId_~",
+                        columns: x => new { x.SourceStoredFileId, x.PortfolioId },
+                        principalTable: "StoredFiles",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -2334,7 +2314,7 @@ namespace RentalCommand.Data.Migrations
                     Id = table.Column<int>(type: "integer", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    UserAccountId = table.Column<int>(type: "integer", nullable: true),
+                    AuthorAccessContextId = table.Column<int>(type: "integer", nullable: true),
                     RecipientTenantId = table.Column<int>(type: "integer", nullable: true),
                     FromLandlord = table.Column<bool>(type: "boolean", nullable: false),
                     Channels = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
@@ -2375,11 +2355,11 @@ namespace RentalCommand.Data.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.SetNull);
                     table.ForeignKey(
-                        name: "FK_PortalMessages_UserAccounts_UserAccountId",
-                        column: x => x.UserAccountId,
-                        principalTable: "UserAccounts",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
+                        name: "FK_PortalMessages_WorkspaceAccessContexts_AuthorAccessContextI~",
+                        columns: x => new { x.AuthorAccessContextId, x.PortfolioId },
+                        principalTable: "WorkspaceAccessContexts",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -2627,8 +2607,7 @@ namespace RentalCommand.Data.Migrations
                     Currency = table.Column<string>(type: "character varying(3)", maxLength: 3, nullable: false),
                     TermsSchemaVersion = table.Column<int>(type: "integer", nullable: false),
                     TermsPayload = table.Column<string>(type: "jsonb", nullable: false),
-                    DocumentTemplateId = table.Column<int>(type: "integer", nullable: true),
-                    DocumentTemplateVersion = table.Column<int>(type: "integer", nullable: true),
+                    DocumentSourceVersionId = table.Column<int>(type: "integer", nullable: false),
                     IssuedArtifactId = table.Column<int>(type: "integer", nullable: true),
                     IssuedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     ExecutedArtifactId = table.Column<int>(type: "integer", nullable: true),
@@ -2658,7 +2637,7 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_LeaseAgreement_Lineage", "(\"ChangeType\" = 'Initial' AND \"VersionNumber\" = 1 AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" = 'Transfer' AND \"VersionNumber\" = 1 AND \"TransferredFromAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Correction', 'Restatement') AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Renewal', 'MonthToMonth') AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_Money", "\"BaseRentAmount\" >= 0 AND \"SecurityDepositObligation\" >= 0 AND \"LateFeeAmount\" >= 0");
                     table.CheckConstraint("CK_LeaseAgreement_RentPolicy", "\"RentDueDay\" BETWEEN 1 AND 31 AND \"GracePeriodDays\" BETWEEN 0 AND 31");
-                    table.CheckConstraint("CK_LeaseAgreement_SchemaVersions", "\"TermsSchemaVersion\" >= 1 AND ((\"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL) OR (\"DocumentTemplateId\" IS NOT NULL AND \"DocumentTemplateVersion\" >= 1))");
+                    table.CheckConstraint("CK_LeaseAgreement_SchemaVersions", "\"TermsSchemaVersion\" >= 1");
                     table.CheckConstraint("CK_LeaseAgreement_Supersession", "(\"SupersededEffectiveOn\" IS NULL AND \"SupersededByAgreementId\" IS NULL AND \"SupersessionRecordedAtUtc\" IS NULL) OR (\"SupersededEffectiveOn\" IS NOT NULL AND \"SupersededByAgreementId\" IS NOT NULL AND \"SupersessionRecordedAtUtc\" IS NOT NULL AND \"SupersededEffectiveOn\" > \"GoverningFromOn\")");
                     table.CheckConstraint("CK_LeaseAgreement_Term", "(\"TermType\" = 'FixedTerm' AND \"TermEndOn\" IS NOT NULL AND \"TermEndOn\" >= \"TermStartOn\") OR (\"TermType\" = 'MonthToMonth' AND \"TermEndOn\" IS NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_TerminalFacts", "NOT (\"VoidedAtUtc\" IS NOT NULL AND \"DraftCanceledAtUtc\" IS NOT NULL) AND (\"DraftCanceledAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NULL)");
@@ -2669,12 +2648,6 @@ namespace RentalCommand.Data.Migrations
                         column: x => x.CreatedByUserId,
                         principalTable: "AspNetUsers",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_LeaseAgreements_DocumentTemplates_DocumentTemplateId_Portfo~",
-                        columns: x => new { x.DocumentTemplateId, x.PortfolioId },
-                        principalTable: "DocumentTemplates",
-                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_LeaseAgreements_LeaseAgreements_RenewsAgreementId_LeaseMana~",
@@ -2716,6 +2689,12 @@ namespace RentalCommand.Data.Migrations
                         name: "FK_LeaseAgreements_LegalDocumentArtifacts_IssuedArtifactId_Por~",
                         columns: x => new { x.IssuedArtifactId, x.PortfolioId },
                         principalTable: "LegalDocumentArtifacts",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LeaseAgreements_LegalDocumentSourceVersions_DocumentSourceV~",
+                        columns: x => new { x.DocumentSourceVersionId, x.PortfolioId },
+                        principalTable: "LegalDocumentSourceVersions",
                         principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
@@ -3238,8 +3217,7 @@ namespace RentalCommand.Data.Migrations
                     SupersessionRecordedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     TermsSchemaVersion = table.Column<int>(type: "integer", nullable: false),
                     TermsPayload = table.Column<string>(type: "jsonb", nullable: false),
-                    DocumentTemplateId = table.Column<int>(type: "integer", nullable: false),
-                    DocumentTemplateVersion = table.Column<int>(type: "integer", nullable: false),
+                    DocumentSourceVersionId = table.Column<int>(type: "integer", nullable: false),
                     IssuedArtifactId = table.Column<int>(type: "integer", nullable: true),
                     IssuedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     ExecutedArtifactId = table.Column<int>(type: "integer", nullable: true),
@@ -3267,8 +3245,8 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_LeaseAddendum_Issuance", "(\"IssuedAtUtc\" IS NULL) = (\"IssuedArtifactId\" IS NULL)");
                     table.CheckConstraint("CK_LeaseAddendum_Lineage", "(\"VersionNumber\" = 1 AND \"ReplacesAddendumId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReplacesAddendumId\" IS NOT NULL)");
                     table.CheckConstraint("CK_LeaseAddendum_Purpose", "\"Purpose\" IN ('Financial', 'Pet', 'Occupancy', 'Rules', 'Other')");
-                    table.CheckConstraint("CK_LeaseAddendum_SchemaVersions", "\"TermsSchemaVersion\" >= 1 AND \"DocumentTemplateVersion\" >= 1");
-                    table.CheckConstraint("CK_LeaseAddendum_Supersession", "(\"SupersededEffectiveOn\" IS NULL AND \"SupersededByAddendumId\" IS NULL AND \"SupersessionRecordedAtUtc\" IS NULL) OR (\"SupersededEffectiveOn\" IS NOT NULL AND \"SupersededByAddendumId\" IS NOT NULL AND \"SupersessionRecordedAtUtc\" IS NOT NULL AND \"SupersededEffectiveOn\" > \"EffectiveFromOn\")");
+                    table.CheckConstraint("CK_LeaseAddendum_SchemaVersions", "\"TermsSchemaVersion\" >= 1");
+                    table.CheckConstraint("CK_LeaseAddendum_Supersession", "(\"SupersededEffectiveOn\" IS NULL AND \"SupersededByAddendumId\" IS NULL AND \"SupersessionRecordedAtUtc\" IS NULL) OR (\"SupersededEffectiveOn\" IS NOT NULL AND \"SupersessionRecordedAtUtc\" IS NOT NULL AND \"SupersededEffectiveOn\" > \"EffectiveFromOn\")");
                     table.CheckConstraint("CK_LeaseAddendum_TerminalFacts", "NOT (\"VoidedAtUtc\" IS NOT NULL AND \"DraftCanceledAtUtc\" IS NOT NULL) AND (\"DraftCanceledAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NULL)");
                     table.CheckConstraint("CK_LeaseAddendum_Version", "\"VersionNumber\" >= 1");
                     table.CheckConstraint("CK_LeaseAddendum_Void", "((\"VoidedAtUtc\" IS NULL) = (\"VoidReasonCode\" IS NULL)) AND (\"VoidedAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NOT NULL)");
@@ -3277,12 +3255,6 @@ namespace RentalCommand.Data.Migrations
                         column: x => x.CreatedByUserId,
                         principalTable: "AspNetUsers",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_LeaseAddenda_DocumentTemplates_DocumentTemplateId_Portfolio~",
-                        columns: x => new { x.DocumentTemplateId, x.PortfolioId },
-                        principalTable: "DocumentTemplates",
-                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_LeaseAddenda_LeaseAddenda_ReplacesAddendumId_SeriesPublicId~",
@@ -3318,6 +3290,12 @@ namespace RentalCommand.Data.Migrations
                         name: "FK_LeaseAddenda_LegalDocumentArtifacts_IssuedArtifactId_Portfo~",
                         columns: x => new { x.IssuedArtifactId, x.PortfolioId },
                         principalTable: "LegalDocumentArtifacts",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LeaseAddenda_LegalDocumentSourceVersions_DocumentSourceVers~",
+                        columns: x => new { x.DocumentSourceVersionId, x.PortfolioId },
+                        principalTable: "LegalDocumentSourceVersions",
                         principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
@@ -5055,6 +5033,18 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.InsertData(
+                table: "SystemNoticeTemplateVersions",
+                columns: new[] { "Id", "Body", "Classification", "JurisdictionCode", "Provenance", "PublishedAtUtc", "Subject", "SystemKey", "Version" },
+                values: new object[,]
+                {
+                    { 1, "Hello {{tenant_name}}, this is a reminder that {{rent_amount}} is due on {{rent_due_date}} for {{property_address}}.", "Courtesy", null, "Rental Command supplied default v1", new DateTime(2026, 7, 13, 0, 0, 0, 0, DateTimeKind.Utc), "Upcoming rent reminder", "rent-reminder", 1 },
+                    { 2, "Hello {{tenant_name}}, we would like to offer a renewal for {{property_address}} beginning {{renewal_start_date}}. Please review the attached terms.", "Operational", null, "Rental Command supplied default v1", new DateTime(2026, 7, 13, 0, 0, 0, 0, DateTimeKind.Utc), "Lease renewal offer", "lease-renewal-offer", 1 },
+                    { 3, "Hello {{tenant_name}}, your current agreement ends {{lease_end_date}}. We are offering a month-to-month arrangement beginning the following day.", "Operational", null, "Rental Command supplied default v1", new DateTime(2026, 7, 13, 0, 0, 0, 0, DateTimeKind.Utc), "Month-to-month offer", "month-to-month-offer", 1 },
+                    { 4, "Hello {{tenant_name}}, this notice concerns the agreement for {{property_address}}, which ends {{lease_end_date}}. Review the attached notice and contact management with questions.", "Legal", null, "Rental Command supplied default v1", new DateTime(2026, 7, 13, 0, 0, 0, 0, DateTimeKind.Utc), "Lease expiration and non-renewal notice", "lease-non-renewal", 1 },
+                    { 5, "Hello {{tenant_name}}, our records show {{overdue_amount}} remains due for {{property_address}} as of {{today}}. This notice includes any applicable late fee described in your agreement.", "Legal", null, "Rental Command supplied default v1", new DateTime(2026, 7, 13, 0, 0, 0, 0, DateTimeKind.Utc), "Past-due rent notice", "late-rent-late-fee", 1 }
+                });
+
+            migrationBuilder.InsertData(
                 table: "RoleProfileCapabilities",
                 columns: new[] { "CapabilityDefinitionId", "RoleProfileId" },
                 values: new object[,]
@@ -5397,17 +5387,6 @@ namespace RentalCommand.Data.Migrations
                 column: "UnitId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_AspNetRoleClaims_RoleId",
-                table: "AspNetRoleClaims",
-                column: "RoleId");
-
-            migrationBuilder.CreateIndex(
-                name: "RoleNameIndex",
-                table: "AspNetRoles",
-                column: "NormalizedName",
-                unique: true);
-
-            migrationBuilder.CreateIndex(
                 name: "IX_AspNetUserClaims_UserId",
                 table: "AspNetUserClaims",
                 column: "UserId");
@@ -5418,19 +5397,9 @@ namespace RentalCommand.Data.Migrations
                 column: "UserId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_AspNetUserRoles_RoleId",
-                table: "AspNetUserRoles",
-                column: "RoleId");
-
-            migrationBuilder.CreateIndex(
                 name: "EmailIndex",
                 table: "AspNetUsers",
                 column: "NormalizedEmail");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_AspNetUsers_PortfolioId",
-                table: "AspNetUsers",
-                column: "PortfolioId");
 
             migrationBuilder.CreateIndex(
                 name: "UserNameIndex",
@@ -5924,9 +5893,9 @@ namespace RentalCommand.Data.Migrations
                 column: "CreatedByUserId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_LeaseAddenda_DocumentTemplateId_PortfolioId",
+                name: "IX_LeaseAddenda_DocumentSourceVersionId_PortfolioId",
                 table: "LeaseAddenda",
-                columns: new[] { "DocumentTemplateId", "PortfolioId" });
+                columns: new[] { "DocumentSourceVersionId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_LeaseAddenda_ExecutedArtifactId_PortfolioId",
@@ -6030,9 +5999,9 @@ namespace RentalCommand.Data.Migrations
                 column: "CreatedByUserId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_LeaseAgreements_DocumentTemplateId_PortfolioId",
+                name: "IX_LeaseAgreements_DocumentSourceVersionId_PortfolioId",
                 table: "LeaseAgreements",
-                columns: new[] { "DocumentTemplateId", "PortfolioId" });
+                columns: new[] { "DocumentSourceVersionId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_LeaseAgreements_ExecutedArtifactId_PortfolioId",
@@ -6300,6 +6269,59 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_LegalDocumentArtifacts_StoredFileId_PortfolioId",
                 table: "LegalDocumentArtifacts",
                 columns: new[] { "StoredFileId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_CreatedByUserId",
+                table: "LegalDocumentSourceVersions",
+                column: "CreatedByUserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_DocumentTemplateId_DocumentTemp~",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "DocumentTemplateId", "DocumentTemplateVersion", "PortfolioId" },
+                unique: true,
+                filter: "\"SourceKind\" = 'AuthoredTemplateSnapshot'");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_DocumentTemplateId_PortfolioId",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "DocumentTemplateId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_PortfolioId_BusinessKey",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "PortfolioId", "BusinessKey" },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_PortfolioId_RendererKey_Rendere~",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "PortfolioId", "RendererKey", "RendererVersion" },
+                unique: true,
+                filter: "\"SourceKind\" = 'BuiltInRenderer'");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_PublicId",
+                table: "LegalDocumentSourceVersions",
+                column: "PublicId",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_SourceLegalDocumentArtifactId_P~",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "SourceLegalDocumentArtifactId", "PortfolioId" },
+                unique: true,
+                filter: "\"SourceKind\" = 'ImportedExternalDocument'");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_SourceLegalDocumentArtifactId_S~",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "SourceLegalDocumentArtifactId", "SourceStoredFileId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LegalDocumentSourceVersions_SourceStoredFileId_PortfolioId",
+                table: "LegalDocumentSourceVersions",
+                columns: new[] { "SourceStoredFileId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_ListingPhotos_RentalListingId_PortfolioId",
@@ -6701,9 +6723,19 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "PortfolioId", "Status", "PreparedAtUtc" });
 
             migrationBuilder.CreateIndex(
+                name: "IX_PortalMessages_AuthorAccessContextId_PortfolioId",
+                table: "PortalMessages",
+                columns: new[] { "AuthorAccessContextId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_PortalMessages_PortfolioId",
                 table: "PortalMessages",
                 column: "PortfolioId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_PortalMessages_PortfolioId_AuthorAccessContextId",
+                table: "PortalMessages",
+                columns: new[] { "PortfolioId", "AuthorAccessContextId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_PortalMessages_PropertyId",
@@ -6724,11 +6756,6 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_PortalMessages_UnitId",
                 table: "PortalMessages",
                 column: "UnitId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_UserAccountId",
-                table: "PortalMessages",
-                column: "UserAccountId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Portfolios_PublicApplicationToken",
@@ -6866,22 +6893,6 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_RecurringMaintenanceTasks_VendorId",
                 table: "RecurringMaintenanceTasks",
                 column: "VendorId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_RefreshTokens_ExpiresAt",
-                table: "RefreshTokens",
-                column: "ExpiresAt");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_RefreshTokens_TokenHash",
-                table: "RefreshTokens",
-                column: "TokenHash",
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_RefreshTokens_UserId",
-                table: "RefreshTokens",
-                column: "UserId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_RenderedNotices_PortfolioId_NoticeDraftId",
@@ -7661,27 +7672,6 @@ namespace RentalCommand.Data.Migrations
                 filter: "\"DeletedAt\" IS NULL");
 
             migrationBuilder.CreateIndex(
-                name: "IX_UserAccounts_OwnerId",
-                table: "UserAccounts",
-                column: "OwnerId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_UserAccounts_PortfolioId_Email",
-                table: "UserAccounts",
-                columns: new[] { "PortfolioId", "Email" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_UserAccounts_Role",
-                table: "UserAccounts",
-                column: "Role");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_UserAccounts_TenantId",
-                table: "UserAccounts",
-                column: "TenantId");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_UserAlertPreferences_PortfolioId_UserId",
                 table: "UserAlertPreferences",
                 columns: new[] { "PortfolioId", "UserId" },
@@ -7809,6 +7799,37 @@ namespace RentalCommand.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_WorkspaceInvitations_InvitedByUserId",
+                table: "WorkspaceInvitations",
+                column: "InvitedByUserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkspaceInvitations_InvitedUserId",
+                table: "WorkspaceInvitations",
+                column: "InvitedUserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkspaceInvitations_PortfolioId",
+                table: "WorkspaceInvitations",
+                column: "PortfolioId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkspaceInvitations_TokenHash",
+                table: "WorkspaceInvitations",
+                column: "TokenHash",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkspaceInvitations_WorkspaceMembershipId_AcceptedAtUtc_Re~",
+                table: "WorkspaceInvitations",
+                columns: new[] { "WorkspaceMembershipId", "AcceptedAtUtc", "RevokedAtUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkspaceInvitations_WorkspaceMembershipId_PortfolioId",
+                table: "WorkspaceInvitations",
+                columns: new[] { "WorkspaceMembershipId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_WorkspaceMemberships_AccessContextId",
                 table: "WorkspaceMemberships",
                 column: "AccessContextId",
@@ -7882,10 +7903,6 @@ namespace RentalCommand.Data.Migrations
 
             foreach (var statement in LeaseLegalSchemaSql.DropStatements)
                 migrationBuilder.Sql(statement);
-
-            migrationBuilder.DropForeignKey(
-                name: "FK_AspNetUsers_Portfolios_PortfolioId",
-                table: "AspNetUsers");
 
             migrationBuilder.DropForeignKey(
                 name: "FK_CapitalAssets_Portfolios_PortfolioId",
@@ -8026,16 +8043,10 @@ namespace RentalCommand.Data.Migrations
                 name: "Appointments");
 
             migrationBuilder.DropTable(
-                name: "AspNetRoleClaims");
-
-            migrationBuilder.DropTable(
                 name: "AspNetUserClaims");
 
             migrationBuilder.DropTable(
                 name: "AspNetUserLogins");
-
-            migrationBuilder.DropTable(
-                name: "AspNetUserRoles");
 
             migrationBuilder.DropTable(
                 name: "AspNetUserTokens");
@@ -8146,9 +8157,6 @@ namespace RentalCommand.Data.Migrations
                 name: "QueuedJobs");
 
             migrationBuilder.DropTable(
-                name: "RefreshTokens");
-
-            migrationBuilder.DropTable(
                 name: "RoleProfileCapabilities");
 
             migrationBuilder.DropTable(
@@ -8200,6 +8208,9 @@ namespace RentalCommand.Data.Migrations
                 name: "WorkOrderStatusEvents");
 
             migrationBuilder.DropTable(
+                name: "WorkspaceInvitations");
+
+            migrationBuilder.DropTable(
                 name: "AccountingEntityMappings");
 
             migrationBuilder.DropTable(
@@ -8207,9 +8218,6 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "ApplicationFinancialAccounts");
-
-            migrationBuilder.DropTable(
-                name: "AspNetRoles");
 
             migrationBuilder.DropTable(
                 name: "AuthSessionRefreshTokenFamilies");
@@ -8243,9 +8251,6 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "BankConnections");
-
-            migrationBuilder.DropTable(
-                name: "UserAccounts");
 
             migrationBuilder.DropTable(
                 name: "CapabilityDefinitions");
@@ -8318,6 +8323,9 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "LeaseAgreements");
+
+            migrationBuilder.DropTable(
+                name: "LegalDocumentSourceVersions");
 
             migrationBuilder.DropTable(
                 name: "DocumentTemplates");

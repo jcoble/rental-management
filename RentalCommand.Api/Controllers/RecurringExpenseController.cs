@@ -6,7 +6,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for recurring-expense templates (insurance/tax/HOA/management fee entered once) within the
-/// caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim; list supports
+/// caller's portfolio. Scope comes from the server-validated workspace context; list supports
 /// <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort&amp;from&amp;to</c>. Removal is a soft-delete. The Engine
 /// materializes due templates into expense rows.
 /// </summary>

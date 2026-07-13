@@ -4,9 +4,12 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -19,9 +22,7 @@ public class ReportsService : IReportsService
     private const int DefaultExpirationWindowDays = 90;
 
     private readonly RentalCommandDbContext _db;
-    private readonly IOwnerStatementService _ownerStatements;
     private readonly IScheduleEService _scheduleE;
-    private readonly IPropertyDispositionService _propertyDispositions;
     private readonly TimeProvider _timeProvider;
 
     public ReportsService(
@@ -32,9 +33,9 @@ public class ReportsService : IReportsService
         TimeProvider timeProvider)
     {
         _db = db;
-        _ownerStatements = ownerStatements;
+        _ = ownerStatements;
         _scheduleE = scheduleE;
-        _propertyDispositions = propertyDispositions;
+        _ = propertyDispositions;
         _timeProvider = timeProvider;
     }
 
@@ -215,9 +216,10 @@ public class ReportsService : IReportsService
 
     // ── Rent Roll ────────────────────────────────────────────────────────────────────────────────
 
-    public async Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<RentRollResponse> GetRentRollAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         var q =
             from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
@@ -228,8 +230,8 @@ public class ReportsService : IReportsService
                 on new { lifecycle.PortfolioId, lifecycle.UnitId }
                 equals new { occupancy.PortfolioId, occupancy.UnitId }
             join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
-                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { agreement.PortfolioId, agreement.LeaseManagementId }
             join account in _db.TenantAccounts.AsNoTracking()
                 on new { lifecycle.PortfolioId, LeaseManagementId = lifecycle.LeaseManagementId }
                 equals new { account.PortfolioId, account.LeaseManagementId }
@@ -239,12 +241,28 @@ public class ReportsService : IReportsService
             where lifecycle.PortfolioId == portfolioId
                 && occupancy.IsOccupied
                 && occupancy.CurrentLeaseManagementId == lifecycle.LeaseManagementId
-                && agreementStatus.IsGoverning
                 && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && agreement.FullyExecutedAtUtc != null
+                && agreement.VoidedAtUtc == null
+                && agreement.DraftCanceledAtUtc == null
+                && agreement.GoverningFromOn <= lifecycle.BusinessDate
+                && !_db.LeaseAgreements.Any(candidate =>
+                    candidate.PortfolioId == agreement.PortfolioId &&
+                    candidate.LeaseManagementId == agreement.LeaseManagementId &&
+                    candidate.FullyExecutedAtUtc != null &&
+                    candidate.VoidedAtUtc == null &&
+                    candidate.DraftCanceledAtUtc == null &&
+                    candidate.GoverningFromOn <= lifecycle.BusinessDate &&
+                    (candidate.GoverningFromOn > agreement.GoverningFromOn ||
+                     (candidate.GoverningFromOn == agreement.GoverningFromOn &&
+                      candidate.VersionNumber > agreement.VersionNumber) ||
+                     (candidate.GoverningFromOn == agreement.GoverningFromOn &&
+                      candidate.VersionNumber == agreement.VersionNumber &&
+                      candidate.Id > agreement.Id)))
             select new { lifecycle, management, agreement, account, agreementStatus };
 
-        if (propertyFilter is not null)
-            q = q.Where(row => propertyFilter.Contains(row.management.PropertyId));
+        q = q.Where(row => authorizedProperties.Any(property =>
+            property.Id == row.management.PropertyId));
 
         var totals = await q
             .GroupBy(_ => 1)
@@ -549,10 +567,11 @@ public class ReportsService : IReportsService
 
     // ── Delinquency / Overdue Aging ────────────────────────────────────────────────────────────────
 
-    public async Task<DelinquencyResponse> GetDelinquencyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<DelinquencyResponse> GetDelinquencyAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var asOf = _timeProvider.UtcNow();
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         var owed =
             from balance in _db.TenantChargeBalanceProjections.AsNoTracking()
@@ -568,10 +587,16 @@ public class ReportsService : IReportsService
             join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { management.PortfolioId, management.UnitId }
+                equals new { occupancy.PortfolioId, occupancy.UnitId }
             where balance.PortfolioId == portfolioId
                 && balance.IsPastDue
                 && balance.OpenAmount > 0m
-                && (propertyFilter == null || propertyFilter.Contains(management.PropertyId))
+                && occupancy.IsOccupied
+                && occupancy.CurrentLeaseManagementId == management.Id
+                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
             select new
             {
                 Balance = balance,
@@ -696,10 +721,11 @@ public class ReportsService : IReportsService
 
     // ── Cash Flow (income vs expense by month) ─────────────────────────────────────────────────────
 
-    public async Task<CashFlowResponse> GetCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<CashFlowResponse> GetCashFlowAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         // Money in: income is ACTUAL CASH RECEIVED — Rent + LateFee that is Paid (full Amount) or
         // Partial (the collected AmountPaid). Security deposits are a liability, never income (§7/§18).
@@ -754,9 +780,8 @@ public class ReportsService : IReportsService
 
         var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
 
-        if (propertyFilter is not null)
-            incomeQuery = incomeQuery.Where(row =>
-                row.PropertyId != null && propertyFilter.Contains(row.PropertyId.Value));
+        incomeQuery = incomeQuery.Where(row => row.PropertyId != null &&
+            authorizedProperties.Any(property => property.Id == row.PropertyId.Value));
 
         var incomeByMonth = (await incomeQuery
             .GroupBy(row => new { row.Year, row.Month })
@@ -778,8 +803,8 @@ public class ReportsService : IReportsService
                 e.PortfolioId == portfolioId &&
                 (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to);
 
-        if (propertyFilter is not null)
-            expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
+        expenseQuery = expenseQuery.Where(e => e.PropertyId != null &&
+            authorizedProperties.Any(property => property.Id == e.PropertyId.Value));
 
         var expenseByMonth = (await expenseQuery
             .GroupBy(e => new { (e.PaidAt ?? e.IncurredAt).Year, (e.PaidAt ?? e.IncurredAt).Month })
@@ -836,16 +861,13 @@ public class ReportsService : IReportsService
 
     // ── True cash flow (rent − opex − debt service), escrow-aware, DB-side (§9/§18) ─────────────────
 
-    public async Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
-        var propertyQuery = _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId);
-        if (propertyFilter is not null)
-            propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
+        var propertyQuery = authorizedProperties;
 
         var fromDate = DateOnly.FromDateTime(from);
         var toDate = DateOnly.FromDateTime(to);
@@ -965,8 +987,9 @@ public class ReportsService : IReportsService
 
     // ── Year-end view: cash flow vs taxable income + rent roll (§11/§18) ────────────────────────────
 
-    public async Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default)
+    public async Task<YearEndViewResponse> GetYearEndAsync(WorkspaceReadScope scope, int year, int? propertyId = null, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var yearRange = new ReportRangeQuery
         {
             From = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -975,24 +998,33 @@ public class ReportsService : IReportsService
         };
 
         // Block 1: true cash flow (rent − opex − debt service, escrow-aware, no depreciation).
-        var cashFlow = await GetTrueCashFlowAsync(portfolioId, yearRange, ct);
+        var cashFlow = await GetTrueCashFlowAsync(scope, yearRange, ct);
 
         // Block 2: taxable income / Schedule E (interest + depreciation in, principal + deposits out).
-        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, propertyId, ct);
+        var scheduleE = await _scheduleE.GetReportAsync(scope, year, propertyId, ct);
 
         // Block 3: rent roll — current leases with their past-due balance (DB-side, no N+1).
-        var rentRoll = await BuildRentRollAsync(portfolioId, propertyId, ct);
+        var rentRoll = await BuildRentRollAsync(scope, propertyId, ct);
 
-        var dispositions = await _propertyDispositions.ListAsync(
-            portfolioId,
-            new PropertyDispositionListQuery
-            {
-                Year = year,
-                PropertyId = propertyId,
-                Sort = "closedOnDate",
-                Take = ListQuery.MaxTake,
-            },
-            ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(
+            scope, yearRange, CapabilityKeys.ReportsRead);
+        var dispositionStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var dispositionEnd = dispositionStart.AddYears(1);
+        var dispositionEntities = await _db.PropertyDispositions
+            .AsNoTracking()
+            .Include(disposition => disposition.Property)
+            .Where(disposition =>
+                disposition.PortfolioId == portfolioId &&
+                disposition.ClosedOnDate >= dispositionStart &&
+                disposition.ClosedOnDate < dispositionEnd &&
+                authorizedProperties.Any(property => property.Id == disposition.PropertyId))
+            .OrderBy(disposition => disposition.ClosedOnDate)
+            .ThenBy(disposition => disposition.Id)
+            .Take(ListQuery.MaxTake)
+            .ToListAsync(ct);
+        var dispositions = dispositionEntities
+            .Select(PropertyDispositionResponse.FromEntity)
+            .ToList();
 
         // §18 "see your accountant" caveats — surfaced so the owner never trusts a number the model
         // does not compute. Conditional on what the data suggests, so they are actionable not noise.
@@ -1032,8 +1064,16 @@ public class ReportsService : IReportsService
     /// <summary>
     /// Rent roll over canonical lease-management lifecycle and tenant-account balance projections.
     /// </summary>
-    private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, int? propertyId, CancellationToken ct)
+    private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(
+            scope,
+            new ReportRangeQuery { PropertyId = propertyId },
+            CapabilityKeys.ReportsRead);
         var query =
             from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
             join management in _db.LeaseManagements.AsNoTracking()
@@ -1043,8 +1083,8 @@ public class ReportsService : IReportsService
                 on new { lifecycle.PortfolioId, lifecycle.UnitId }
                 equals new { occupancy.PortfolioId, occupancy.UnitId }
             join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.CurrentAgreementId }
-                equals new { agreement.PortfolioId, Id = (int?)agreement.Id }
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { agreement.PortfolioId, agreement.LeaseManagementId }
             join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
                 on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
                 equals new { status.PortfolioId, status.AgreementId }
@@ -1054,12 +1094,26 @@ public class ReportsService : IReportsService
             where lifecycle.PortfolioId == portfolioId
                 && occupancy.IsOccupied
                 && occupancy.CurrentLeaseManagementId == lifecycle.LeaseManagementId
-                && status.IsGoverning
                 && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                && agreement.FullyExecutedAtUtc != null
+                && agreement.VoidedAtUtc == null
+                && agreement.DraftCanceledAtUtc == null
+                && agreement.GoverningFromOn <= lifecycle.BusinessDate
+                && !_db.LeaseAgreements.Any(candidate =>
+                    candidate.PortfolioId == agreement.PortfolioId &&
+                    candidate.LeaseManagementId == agreement.LeaseManagementId &&
+                    candidate.FullyExecutedAtUtc != null &&
+                    candidate.VoidedAtUtc == null &&
+                    candidate.DraftCanceledAtUtc == null &&
+                    candidate.GoverningFromOn <= lifecycle.BusinessDate &&
+                    (candidate.GoverningFromOn > agreement.GoverningFromOn ||
+                     (candidate.GoverningFromOn == agreement.GoverningFromOn &&
+                      candidate.VersionNumber > agreement.VersionNumber) ||
+                     (candidate.GoverningFromOn == agreement.GoverningFromOn &&
+                      candidate.VersionNumber == agreement.VersionNumber &&
+                      candidate.Id > agreement.Id)))
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
             select new { lifecycle, management, agreement, status, balance };
-
-        if (propertyId.HasValue)
-            query = query.Where(row => row.management.PropertyId == propertyId.Value);
 
         var rows = await query
             .OrderBy(row => row.management.Property!.Name)
@@ -1094,10 +1148,11 @@ public class ReportsService : IReportsService
 
     // ── General Ledger (running balance) ───────────────────────────────────────────────────────────
 
-    public async Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<GeneralLedgerResponse> GetGeneralLedgerAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         const int expenseEntryKind = 0;
         const int receiptEntryKind = 1;
@@ -1122,7 +1177,7 @@ public class ReportsService : IReportsService
             where allocation.PortfolioId == portfolioId
                 && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
                 && charge.EntryType != TenantLedgerEntryType.DepositCharge
-                && (propertyFilter == null || propertyFilter.Contains(management.PropertyId))
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
             group allocation by new
             {
                 receipt.Id,
@@ -1151,8 +1206,8 @@ public class ReportsService : IReportsService
             .AsNoTracking()
             .Where(e => e.PortfolioId == portfolioId);
 
-        if (propertyFilter is not null)
-            expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
+        expenseQuery = expenseQuery.Where(e => e.PropertyId != null &&
+            authorizedProperties.Any(property => property.Id == e.PropertyId.Value));
 
         var expenseEntries = expenseQuery
             .Select(e => new GeneralLedgerQueryRow
@@ -1237,17 +1292,11 @@ public class ReportsService : IReportsService
 
     // ── Property P&L Summary ───────────────────────────────────────────────────────────────────────
 
-    public async Task<PropertyProfitAndLossResponse> GetPropertyProfitAndLossAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<PropertyProfitAndLossResponse> GetPropertyProfitAndLossAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
-
-        var propertyQuery = _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId);
-
-        if (propertyFilter is not null)
-            propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
+        var propertyQuery = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         var fromOn = DateOnly.FromDateTime(from);
         var toOn = DateOnly.FromDateTime(to);
@@ -1334,16 +1383,10 @@ public class ReportsService : IReportsService
 
     // ── Occupancy / Vacancy ────────────────────────────────────────────────────────────────────────
 
-    public async Task<OccupancyResponse> GetOccupancyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<OccupancyResponse> GetOccupancyAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
-
-        var propertyQuery = _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId);
-
-        if (propertyFilter is not null)
-            propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
+        var portfolioId = scope.PortfolioId;
+        var propertyQuery = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         // The projection has exactly one row per live Unit. Keep both per-property and portfolio
         // aggregation in PostgreSQL; the mutable Unit.Status column is not part of this read path.
@@ -1404,12 +1447,13 @@ public class ReportsService : IReportsService
 
     // ── Lease Expirations / Renewals Due ───────────────────────────────────────────────────────────
 
-    public async Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(int portfolioId, ReportRangeQuery query, int days, CancellationToken ct = default)
+    public async Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(WorkspaceReadScope scope, ReportRangeQuery query, int days, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var window = days > 0 ? days : DefaultExpirationWindowDays;
         var asOf = DateOnly.FromDateTime(_timeProvider.UtcNow());
         var cutoff = asOf.AddDays(window);
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         var q =
             from status in _db.LeaseAgreementStatusProjections.AsNoTracking()
@@ -1428,8 +1472,8 @@ public class ReportsService : IReportsService
                 && agreement.TermEndOn <= cutoff
             select new { status, agreement, management, lifecycle };
 
-        if (propertyFilter is not null)
-            q = q.Where(row => propertyFilter.Contains(row.management.PropertyId));
+        q = q.Where(row => authorizedProperties.Any(property =>
+            property.Id == row.management.PropertyId));
 
         var summary = await q
             .GroupBy(_ => 1)
@@ -1499,9 +1543,10 @@ public class ReportsService : IReportsService
 
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────
 
-    public async Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         var q =
             from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
@@ -1530,8 +1575,8 @@ public class ReportsService : IReportsService
                 Agreement = agreement,
             };
 
-        if (propertyFilter is not null)
-            q = q.Where(h => propertyFilter.Contains(h.Management.PropertyId));
+        q = q.Where(h => authorizedProperties.Any(property =>
+            property.Id == h.Management.PropertyId));
 
         var rowsQuery = q
             .Select(h => new
@@ -1618,8 +1663,11 @@ public class ReportsService : IReportsService
 
     // ── Vendor 1099 & Payments ─────────────────────────────────────────────────────────────────────
 
-    public async Task<Vendor1099Response> GetVendor1099Async(int portfolioId, int year, CancellationToken ct = default)
+    public async Task<Vendor1099Response> GetVendor1099Async(WorkspaceReadScope scope, int year, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(
+            scope, new ReportRangeQuery(), CapabilityKeys.MoneyOwnerReportsRead);
         // Total paid per vendor = expenses to that vendor whose PaidAt falls in the year. Mirrors the
         // accounting reports' 1099 logic but scoped to a single tax year (the 1099 reporting period).
         var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -1627,8 +1675,10 @@ public class ReportsService : IReportsService
 
         var vendorRowsQuery = _db.Vendors
             .AsNoTracking()
-            .Where(v => v.PortfolioId == portfolioId &&
-                        (v.Is1099Eligible || v.Expenses.Any(e => e.PaidAt >= yearStart && e.PaidAt < yearEnd)))
+            .Where(v => v.PortfolioId == portfolioId && v.Expenses.Any(e =>
+                e.PaidAt >= yearStart && e.PaidAt < yearEnd &&
+                e.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == e.PropertyId.Value)))
             .OrderBy(v => v.Name)
             .Select(v => new
             {
@@ -1638,7 +1688,9 @@ public class ReportsService : IReportsService
                 v.Is1099Eligible,
                 v.W9OnFile,
                 TotalPaid = v.Expenses
-                    .Where(e => e.PaidAt >= yearStart && e.PaidAt < yearEnd)
+                    .Where(e => e.PaidAt >= yearStart && e.PaidAt < yearEnd &&
+                        e.PropertyId != null &&
+                        authorizedProperties.Any(property => property.Id == e.PropertyId.Value))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
             });
 
@@ -1672,29 +1724,99 @@ public class ReportsService : IReportsService
 
     // ── Owner Distributions ────────────────────────────────────────────────────────────────────────
 
-    public async Task<OwnerDistributionsResponse> GetOwnerDistributionsAsync(int portfolioId, int year, CancellationToken ct = default)
+    public async Task<OwnerDistributionsResponse> GetOwnerDistributionsAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default)
     {
-        // Reuse OwnerStatementService's net-per-owner computation so distributions reconcile exactly with
-        // the per-owner statement.
-        var summaries = await _ownerStatements.ListOwnersWithNetAsync(portfolioId, year, ct);
-        var totalNetToOwners = await _ownerStatements.GetTotalNetToOwnersAsync(portfolioId, year, ct);
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(
+            scope, new ReportRangeQuery(), CapabilityKeys.MoneyOwnerReportsRead);
+        var startOn = new DateOnly(year, 1, 1);
+        var endOn = startOn.AddYears(1);
         var start = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var end = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var totalDistributed = await _db.OwnerDistributions
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId && d.Date >= start && d.Date < end)
-            .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
 
-        var rows = summaries
-            .Select(s => new OwnerDistributionRow
+        var propertyNetRows = authorizedProperties
+            .Where(property => property.OwnerEntityId != null && property.OwnerEntity != null)
+            .Select(property => new
             {
-                OwnerId = s.OwnerId,
-                OwnerName = s.OwnerName,
-                NetToOwner = s.NetToOwner,
-                TotalDistributed = s.TotalDistributed,
-                Undistributed = s.Undistributed,
+                OwnerId = property.OwnerEntityId!.Value,
+                OwnerName = property.OwnerEntity!.Name,
+                PropertyId = property.Id,
+                RentalIncome = (
+                    from allocation in _db.TenantLedgerAllocations.AsNoTracking()
+                    join credit in _db.TenantLedgerEntries.AsNoTracking()
+                        on new { allocation.PortfolioId, Id = allocation.CreditEntryId }
+                        equals new { credit.PortfolioId, credit.Id }
+                    join debit in _db.TenantLedgerEntries.AsNoTracking()
+                        on new { allocation.PortfolioId, Id = allocation.DebitEntryId }
+                        equals new { debit.PortfolioId, debit.Id }
+                    join account in _db.TenantAccounts.AsNoTracking()
+                        on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
+                        equals new { account.PortfolioId, account.Id }
+                    join management in _db.LeaseManagements.AsNoTracking()
+                        on new { account.PortfolioId, Id = account.LeaseManagementId }
+                        equals new { management.PortfolioId, management.Id }
+                    where allocation.PortfolioId == portfolioId
+                        && management.PropertyId == property.Id
+                        && credit.EntryType == TenantLedgerEntryType.PaymentReceipt
+                        && credit.EffectiveOn >= startOn
+                        && credit.EffectiveOn < endOn
+                        && debit.EntryType == TenantLedgerEntryType.RentCharge
+                    select (decimal?)allocation.Amount).Sum() ?? 0m,
+                Expenses = _db.Expenses
+                    .Where(expense =>
+                        expense.PortfolioId == portfolioId &&
+                        expense.PropertyId == property.Id &&
+                        expense.Status == ExpenseStatus.Paid &&
+                        (expense.PaidAt ?? expense.IncurredAt) >= start &&
+                        (expense.PaidAt ?? expense.IncurredAt) < end)
+                    .Sum(expense => (decimal?)expense.Amount) ?? 0m,
+                ManagementFeePercent = property.ManagementFeePercent ?? 0m,
+            });
+
+        var summaries = propertyNetRows
+            .GroupBy(property => new { property.OwnerId, property.OwnerName })
+            .Select(group => new
+            {
+                group.Key.OwnerId,
+                group.Key.OwnerName,
+                NetToOwner = group.Sum(property =>
+                    property.RentalIncome -
+                    property.Expenses -
+                    (property.RentalIncome * property.ManagementFeePercent / 100m)),
+                TotalDistributed = _db.OwnerDistributions
+                    .Where(distribution =>
+                        distribution.PortfolioId == portfolioId &&
+                        distribution.OwnerEntityId == group.Key.OwnerId &&
+                        distribution.PropertyId != null &&
+                        distribution.Date >= start &&
+                        distribution.Date < end &&
+                        authorizedProperties.Any(property =>
+                            property.Id == distribution.PropertyId.Value))
+                    .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
+            });
+
+        var rows = await summaries
+            .OrderBy(summary => summary.OwnerName)
+            .Select(summary => new OwnerDistributionRow
+            {
+                OwnerId = summary.OwnerId,
+                OwnerName = summary.OwnerName,
+                NetToOwner = summary.NetToOwner,
+                TotalDistributed = summary.TotalDistributed,
+                Undistributed = summary.NetToOwner - summary.TotalDistributed,
             })
-            .ToList();
+            .ToListAsync(ct);
+
+        var totals = await summaries
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                TotalNetToOwners = group.Sum(summary => summary.NetToOwner),
+                TotalDistributed = group.Sum(summary => summary.TotalDistributed),
+            })
+            .SingleOrDefaultAsync(ct);
+        var totalNetToOwners = totals?.TotalNetToOwners ?? 0m;
+        var totalDistributed = totals?.TotalDistributed ?? 0m;
 
         return new OwnerDistributionsResponse
         {
@@ -1708,18 +1830,17 @@ public class ReportsService : IReportsService
 
     // ── Work Orders / Maintenance ──────────────────────────────────────────────────────────────────
 
-    public async Task<WorkOrderReportResponse> GetWorkOrdersAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    public async Task<WorkOrderReportResponse> GetWorkOrdersAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
 
         var q = _db.WorkOrders
             .AsNoTracking()
             .Where(w => w.PortfolioId == portfolioId &&
-                        w.RequestedAt >= from && w.RequestedAt <= to);
-
-        if (propertyFilter is not null)
-            q = q.Where(w => propertyFilter.Contains(w.PropertyId));
+                        w.RequestedAt >= from && w.RequestedAt <= to &&
+                        authorizedProperties.Any(property => property.Id == w.PropertyId));
 
         var rows = await q
             .OrderByDescending(w => w.RequestedAt)
@@ -1778,28 +1899,25 @@ public class ReportsService : IReportsService
     /// Accepts either a single <c>propertyId</c> or a <c>propertyIds</c> list; out-of-portfolio ids are
     /// silently dropped so a caller can never read another tenant's data by id.
     /// </summary>
-    private async Task<HashSet<int>?> ResolvePropertyFilterAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct)
+    private IQueryable<Property> BuildAuthorizedPropertyQuery(
+        WorkspaceReadScope scope,
+        ReportRangeQuery query,
+        string capabilityKey)
     {
-        var requested = new HashSet<int>();
-        if (query.PropertyId.HasValue)
-            requested.Add(query.PropertyId.Value);
-        if (query.PropertyIds is { Count: > 0 })
-            foreach (var id in query.PropertyIds)
-                requested.Add(id);
-
-        if (requested.Count == 0)
-            return null;
-
-        // Keep only ids that actually belong to this portfolio.
-        var valid = await _db.Properties
+        var requested = (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is { } propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
+        var properties = _db.Properties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && requested.Contains(p.Id))
-            .Select(p => p.Id)
-            .ToListAsync(ct);
-
-        // If every requested id was out-of-portfolio, return an empty set so the report yields no rows
-        // (rather than null, which would silently widen the scope to the whole portfolio).
-        return valid.ToHashSet();
+            .WhereAuthorized(
+                _db,
+                scope,
+                capabilityKey,
+                _timeProvider.GetUtcNow().UtcDateTime);
+        return requested.Length == 0
+            ? properties
+            : properties.Where(property => requested.Contains(property.Id));
     }
 
     /// <summary>

@@ -11,6 +11,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
 {
     public async Task<AtomicTransferLeaseManagementMutationResult> TransferLeaseManagementAsync(
         TransferLeaseManagementCommand command,
+        int destinationDocumentSourceVersionId,
         DateTime changedAtUtc,
         CancellationToken ct = default)
     {
@@ -35,7 +36,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
             new("givePossessionNow", NpgsqlDbType.Boolean) { Value = command.GiveDestinationPossessionNow },
             NullableText("possessionExceptionReason", command.PossessionAgreementExceptionReason?.Trim()),
             Integer("documentTemplateId", command.DestinationDocumentTemplateId),
-            Integer("documentTemplateVersion", command.DestinationDocumentTemplateVersion),
+            Integer("documentSourceVersionId", destinationDocumentSourceVersionId),
             new("carryTenantBalance", NpgsqlDbType.Boolean) { Value = command.CarryTenantBalance },
             new("carrySecurityDeposit", NpgsqlDbType.Boolean) { Value = command.CarrySecurityDeposit },
             Text("transferReason", command.TransferReason.Trim()),
@@ -67,8 +68,8 @@ internal sealed partial class AtomicLeaseMutationPersistence
             new("TenantUserAccesses", AtomicRawDmlOperation.Insert),
             new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert));
 
-        var row = await _db.Database.SqlQueryRaw<TransferLeaseManagementRow>(TransferSql, parameters)
-            .SingleAsync(ct);
+        var row = await _db.Database.SingleTopLevelResultAsync<TransferLeaseManagementRow>(
+            TransferSql, parameters, ct);
         return new(
             (TransferLeaseManagementOutcome)row.Outcome,
             row.TransferPublicId,
@@ -265,7 +266,6 @@ internal sealed partial class AtomicLeaseMutationPersistence
                       AND template."PortfolioId" = @portfolioId
                       AND template."Kind" = 'Lease'
                       AND template."Status" = 'Active'
-                      AND template."Version" = @documentTemplateVersion
                       AND template."ArchivedAtUtc" IS NULL
                       AND (template."PropertyId" IS NULL
                            OR template."PropertyId" = (SELECT "PropertyId" FROM destination_unit)))
@@ -365,7 +365,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
                  "ChangeType", "TransferredFromAgreementId", "TermType", "TermStartOn", "TermEndOn",
                  "GoverningFromOn", "BaseRentAmount", "RentDueDay", "SecurityDepositObligation",
                  "LateFeeAmount", "GracePeriodDays", "Currency", "TermsSchemaVersion", "TermsPayload",
-                 "DocumentTemplateId", "DocumentTemplateVersion", "CreatedAtUtc", "CreatedByUserId",
+                 "DocumentSourceVersionId", "CreatedAtUtc", "CreatedByUserId",
                  "UpdatedAtUtc", "DraftRevision")
             SELECT gen_random_uuid(), @portfolioId, destination."Id", 1,
                    'AGR-XFER-' || @sourceLeaseManagementId::text || '-' || @destinationUnitId::text || '-V1',
@@ -373,7 +373,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
                    @businessDate, source."BaseRentAmount", source."RentDueDay",
                    source."SecurityDepositObligation", source."LateFeeAmount", source."GracePeriodDays",
                    source."Currency", source."TermsSchemaVersion", source."TermsPayload",
-                   @documentTemplateId, @documentTemplateVersion, @changedAt, @actorUserId,
+                   @documentSourceVersionId, @changedAt, @actorUserId,
                    @changedAt, 1
             FROM destination_relationship AS destination, source_agreement AS source
             RETURNING *

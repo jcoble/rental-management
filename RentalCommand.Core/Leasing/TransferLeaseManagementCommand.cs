@@ -21,7 +21,6 @@ public sealed record TransferLeaseManagementCommand(
     bool GiveDestinationPossessionNow,
     string? PossessionAgreementExceptionReason,
     int DestinationDocumentTemplateId,
-    int DestinationDocumentTemplateVersion,
     bool CarryTenantBalance,
     bool CarrySecurityDeposit,
     string TransferReason,

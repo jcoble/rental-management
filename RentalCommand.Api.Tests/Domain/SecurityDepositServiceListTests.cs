@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -28,8 +29,9 @@ public sealed class SecurityDepositServiceListTests
         SeedCanonicalAccount(db, id: 102, relationshipNumber: "REL-B", heldBalance: 1_100m, status: "PartiallyReturned");
         SeedCanonicalAccount(db, id: 103, relationshipNumber: "REL-C", heldBalance: 1_300m, status: "Returned");
         await db.SaveChangesAsync();
+        var scope = SeedAdministratorScope(db);
 
-        var result = await BuildService(db).ListPageAsync(1, leaseManagementId: null, new ListQuery
+        var result = await BuildService(db).ListPageAsync(scope, leaseManagementId: null, new ListQuery
         {
             Sort = "amount",
             Skip = 1,
@@ -58,7 +60,9 @@ public sealed class SecurityDepositServiceListTests
                 .Options);
 
         var term = "%REL-B%";
-        var sql = BuildService(db).BuildAccountQuery(1)
+        var scope = new WorkspaceReadScope(
+            1, 17, Guid.Parse("8b2b8fc4-931e-4896-a8ea-d52b261df51a"), 23, 5);
+        var sql = BuildService(db).BuildAccountQuery(scope)
             .Where(row => row.LeaseManagementId == 202)
             .Where(row => EF.Functions.ILike(row.RelationshipNumber, term)
                 || (row.TenantName != null && EF.Functions.ILike(row.TenantName, term)))
@@ -76,13 +80,59 @@ public sealed class SecurityDepositServiceListTests
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");
         sql.Should().Contain("OFFSET");
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain(CapabilityKeys.MoneyDepositsManage);
+        sql.Should().Contain(CapabilityKeys.LeasingDepositsRead);
+        sql.Should().Contain("AccessRevision");
         sql.Should().NotContain("SecurityDepositHoldings");
     }
 
-    private static FixtureDbContext NewFixtureContext() =>
-        new(new DbContextOptionsBuilder<RentalCommandDbContext>()
+    [Fact]
+    public async Task EveryAccountReadSurfaceHidesUnauthorizedPropertyAndHonorsLeaseFilter()
+    {
+        await using var db = NewFixtureContext();
+        db.Portfolios.Add(new Portfolio
+        {
+            Id = 1,
+            Name = "Test Portfolio",
+            ManagementCompanyName = "Test Company",
+            TimeZone = "UTC",
+        });
+        SeedCanonicalAccount(db, id: 201, relationshipNumber: "ALLOWED", heldBalance: 700m, status: "Held");
+        SeedCanonicalAccount(db, id: 202, relationshipNumber: "DECOY", heldBalance: 9_000m, status: "Held");
+        await db.SaveChangesAsync();
+        var allowedLeaseManagementId = 201 + 100;
+        var scope = SeedSelectedPropertyManagerScope(db, propertyId: 201 + 300);
+        var service = BuildService(db);
+
+        var list = await service.ListAsync(scope, leaseManagementId: null);
+        var page = await service.ListPageAsync(scope, leaseManagementId: null, new ListQuery
+        {
+            Sort = "amount",
+            Skip = 0,
+            Take = 20,
+        });
+        var filtered = await service.ListAsync(scope, allowedLeaseManagementId);
+        var allowedDetail = await service.GetAsync(scope, 201);
+        var decoyDetail = await service.GetAsync(scope, 202);
+
+        list.Should().ContainSingle().Which.Id.Should().Be(201);
+        page.TotalCount.Should().Be(1);
+        page.Items.Should().ContainSingle().Which.Id.Should().Be(201);
+        filtered.Should().ContainSingle().Which.Id.Should().Be(201);
+        allowedDetail.Should().NotBeNull();
+        decoyDetail.Should().BeNull("resource-target reads must not disclose an out-of-scope deposit");
+    }
+
+    private static FixtureDbContext NewFixtureContext()
+    {
+        var db = new FixtureDbContext(new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseInMemoryDatabase($"canonical-deposits-{Guid.NewGuid():N}")
             .Options);
+        db.Database.EnsureCreated();
+        return db;
+    }
 
     private static SecurityDepositService BuildService(RentalCommandDbContext db) =>
         new(
@@ -91,6 +141,99 @@ public sealed class SecurityDepositServiceListTests
             Mock.Of<IMoveOutStatementPdfGenerator>(),
             NullLogger<SecurityDepositService>.Instance,
             TimeProvider.System);
+
+    private static WorkspaceReadScope SeedAdministratorScope(RentalCommandDbContext db)
+    {
+        var access = SeedAccess(db, RoleProfileKeys.WorkspaceAdministrator,
+            MembershipRoleAssignmentScopeKind.AllProperties);
+        db.SaveChanges();
+        return ScopeFor(access.Context, access.Session);
+    }
+
+    private static WorkspaceReadScope SeedSelectedPropertyManagerScope(
+        RentalCommandDbContext db,
+        int propertyId)
+    {
+        var access = SeedAccess(db, RoleProfileKeys.PropertyManager,
+            MembershipRoleAssignmentScopeKind.SelectedProperties);
+        access.Assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = access.Assignment,
+            PortfolioId = 1,
+            PropertyId = propertyId,
+        });
+        db.SaveChanges();
+        return ScopeFor(access.Context, access.Session);
+    }
+
+    private static TestAccess SeedAccess(
+        RentalCommandDbContext db,
+        string roleKey,
+        MembershipRoleAssignmentScopeKind scopeKind)
+    {
+        var now = DateTime.UtcNow;
+        var email = $"deposit-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = "Deposit Reader",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = 1,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = 1,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleKey).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = scopeKind,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        return new TestAccess(context, assignment, session);
+    }
+
+    private static WorkspaceReadScope ScopeFor(WorkspaceAccessContext context, AuthSession session) =>
+        new(1, context.UserId, session.Id, context.Id, context.AccessRevision);
+
+    private sealed record TestAccess(
+        WorkspaceAccessContext Context,
+        MembershipRoleAssignment Assignment,
+        AuthSession Session);
 
     private static void SeedCanonicalAccount(
         FixtureDbContext db,
@@ -103,7 +246,7 @@ public sealed class SecurityDepositServiceListTests
         var tenantAccountId = id + 200;
         var propertyId = id + 300;
         var unitId = id + 400;
-        var createdAt = new DateTime(2026, 1, id - 100, 12, 0, 0, DateTimeKind.Utc);
+        var createdAt = new DateTime(2026, 1, ((id - 1) % 28) + 1, 12, 0, 0, DateTimeKind.Utc);
         var totalDeductions = status == "PartiallyReturned" ? 250m : 0m;
         var totalRefunded = status == "Returned" ? 1_300m : 0m;
         var totalReceived = heldBalance + totalDeductions + totalRefunded;

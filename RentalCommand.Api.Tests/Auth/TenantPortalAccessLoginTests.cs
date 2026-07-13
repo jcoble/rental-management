@@ -96,8 +96,6 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
 
     private AuthService CreateAuthService()
     {
-        var userMigration = new Mock<IUserMigrationService>();
-        userMigration.Setup(m => m.RequiresPasswordResetAsync(It.IsAny<ApplicationUser>())).ReturnsAsync(false);
         var contextSelection = new Mock<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>();
         contextSelection
             .Setup(query => query.ListAsync(
@@ -118,7 +116,6 @@ public sealed class TenantPortalAccessLoginTests : IDisposable
                 FamilyAbsoluteLifetimeDays = 30,
                 SessionLifetimeDays = 30,
             }),
-            userMigration.Object,
             Mock.Of<IAuthEmailSender>(),
             _ctx.Db,
             new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),

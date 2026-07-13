@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -432,13 +431,7 @@ public class ScanBatchControllerTests : IDisposable
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity([
-                        new Claim("portfolioId", PortfolioId.ToString()),
-                        new Claim(ClaimTypes.NameIdentifier, "7"),
-                    ], "test")),
-                },
+                HttpContext = new DefaultHttpContext(),
             },
         };
         controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(

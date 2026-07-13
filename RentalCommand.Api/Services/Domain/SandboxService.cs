@@ -365,9 +365,18 @@ public sealed class SandboxService : ISandboxService
         await _db.LeaseManagements.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.LegalDocumentArtifacts.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+            .Where(e => e.PortfolioId == portfolioId
+                && !_db.LegalDocumentSourceVersions.IgnoreQueryFilters().Any(source =>
+                    source.PortfolioId == portfolioId
+                    && source.SourceLegalDocumentArtifactId == e.Id))
+            .ExecuteDeleteAsync(ct);
         await _db.DocumentTemplates.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId && e.IsSandboxSeeded).ExecuteDeleteAsync(ct);
+            .Where(e => e.PortfolioId == portfolioId
+                && e.IsSandboxSeeded
+                && !_db.LegalDocumentSourceVersions.IgnoreQueryFilters().Any(source =>
+                    source.PortfolioId == portfolioId
+                    && source.DocumentTemplateId == e.Id))
+            .ExecuteDeleteAsync(ct);
         await _db.ScanDrafts.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.ScanBatches.IgnoreQueryFilters()
@@ -380,9 +389,14 @@ public sealed class SandboxService : ISandboxService
             .Where(file => file.PortfolioId == portfolioId
                 && !_db.DocumentTemplates.IgnoreQueryFilters().Any(template =>
                     template.PortfolioId == portfolioId
-                    && !template.IsSandboxSeeded
                     && (template.OriginalStoredFileId == file.Id
-                        || template.CompiledStoredFileId == file.Id)))
+                        || template.CompiledStoredFileId == file.Id))
+                && !_db.LegalDocumentSourceVersions.IgnoreQueryFilters().Any(source =>
+                    source.PortfolioId == portfolioId
+                    && source.SourceStoredFileId == file.Id)
+                && !_db.LegalDocumentArtifacts.IgnoreQueryFilters().Any(artifact =>
+                    artifact.PortfolioId == portfolioId
+                    && artifact.StoredFileId == file.Id))
             .ExecuteDeleteAsync(ct);
         await _db.Units.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);

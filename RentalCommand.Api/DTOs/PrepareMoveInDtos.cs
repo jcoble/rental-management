@@ -23,7 +23,6 @@ public sealed class PrepareMoveInRequest
     public DateOnly PartyEffectiveFrom { get; set; }
     public List<PrepareMoveInPartyRequest> Parties { get; set; } = [];
     public int DocumentTemplateId { get; set; }
-    public int DocumentTemplateVersion { get; set; }
     public LeaseAgreementTermType? TermType { get; set; }
     public DateOnly TermStartOn { get; set; }
     public DateOnly? TermEndOn { get; set; }

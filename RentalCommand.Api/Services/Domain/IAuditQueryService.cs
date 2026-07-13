@@ -1,17 +1,19 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
 /// Read-only access to the portfolio's append-only <see cref="Core.Entities.AuditLog"/> trail.
-/// Every query is filtered by the caller's portfolio id (cross-tenant IDOR guard); there are no
-/// create/update/delete operations.
+/// User-facing queries consume a server-validated workspace scope and apply current-session,
+/// access-revision, <c>reports.read</c>, and property scope in the translated SQL statement. The
+/// separate forensic operations are platform-operator-only and retain an explicit portfolio scope.
 /// </summary>
 public interface IAuditQueryService
 {
     Task<IReadOnlyList<AuditEntryResponse>> ListAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AuditLogOperation? operation,
         string? entityType,
         int? entityId,

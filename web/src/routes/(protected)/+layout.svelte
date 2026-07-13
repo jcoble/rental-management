@@ -19,14 +19,14 @@
 	// Reconcile before child route queries are created. Doing this only in an effect lets the first
 	// protected page briefly query the SSR placeholder portfolio id before the authenticated id wins.
 	// svelte-ignore state_referenced_locally
-	const initialPortfolioId = data.user?.portfolioId ?? undefined;
+	const initialPortfolioId = data.access?.selectedContext.portfolioId;
 	if (browser) {
 		initPortfolio(initialPortfolioId);
 	}
 
 	// Reconcile again when layout data changes during client navigation.
 	$effect(() => {
-		initPortfolio(data.user?.portfolioId ?? undefined);
+		initPortfolio(data.access?.selectedContext.portfolioId);
 	});
 
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).

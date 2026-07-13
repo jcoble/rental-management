@@ -5,9 +5,11 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -27,6 +29,7 @@ public class YearEndPacketTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly ScheduleEService _scheduleE;
     private readonly AccountingService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public YearEndPacketTests()
     {
@@ -35,6 +38,7 @@ public class YearEndPacketTests : IDisposable
 
         _conn = new SqliteConnection("DataSource=:memory:");
         _conn.Open();
+        _conn.RegisterScheduleEDepreciationFunctionForSqlite();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
@@ -43,6 +47,7 @@ public class YearEndPacketTests : IDisposable
 
         _db = new YearEndPacketFixtureDbContext(options);
         _db.Database.EnsureCreated();
+        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
         _db.Portfolios.Add(new Portfolio
         {
@@ -64,6 +69,7 @@ public class YearEndPacketTests : IDisposable
             CreatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(YearEndPacketTests));
 
         _scheduleE = new ScheduleEService(_db);
         _sut = new AccountingService(_db, _scheduleE, new YearEndPacketPdfGenerator(), TimeProvider.System);
@@ -80,7 +86,7 @@ public class YearEndPacketTests : IDisposable
     {
         SeedYear(Year);
 
-        var pdf = await _sut.GetYearEndPacketAsync(PortfolioId, Year, CancellationToken.None);
+        var pdf = await _sut.GetYearEndPacketAsync(_scope, Year, CancellationToken.None);
 
         pdf.Should().NotBeNullOrEmpty();
         // Valid PDFs start with the "%PDF" magic header.
@@ -91,7 +97,7 @@ public class YearEndPacketTests : IDisposable
     public async Task GetYearEndPacketAsync_RendersEvenWithNoActivity()
     {
         // No data seeded beyond the portfolio: the packet should still render a valid PDF.
-        var pdf = await _sut.GetYearEndPacketAsync(PortfolioId, Year, CancellationToken.None);
+        var pdf = await _sut.GetYearEndPacketAsync(_scope, Year, CancellationToken.None);
 
         pdf.Should().NotBeNullOrEmpty();
         Encoding.ASCII.GetString(pdf, 0, 4).Should().Be("%PDF");
@@ -104,8 +110,8 @@ public class YearEndPacketTests : IDisposable
 
         _commands.Clear();
 
-        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
-        var scheduleE = await _scheduleE.GetReportAsync(PortfolioId, Year, ct: CancellationToken.None);
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
+        var scheduleE = await _scheduleE.GetReportAsync(_scope, Year, ct: CancellationToken.None);
 
         // The packet must embed the exact same Schedule E numbers the standalone report/CSV produces.
         packet.ScheduleE.Year.Should().Be(scheduleE.Year);
@@ -120,7 +126,7 @@ public class YearEndPacketTests : IDisposable
     {
         SeedYear(Year);
 
-        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
 
         packet.PortfolioName.Should().Be("Frank's Rentals");
         packet.ManagementCompanyName.Should().Be("Frank Property Co");
@@ -146,7 +152,7 @@ public class YearEndPacketTests : IDisposable
         row.TenantName.Should().Be("Maria Tenant");
         row.MonthlyRent.Should().Be(1_200m);
         row.PastDueBalance.Should().Be(1_200m);
-        row.LeaseStatus.Should().Be("Active");
+        row.LeaseStatus.Should().Be("Expired");
 
         var sql = string.Join("\n---\n", _commands);
         sql.Should().Contain("EXISTS", "year-end packet P&L property filtering must happen in SQL");
@@ -167,7 +173,7 @@ public class YearEndPacketTests : IDisposable
             DateOnly.FromDateTime(paid),
             "security-deposit");
 
-        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
 
         packet.CashFlowMoneyIn.Should().Be(14_400m);
         packet.CashFlowNet.Should().Be(11_800m);
@@ -180,15 +186,18 @@ public class YearEndPacketTests : IDisposable
         SeedYear(Year);
         _commands.Clear();
 
-        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
 
         packet.RentRoll.Should().ContainSingle();
         packet.RentRoll[0].PastDueBalance.Should().Be(1_200m);
         var rentRollSql = _commands.Single(sql =>
-            sql.Contains("YearEndTestAccountBalances", StringComparison.Ordinal));
+            sql.Contains("\"vw_tenant_account_balances\"", StringComparison.Ordinal));
         rentRollSql.Should().Contain("LeaseManagements");
         rentRollSql.Should().Contain("LeaseAgreements");
-        rentRollSql.Should().Contain("YearEndTestAgreementStatus");
+        rentRollSql.Should().Contain("\"vw_lease_management_lifecycle\"");
+        rentRollSql.Should().Contain("\"vw_unit_occupancy\"");
+        rentRollSql.Should().Contain("\"vw_lease_agreement_status\"");
+        rentRollSql.Should().Contain("PastDueAmount");
         rentRollSql.Should().Contain("ORDER BY");
     }
 
@@ -198,7 +207,7 @@ public class YearEndPacketTests : IDisposable
         SeedYear(Year);
         _commands.Clear();
 
-        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
 
         packet.Properties.Should().ContainSingle();
         var pnl = packet.Properties[0];
@@ -207,9 +216,12 @@ public class YearEndPacketTests : IDisposable
         pnl.TotalExpenses.Should().Be(2_600m);
         pnl.Net.Should().Be(11_800m);
 
-        var propertyPnlSql = _commands.Single(sql =>
-            sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal) &&
-            sql.Contains("FROM \"Properties\"", StringComparison.Ordinal));
+        var propertyPnlCommands = _commands.Where(sql =>
+                sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal) &&
+                sql.Contains("FROM \"Properties\"", StringComparison.Ordinal))
+            .ToList();
+        propertyPnlCommands.Should().NotBeEmpty();
+        var propertyPnlSql = string.Join("\n---\n", propertyPnlCommands);
         propertyPnlSql.Should().Contain("TenantLedgerEntries");
         (propertyPnlSql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
          propertyPnlSql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
@@ -296,6 +308,8 @@ public class YearEndPacketTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, ActorUserId, anchor),
             IssuedAtUtc = anchor,
             FullyExecutedAtUtc = anchor,
             CreatedAtUtc = anchor,
@@ -336,7 +350,7 @@ public class YearEndPacketTests : IDisposable
             EffectiveNowUtc = anchor,
             BusinessDate = termStart,
             Lifecycle = "Occupied",
-            CurrentAgreementId = agreement.Id,
+            CurrentAgreementId = null,
             CurrentPartyCount = 1,
             CurrentResidentCount = 1,
             CurrentFinanciallyResponsiblePartyCount = 1,
@@ -353,8 +367,8 @@ public class YearEndPacketTests : IDisposable
             BusinessDate = termStart,
             GoverningFromOn = termStart,
             GoverningThroughExclusiveOn = termEnd.AddDays(1),
-            AgreementStatus = "Active",
-            IsGoverning = true,
+            AgreementStatus = "Expired",
+            IsGoverning = false,
         });
         _db.SaveChanges();
 

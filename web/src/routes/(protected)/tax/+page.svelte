@@ -289,11 +289,18 @@
 		<p class="py-12 text-center text-sm text-destructive" data-testid="tax-error">
 			Could not load tax data. Please try again.
 		</p>
-	{:else if !report || report.properties.length === 0}
+	{:else if !report || (report.properties.length === 0 && !report.unallocatedActivity.requiresAllocation)}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-empty">
 			No rental income or expense data for {selectedYear}.
 		</p>
 	{:else}
+		{#if report.unallocatedActivity.requiresAllocation}
+			<div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="tax-unallocated-warning">
+				<p class="font-semibold">Tax activity needs a property before filing</p>
+				<p class="mt-1">{report.unallocatedActivity.incomeEntryCount} income entries ({money(report.unallocatedActivity.rentalIncome)}) and {report.unallocatedActivity.expenseCount} expenses ({money(report.unallocatedActivity.totalExpenses)}) are not assigned to a property, so they are excluded from the Schedule E property lines below.</p>
+				<p class="mt-2 font-medium">Reconciled activity: {money(report.reconciledTotalRentalIncome)} income − {money(report.reconciledTotalExpenses)} expenses = {money(report.reconciledNetIncome)} net.</p>
+			</div>
+		{/if}
 		<!-- Grand-total summary cards -->
 		<div class="mb-6 grid gap-4 sm:grid-cols-3" data-testid="tax-summary-cards">
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-income">

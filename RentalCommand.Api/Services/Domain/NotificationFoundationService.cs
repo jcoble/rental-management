@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -196,42 +197,12 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     public async Task SeedSuppliedTemplatesAsync(int portfolioId, int actorUserId, CancellationToken ct)
     {
         var now = _clock.GetUtcNow().UtcDateTime;
-        var ownsTransaction = _db.Database.CurrentTransaction is null;
-        await using var transaction = ownsTransaction ? await _db.Database.BeginTransactionAsync(ct) : null;
-        var suppliedKeys = SuppliedTemplates.All.Select(template => template.Key).ToArray();
-        var systemByKey = await _db.SystemNoticeTemplateVersions
-            .Where(row => row.Version == 1 && suppliedKeys.Contains(row.SystemKey))
-            .ToDictionaryAsync(row => row.SystemKey, ct);
-        foreach (var supplied in SuppliedTemplates.All)
-        {
-            if (!systemByKey.TryGetValue(supplied.Key, out var system))
-            {
-                system = new SystemNoticeTemplateVersion
-                {
-                    SystemKey = supplied.Key, Version = 1, Classification = supplied.Classification,
-                    Subject = supplied.Subject, Body = supplied.Body, Provenance = "Rental Command supplied default v1",
-                    PublishedAtUtc = now,
-                };
-                _db.SystemNoticeTemplateVersions.Add(system);
-                systemByKey.Add(supplied.Key, system);
-            }
-        }
-        await _db.SaveChangesAsync(ct);
-        var workspaceKeys = await _db.WorkspaceNoticeTemplateVersions.AsNoTracking()
-            .Where(row => row.PortfolioId == portfolioId && suppliedKeys.Contains(row.SystemKey))
-            .Select(row => row.SystemKey).Distinct().ToListAsync(ct);
-        var missingWorkspaceCopies = SuppliedTemplates.All
-            .Where(supplied => !workspaceKeys.Contains(supplied.Key))
-            .Select(supplied => new WorkspaceNoticeTemplateVersion
-            {
-                PortfolioId = portfolioId, SystemKey = supplied.Key, Version = 1,
-                BasedOnSystemTemplateVersionId = systemByKey[supplied.Key].Id,
-                Subject = systemByKey[supplied.Key].Subject, Body = systemByKey[supplied.Key].Body,
-                CreatedByUserId = actorUserId, CreatedAtUtc = now,
-            });
-        _db.WorkspaceNoticeTemplateVersions.AddRange(missingWorkspaceCopies);
-        await _db.SaveChangesAsync(ct);
-        if (transaction is not null) await transaction.CommitAsync(ct);
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            SuppliedNoticeTemplateBaseline.BuildWorkspaceV1CopyCommand(
+                portfolioId,
+                actorUserId,
+                now),
+            ct);
     }
 
     public Task<WorkspaceNoticeTemplateResponse> CreateTemplateVersionAsync(int portfolioId, int actorUserId,
@@ -404,16 +375,4 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         return await TemplateResponses(portfolioId).SingleAsync(row => row.Id == next.Id, ct);
     }
 
-    private static class SuppliedTemplates
-    {
-        internal sealed record Seed(string Key, NoticeClassification Classification, string Subject, string Body);
-        internal static readonly Seed[] All =
-        [
-            new("rent-reminder", NoticeClassification.Courtesy, "Upcoming rent reminder", "Hello {{tenant_name}}, this is a reminder that {{amount_due}} is due on {{due_date}} for {{property_address}}."),
-            new("lease-renewal-offer", NoticeClassification.Operational, "Lease renewal offer", "Hello {{tenant_name}}, we would like to offer a renewal for {{property_address}} beginning {{renewal_start_date}}. Please review the attached terms."),
-            new("month-to-month-offer", NoticeClassification.Operational, "Month-to-month offer", "Hello {{tenant_name}}, your current agreement ends {{lease_end_date}}. We are offering a month-to-month arrangement beginning the following day."),
-            new("lease-non-renewal", NoticeClassification.Legal, "Lease expiration and non-renewal notice", "Hello {{tenant_name}}, this notice concerns the agreement for {{property_address}}, which ends {{lease_end_date}}. Review the attached notice and contact management with questions."),
-            new("late-rent-late-fee", NoticeClassification.Legal, "Past-due rent notice", "Hello {{tenant_name}}, our records show {{amount_due}} remains due for {{property_address}} as of {{today}}. This notice includes any applicable late fee described in your agreement."),
-        ];
-    }
 }

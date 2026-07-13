@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -118,6 +119,94 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         claims.Single().Id.Should().Be(ids[0]);
     }
 
+    [SkippableFact]
+    public async Task Direct_successor_uniqueness_rejects_a_correction_and_renewal_branch()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        await SeedRequestsAsync(now, 1);
+
+        await using var db = NewContext();
+        var source = await db.LeaseAgreements.AsNoTracking().SingleAsync(agreement => agreement.Id == 4_000);
+        db.LeaseAgreements.Add(Successor(source, 4_001, 2, LeaseAgreementChangeType.Correction, now));
+        await db.SaveChangesAsync();
+
+        db.LeaseAgreements.Add(Successor(source, 4_002, 3, LeaseAgreementChangeType.Renewal, now));
+        var act = () => db.SaveChangesAsync();
+
+        var exception = await act.Should().ThrowAsync<DbUpdateException>();
+        exception.Which.InnerException.Should().BeOfType<PostgresException>()
+            .Which.ConstraintName.Should().Be("IX_LeaseAgreements_DurableDirectSuccessor");
+    }
+
+    [SkippableFact]
+    public async Task Reciprocal_lineage_validator_rejects_a_mismatched_effective_date_at_commit()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var now = DateTime.UtcNow;
+        await SeedRequestsAsync(now, 1);
+
+        await using var db = NewContext();
+        var source = await db.LeaseAgreements.AsNoTracking().SingleAsync(agreement => agreement.Id == 4_000);
+        var successor = Successor(source, 4_001, 2, LeaseAgreementChangeType.Correction, now);
+        db.LeaseAgreements.Add(successor);
+        await db.SaveChangesAsync();
+
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        await db.LeaseAgreements.Where(agreement => agreement.Id == source.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agreement => agreement.SupersededEffectiveOn, successor.GoverningFromOn.AddDays(1))
+                .SetProperty(agreement => agreement.SupersededByAgreementId, successor.Id)
+                .SetProperty(agreement => agreement.SupersessionRecordedAtUtc, now));
+
+        var act = () => transaction.CommitAsync();
+        var exception = await act.Should().ThrowAsync<PostgresException>();
+        exception.Which.SqlState.Should().Be("P0001");
+        exception.Which.MessageText.Should().Contain("reciprocal direct successor");
+    }
+
+    private static LeaseAgreement Successor(
+        LeaseAgreement source,
+        int id,
+        int version,
+        LeaseAgreementChangeType changeType,
+        DateTime now)
+    {
+        var isCorrection = changeType == LeaseAgreementChangeType.Correction;
+        var governingFrom = isCorrection
+            ? source.GoverningFromOn.AddDays(1)
+            : source.TermEndOn!.Value.AddDays(1);
+        return new LeaseAgreement
+        {
+            Id = id,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = source.PortfolioId,
+            LeaseManagementId = source.LeaseManagementId,
+            VersionNumber = version,
+            AgreementNumber = $"AGR-BRANCH-{version}",
+            ChangeType = changeType,
+            ReplacesAgreementId = isCorrection ? source.Id : null,
+            RenewsAgreementId = isCorrection ? null : source.Id,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = isCorrection ? source.TermStartOn : governingFrom,
+            TermEndOn = isCorrection ? source.TermEndOn : governingFrom.AddYears(1),
+            GoverningFromOn = governingFrom,
+            BaseRentAmount = source.BaseRentAmount,
+            RentDueDay = source.RentDueDay,
+            SecurityDepositObligation = source.SecurityDepositObligation,
+            LateFeeAmount = source.LateFeeAmount,
+            GracePeriodDays = source.GracePeriodDays,
+            Currency = source.Currency,
+            TermsSchemaVersion = source.TermsSchemaVersion,
+            TermsPayload = source.TermsPayload,
+            DocumentSourceVersionId = source.DocumentSourceVersionId,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = source.CreatedByUserId,
+            DraftRevision = 1,
+        };
+    }
+
     private async Task<int[]> SeedRequestsAsync(DateTime now, int count)
     {
         await using var db = NewContext();
@@ -172,8 +261,24 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
+        var documentSourceVersion = new LegalDocumentSourceVersion
+        {
+            Id = 1,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            SourceKind = LegalDocumentSourceKind.AuthoredTemplateSnapshot,
+            BusinessKey = "template:1:v1",
+            DocumentTemplate = template,
+            DocumentTemplateVersion = template.Version,
+            RendererKey = "lease-agreement-overlay",
+            RendererVersion = 1,
+            SnapshotPayload = "{}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
 
-        db.AddRange(portfolio, user, property, unit, template);
+        db.AddRange(portfolio, user, property, unit, template, documentSourceVersion);
+        var agreementsToIssue = new List<(LeaseAgreement Agreement, int ArtifactId)>();
         for (var index = 0; index < count; index++)
         {
             var relationshipId = 3_000 + index;
@@ -184,6 +289,34 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
             var artifactId = 2_000 + index;
             var preparedAtUtc = now.AddMinutes(index);
             var storageKey = $"agreements/{Guid.NewGuid():N}.pdf";
+
+            var agreement = new LeaseAgreement
+            {
+                Id = agreementId,
+                PublicId = Guid.NewGuid(),
+                PortfolioId = portfolio.Id,
+                LeaseManagementId = relationshipId,
+                VersionNumber = 1,
+                AgreementNumber = $"AGR-{index + 1}",
+                ChangeType = LeaseAgreementChangeType.Initial,
+                TermType = LeaseAgreementTermType.FixedTerm,
+                TermStartOn = DateOnly.FromDateTime(now),
+                TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+                GoverningFromOn = DateOnly.FromDateTime(now),
+                BaseRentAmount = 1_000,
+                RentDueDay = 1,
+                SecurityDepositObligation = 1_000,
+                LateFeeAmount = 50,
+                GracePeriodDays = 5,
+                Currency = "USD",
+                TermsSchemaVersion = 1,
+                TermsPayload = "{}",
+                DocumentSourceVersionId = documentSourceVersion.Id,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CreatedByUserId = user.Id,
+            };
+            agreementsToIssue.Add((agreement, artifactId));
 
             db.AddRange(
                 new LeaseManagement
@@ -223,38 +356,11 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
                     ContentType = "application/pdf",
                     ByteLength = 1,
                     ContentSha256 = new string('a', 64),
+                    LegalIssuanceFingerprint = new string('b', 64),
                     CreatedAtUtc = now,
                     CreatedByUserId = user.Id,
                 },
-                new LeaseAgreement
-                {
-                    Id = agreementId,
-                    PublicId = Guid.NewGuid(),
-                    PortfolioId = portfolio.Id,
-                    LeaseManagementId = relationshipId,
-                    VersionNumber = 1,
-                    AgreementNumber = $"AGR-{index + 1}",
-                    ChangeType = LeaseAgreementChangeType.Initial,
-                    TermType = LeaseAgreementTermType.FixedTerm,
-                    TermStartOn = DateOnly.FromDateTime(now),
-                    TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
-                    GoverningFromOn = DateOnly.FromDateTime(now),
-                    BaseRentAmount = 1_000,
-                    RentDueDay = 1,
-                    SecurityDepositObligation = 1_000,
-                    LateFeeAmount = 50,
-                    GracePeriodDays = 5,
-                    Currency = "USD",
-                    TermsSchemaVersion = 1,
-                    TermsPayload = "{}",
-                    DocumentTemplateId = template.Id,
-                    DocumentTemplateVersion = template.Version,
-                    IssuedArtifactId = artifactId,
-                    IssuedAtUtc = now,
-                    CreatedAtUtc = now,
-                    UpdatedAtUtc = now,
-                    CreatedByUserId = user.Id,
-                },
+                agreement,
                 new LeaseAgreementSigner
                 {
                     Id = agreementSignerId,
@@ -306,6 +412,13 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
         }
 
         await db.SaveChangesAsync();
+        foreach (var (agreement, artifactId) in agreementsToIssue)
+        {
+            agreement.IssuedArtifactId = artifactId;
+            agreement.IssuedAtUtc = now;
+        }
+        await db.SaveChangesAsync();
+
         return await db.SignatureRequests
             .AsNoTracking()
             .OrderBy(request => request.PreparedAtUtc)

@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
@@ -16,26 +15,17 @@ public class PortfolioService : IPortfolioService
     private const string EntityType = "Portfolio";
 
     private readonly RentalCommandDbContext _db;
-    private readonly UserManager<ApplicationUser> _userManager;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly TimeProvider _timeProvider;
-    private readonly INotificationFoundationService? _notificationFoundation;
 
     public PortfolioService(
         RentalCommandDbContext db,
-        UserManager<ApplicationUser> userManager,
         IDataUpdateService dataUpdate,
-        ISelfOwnerProvisioner selfOwnerProvisioner,
-        TimeProvider timeProvider,
-        INotificationFoundationService? notificationFoundation = null)
+        TimeProvider timeProvider)
     {
         _db = db;
-        _userManager = userManager;
         _dataUpdate = dataUpdate;
-        _selfOwnerProvisioner = selfOwnerProvisioner;
         _timeProvider = timeProvider;
-        _notificationFoundation = notificationFoundation;
     }
 
     public async Task<IReadOnlyList<PortfolioResponse>> ListForUserAsync(int portfolioId, CancellationToken ct = default)
@@ -137,46 +127,6 @@ public class PortfolioService : IPortfolioService
                 || notificationSettings?.EnableLateFees == true,
             IsSandbox = summary.IsSandbox,
         };
-    }
-
-    public async Task<PortfolioResponse> CreateAsync(int userId, CreatePortfolioRequest request, CancellationToken ct = default)
-    {
-        var now = _timeProvider.UtcNow();
-        var entity = new Portfolio
-        {
-            Name = request.Name,
-            Description = request.Description,
-            ManagementCompanyName = request.ManagementCompanyName,
-            TimeZone = string.IsNullOrWhiteSpace(request.TimeZone) ? "America/New_York" : request.TimeZone,
-            Status = PortfolioStatus.Active,
-            Currency = string.IsNullOrWhiteSpace(request.Currency) ? "USD" : request.Currency,
-            Settings = request.Settings,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        _db.Portfolios.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        // Create the relationship-scoped canonical access context; bearer tokens never carry a
-        // mutable user-level portfolio hint.
-        var user = await _userManager.FindByIdAsync(userId.ToString());
-        if (user != null)
-        {
-            // The landlord IS the first owner — auto-create a primary self-owner so the new portfolio is
-            // never owner-less and onboarding skips the manual "add an owner" step. Idempotent.
-            await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, entity.Id, ct);
-            if (_notificationFoundation is not null)
-            {
-                await _notificationFoundation.SeedSuppliedTemplatesAsync(entity.Id, user.Id, ct);
-            }
-        }
-
-        var response = PortfolioResponse.FromEntity(entity);
-        await transaction.CommitAsync(ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(entity.Id, EntityType, entity.Id, response, ct);
-        return response;
     }
 
     public async Task<PortfolioResponse?> UpdateAsync(int portfolioId, int id, UpdatePortfolioRequest request, CancellationToken ct = default)

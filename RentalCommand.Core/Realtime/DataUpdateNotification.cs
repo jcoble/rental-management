@@ -37,7 +37,10 @@ public sealed class DataUpdateNotification
     [JsonPropertyName("op")]
     public string Op { get; set; } = OpUpdate;
 
-    /// <summary>Portfolio the change belongs to; scopes the SignalR group (<c>portfolio-{id}</c>).</summary>
+    /// <summary>
+    /// Portfolio the change belongs to. The API listener uses it only as a database/RLS boundary;
+    /// SignalR recipients are resolved from current session, capability, and resource scope.
+    /// </summary>
     [JsonPropertyName("pf")]
     public int PortfolioId { get; set; }
 
@@ -50,13 +53,10 @@ public sealed class DataUpdateNotification
     public int EntityId { get; set; }
 
     /// <summary>
-    /// Optional payload the client may read (updates only; always <c>null</c> for deletes). Carried
-    /// verbatim through to the SignalR <c>EntityUpdated</c> payload's <c>data</c> field. Serializes
-    /// as the runtime DTO type on the publisher; deserializes to a <see cref="JsonElement"/> on the
-    /// listener, which SignalR then re-emits as-is (enums already rendered as strings). May be dropped
-    /// (left null) by the publisher if including it would exceed the NOTIFY size limit — the client
-    /// only reads it for the <c>Unit → propertyId</c> derived-key case, so dropping it merely widens
-    /// invalidation rather than losing correctness.
+    /// Optional internal publisher hint (updates only; always <c>null</c> for deletes). The API
+    /// broadcaster never forwards this object over SignalR; clients receive a minimal invalidation
+    /// and refetch through their authorized REST query. It may be dropped when the PostgreSQL NOTIFY
+    /// size limit would otherwise be exceeded.
     /// </summary>
     [JsonPropertyName("d")]
     public object? Data { get; set; }

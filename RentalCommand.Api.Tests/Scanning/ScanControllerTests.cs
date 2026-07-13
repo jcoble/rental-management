@@ -1,5 +1,4 @@
 using System.Data.Common;
-using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -7,14 +6,17 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
@@ -56,6 +58,13 @@ public class ScanControllerTests : IDisposable
                 "WorkOrder",
                 false,
                 null,
+                It.Is<ScanCaptureContextData>(context =>
+                    context.AccessContextId == 1
+                    && context.AccessRevision == 1
+                    && context.PropertyId == null
+                    && context.UnitId == null
+                    && context.LeaseManagementId == null
+                    && context.TenantAccountId == null),
                 It.Is<IReadOnlyList<ScanUploadFilePayload>>(payloads =>
                     payloads.Count == 1
                     && payloads[0].Bytes.SequenceEqual(new byte[] { 1, 2, 3 })
@@ -263,6 +272,8 @@ public class ScanControllerTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                42, 7, now),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             CreatedByUserId = 7,
@@ -394,7 +405,17 @@ public class ScanControllerTests : IDisposable
         Property(body, "replayed").Should().Be(replayed);
         Property(body, "atomicDisposition").Should().Be(disposition.ToString());
         atomic.Calls.Should().Be(1);
-        atomic.Command.Should().BeSameAs(command);
+        var admitted = atomic.Command.Should().BeOfType<ConfirmScanDraftCommand>().Subject;
+        admitted.PortfolioId.Should().Be(command.PortfolioId);
+        admitted.DraftId.Should().Be(command.DraftId);
+        admitted.ConfirmedByUserId.Should().Be(command.ConfirmedByUserId);
+        admitted.ConfirmedAtUtc.Should().Be(command.ConfirmedAtUtc);
+        admitted.ExpectedDraftFingerprint.Should().Be(command.ExpectedDraftFingerprint);
+        admitted.Target.Should().BeEquivalentTo(command.Target);
+        admitted.AuthSessionId.Should().Be(Guid.Parse("11111111-1111-1111-1111-111111111111"));
+        admitted.AccessContextId.Should().Be(1);
+        admitted.ExpectedAccessRevision.Should().Be(1);
+        admitted.DeliveryIdempotencyKey.Should().StartWith("scan-confirm:42:17:");
         atomic.Identity!.CommandType.Should().Be("scan.confirm");
         atomic.Identity.IdempotencyKey.Should().StartWith("42:17:");
         scan.VerifyAll();
@@ -494,6 +515,17 @@ public class ScanControllerTests : IDisposable
         IAtomicUnitOfWork? atomic = null,
         IScanUploadService? uploads = null)
     {
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            UserId: 7,
+            AccessContextId: 1,
+            PortfolioId: 42,
+            AccessRevision: 1,
+            LastAuthorizedExperience: null,
+            WorkspaceMembershipId: null,
+            DefaultExperience: null);
+
         var controller = new ScanController(
             scan,
             uploads ?? Mock.Of<IScanUploadService>(),
@@ -503,13 +535,7 @@ public class ScanControllerTests : IDisposable
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity([
-                        new Claim("portfolioId", "42"),
-                        new Claim(ClaimTypes.NameIdentifier, "7"),
-                    ], "test")),
-                },
+                HttpContext = httpContext,
             },
         };
 

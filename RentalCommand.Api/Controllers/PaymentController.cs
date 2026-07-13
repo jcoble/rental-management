@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -77,15 +76,14 @@ public class PaymentController : AuthenticatedPortfolioControllerBase
     private bool TryReadAccessContext(out PaymentReceiptReadContext access)
     {
         access = default;
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId)
-            || !int.TryParse(User.FindFirstValue("ctx"), out var accessContextId)
-            || !long.TryParse(User.FindFirstValue("ar"), out var accessRevision))
+        if (!TryGetActiveAccessContext(out var active))
         {
             return false;
         }
 
         access = new PaymentReceiptReadContext(
-            GetPortfolioId(), GetUserId(), sessionId, accessContextId, accessRevision);
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
         return true;
     }
 

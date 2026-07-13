@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -48,7 +49,7 @@ public sealed class WorkspaceInvitationsController : ControllerBase
             IsolationLevel.ReadCommitted, ct);
 
         var locked = await _db.Database.SqlQuery<LockedInvitationRow>($"""
-                SELECT "Id", clock_timestamp() AS "WallClockUtc"
+                SELECT "Id", "PortfolioId", clock_timestamp() AS "WallClockUtc"
                 FROM "WorkspaceInvitations"
                 WHERE "TokenHash" = {tokenHash}
                 FOR UPDATE
@@ -58,6 +59,9 @@ public sealed class WorkspaceInvitationsController : ControllerBase
         {
             return InvalidInvitation();
         }
+
+        await WorkspaceInvitationActivationRlsScope.ApplyAsync(
+            _db.Database, locked.PortfolioId, ct);
 
         var invitation = await _db.WorkspaceInvitations
             .IgnoreQueryFilters()
@@ -108,6 +112,7 @@ public sealed class WorkspaceInvitationsController : ControllerBase
     public sealed class LockedInvitationRow
     {
         public long Id { get; set; }
+        public int PortfolioId { get; set; }
         public DateTime WallClockUtc { get; set; }
     }
 }

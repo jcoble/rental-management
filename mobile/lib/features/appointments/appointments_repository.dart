@@ -8,7 +8,7 @@ import '../../core/models/models.dart';
 /// Repository for Appointments.
 ///
 /// Endpoints used:
-///   GET    /appointments                    — list (JWT-scoped, no portfolioId param)
+///   GET    /appointments                    — list (canonical-access-scoped, no portfolioId param)
 ///   GET    /appointments/{id}               — single appointment
 ///   POST   /appointments                    — create
 ///   PATCH  /appointments/{id}              — update / status change

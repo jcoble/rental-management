@@ -54,29 +54,4 @@ describe('buildOnboardingLeaseScanOverrides', () => {
 		assert.equal('lateFeeAmount' in overrides, false);
 	});
 
-	it('includes opening-balance import choices when supplied', () => {
-		const overrides = JSON.parse(
-			buildOnboardingLeaseScanOverrides({
-				leaseNumber: 'L-2026-003',
-				propertyId: 1,
-				unitId: 2,
-				tenantId: 3,
-				startDate: '2026-01-01',
-				endDate: '2026-12-31',
-				monthlyRent: 1200,
-				securityDeposit: 1200,
-				lateFeeAmount: 75,
-				rentDueDay: 1,
-				rentTrackingStartMode: 'OpeningBalanceOnly',
-				openingBalanceAmount: 2400,
-				openingBalanceAsOfDate: '2026-06-30',
-				openingBalanceNote: 'Imported current balance'
-			})
-		);
-
-		assert.equal(overrides.rentTrackingStartMode, 'OpeningBalanceOnly');
-		assert.equal(overrides.openingBalanceAmount, 2400);
-		assert.equal(overrides.openingBalanceAsOfDate, '2026-06-30');
-		assert.equal(overrides.openingBalanceNote, 'Imported current balance');
-	});
 });

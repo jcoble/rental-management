@@ -133,19 +133,16 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
 
 ---
 
-## ONB-04 — Confirm 19 active leases via scan→draft→confirm (rent back-fill) — FLAGSHIP
+## ONB-04 — Confirm 19 active agreements via scan→draft→confirm — FLAGSHIP
 - **Goal / exercises:** the flagship *"the computer types for you"* path — upload a lease document, let the
-  LLM extract fields into a **draft**, confirm with overrides, and create the lease. Critically, creating
-  each lease with **`RentTrackingStartMode=BackfillFromLeaseStart`** back-fills every monthly `Payment(Rent,
-  Scheduled)` from lease start through T0 **synchronously** (no worker needed). Also exercises the
-  **multi-photo stitch** path on 3 leases.
+  LLM extract fields into a **draft**, review the proposed agreement, and confirm it against explicit
+  LeaseManagement, Agreement, and TenantAccount targets. Historical account entries are loaded separately
+  in ONB-08; agreement confirmation never selects a rent-generation mode. Also exercises the **multi-photo
+  stitch** path on 3 leases.
 - **Preconditions:** `ONB-03` done (properties/units exist to map onto); clock 2025-01-01.
 - **Actor:** Priya (does the scanning/confirming), with Dana available to approve.
 - **Surfaces:** `[UI]` — the flagship scan→draft→confirm via **`/scan/new-rental`** (`LeaseFirstImport`),
-  which exposes the rent-tracking control **and** links to the existing property/unit from ONB-03.
-  **⚠ Product-gap PG-1:** the *generic* `/scan/[draftId]` lease-confirm does **not** surface the
-  rent-tracking control — so it must NOT be used for these back-filled leases (routing them through
-  `/scan/new-rental` is the true-to-life path that keeps the control on-screen; see README PG-1).
+  which links to the existing property/unit from ONB-03 and confirms the reviewed agreement facts.
 - **Steps:**
   1. **`[UI]`** For each of the **19 active leases** (L01–L07, L09–L15, L17, L18, L19, L21, L22), upload the
      born-digital lease PDF from `generated/leases/` and run scan→draft→confirm **through `/scan/new-rental`**:
@@ -156,9 +153,8 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
   2. **`[UI]`** On each new-rental review screen: verify the extracted **tenant, property/unit, monthly
      rent, deposit, term dates, due-day** against `scenario/scenario.json → leases`, correct any
      low-confidence field, **link to the existing property + unit** (the duplicate-guard "link existing"
-     choice — do NOT create a duplicate of the ONB-03 records), select the rent-tracking control
-     **"Backfill from lease start"** (exact on-screen label; = `RentTrackingStartMode=BackfillFromLeaseStart`),
-     set `Status=Active`, then confirm. Add co-tenants where present (L04 Mary Abernathy, L11 Minh Pham,
+     choice — do NOT create a duplicate of the ONB-03 records), review the Agreement and TenantAccount
+     targets, then confirm. Add co-tenants where present (L04 Mary Abernathy, L11 Minh Pham,
      L19 Dana Malloy).
   3. **`[UI]` Stitch path (3 leases):** for **L01, L11, L14** instead upload the per-page phone photos to
      exercise client-side multi-photo stitch → ONE draft: `generated/leases/photos/L01_p1.jpg`+`L01_p2.jpg`;
@@ -167,16 +163,11 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
   - **19 leases** created, all `Active`, each mapped to the right property/unit with the exact rent/deposit/
     due-day from `scenario.json` (spot-check: **L01** rent 1250 due-day 1; **L07** rent 850 **due-day 5**;
     **L10** rent 1100 **due-day 15**; **L17** rent 1525; **L19** rent 1600 co-tenant Dana Malloy).
-  - **Rent back-fill materialized:** each lease shows `Payment(Rent, Scheduled)` rows from
-    `max(start, RentTrackingStartDate)` through T0. Spot-check **L01** (start 2024-04-01) → ~9 monthly rent
-    rows Apr–Dec 2024 present; **L21/L22** (P13, tenants since 2023) → rows back to 2023 (they have the
-    longest history; cf. `events.csv` E00012/E00013 at 2023-01-01).
-  - Rent-tracking dates never precede lease `StartDate`; `RentTrackingStartMode` did not persist (only the
-    resolved `RentTrackingStartDate` did).
+  - Each confirmation creates one relationship, one reviewed agreement version, and the intended tenant
+    account context; historical rent entries are absent until the bounded ONB-08 seed posts them.
   - Stitch: L01/L11/L14 each produced exactly **one** lease from **two** photos (not two drafts).
   - Occupancy now 19/21 (P05·3, P09·4 still vacant).
-- **Worker fires:** none (back-fill is synchronous inside `POST /leases`). Rows are **Scheduled** here;
-  they become **Paid** in `ONB-08`.
+- **Worker fires:** none. Historical account entries are posted in `ONB-08`.
 - **Idempotency/cleanup:** re-confirming the same lease double-creates — confirm each draft once. If a draft
   mis-maps the unit, fix on the draft before confirming (post-confirm requires deleting the lease).
 

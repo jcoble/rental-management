@@ -80,6 +80,11 @@ public sealed record AtomicAgreementDraftSignerReplacementResult(
     IReadOnlyList<int> DeletedSignerIds,
     IReadOnlyList<int> CreatedSignerIds);
 
+public sealed record AtomicAddendumCorrectionChildCopyResult(
+    bool Eligible,
+    IReadOnlyList<int> CreatedSignerIds,
+    IReadOnlyList<int> CreatedFinancialEffectIds);
+
 public sealed record AtomicRenewalAddendumDecisionInput(
     Guid SourceAddendumSeriesPublicId,
     int Decision);
@@ -90,6 +95,23 @@ public sealed record AtomicRenewalAddendumDraftResult(
     IReadOnlyList<int> ReplacementAddendumIds,
     IReadOnlyList<int> ReplacementSignerIds,
     IReadOnlyList<int> ReplacementFinancialEffectIds);
+
+public enum AtomicLegalExecutionTransitionOutcome
+{
+    Applied,
+    TargetChanged,
+    SuccessorConflict,
+    InvalidEffectiveDate,
+    RenewalAddendumStateChanged,
+}
+
+public sealed record AtomicLegalExecutionTransitionResult(
+    AtomicLegalExecutionTransitionOutcome Outcome,
+    int? PredecessorId,
+    IReadOnlyList<int> SupersededAddendumIds,
+    IReadOnlyList<int> ReissuedAddendumIds);
+
+public sealed record AtomicLegalDocumentSourceVersionResult(bool Resolved, int DocumentSourceVersionId);
 
 public sealed record AtomicPropertyDispositionMutationResult(
     int DispositionId,
@@ -109,6 +131,25 @@ public sealed record AtomicPropertyDispositionMutationResult(
 /// </summary>
 public interface IAtomicLeaseMutationPersistence
 {
+    Task<AtomicLegalDocumentSourceVersionResult> ResolveAuthoredDocumentSourceVersionAsync(
+        int portfolioId,
+        int propertyId,
+        int leaseManagementId,
+        int documentTemplateId,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+
+    Task<AtomicLegalDocumentSourceVersionResult> ResolveImportedDocumentSourceVersionAsync(
+        int portfolioId,
+        int sourceStoredFileId,
+        int sourceLegalDocumentArtifactId,
+        string sourceContentSha256,
+        string? sourceLabel,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+
     Task<AtomicPropertyDispositionMutationResult?> CreatePropertyDispositionAsync(
         int portfolioId,
         int propertyId,
@@ -139,11 +180,27 @@ public interface IAtomicLeaseMutationPersistence
         DateTime createdAtUtc,
         CancellationToken ct = default);
 
+    Task<AtomicLegalExecutionTransitionResult> ExecuteLegalArtifactTransitionAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int? leaseAgreementId,
+        int? leaseAddendumId,
+        int executedArtifactId,
+        DateTime executedAtUtc,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
         int portfolioId,
         int leaseManagementId,
         int sourceAgreementId,
         int successorAgreementId,
+        CancellationToken ct = default);
+
+    Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAddendumId,
+        int correctionAddendumId,
         CancellationToken ct = default);
 
     Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
@@ -188,6 +245,7 @@ public interface IAtomicLeaseMutationPersistence
 
     Task<AtomicTransferLeaseManagementMutationResult> TransferLeaseManagementAsync(
         TransferLeaseManagementCommand command,
+        int destinationDocumentSourceVersionId,
         DateTime changedAtUtc,
         CancellationToken ct = default);
 }

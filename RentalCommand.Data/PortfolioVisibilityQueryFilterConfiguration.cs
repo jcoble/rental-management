@@ -97,6 +97,8 @@ internal static class PortfolioVisibilityQueryFilterConfiguration
         // portfolio-only and never interprets supersession, execution, or governing status.
         modelBuilder.Entity<LegalDocumentArtifact>()
             .HasQueryFilter(row => row.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<LegalDocumentSourceVersion>()
+            .HasQueryFilter(row => row.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<LeaseAgreement>()
             .HasQueryFilter(row => row.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<LeaseAgreementSigner>()

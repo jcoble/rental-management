@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -27,7 +29,44 @@ public class DailyBriefingService : IDailyBriefingService
         _timeProvider = timeProvider;
     }
 
-    public async Task<BriefingResponse> ComposeAsync(int portfolioId, CancellationToken ct = default)
+    public Task<BriefingResponse> ComposeAsync(WorkspaceReadScope scope, CancellationToken ct = default)
+    {
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        return ComposeCoreAsync(
+            scope.PortfolioId,
+            AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead, utcNow),
+            AuthorizedProperties(scope, CapabilityKeys.RentalsRead, utcNow),
+            AuthorizedProperties(scope, CapabilityKeys.WorkRead, utcNow),
+            AuthorizedProperties(scope, CapabilityKeys.LeasingShowingsManage, utcNow),
+            AuthorizedProperties(scope, CapabilityKeys.LeasingOnboardingManage, utcNow),
+            ct);
+    }
+
+    public Task<BriefingResponse> ComposeForSystemAutomationAsync(
+        int portfolioId,
+        CancellationToken ct = default)
+    {
+        var portfolioProperties = _db.Properties
+            .AsNoTracking()
+            .Where(property => property.PortfolioId == portfolioId && property.DeletedAt == null);
+        return ComposeCoreAsync(
+            portfolioId,
+            portfolioProperties,
+            portfolioProperties,
+            portfolioProperties,
+            portfolioProperties,
+            portfolioProperties,
+            ct);
+    }
+
+    private async Task<BriefingResponse> ComposeCoreAsync(
+        int portfolioId,
+        IQueryable<Property> moneyProperties,
+        IQueryable<Property> rentalProperties,
+        IQueryable<Property> workProperties,
+        IQueryable<Property> showingProperties,
+        IQueryable<Property> onboardingProperties,
+        CancellationToken ct)
     {
         // TODO: portfolio-timezone handling is a future refinement; using UTC for now.
         var today = _timeProvider.UtcNow().Date;
@@ -42,6 +81,7 @@ public class DailyBriefingService : IDailyBriefingService
             .AsNoTracking()
             .Where(w =>
                 w.PortfolioId == portfolioId &&
+                workProperties.Any(property => property.Id == w.PropertyId) &&
                 w.Priority == WorkOrderPriority.Emergency &&
                 w.Status != WorkOrderStatus.Completed &&
                 w.Status != WorkOrderStatus.Cancelled &&
@@ -61,7 +101,8 @@ public class DailyBriefingService : IDailyBriefingService
                 TenantName = null,
                 PropertyName = null,
                 Amount = 0m,
-                EventDate = w.RequestedAt,
+                EventDateTime = w.RequestedAt,
+                EventDateOnly = null,
                 TypeValue = 0,
             });
 
@@ -77,7 +118,7 @@ public class DailyBriefingService : IDailyBriefingService
             join unit in _db.Units.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
-            join property in _db.Properties.AsNoTracking()
+            join property in moneyProperties
                 on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
                 equals new { property.PortfolioId, property.Id }
             join agreement in _db.LeaseAgreements.AsNoTracking()
@@ -105,7 +146,8 @@ public class DailyBriefingService : IDailyBriefingService
                 TenantName = lifecycle.CurrentPrimaryTenantName,
                 PropertyName = property.Name,
                 Amount = charge.OpenAmount,
-                EventDate = charge.DueOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                EventDateTime = null,
+                EventDateOnly = charge.DueOn,
                 TypeValue = 0,
             };
 
@@ -139,7 +181,7 @@ public class DailyBriefingService : IDailyBriefingService
             join unit in _db.Units.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
-            join property in _db.Properties.AsNoTracking()
+            join property in moneyProperties
                 on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
                 equals new { property.PortfolioId, property.Id }
             join agreement in _db.LeaseAgreements.AsNoTracking()
@@ -163,7 +205,8 @@ public class DailyBriefingService : IDailyBriefingService
                 TenantName = lifecycle.CurrentPrimaryTenantName,
                 PropertyName = property.Name,
                 Amount = due.OpenAmount,
-                EventDate = due.DueOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                EventDateTime = null,
+                EventDateOnly = due.DueOn,
                 TypeValue = 0,
             };
 
@@ -172,6 +215,15 @@ public class DailyBriefingService : IDailyBriefingService
             .AsNoTracking()
             .Where(a =>
                 a.PortfolioId == portfolioId &&
+                a.PropertyId != null &&
+                ((a.Type == AppointmentType.Showing &&
+                  showingProperties.Any(property => property.Id == a.PropertyId)) ||
+                 ((a.Type == AppointmentType.MoveIn || a.Type == AppointmentType.MoveOut) &&
+                  onboardingProperties.Any(property => property.Id == a.PropertyId)) ||
+                 ((a.Type == AppointmentType.Inspection || a.Type == AppointmentType.MaintenanceVisit) &&
+                  workProperties.Any(property => property.Id == a.PropertyId)) ||
+                 (a.Type == AppointmentType.OwnerMeeting &&
+                  rentalProperties.Any(property => property.Id == a.PropertyId))) &&
                 (a.Status == AppointmentStatus.Scheduled || a.Status == AppointmentStatus.Confirmed) &&
                 a.ScheduledStart >= today && a.ScheduledStart < tomorrow)
             .Select(a => new BriefingCandidate
@@ -190,7 +242,8 @@ public class DailyBriefingService : IDailyBriefingService
                 PropertyName = null,
                 Amount = 0m,
                 TypeValue = (int)a.Type,
-                EventDate = a.ScheduledStart,
+                EventDateTime = a.ScheduledStart,
+                EventDateOnly = null,
             });
 
         // --- Rule 5: Inspections due within 7 days ---
@@ -198,6 +251,7 @@ public class DailyBriefingService : IDailyBriefingService
             .AsNoTracking()
             .Where(i =>
                 i.PortfolioId == portfolioId &&
+                workProperties.Any(property => property.Id == i.PropertyId) &&
                 i.Status == InspectionStatus.Scheduled &&
                 i.ScheduledFor >= today &&
                 i.ScheduledFor < nextWeekEnd)
@@ -217,7 +271,8 @@ public class DailyBriefingService : IDailyBriefingService
                 PropertyName = null,
                 Amount = 0m,
                 TypeValue = (int)i.Type,
-                EventDate = i.ScheduledFor,
+                EventDateTime = i.ScheduledFor,
+                EventDateOnly = null,
             });
 
         // --- Rule 6: Governing agreements expiring within 60 days ---
@@ -232,7 +287,7 @@ public class DailyBriefingService : IDailyBriefingService
             join unit in _db.Units.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
-            join property in _db.Properties.AsNoTracking()
+            join property in rentalProperties
                 on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
                 equals new { property.PortfolioId, property.Id }
             where status.PortfolioId == portfolioId
@@ -256,7 +311,8 @@ public class DailyBriefingService : IDailyBriefingService
                 TenantName = lifecycle.CurrentPrimaryTenantName,
                 PropertyName = property.Name,
                 Amount = 0m,
-                EventDate = agreement.TermEndOn!.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                EventDateTime = null,
+                EventDateOnly = agreement.TermEndOn,
                 TypeValue = 0,
             };
 
@@ -268,7 +324,11 @@ public class DailyBriefingService : IDailyBriefingService
             .Concat(expiringAgreements)
             .OrderBy(c => c.SeverityOrder)
             .ThenBy(c => c.SortOrder)
-            .ThenBy(c => c.EventDate)
+            // SortOrder uniquely identifies a source category, so each ordered category has
+            // exactly one populated event column. Keeping date-only and timestamp values typed
+            // avoids a client DateOnly -> DateTime conversion before the SQL UNION.
+            .ThenBy(c => c.EventDateOnly)
+            .ThenBy(c => c.EventDateTime)
             .ThenBy(c => c.EntityId)
             .Take(MaxBriefingBullets)
             .ToListAsync(ct);
@@ -311,9 +371,21 @@ public class DailyBriefingService : IDailyBriefingService
         };
     }
 
+    private IQueryable<Property> AuthorizedProperties(
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        DateTime utcNow) =>
+        _db.Properties
+            .AsNoTracking()
+            .Where(property => property.DeletedAt == null)
+            .WhereAuthorized(_db, scope, capabilityKey, utcNow);
+
     private static BriefingBullet ToBullet(BriefingCandidate candidate, DateTime today)
     {
         var severity = SeverityLabel(candidate.SeverityOrder);
+        var eventDate = candidate.EventDateTime
+            ?? candidate.EventDateOnly?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
+            ?? throw new InvalidOperationException("Briefing candidate is missing its event date.");
         return candidate.Category switch
         {
             "Maintenance" => new BriefingBullet(
@@ -327,7 +399,7 @@ public class DailyBriefingService : IDailyBriefingService
 
             "RentLate" => new BriefingBullet(
                 Title: $"Rent overdue — {RentAttentionRef(candidate)}",
-                Detail: $"${candidate.Amount:N0} was due {DaysBetween(today, candidate.EventDate)} day{(DaysBetween(today, candidate.EventDate) == 1 ? "" : "s")} ago",
+                Detail: $"${candidate.Amount:N0} was due {DaysBetween(today, eventDate)} day{(DaysBetween(today, eventDate) == 1 ? "" : "s")} ago",
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
@@ -345,7 +417,7 @@ public class DailyBriefingService : IDailyBriefingService
 
             "Appointment" => new BriefingBullet(
                 Title: $"Appointment today: {candidate.TitleText}",
-                Detail: $"{(AppointmentType)candidate.TypeValue} at {candidate.EventDate:h:mm tt}",
+                Detail: $"{(AppointmentType)candidate.TypeValue} at {eventDate:h:mm tt}",
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
@@ -353,8 +425,8 @@ public class DailyBriefingService : IDailyBriefingService
                 UnitId: candidate.UnitId),
 
             "Inspection" => new BriefingBullet(
-                Title: $"Inspection {RelativeWhen(candidate.EventDate, today)} — {(InspectionType)candidate.TypeValue}",
-                Detail: $"Scheduled for {candidate.EventDate:MMM d}",
+                Title: $"Inspection {RelativeWhen(eventDate, today)} — {(InspectionType)candidate.TypeValue}",
+                Detail: $"Scheduled for {eventDate:MMM d}",
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
@@ -363,7 +435,7 @@ public class DailyBriefingService : IDailyBriefingService
 
             "LeaseExpiring" => new BriefingBullet(
                 Title: $"Lease expiring — {UnitOrLeaseRef(candidate)}",
-                Detail: $"Ends {candidate.EventDate:MMM d} ({DaysUntil(candidate.EventDate, today)} day{(DaysUntil(candidate.EventDate, today) == 1 ? "" : "s")} left)",
+                Detail: $"Ends {eventDate:MMM d} ({DaysUntil(eventDate, today)} day{(DaysUntil(eventDate, today) == 1 ? "" : "s")} left)",
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
@@ -463,7 +535,8 @@ public class DailyBriefingService : IDailyBriefingService
         public string? TenantName { get; set; }
         public string? PropertyName { get; set; }
         public decimal Amount { get; set; }
-        public DateTime EventDate { get; set; }
+        public DateTime? EventDateTime { get; set; }
+        public DateOnly? EventDateOnly { get; set; }
         public int TypeValue { get; set; }
     }
 }

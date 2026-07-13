@@ -9,6 +9,10 @@ const depositDetailSource = readFileSync(
 const depositListSource = readFileSync('src/routes/(protected)/deposits/+page.svelte', 'utf8');
 const importSource = readFileSync('src/routes/(protected)/import/+page.svelte', 'utf8');
 const taxSource = readFileSync('src/routes/(protected)/tax/+page.svelte', 'utf8');
+const yearEndSource = readFileSync(
+	'src/routes/(protected)/accounting/year-end/+page.svelte',
+	'utf8'
+);
 
 describe('pass 27 UI regressions', () => {
 	it('uses the canonical append-only refund command instead of legacy return/delete confirmation', () => {
@@ -27,5 +31,16 @@ describe('pass 27 UI regressions', () => {
 		assert.doesNotMatch(taxSource, /let packetYear = \$state/);
 		assert.doesNotMatch(taxSource, /PACKET_YEAR_OPTIONS/);
 		assert.match(taxSource, /downloadYearEndPacket\(Number\(selectedYear\)\)/);
+	});
+
+	it('keeps unallocated tax activity visible and reconciled without folding it into property lines', () => {
+		for (const source of [taxSource, yearEndSource]) {
+			assert.match(source, /unallocatedActivity\.requiresAllocation/);
+			assert.match(source, /unallocatedActivity\.incomeEntryCount/);
+			assert.match(source, /unallocatedActivity\.expenseCount/);
+			assert.match(source, /reconciledTotalRentalIncome/);
+			assert.match(source, /reconciledTotalExpenses/);
+			assert.match(source, /reconciledNetIncome/);
+		}
 	});
 });

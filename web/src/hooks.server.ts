@@ -2,21 +2,20 @@
  * Server hooks for authentication.
  *
  * On every request we validate the app-namespaced access-token cookie against the API
- * (GET /auth/me), refreshing on 401, and populate event.locals.user /
- * event.locals.accessToken for downstream load functions and guards.
+ * (GET /auth/access), refreshing on 401, and populate event.locals.user,
+ * event.locals.access, and event.locals.accessToken for downstream load functions and guards.
  *
  * Mirrors EdiPlatform's hooks.server.ts, adapted to RentalCommand's int user
  * keys and rental routes (no Sentry dependency here).
  */
 
-import type { Handle, HandleFetch, RequestEvent } from '@sveltejs/kit';
+import type { Handle, HandleFetch } from '@sveltejs/kit';
 import type { Cookies } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
 import type { AccessEnvelope, User } from '$lib/types/user';
 import { userFromAccessEnvelope } from '$lib/types/user';
 import { serverRefreshToken, applyRefreshCookies } from '$lib/server/token-refresh';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
-import { userFromAccessToken } from '$lib/server/jwt-claims';
 import { SIM_CLOCK_SHIM_PLACEHOLDER, simClockShimScript } from '$lib/dev/sim-clock-shim';
 import {
 	deleteAccessCookies,
@@ -72,17 +71,14 @@ export const handle: Handle = async ({ event, resolve }) => {
 					deleteAccessCookies(event.cookies);
 				}
 			} else {
-				// Transient server error (429/500/...) — NOT a real 401, so keep the session alive
-				// rather than bouncing every logged-in user to /login during a brief API blip.
+				// The canonical bearer contains only authority coordinates, never display or workspace
+				// facts. Keep the cookies for a later retry but fail this request closed.
 				console.warn(
-					`Auth /me returned ${response.status} — preserving existing session for this request`
+					`Auth /access returned ${response.status} — canonical session could not be validated`
 				);
-				preserveSessionFromToken(event, accessToken);
 			}
 		} catch (error) {
-			// Network/cert/timeout error reaching the API — keep the session alive through the blip.
-			console.warn('Auth validation error (preserving session):', error);
-			preserveSessionFromToken(event, accessToken);
+			console.warn('Auth validation error; canonical session could not be validated:', error);
 		}
 	} else {
 		// No access token — fall back to the refresh token if present.
@@ -108,27 +104,6 @@ export const handle: Handle = async ({ event, resolve }) => {
 			html.replace(SIM_CLOCK_SHIM_PLACEHOLDER, simClockEnabled ? simClockShimScript : '')
 	});
 };
-
-/**
- * Transient /auth/me failure (a 5xx, or the fetch threw on network/cert/timeout — anything that is
- * NOT a real 401): keep the user signed in through the blip instead of 303-bouncing every logged-in
- * user to /login on a brief API hiccup. Forward the still-valid token AND reconstruct locals.user by
- * decoding the token's own claims locally — but only when the token has not expired. An expired or
- * malformed token leaves locals.user null, so a genuinely stale session still falls through to the
- * guards' /login redirect rather than being silently extended.
- */
-function preserveSessionFromToken(event: RequestEvent, accessToken: string): void {
-	event.locals.accessToken = accessToken;
-	const storedExpiration = getAccessTokenExpiration(event.cookies);
-	if (storedExpiration) {
-		event.locals.accessTokenExpiration = storedExpiration;
-	}
-
-	const user = userFromAccessToken(accessToken);
-	if (user) {
-		event.locals.user = user;
-	}
-}
 
 /**
  * Refresh the access token from the app-namespaced refresh cookie, using the shared

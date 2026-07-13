@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data;
 
@@ -70,6 +71,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<TenantChargeBalanceProjection> TenantChargeBalanceProjections =>
         Set<TenantChargeBalanceProjection>();
     public DbSet<LegalDocumentArtifact> LegalDocumentArtifacts => Set<LegalDocumentArtifact>();
+    public DbSet<LegalDocumentSourceVersion> LegalDocumentSourceVersions => Set<LegalDocumentSourceVersion>();
     public DbSet<LeaseAgreement> LeaseAgreements => Set<LeaseAgreement>();
     public DbSet<LeaseAgreementSigner> LeaseAgreementSigners => Set<LeaseAgreementSigner>();
     public DbSet<LeaseAddendum> LeaseAddenda => Set<LeaseAddendum>();
@@ -204,6 +206,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.ConfigureTenantAccountKernel();
         modelBuilder.ConfigureLeaseLifecycleProjections();
         modelBuilder.ConfigureAccountStatusProjections();
+        ScheduleEDepreciationDbFunction.Configure(modelBuilder);
+        SqlNumericFunctions.Configure(modelBuilder);
         modelBuilder.ConfigureApplicationFinance();
 
         // Npgsql's inet type is represented by IPAddress. Keep the HTTP/domain boundary as a
@@ -607,6 +611,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<SystemNoticeTemplateVersion>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedNever();
             entity.Property(e => e.SystemKey).IsRequired().HasMaxLength(80);
             entity.Property(e => e.Classification).HasConversion<string>().HasMaxLength(30);
             entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
@@ -614,6 +619,18 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.JurisdictionCode).HasMaxLength(80);
             entity.Property(e => e.Provenance).IsRequired().HasMaxLength(1000);
             entity.HasIndex(e => new { e.SystemKey, e.Version }).IsUnique();
+            entity.HasData(SuppliedNoticeTemplateBaseline.V1.Select(template => new
+            {
+                template.Id,
+                template.SystemKey,
+                Version = SuppliedNoticeTemplateBaseline.Version,
+                template.Classification,
+                template.Subject,
+                template.Body,
+                JurisdictionCode = (string?)null,
+                Provenance = SuppliedNoticeTemplateBaseline.Provenance,
+                SuppliedNoticeTemplateBaseline.PublishedAtUtc,
+            }));
         });
 
         modelBuilder.Entity<WorkspaceNoticeTemplateVersion>(entity =>

@@ -1,9 +1,9 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Auth;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -27,31 +27,25 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     private static readonly AtomicJsonResultCodec<WorkspaceTeamMutationResult> MutationCodec =
         new("workspace-team.mutation.v1");
     private readonly RentalCommandDbContext _db;
-    private readonly IWorkspaceAuthorizationEvaluator _authorization;
     private readonly IAtomicUnitOfWork _atomic;
-    private readonly TimeProvider _timeProvider;
     private readonly string _webBaseUrl;
 
     public TeamController(
         RentalCommandDbContext db,
-        IWorkspaceAuthorizationEvaluator authorization,
         IAtomicUnitOfWork atomic,
-        TimeProvider timeProvider,
         IConfiguration configuration)
     {
         _db = db;
-        _authorization = authorization;
         _atomic = atomic;
-        _timeProvider = timeProvider;
         _webBaseUrl = configuration["App:WebBaseUrl"] ?? "https://localhost:5667";
     }
 
     [HttpGet("members")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamRead)]
     public async Task<ActionResult<TeamMemberPageDto>> ListMembers(
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        if (!await HasWorkspaceCapabilityAsync(CapabilityKeys.TeamRead, ct)) return Forbid();
         var portfolioId = GetPortfolioId();
         var assignments = _db.MembershipRoleAssignments.AsNoTracking();
         var filtered =
@@ -116,12 +110,12 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpGet("members/{accessContextId:int}/assignments")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamRead)]
     public async Task<ActionResult<TeamAssignmentPageDto>> ListAssignments(
         int accessContextId,
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        if (!await HasWorkspaceCapabilityAsync(CapabilityKeys.TeamRead, ct)) return Forbid();
         var portfolioId = GetPortfolioId();
         var filtered = _db.MembershipRoleAssignments.AsNoTracking()
             .Where(assignment =>
@@ -164,9 +158,9 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpGet("role-profiles")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamRead)]
     public async Task<ActionResult<IReadOnlyList<TeamRoleProfileDto>>> ListRoleProfiles(CancellationToken ct)
     {
-        if (!await HasWorkspaceCapabilityAsync(CapabilityKeys.TeamRead, ct)) return Forbid();
         var items = await _db.RoleProfiles.AsNoTracking()
             .Where(profile =>
                 profile.Key == RoleProfileKeys.WorkspaceAdministrator ||
@@ -182,6 +176,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpPost("memberships")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     public async Task<IActionResult> CreateMembership(
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] CreateWorkspaceMembershipRequest request,
@@ -200,6 +195,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpPost("members/{accessContextId:int}/assignments")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     public async Task<IActionResult> AddAssignment(
         int accessContextId,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
@@ -218,6 +214,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpPatch("members/{accessContextId:int}/assignments/{assignmentId:int}/end")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     public async Task<IActionResult> EndAssignment(
         int accessContextId,
         int assignmentId,
@@ -237,6 +234,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpPut("members/{accessContextId:int}/assignments/{assignmentId:int}/properties")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     public async Task<IActionResult> ReplaceProperties(
         int accessContextId,
         int assignmentId,
@@ -256,6 +254,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpPatch("members/{accessContextId:int}/status")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     public async Task<IActionResult> ChangeStatus(
         int accessContextId,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
@@ -270,18 +269,6 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             accessContextId, request.ExpectedAccessRevision, request.Action);
         return await Execute("workspace-team.membership.status", e.KeyDigest,
             command, MutationCodec, StatusCodes.Status200OK, ct);
-    }
-
-    private async Task<bool> HasWorkspaceCapabilityAsync(string capability, CancellationToken ct)
-    {
-        if (!HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) ||
-            value is not ActiveAccessContext active)
-        {
-            return false;
-        }
-        return await _authorization.HasCapabilityAsync(active, capability,
-            new WorkspaceCapabilityAuthorizationTarget(active.PortfolioId),
-            _timeProvider.GetUtcNow().UtcDateTime, ct);
     }
 
     private async Task<IActionResult> Execute<TCommand, TResult>(
@@ -325,9 +312,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
             failure = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
             return false;
         }
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId) ||
-            !int.TryParse(User.FindFirstValue("ctx"), out var contextId) ||
-            !long.TryParse(User.FindFirstValue("ar"), out var revision))
+        if (!TryGetActiveAccessContext(out var active))
         {
             failure = Forbid();
             return false;
@@ -335,7 +320,8 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
             .ToLowerInvariant();
         envelope = new CommandEnvelope(
-            GetPortfolioId(), GetUserId(), sessionId, contextId, revision, digest);
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision, digest);
         return true;
     }
 

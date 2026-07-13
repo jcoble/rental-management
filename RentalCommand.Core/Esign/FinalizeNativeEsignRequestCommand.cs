@@ -1,4 +1,5 @@
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Core.Esign;
 
@@ -17,6 +18,25 @@ public sealed class NativeEsignExecutionClaimLostException : InvalidOperationExc
 {
     public NativeEsignExecutionClaimLostException(int signatureRequestId)
         : base($"Native e-sign execution claim for request {signatureRequestId} is no longer owned.") { }
+}
+
+public sealed class NativeEsignLegalTransitionConflictException : InvalidOperationException
+{
+    public NativeEsignLegalTransitionConflictException(AtomicLegalExecutionTransitionOutcome outcome)
+        : base($"Native e-sign legal transition was rejected: {outcome}.")
+    {
+        Outcome = outcome;
+    }
+
+    public NativeEsignLegalTransitionConflictException(
+        int signatureRequestId,
+        AtomicLegalExecutionTransitionOutcome outcome)
+        : base($"Native e-sign legal transition for request {signatureRequestId} was rejected: {outcome}.")
+    {
+        Outcome = outcome;
+    }
+
+    public AtomicLegalExecutionTransitionOutcome Outcome { get; }
 }
 
 public sealed record FinalizeNativeEsignRequestResult(

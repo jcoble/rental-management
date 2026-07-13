@@ -1,13 +1,14 @@
-using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -139,6 +140,17 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
 
     private WorkOrderController CreateController(IWorkOrderService service)
     {
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            UserId: 7,
+            AccessContextId: 1,
+            PortfolioId: 42,
+            AccessRevision: 1,
+            LastAuthorizedExperience: null,
+            WorkspaceMembershipId: null,
+            DefaultExperience: null);
+
         var controller = new WorkOrderController(
             service,
             Mock.Of<IVendorDispatchService>(),
@@ -147,13 +159,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity([
-                        new Claim("portfolioId", "42"),
-                        new Claim(ClaimTypes.NameIdentifier, "7"),
-                    ], "test")),
-                },
+                HttpContext = httpContext,
             },
         };
 

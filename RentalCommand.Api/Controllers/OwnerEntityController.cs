@@ -5,8 +5,8 @@ using RentalCommand.Api.Services.Domain;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for owner entities (Person/LLC/Trust) within the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?skip&amp;take&amp;search&amp;sort&amp;ownerEntityType</c>. Removal is a soft-delete.
+/// CRUD for owner entities (Person/LLC/Trust) within the caller's canonical workspace scope. The list
+/// supports <c>?skip&amp;take&amp;search&amp;sort&amp;ownerEntityType</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/owner-entities")]

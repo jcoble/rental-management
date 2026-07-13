@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -9,25 +10,25 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IAccountingService
 {
-    Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default);
+    Task<AccountingSummaryResponse> GetSummaryAsync(WorkspaceReadScope scope, CancellationToken ct = default);
 
     /// <summary>
     /// Plain-English money snapshot (month-to-date + trailing 30 days) for a one-glance card and the
     /// daily briefing: money in, money out, what's kept, and who's behind, each with a jargon-free
     /// explanation.
     /// </summary>
-    Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default);
+    Task<MoneySnapshotResponse> GetSnapshotAsync(WorkspaceReadScope scope, CancellationToken ct = default);
 
     /// <summary>
     /// The "Who's behind" list: one row per lease/tenant currently behind on rent, with amount owed,
     /// overdue-payment count, and a deep-link anchor. Uses the exact same past-due definition as the
     /// snapshot KPI's PastDueCount/PastDueAmount, so the list length and the KPI count always agree.
     /// </summary>
-    Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default);
+    Task<PastDueResponse> GetPastDueAsync(WorkspaceReadScope scope, CancellationToken ct = default);
 
-    Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default);
+    Task<AccountingReportsResponse> GetReportsAsync(WorkspaceReadScope scope, CancellationToken ct = default);
     Task<AccountingTransactionsResponse> GetTransactionsAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AccountingTransactionsQuery query,
         CancellationToken ct = default);
 
@@ -36,11 +37,12 @@ public interface IAccountingService
     /// month-by-month cash flow, and rent roll) for <paramref name="year"/>, scoped to the portfolio.
     /// Reuses the Schedule E computation so the packet reconciles with the existing CSV/report.
     /// </summary>
-    Task<YearEndPacketData> GetYearEndPacketDataAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<YearEndPacketData> GetYearEndPacketDataAsync(
+        WorkspaceReadScope scope, int year, CancellationToken ct = default);
 
     /// <summary>
     /// Renders the year-end packet to PDF bytes (cover + Schedule E summary + per-property P&amp;L +
     /// cash-flow summary + rent roll) for <paramref name="year"/>, scoped to the portfolio.
     /// </summary>
-    Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<byte[]> GetYearEndPacketAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default);
 }

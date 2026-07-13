@@ -22,11 +22,6 @@ export type UnitLeaseCreateForm = {
 	securityDeposit: string;
 	lateFeeAmount: string;
 	rentDueDay: string;
-	rentTrackingStartMode: string;
-	rentTrackingStartDate: string;
-	openingBalanceAmount: string;
-	openingBalanceAsOfDate: string;
-	openingBalanceNote: string;
 	status: string;
 	notes: string;
 };
@@ -51,11 +46,6 @@ export function createUnitLeaseForm(context: UnitLeaseCreateContext): UnitLeaseC
 		securityDeposit: '',
 		lateFeeAmount: '75',
 		rentDueDay: '1',
-		rentTrackingStartMode: 'ForwardOnly',
-		rentTrackingStartDate: '',
-		openingBalanceAmount: '',
-		openingBalanceAsOfDate: '',
-		openingBalanceNote: '',
 		status: 'Active',
 		notes: '',
 	};

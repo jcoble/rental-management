@@ -26,7 +26,7 @@ public class SecurityDepositsController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<SecurityDepositAccountResponse>>> List(
         [FromQuery] int? leaseManagementId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), leaseManagementId, ct);
+        var items = await _service.ListAsync(GetWorkspaceReadScope(), leaseManagementId, ct);
         return Ok(items);
     }
 
@@ -35,7 +35,7 @@ public class SecurityDepositsController : ManagementControllerBase
     public async Task<ActionResult<SecurityDepositListResponse>> ListPage(
         [FromQuery] int? leaseManagementId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), leaseManagementId, query, ct);
+        var page = await _service.ListPageAsync(GetWorkspaceReadScope(), leaseManagementId, query, ct);
         return Ok(page);
     }
 
@@ -45,7 +45,7 @@ public class SecurityDepositsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SecurityDepositAccountResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Security deposit holding not found" }) : Ok(item);
     }
 
@@ -60,7 +60,7 @@ public class SecurityDepositsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> MoveOutStatement(int id, CancellationToken ct)
     {
-        var pdf = await _service.GetMoveOutStatementAsync(GetPortfolioId(), id, ct);
+        var pdf = await _service.GetMoveOutStatementAsync(GetWorkspaceReadScope(), id, ct);
         if (pdf == null)
             return NotFound(new { error = "Security deposit holding not found" });
 

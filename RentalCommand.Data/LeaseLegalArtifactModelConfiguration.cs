@@ -13,6 +13,7 @@ internal static class LeaseLegalArtifactModelConfiguration
         modelBuilder.Entity<DocumentTemplate>().HasAlternateKey(e => new { e.Id, e.PortfolioId });
 
         ConfigureLegalDocumentArtifact(modelBuilder);
+        ConfigureLegalDocumentSourceVersion(modelBuilder);
         ConfigureLeaseAgreement(modelBuilder);
         ConfigureLeaseAgreementSigner(modelBuilder);
         ConfigureLeaseAddendum(modelBuilder);
@@ -21,12 +22,99 @@ internal static class LeaseLegalArtifactModelConfiguration
         ConfigureLeaseRenewalAddendumDecision(modelBuilder);
     }
 
+    private static void ConfigureLegalDocumentSourceVersion(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<LegalDocumentSourceVersion>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.PublicId).HasDefaultValueSql("gen_random_uuid()");
+            entity.Property(e => e.SourceKind).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.BusinessKey).IsRequired().HasMaxLength(300);
+            entity.Property(e => e.RendererKey).HasMaxLength(100);
+            entity.Property(e => e.SnapshotPayload).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.SourceContentSha256).HasColumnType("char(64)");
+            entity.Property(e => e.CreatedAtUtc).HasDefaultValueSql("clock_timestamp()");
+
+            entity.HasIndex(e => e.PublicId).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.BusinessKey }).IsUnique();
+            entity.HasIndex(e => new { e.DocumentTemplateId, e.DocumentTemplateVersion, e.PortfolioId })
+                .IsUnique()
+                .HasFilter("\"SourceKind\" = 'AuthoredTemplateSnapshot'");
+            entity.HasIndex(e => new { e.PortfolioId, e.RendererKey, e.RendererVersion })
+                .IsUnique()
+                .HasFilter("\"SourceKind\" = 'BuiltInRenderer'");
+            entity.HasIndex(e => new { e.SourceLegalDocumentArtifactId, e.PortfolioId })
+                .IsUnique()
+                .HasFilter("\"SourceKind\" = 'ImportedExternalDocument'");
+
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_LegalDocumentSourceVersion_Kind",
+                    "\"SourceKind\" IN ('AuthoredTemplateSnapshot', 'BuiltInRenderer', 'ImportedExternalDocument')");
+                table.HasCheckConstraint(
+                    "CK_LegalDocumentSourceVersion_Snapshot",
+                    "jsonb_typeof(\"SnapshotPayload\") = 'object'");
+                table.HasCheckConstraint(
+                    "CK_LegalDocumentSourceVersion_SourceShape",
+                    "(\"SourceKind\" = 'AuthoredTemplateSnapshot' " +
+                    "AND \"DocumentTemplateId\" IS NOT NULL AND \"DocumentTemplateVersion\" >= 1 " +
+                    "AND \"RendererKey\" IS NOT NULL AND \"RendererVersion\" >= 1 " +
+                    "AND \"SourceStoredFileId\" IS NULL AND \"SourceLegalDocumentArtifactId\" IS NULL " +
+                    "AND \"SourceContentSha256\" IS NULL) OR " +
+                    "(\"SourceKind\" = 'BuiltInRenderer' " +
+                    "AND \"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL " +
+                    "AND \"RendererKey\" IS NOT NULL AND \"RendererVersion\" >= 1 " +
+                    "AND \"SourceStoredFileId\" IS NULL AND \"SourceLegalDocumentArtifactId\" IS NULL " +
+                    "AND \"SourceContentSha256\" IS NULL) OR " +
+                    "(\"SourceKind\" = 'ImportedExternalDocument' " +
+                    "AND \"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL " +
+                    "AND \"RendererKey\" IS NULL AND \"RendererVersion\" IS NULL " +
+                    "AND \"SourceStoredFileId\" IS NOT NULL AND \"SourceLegalDocumentArtifactId\" IS NOT NULL " +
+                    "AND \"SourceContentSha256\" ~ '^[0-9a-f]{64}$')");
+            });
+
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(e => e.LegalDocumentSourceVersions)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.DocumentTemplate)
+                .WithMany()
+                .HasForeignKey(e => new { e.DocumentTemplateId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.SourceStoredFile)
+                .WithMany()
+                .HasForeignKey(e => new { e.SourceStoredFileId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.SourceLegalDocumentArtifact)
+                .WithMany()
+                .HasForeignKey(e => new
+                {
+                    e.SourceLegalDocumentArtifactId,
+                    e.SourceStoredFileId,
+                    e.PortfolioId,
+                })
+                .HasPrincipalKey(e => new { e.Id, e.StoredFileId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.CreatedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // PostgreSQL rejects every UPDATE/DELETE; legal rows bind this exact immutable identity.
+        });
+    }
+
     private static void ConfigureLegalDocumentArtifact(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<LegalDocumentArtifact>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.HasAlternateKey(e => new { e.Id, e.StoredFileId, e.PortfolioId });
 
             entity.Property(e => e.PublicId).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.ArtifactKind).HasConversion<string>().HasMaxLength(30);
@@ -34,6 +122,7 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.Property(e => e.FileName).IsRequired().HasMaxLength(255);
             entity.Property(e => e.ContentType).IsRequired().HasMaxLength(100);
             entity.Property(e => e.ContentSha256).IsRequired().HasColumnType("char(64)");
+            entity.Property(e => e.LegalIssuanceFingerprint).HasColumnType("char(64)");
             entity.Property(e => e.CreatedAtUtc).HasDefaultValueSql("clock_timestamp()");
 
             entity.HasIndex(e => e.PublicId).IsUnique();
@@ -51,6 +140,12 @@ internal static class LeaseLegalArtifactModelConfiguration
                 table.HasCheckConstraint(
                     "CK_LegalDocumentArtifact_ContentSha256",
                     "\"ContentSha256\" ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "CK_LegalDocumentArtifact_IssuanceBinding",
+                    "(\"ArtifactKind\" IN ('IssuedAgreement', 'IssuedAddendum') " +
+                    "AND \"LegalIssuanceFingerprint\" ~ '^[0-9a-f]{64}$') OR " +
+                    "(\"ArtifactKind\" NOT IN ('IssuedAgreement', 'IssuedAddendum') " +
+                    "AND \"LegalIssuanceFingerprint\" IS NULL)");
                 table.HasCheckConstraint(
                     "CK_LegalDocumentArtifact_ContentType",
                     "\"ContentType\" IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/gif')");
@@ -182,11 +277,7 @@ internal static class LeaseLegalArtifactModelConfiguration
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Currency",
                     "\"Currency\" ~ '^[A-Z]{3}$'");
-                table.HasCheckConstraint(
-                    "CK_LeaseAgreement_SchemaVersions",
-                    "\"TermsSchemaVersion\" >= 1 AND " +
-                    "((\"DocumentTemplateId\" IS NULL AND \"DocumentTemplateVersion\" IS NULL) OR " +
-                    "(\"DocumentTemplateId\" IS NOT NULL AND \"DocumentTemplateVersion\" >= 1))");
+                table.HasCheckConstraint("CK_LeaseAgreement_SchemaVersions", "\"TermsSchemaVersion\" >= 1");
             });
 
             entity.HasOne(e => e.Portfolio)
@@ -218,9 +309,9 @@ internal static class LeaseLegalArtifactModelConfiguration
                 .HasForeignKey(e => new { e.SupersededByAgreementId, e.LeaseManagementId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
-            entity.HasOne(e => e.DocumentTemplate)
-                .WithMany()
-                .HasForeignKey(e => new { e.DocumentTemplateId, e.PortfolioId })
+            entity.HasOne(e => e.DocumentSourceVersion)
+                .WithMany(e => e.Agreements)
+                .HasForeignKey(e => new { e.DocumentSourceVersionId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.IssuedArtifact)
@@ -341,8 +432,7 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "CK_LeaseAddendum_Supersession",
                     "(\"SupersededEffectiveOn\" IS NULL AND \"SupersededByAddendumId\" IS NULL " +
                     "AND \"SupersessionRecordedAtUtc\" IS NULL) OR " +
-                    "(\"SupersededEffectiveOn\" IS NOT NULL AND \"SupersededByAddendumId\" IS NOT NULL " +
-                    "AND \"SupersessionRecordedAtUtc\" IS NOT NULL " +
+                    "(\"SupersededEffectiveOn\" IS NOT NULL AND \"SupersessionRecordedAtUtc\" IS NOT NULL " +
                     "AND \"SupersededEffectiveOn\" > \"EffectiveFromOn\")");
                 table.HasCheckConstraint(
                     "CK_LeaseAddendum_Issuance",
@@ -368,7 +458,7 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "(\"VersionNumber\" > 1 AND \"ReplacesAddendumId\" IS NOT NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseAddendum_SchemaVersions",
-                    "\"TermsSchemaVersion\" >= 1 AND \"DocumentTemplateVersion\" >= 1");
+                    "\"TermsSchemaVersion\" >= 1");
             });
 
             entity.HasOne(e => e.Portfolio)
@@ -407,9 +497,9 @@ internal static class LeaseLegalArtifactModelConfiguration
                 })
                 .HasPrincipalKey(e => new { e.Id, e.SeriesPublicId, e.LeaseManagementId, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
-            entity.HasOne(e => e.DocumentTemplate)
-                .WithMany()
-                .HasForeignKey(e => new { e.DocumentTemplateId, e.PortfolioId })
+            entity.HasOne(e => e.DocumentSourceVersion)
+                .WithMany(e => e.Addenda)
+                .HasForeignKey(e => new { e.DocumentSourceVersionId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.IssuedArtifact)

@@ -37,7 +37,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILeaseQaService, LeaseQaService>();
         // Residential lease agreement PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<ILeaseAgreementPdfGenerator, LeaseAgreementPdfGenerator>();
+        services.AddSingleton<ILeaseAddendumPdfGenerator, LeaseAddendumPdfGenerator>();
         services.AddScoped<ILeaseAgreementRenderer, LeaseAgreementRenderer>();
+        services.AddScoped<RentalCommand.Core.Leasing.ILegalDocumentIssuanceDraftReader,
+            RentalCommand.Data.Leasing.LegalDocumentIssuanceDraftReader>();
+        services.AddScoped<ILegalDocumentIssuancePreparationService,
+            LegalDocumentIssuancePreparationService>();
         // Native e-sign: executed-PDF/certificate renderer (stateless → singleton) + the public,
         // token-scoped signing flow used by SignController.
         services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
@@ -175,11 +180,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RentalCommand.Core.Interfaces.ISandboxGuard, RentalCommand.Data.SandboxGuard>();
         services.AddScoped<ISandboxService, SandboxService>();
 
-        // --- self-owner provisioning (the landlord IS the first owner) ---
-        // Used by registration, Google sign-in, and go-live to auto-create the primary owner; the
-        // backfill service is a one-off catch-up for portfolios created before the feature.
+        // --- owner provisioning (the landlord IS the first owner) ---
+        // InitialWorkspaceAuthorityProvisioner creates every fresh workspace's full owner + Team graph.
+        // SelfOwnerProvisioner remains the explicit, current go-live operation; no startup backfill exists.
         services.AddScoped<ISelfOwnerProvisioner, SelfOwnerProvisioner>();
-        services.AddScoped<SelfOwnerBackfillService>();
+        services.AddScoped<IInitialWorkspaceAuthorityProvisioner, InitialWorkspaceAuthorityProvisioner>();
 
         return services;
     }

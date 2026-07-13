@@ -7,8 +7,8 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for maintenance work orders within the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>
+/// CRUD for maintenance work orders within the caller's canonical workspace and property scope.
+/// The list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>
 /// plus requested/scheduled/completed date windows.
 /// Create validates the referenced property/unit/tenant/lease relationship/vendor are in the portfolio. Work orders
 /// have no soft-delete column, so removal is a hard delete.

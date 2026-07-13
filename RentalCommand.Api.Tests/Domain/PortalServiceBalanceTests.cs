@@ -247,6 +247,8 @@ public class PortalServiceBalanceTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, actor.Id, now),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             CreatedByUserId = actor.Id,

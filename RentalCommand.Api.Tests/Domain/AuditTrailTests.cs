@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -29,6 +30,9 @@ public sealed class AuditTrailTests : IDisposable
     private readonly AuditScope _scope;
     private readonly FakeActor _actor;
     private readonly RentalCommandDbContext _db;
+    private readonly WorkspaceReadScope _readScope;
+    private readonly int _propertyId;
+    private readonly int _otherPropertyId;
 
     public AuditTrailTests()
     {
@@ -51,7 +55,7 @@ public sealed class AuditTrailTests : IDisposable
         SeedPortfolio(OtherPortfolioId);
 
         // The actor's UserId is a FK to ApplicationUser; seed it so SQLite's FK check is satisfied.
-        _db.Users.Add(new ApplicationUser
+        var actorUser = new ApplicationUser
         {
             Id = 7,
             UserName = "jane@example.test",
@@ -59,7 +63,22 @@ public sealed class AuditTrailTests : IDisposable
             Email = "jane@example.test",
             NormalizedEmail = "JANE@EXAMPLE.TEST",
             DisplayName = "Jane Landlord",
+        };
+        _db.Users.Add(actorUser);
+        _db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
+        {
+            User = actorUser,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
         });
+        _db.SaveChanges();
+
+        _readScope = _db.SeedAdministratorScope(PortfolioId, "audit-query");
+        _propertyId = SeedProperty(PortfolioId, "Authorized property");
+        _otherPropertyId = SeedProperty(OtherPortfolioId, "Foreign property");
+        _db.AuditLogs.RemoveRange(_db.AuditLogs);
         _db.SaveChanges();
     }
 
@@ -83,9 +102,28 @@ public sealed class AuditTrailTests : IDisposable
         _db.SaveChanges();
     }
 
-    private Expense NewExpense() => new()
+    private int SeedProperty(int portfolioId, string name)
     {
-        PortfolioId = PortfolioId,
+        var property = new Property
+        {
+            PortfolioId = portfolioId,
+            Name = name,
+            AddressLine1 = "1 Test Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44308",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+        return property.Id;
+    }
+
+    private Expense NewExpense(int portfolioId = PortfolioId) => new()
+    {
+        PortfolioId = portfolioId,
+        PropertyId = portfolioId == PortfolioId ? _propertyId : _otherPropertyId,
         Category = ScheduleECategory.Repairs,
         Description = "Roof repair",
         Status = ExpenseStatus.Pending,
@@ -244,13 +282,12 @@ public sealed class AuditTrailTests : IDisposable
         _db.Expenses.Add(second);
         await _db.SaveChangesAsync();
 
-        var foreign = NewExpense();
-        foreign.PortfolioId = OtherPortfolioId;
+        var foreign = NewExpense(OtherPortfolioId);
         _db.Expenses.Add(foreign);
         await _db.SaveChangesAsync();
 
         var sut = NewAuditQueryService();
-        var page = await sut.ListAsync(PortfolioId, null, null, null, new ListQuery());
+        var page = await sut.ListAsync(_readScope, null, null, null, new ListQuery());
 
         page.Should().OnlyContain(e => e.PortfolioId == PortfolioId);
         page.Select(e => e.EntityId).Should().NotContain(foreign.Id);
@@ -269,13 +306,13 @@ public sealed class AuditTrailTests : IDisposable
 
         var sut = NewAuditQueryService();
 
-        var created = await sut.ListAsync(PortfolioId, AuditLogOperation.Created, "Expense", null, new ListQuery());
+        var created = await sut.ListAsync(_readScope, AuditLogOperation.Created, "Expense", null, new ListQuery());
         created.Should().ContainSingle();
         created[0].Operation.Should().Be(AuditLogOperation.Created);
         created[0].Description.Should().Be("Recorded an expense");
         created[0].DetailHref.Should().Be($"/accounting/expenses/{expense.Id}");
 
-        var wrongType = await sut.ListAsync(PortfolioId, null, "Lease", null, new ListQuery());
+        var wrongType = await sut.ListAsync(_readScope, null, "Lease", null, new ListQuery());
         wrongType.Should().BeEmpty();
     }
 
@@ -290,39 +327,128 @@ public sealed class AuditTrailTests : IDisposable
         // The reported "User #1" bug: a row written with a user id but no ActorLabel (e.g. an HTTP
         // request whose token lacked a name claim) must render the user's display name, not "User #7".
         // A user with a blank display name falls back to the email; a row with no user id stays "system".
-        _db.Users.Add(new ApplicationUser
+        var noNameUser = new ApplicationUser
         {
-            Id = 8,
             UserName = "noname@example.test",
             NormalizedUserName = "NONAME@EXAMPLE.TEST",
             Email = "noname@example.test",
             NormalizedEmail = "NONAME@EXAMPLE.TEST",
             DisplayName = "",
+        };
+        _db.Users.Add(noNameUser);
+        _db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
+        {
+            User = noNameUser,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
         });
         await _db.SaveChangesAsync();
 
+        var units = new[]
+        {
+            Unit("71"),
+            Unit("72"),
+            Unit("73"),
+        };
+        _db.Units.AddRange(units);
+        await _db.SaveChangesAsync();
+
         _db.AuditLogs.AddRange(
-            new AuditLog { PortfolioId = PortfolioId, EntityType = "Conversation", EntityId = 71, Operation = AuditLogOperation.Created, UserId = 7, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-3) },
-            new AuditLog { PortfolioId = PortfolioId, EntityType = "Conversation", EntityId = 72, Operation = AuditLogOperation.Created, UserId = 8, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-2) },
-            new AuditLog { PortfolioId = PortfolioId, EntityType = "Conversation", EntityId = 73, Operation = AuditLogOperation.Created, UserId = null, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-1) });
+            new AuditLog { PortfolioId = PortfolioId, EntityType = nameof(Unit), EntityId = units[0].Id, Operation = AuditLogOperation.Created, UserId = 7, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-3) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = nameof(Unit), EntityId = units[1].Id, Operation = AuditLogOperation.Created, UserId = noNameUser.Id, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-2) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = nameof(Unit), EntityId = units[2].Id, Operation = AuditLogOperation.Created, UserId = null, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-1) });
         await _db.SaveChangesAsync();
 
         var sut = NewAuditQueryService();
-        var page = await sut.ListAsync(PortfolioId, null, "Conversation", null, new ListQuery());
+        var page = await sut.ListAsync(_readScope, null, nameof(Unit), null, new ListQuery());
 
         // UserId present, no ActorLabel → resolved display name (NOT "User #7").
-        page.Single(p => p.EntityId == 71).Actor.Should().Be("Jane Landlord");
+        page.Single(p => p.EntityId == units[0].Id).Actor.Should().Be("Jane Landlord");
         // Display name blank → falls back to email.
-        page.Single(p => p.EntityId == 72).Actor.Should().Be("noname@example.test");
+        page.Single(p => p.EntityId == units[1].Id).Actor.Should().Be("noname@example.test");
         // No user id at all → system.
-        page.Single(p => p.EntityId == 73).Actor.Should().Be("system");
+        page.Single(p => p.EntityId == units[2].Id).Actor.Should().Be("system");
     }
 
     [Fact]
-    public void Query_Routes_Canonical_TenantAccount_To_Unit_CommandCenter()
+    public async Task Query_Applies_SelectedProperty_Scope_Before_Paging()
     {
-        AuditEntryResponse.BuildDetailHref(nameof(TenantAccount), 81, 42)
-            .Should().Be("/units/42?tab=ledger&tenantAccount=81");
+        var decoyPropertyId = SeedProperty(PortfolioId, "Out-of-scope decoy");
+        var authorized = NewExpense();
+        var decoy = NewExpense();
+        decoy.PropertyId = decoyPropertyId;
+        decoy.Description = "Must not appear";
+        _db.Expenses.AddRange(authorized, decoy);
+
+        var assignment = _db.MembershipRoleAssignments
+            .Include(item => item.SelectedProperties)
+            .Single(item => item.WorkspaceMembership!.AccessContextId == _readScope.AccessContextId);
+        assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = _propertyId,
+        });
+        await _db.SaveChangesAsync();
+
+        var page = await NewAuditQueryService().ListAsync(
+            _readScope,
+            AuditLogOperation.Created,
+            nameof(Expense),
+            null,
+            new ListQuery { Take = 1 });
+
+        page.Should().ContainSingle();
+        page[0].EntityId.Should().Be(authorized.Id,
+            "the unauthorized newer decoy must be removed before Take(1)");
+    }
+
+    [Fact]
+    public async Task Query_FailsClosed_For_Stale_AccessRevision()
+    {
+        var page = await NewAuditQueryService().ListAsync(
+            _readScope with { AccessRevision = _readScope.AccessRevision + 1 },
+            null,
+            null,
+            null,
+            new ListQuery());
+
+        page.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Query_FailsClosed_For_Revoked_Session()
+    {
+        var session = await _db.AuthSessions.SingleAsync(item => item.Id == _readScope.SessionId);
+        session.RevokedAtUtc = DateTime.UtcNow;
+        session.Status = AuthSessionStatus.Revoked;
+        await _db.SaveChangesAsync();
+
+        var page = await NewAuditQueryService().ListAsync(
+            _readScope,
+            null,
+            null,
+            null,
+            new ListQuery());
+
+        page.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(LeaseManagement), "/units/42?tab=lease&leaseManagement=81")]
+    [InlineData(nameof(LeaseAgreement), "/units/42?tab=lease&agreement=81")]
+    [InlineData(nameof(TenantAccount), "/units/42?tab=ledger&tenantAccount=81")]
+    [InlineData(nameof(WorkOrder), "/units/42?tab=maintenance&wo=81")]
+    [InlineData(nameof(Expense), "/units/42?tab=ledger&ledger=expenses&expense=81")]
+    [InlineData(nameof(RentalApplication), "/units/42?tab=applications&app=81")]
+    public void Query_Routes_Supported_Canonical_Entities_To_Unit_CommandCenter(
+        string entityType,
+        string expectedHref)
+    {
+        AuditEntryResponse.BuildDetailHref(entityType, 81, 42)
+            .Should().Be(expectedHref);
     }
 
     [Theory]
@@ -340,7 +466,17 @@ public sealed class AuditTrailTests : IDisposable
     }
 
     private AuditQueryService NewAuditQueryService() =>
-        new(_db, new AuditDescriber(), new AuditDiffBuilder(), new FakeTimeZoneProvider());
+        new(_db, new AuditDescriber(), new AuditDiffBuilder(), new FakeTimeZoneProvider(), TimeProvider.System);
+
+    private Unit Unit(string number) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = _propertyId,
+        UnitNumber = number,
+        MarketRent = 1_000m,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow,
+    };
 
     private sealed class FakeActor : ICurrentActor
     {

@@ -18,7 +18,6 @@ public class IdentitySeeder
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RentalCommandDbContext _dbContext;
     private readonly SeedSettings _settings;
-    private readonly ITenantPortalProvisioningService _portalProvisioning;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly ILogger<IdentitySeeder> _logger;
     private readonly TimeProvider _timeProvider;
@@ -27,7 +26,6 @@ public class IdentitySeeder
         UserManager<ApplicationUser> userManager,
         RentalCommandDbContext dbContext,
         IOptions<SeedSettings> settings,
-        ITenantPortalProvisioningService portalProvisioning,
         ICanonicalAccountBootstrapService accountBootstrap,
         ILogger<IdentitySeeder> logger,
         TimeProvider timeProvider)
@@ -35,7 +33,6 @@ public class IdentitySeeder
         _userManager = userManager;
         _dbContext = dbContext;
         _settings = settings.Value;
-        _portalProvisioning = portalProvisioning;
         _accountBootstrap = accountBootstrap;
         _logger = logger;
         _timeProvider = timeProvider;
@@ -77,7 +74,6 @@ public class IdentitySeeder
         portfolio.ManagementCompanyName = _settings.ManagementCompanyName;
         portfolio.UpdatedAt = _timeProvider.UtcNow();
         await _dbContext.SaveChangesAsync(ct);
-        await EnsureTenantPortalAccountsAsync(portfolioId, ct);
         _logger.LogInformation(
             "Seeded canonical administrator {Email} (id {UserId}) in workspace {PortfolioId}.",
             _settings.AdminEmail,
@@ -85,48 +81,4 @@ public class IdentitySeeder
             portfolioId);
     }
 
-    private async Task EnsureTenantPortalAccountsAsync(int portfolioId, CancellationToken ct)
-    {
-        // Load the candidate tenant ids in ONE query (the "has an email" filter runs DB-side), then
-        // provision each through the shared service. Account creation is inherently per-tenant — Identity's
-        // UserManager has no batch API — so this loop is per-user round-trips, not in-memory aggregation;
-        // it's startup-only and idempotent. The on-demand staff endpoint reuses the same per-tenant method.
-        var tenantIds = await _dbContext.Tenants
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.Email != null && t.Email != "")
-            .OrderBy(t => t.Id)
-            .Select(t => t.Id)
-            .ToListAsync(ct);
-
-        if (tenantIds.Count == 0)
-        {
-            return;
-        }
-
-        var created = 0;
-        var existed = 0;
-
-        foreach (var tenantId in tenantIds)
-        {
-            var result = await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
-            switch (result.Status)
-            {
-                case PortalAccountStatus.Created:
-                    created++;
-                    break;
-                case PortalAccountStatus.AlreadyExisted:
-                    existed++;
-                    break;
-            }
-        }
-
-        if (created > 0 || existed > 0)
-        {
-            _logger.LogInformation(
-                "Ensured tenant portal accounts for portfolio {PortfolioId}: {Created} created, {Existed} already existed.",
-                portfolioId,
-                created,
-                existed);
-        }
-    }
 }

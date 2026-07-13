@@ -10,10 +10,8 @@ import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (locals.user) {
-		const roles = locals.user.roles ?? [];
-		const portalOnly =
-			roles.includes('Tenant') && !roles.some((r) => ['Admin', 'Manager', 'Agent'].includes(r));
-		throw redirect(303, portalOnly ? '/portal' : '/');
+		const activeExperience = locals.access?.selectedContext.activeExperience;
+		throw redirect(303, activeExperience === 'Tenant' ? '/portal' : '/');
 	}
 
 	return {};

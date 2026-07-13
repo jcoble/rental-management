@@ -422,7 +422,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         var template = await _db.DocumentTemplates
             .AsNoTracking()
             .Include(t => t.OriginalStoredFile)
-            .Include(t => t.Fields)
             .FirstOrDefaultAsync(t => t.Id == templateId && t.PortfolioId == portfolioId, ct);
         if (template is null)
         {
@@ -463,7 +462,23 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         }
 
         var data = BuildLeaseAgreementData(agreement);
-        var previewBytes = LeaseAgreementRenderer.RenderOverlayPreview(originalBytes, template.Fields, data);
+        var valueKeys = LeaseAgreementRenderer.BuildValueMap(data)
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Value))
+            .Select(pair => pair.Key)
+            .ToArray();
+        var fields = await _db.DocumentTemplateFields.AsNoTracking()
+            .Where(field => field.DocumentTemplateId == template.Id
+                && (field.Kind == DocumentTemplateFieldKind.Whiteout
+                    || (field.SignerRole == DocumentTemplateSignerRole.None
+                        && field.Kind != DocumentTemplateFieldKind.Signature
+                        && field.Kind != DocumentTemplateFieldKind.Initial
+                        && field.Kind != DocumentTemplateFieldKind.DateSigned
+                        && (valueKeys.Contains(field.FieldKey)
+                            || (field.DefaultText != null && field.DefaultText != "")))))
+            .OrderBy(field => field.SortOrder)
+            .ThenBy(field => field.Id)
+            .ToListAsync(ct);
+        var previewBytes = LeaseAgreementRenderer.RenderOverlayPreview(originalBytes, fields, data);
         var fileName = $"lease-template-{template.Id}-agreement-{agreement.LeaseAgreementId}-preview.pdf";
 
         return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Success(

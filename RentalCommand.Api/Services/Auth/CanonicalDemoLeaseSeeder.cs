@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -17,6 +18,7 @@ internal static class CanonicalDemoLeaseSeeder
 {
     public static async Task<CanonicalDemoLeaseSeedResult> SeedAsync(
         RentalCommandDbContext db,
+        ILegalDocumentSourceVersionResolver sourceVersions,
         int portfolioId,
         int actorUserId,
         string currency,
@@ -41,6 +43,15 @@ internal static class CanonicalDemoLeaseSeeder
             UpdatedAtUtc = now,
         };
         db.DocumentTemplates.Add(template);
+        await db.SaveChangesAsync(ct);
+        var sourceVersion = await sourceVersions.ResolveAuthoredTemplateAsync(
+                portfolioId,
+                template.Id,
+                actorUserId,
+                now,
+                ct)
+            ?? throw new InvalidOperationException(
+                $"Demo lease template {template.Id} could not be resolved to immutable provenance.");
 
         var graphs = new List<DemoLeaseGraph>();
         var activeManagements = new List<LeaseManagement>();
@@ -121,8 +132,7 @@ internal static class CanonicalDemoLeaseSeeder
                     startDate = start.ToString("yyyy-MM-dd"),
                     endDate = end.ToString("yyyy-MM-dd"),
                 }),
-                DocumentTemplate = template,
-                DocumentTemplateVersion = 1,
+                DocumentSourceVersionId = sourceVersion.DocumentSourceVersionId,
                 CreatedAtUtc = createdAt,
                 CreatedByUserId = actorUserId,
                 UpdatedAtUtc = createdAt,

@@ -26,7 +26,10 @@ public class SandboxServiceTests : IDisposable
     {
         var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance, TimeProvider.System);
         var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
-            _ctx.Db, NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance, TimeProvider.System);
+            _ctx.Db,
+            NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance,
+            TimeProvider.System,
+            new LegalDocumentSourceVersionTestResolver(_ctx.Db));
         return new SandboxService(
             _ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System, _rls);
     }
@@ -686,6 +689,8 @@ public class SandboxServiceTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                portfolioId, actor.Id, now),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             CreatedByUserId = actor.Id,
@@ -744,6 +749,7 @@ public class SandboxServiceTests : IDisposable
             ContentType = issuedFile.ContentType,
             ByteLength = issuedFile.FileSize,
             ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
             CreatedAtUtc = now,
             CreatedByUserId = actor.Id,
         };

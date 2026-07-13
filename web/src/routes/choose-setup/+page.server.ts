@@ -19,9 +19,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		throw redirect(303, '/login?redirectTo=/choose-setup');
 	}
 
-	const roles = locals.user.roles ?? [];
-	const portalOnly = roles.includes('Tenant') && !roles.some((r) => ['Admin', 'Manager', 'Agent'].includes(r));
-	if (portalOnly) {
+	if (locals.access?.selectedContext.activeExperience === 'Tenant') {
 		throw redirect(303, '/portal');
 	}
 

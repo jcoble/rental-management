@@ -13,7 +13,7 @@
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
-	import { propertySchema, unitSchema, tenantSchema, leaseSchema, leaseRentTrackingErrors, parseForm } from '$lib/schemas';
+	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
 	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
 	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
@@ -61,11 +61,6 @@
 		securityDeposit: '',
 		lateFeeAmount: '',
 		rentDueDay: '1',
-		rentTrackingStartMode: 'ForwardOnly',
-		rentTrackingStartDate: '',
-		openingBalanceAmount: '',
-		openingBalanceAsOfDate: '',
-		openingBalanceNote: '',
 		status: 'Active',
 		notes: ''
 	});
@@ -116,11 +111,6 @@
 			securityDeposit: '',
 			lateFeeAmount: '',
 			rentDueDay: '1',
-			rentTrackingStartMode: 'ForwardOnly',
-			rentTrackingStartDate: '',
-			openingBalanceAmount: '',
-			openingBalanceAsOfDate: '',
-			openingBalanceNote: '',
 			status: 'Active',
 			notes: ''
 		};
@@ -251,19 +241,6 @@
 		step = 0;
 	});
 	$effect(() => {
-		if (leaseForm.rentTrackingStartMode !== 'CustomCutoffDate' && leaseForm.rentTrackingStartDate) {
-			leaseForm.rentTrackingStartDate = '';
-		}
-	});
-	$effect(() => {
-		if (leaseForm.rentTrackingStartMode !== 'OpeningBalanceOnly') {
-			if (leaseForm.openingBalanceAmount) leaseForm.openingBalanceAmount = '';
-			if (leaseForm.openingBalanceAsOfDate) leaseForm.openingBalanceAsOfDate = '';
-			if (leaseForm.openingBalanceNote) leaseForm.openingBalanceNote = '';
-		}
-	});
-
-	$effect(() => {
 		if (phase !== 'steps' || isCreatingProperty || unitChoiceSeeded || unitChoice !== CREATE) return;
 		const unitId = findNewRentalExistingUnitId(
 			unitForm.unitNumber,
@@ -305,7 +282,7 @@
 			// drop id errors (they aren't user-entered here)
 			const e = { ...(r.errors ?? {}) };
 			delete e.propertyId; delete e.unitId; delete e.tenantId;
-			leaseErrors = { ...e, ...leaseRentTrackingErrors(probe) };
+			leaseErrors = e;
 			return Object.keys(leaseErrors).length === 0;
 		}
 		return true;
@@ -373,15 +350,6 @@
 		if (leaseForm.securityDeposit.trim()) o.securityDeposit = Number(leaseForm.securityDeposit);
 		if (leaseForm.lateFeeAmount.trim()) o.lateFee = Number(leaseForm.lateFeeAmount);
 		if (leaseForm.rentDueDay.trim()) o.rentDueDay = Number(leaseForm.rentDueDay);
-		o.rentTrackingStartMode = leaseForm.rentTrackingStartMode;
-		if (leaseForm.rentTrackingStartMode === 'CustomCutoffDate') {
-			o.rentTrackingStartDate = leaseForm.rentTrackingStartDate;
-		}
-		if (leaseForm.rentTrackingStartMode === 'OpeningBalanceOnly') {
-			if (leaseForm.openingBalanceAmount.trim()) o.openingBalanceAmount = Number(leaseForm.openingBalanceAmount);
-			if (leaseForm.openingBalanceAsOfDate.trim()) o.openingBalanceAsOfDate = leaseForm.openingBalanceAsOfDate;
-			if (leaseForm.openingBalanceNote.trim()) o.openingBalanceNote = leaseForm.openingBalanceNote.trim();
-		}
 		return JSON.stringify(o);
 	}
 

@@ -22,8 +22,8 @@ namespace RentalCommand.Engine.Services;
 public sealed class NotifyDataUpdateService : IDataUpdateService
 {
     // PostgreSQL rejects a NOTIFY payload of 8000 bytes or more. Stay comfortably under that; if the
-    // serialized event would exceed this, we re-send without Data (the client only needs Data for the
-    // Unit → propertyId derived key, so dropping it widens invalidation rather than losing correctness).
+    // serialized event would exceed this, we re-send without Data. Data is only an internal publisher
+    // hint; the API resolves recipients from the database and emits a minimal invalidation payload.
     private const int MaxPayloadBytes = 7000;
 
     private readonly NpgsqlDataSource _dataSource;

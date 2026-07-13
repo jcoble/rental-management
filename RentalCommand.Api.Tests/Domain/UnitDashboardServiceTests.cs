@@ -6,6 +6,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -622,6 +623,8 @@ public class UnitDashboardServiceTests : IDisposable
         Currency = "USD",
         TermsSchemaVersion = 1,
         TermsPayload = "{}",
+        DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+            PortfolioId, ActorUserId, now),
         IssuedAtUtc = now,
         FullyExecutedAtUtc = now,
         CreatedAtUtc = now,

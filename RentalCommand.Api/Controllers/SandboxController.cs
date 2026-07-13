@@ -8,9 +8,9 @@ using RentalCommand.Core.Authorization;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Account-wide Sandbox/Live lifecycle for the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim — never a request parameter — so a caller can only read or graduate their
-/// OWN portfolio (IDOR-safe). "Go Live" is a one-way graduation that wipes the seeded demo data.
+/// Account-wide Sandbox/Live lifecycle for the caller's workspace. Scope comes from the
+/// server-validated canonical access context — never a request parameter — so a caller can only read
+/// or graduate their own workspace. "Go Live" is a one-way graduation that wipes seeded demo data.
 /// </summary>
 [ApiController]
 [Route("api/v1/portfolio")]

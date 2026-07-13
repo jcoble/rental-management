@@ -94,7 +94,8 @@ Live at **https://rentalcommand.net** on a small Hetzner box (`/opt/rental-comma
 
 - ASP.NET Identity with **int keys** (`ApplicationUser : IdentityUser<int>`), matching the
   int-keyed domain entities. JWT access tokens (~15 min) + single-use **rotated** refresh
-  tokens. `ApiKeyAuthenticationHandler` covers webhook/server callers.
+  tokens. Machine callers require a future canonical service-principal authority; the removed
+  portfolio-claim API-key scheme is not a supported authentication path.
 - The web app stores tokens in **app-namespaced httpOnly cookies first-party to the SvelteKit origin**.
   Current names are `rc_access_token`, `rc_access_token_expiration`, and `rc_refresh_token`;
   avoid generic names like `access_token`/`refresh_token` because localhost cookies are shared

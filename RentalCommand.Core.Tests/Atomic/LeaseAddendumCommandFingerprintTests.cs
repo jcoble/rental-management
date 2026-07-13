@@ -42,7 +42,7 @@ public sealed class LeaseAddendumCommandFingerprintTests
 
     private static CreateLeaseAddendumDraftCommand CreateDraft(decimal delta) => new(
         1, 2, 3, "PET-2-1", LeaseAddendumPurpose.Pet,
-        new DateOnly(2026, 8, 1), null, 1, "{\"pet\":true}", 4, 1,
+        new DateOnly(2026, 8, 1), null, 1, "{\"pet\":true}", 4,
         [new(5, 6, LeaseLegalSignerRole.PrimaryTenant, "Tenant One", "tenant@example.com", 1, true)],
         [new(LeaseAddendumFinancialEffectType.RecurringRentDelta, delta, "USD", "PET_RENT",
             new DateOnly(2026, 8, 1), null, null, "Monthly pet rent")],
