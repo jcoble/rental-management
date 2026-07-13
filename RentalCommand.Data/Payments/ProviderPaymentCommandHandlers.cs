@@ -891,7 +891,6 @@ internal static class ProviderPaymentHandlerSupport
                 && (candidate.ProcessedAtUtc != null
                     || candidate.DeadLetteredAtUtc != null
                     || (candidate.FailureKind == ProviderInboxFailureKind.Unmatched
-                        && candidate.NextAttemptAtUtc != null
                         && candidate.ClaimToken == null)), ct);
         if (!admitted)
             throw new UnauthorizedAccessException(
