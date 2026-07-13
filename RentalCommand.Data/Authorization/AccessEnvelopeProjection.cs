@@ -9,6 +9,7 @@ public sealed class AccessEnvelopeProjectionRow
 {
     public int AccessContextId { get; set; }
     public int UserId { get; set; }
+    public int PortfolioId { get; set; }
     public string EnvelopeJson { get; set; } = string.Empty;
 }
 
@@ -190,6 +191,7 @@ internal static class AccessEnvelopeViewSql
             GROUP BY ec."Id"
         )
         SELECT ec."Id" AS "AccessContextId", ec."UserId" AS "UserId",
+               ec."PortfolioId" AS "PortfolioId",
                jsonb_build_object(
                  'identity', jsonb_build_object(
                    'userId', ec."UserId", 'displayName', ec."DisplayName", 'email', ec."Email"),
