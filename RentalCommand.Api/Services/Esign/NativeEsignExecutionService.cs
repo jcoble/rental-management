@@ -187,7 +187,11 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                     && candidate.PortfolioId == sigRequest.PortfolioId, ct)
             : null;
         agreement ??= addendum?.BaseAgreement;
-        if (agreement?.LeaseManagement?.Property is null)
+        if (agreement is null)
+        {
+            return null;
+        }
+        if (agreement.LeaseManagement?.Property is null)
         {
             // BaseAgreement and Addendum share LeaseManagement, but an AsNoTracking include does not
             // fix up the base Agreement's relationship. Use the explicitly loaded Addendum parent.
@@ -201,7 +205,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             : portfolio?.Name ?? "Landlord";
         var primarySigner = sigRequest.LeaseAgreementId.HasValue
             ? await _db.LeaseAgreementSigners.AsNoTracking()
-                .Where(signer => signer.LeaseAgreementId == agreement!.Id
+                .Where(signer => signer.LeaseAgreementId == agreement.Id
                     && signer.PortfolioId == agreement.PortfolioId
                     && signer.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
                 .Select(signer => new { signer.NameSnapshot, signer.EmailSnapshot })
@@ -213,7 +217,7 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
                 .Select(signer => new { signer.NameSnapshot, signer.EmailSnapshot })
                 .FirstOrDefaultAsync(ct);
         var tenantName = primarySigner?.NameSnapshot ?? string.Empty;
-        var relationship = addendum?.LeaseManagement ?? agreement!.LeaseManagement!;
+        var relationship = addendum?.LeaseManagement ?? agreement.LeaseManagement!;
         var property = relationship.Property!;
         var propertyAddress = string.Join(", ", new[]
             {
@@ -228,27 +232,21 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             .OrderBy(signer => signer.SigningOrder)
             .ToListAsync(ct);
 
-        // The executed renderer still accepts its historical presentation DTO. This transient object
-        // is never tracked or persisted; every authoritative term comes from LeaseAgreement.
-        var presentation = new Lease
-        {
-            LeaseNumber = addendum?.AddendumNumber ?? agreement!.AgreementNumber,
-            StartDate = (addendum?.EffectiveFromOn ?? agreement!.TermStartOn).ToDateTime(TimeOnly.MinValue),
-            EndDate = (addendum?.EffectiveThroughOn ?? agreement!.TermEndOn ?? agreement.TermStartOn)
-                .ToDateTime(TimeOnly.MinValue),
-            MonthlyRent = agreement!.BaseRentAmount,
-            SecurityDeposit = agreement.SecurityDepositObligation,
-            LateFeeAmount = agreement.LateFeeAmount,
-            RentDueDay = agreement.RentDueDay,
-        };
-
         return new ExecutedLeaseData
         {
-            Agreement = new LeaseAgreementData
+            Agreement = new LeaseAgreementRenderData
             {
-                Lease = presentation,
+                PropertyId = relationship.PropertyId,
+                AgreementNumber = addendum?.AddendumNumber ?? agreement.AgreementNumber,
+                TermStartOn = addendum?.EffectiveFromOn ?? agreement.TermStartOn,
+                TermEndOn = addendum?.EffectiveThroughOn ?? agreement.TermEndOn,
+                BaseRentAmount = agreement.BaseRentAmount,
+                SecurityDepositObligation = agreement.SecurityDepositObligation,
+                LateFeeAmount = agreement.LateFeeAmount,
+                RentDueDay = agreement.RentDueDay,
                 LandlordName = landlordName,
                 TenantName = tenantName,
+                TenantEmail = primarySigner?.EmailSnapshot ?? string.Empty,
                 PropertyName = property?.Name ?? string.Empty,
                 PropertyAddress = propertyAddress,
                 UnitNumber = relationship.Unit?.UnitNumber,
