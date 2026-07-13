@@ -47,9 +47,15 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(typeof(PropertyDispositionResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyDispositionResponse>> Create(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] CreatePropertyDispositionRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+            return BadRequest(new { error = "Idempotency-Key is required." });
+        if (idempotencyKey.Trim().Length > 200)
+            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+        var created = await _service.CreateAsync(
+            GetActiveAccessContext(), request, idempotencyKey.Trim(), ct);
         return created is null
             ? NotFound(new { error = "Property not found in this portfolio or already has an active disposition" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);

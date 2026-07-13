@@ -1,8 +1,12 @@
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -12,26 +16,26 @@ namespace RentalCommand.Api.Services.Domain;
 public class PropertyDispositionService : IPropertyDispositionService
 {
     private const string EntityType = "PropertyDisposition";
-    private const string PropertyEntityType = "Property";
-    private const string LeaseEntityType = "Lease";
-    private const string UnitEntityType = "Unit";
-    private const string CapitalAssetEntityType = "CapitalAsset";
 
     private readonly RentalCommandDbContext _db;
+    private static readonly AtomicJsonResultCodec<CreatePropertyDispositionResult> CreateCodec =
+        new("property-disposition.create.v1");
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
-    private readonly ICurrentActor _actor;
 
     public PropertyDispositionService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        ICurrentActor actor)
+        ICurrentActor actor,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
+        _atomic = atomic;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
-        _actor = actor;
+        _ = actor;
     }
 
     public async Task<IReadOnlyList<PropertyDispositionResponse>> ListAsync(
@@ -72,102 +76,31 @@ public class PropertyDispositionService : IPropertyDispositionService
     }
 
     public async Task<PropertyDispositionResponse?> CreateAsync(
-        int portfolioId, CreatePropertyDispositionRequest request, CancellationToken ct = default)
+        ActiveAccessContext accessContext, CreatePropertyDispositionRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var property = await _db.Properties
-            .FirstOrDefaultAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (property is null)
-            return null;
-
-        var alreadyDisposed = await _db.PropertyDispositions
-            .AnyAsync(d => d.PortfolioId == portfolioId && d.PropertyId == request.PropertyId, ct);
-        if (alreadyDisposed)
-            return null;
-
-        var now = _timeProvider.UtcNow();
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var portfolioId = accessContext.PortfolioId;
         var closedOn = request.ClosedOnDate.ToUtc().Date;
-        var entity = new PropertyDisposition
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            ClosedOnDate = closedOn,
-            SalePrice = request.SalePrice,
-            SellingCosts = request.SellingCosts,
-            BuyerName = Normalize(request.BuyerName),
-            Memo = Normalize(request.Memo),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey.Trim())))
+            .ToLowerInvariant();
+        var deliveryKey = $"property-disposition:{portfolioId}:{request.PropertyId}:{digest}";
+        var outcome = await atomic.ExecuteAsync(
+            new AtomicCommandIdentity("property-disposition.create", deliveryKey),
+            new CreatePropertyDispositionCommand(portfolioId, request.PropertyId, closedOn,
+                request.SalePrice, request.SellingCosts, Normalize(request.BuyerName),
+                Normalize(request.Memo), accessContext.UserId, accessContext.SessionId,
+                accessContext.AccessContextId, accessContext.AccessRevision, deliveryKey),
+            CreateCodec, ct);
+        if (outcome.Value.Outcome == CreatePropertyDispositionOutcome.PropertyNotFoundOrAlreadyDisposed
+            || outcome.Value.DispositionId is not { } dispositionId)
+            return null;
 
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        _db.PropertyDispositions.Add(entity);
-        property.Status = PropertyStatus.Inactive;
-        property.UpdatedAt = now;
-
-        await _db.SaveChangesAsync(ct);
-
-        await _db.Leases
-            .Where(l => l.PortfolioId == portfolioId &&
-                        l.PropertyId == property.Id &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
-            .ExecuteUpdateAsync(updates => updates
-                .SetProperty(lease => lease.Status, LeaseStatus.Terminated)
-                .SetProperty(lease => lease.EndDate, lease => lease.EndDate > closedOn ? closedOn : lease.EndDate)
-                .SetProperty(lease => lease.MoveOutDate, closedOn)
-                .SetProperty(lease => lease.UpdatedAt, now), ct);
-
-        var actorUserId = _actor.UserId
-            ?? throw new InvalidOperationException("Property disposition requires an authenticated actor.");
-        await _db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO "UnitOperationalPeriods"
-                ("PortfolioId", "PropertyId", "UnitId", "Type", "StartedAtUtc",
-                 "Reason", "CreatedAtUtc", "CreatedByUserId")
-            SELECT unit."PortfolioId", unit."PropertyId", unit."Id", 'ManagementHold', {now},
-                   'Property disposed; unit is no longer operational.', {now}, {actorUserId}
-            FROM "Units" AS unit
-            WHERE unit."PortfolioId" = {portfolioId}
-              AND unit."PropertyId" = {property.Id}
-              AND unit."DeletedAt" IS NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM "UnitOperationalPeriods" AS period
-                WHERE period."PortfolioId" = unit."PortfolioId"
-                  AND period."UnitId" = unit."Id"
-                  AND period."Type" = 'ManagementHold'
-                  AND period."EndedAtUtc" IS NULL)
-            """, ct);
-
-        await _db.Units
-            .Where(unit => unit.PortfolioId == portfolioId && unit.PropertyId == property.Id)
-            .ExecuteUpdateAsync(updates => updates.SetProperty(unit => unit.UpdatedAt, now), ct);
-
-        await _db.CapitalAssets
-            .Where(a => a.PortfolioId == portfolioId &&
-                        a.PropertyId == property.Id &&
-                        a.DisposedOnDate == null)
-            .ExecuteUpdateAsync(updates => updates
-                .SetProperty(asset => asset.DisposedOnDate, closedOn)
-                .SetProperty(asset => asset.UpdatedAt, now), ct);
-
-        var leases = await _db.Leases.AsNoTracking()
-            .Where(lease => lease.PortfolioId == portfolioId
-                && lease.PropertyId == property.Id
-                && lease.Status == LeaseStatus.Terminated
-                && lease.MoveOutDate == closedOn)
-            .ToListAsync(ct);
-        var units = await BuildDerivedUnitResponses(portfolioId, property.Id).ToListAsync(ct);
-        var capitalAssets = await _db.CapitalAssets.AsNoTracking()
-            .Where(asset => asset.PortfolioId == portfolioId
-                && asset.PropertyId == property.Id
-                && asset.DisposedOnDate == closedOn)
-            .ToListAsync(ct);
-
-        await tx.CommitAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? PropertyDispositionResponse.FromEntity(entity);
-        await BroadcastRelatedUpdatesAsync(portfolioId, property, leases, units, capitalAssets, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        return await GetAsync(portfolioId, dispositionId, ct)
+            ?? throw new InvalidOperationException("Committed property disposition could not be read back.");
     }
 
     public async Task<PropertyDispositionResponse?> UpdateAsync(
@@ -320,64 +253,6 @@ public class PropertyDispositionService : IPropertyDispositionService
             UpdatedAt = row.UpdatedAt,
         };
     }
-
-    private async Task BroadcastRelatedUpdatesAsync(
-        int portfolioId,
-        Property property,
-        IReadOnlyCollection<Lease> leases,
-        IReadOnlyCollection<UnitResponse> units,
-        IReadOnlyCollection<CapitalAsset> capitalAssets,
-        CancellationToken ct)
-    {
-        var unitCount = await _db.Units.CountAsync(u => u.PropertyId == property.Id, ct);
-        var occupiedUnits = await _db.UnitOccupancyProjections.CountAsync(
-            row => row.PortfolioId == portfolioId
-                && row.PropertyId == property.Id
-                && row.IsOccupied, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            portfolioId,
-            PropertyEntityType,
-            property.Id,
-            PropertyResponse.FromEntity(property, unitCount, occupiedUnits),
-            ct);
-
-        foreach (var lease in leases)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, LeaseEntityType, lease.Id, LeaseResponse.FromEntity(lease), ct);
-
-        foreach (var unit in units)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, UnitEntityType, unit.Id, unit, ct);
-
-        foreach (var asset in capitalAssets)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, CapitalAssetEntityType, asset.Id, CapitalAssetResponse.FromEntity(asset, property.UpdatedAt.Year), ct);
-    }
-
-    private IQueryable<UnitResponse> BuildDerivedUnitResponses(int portfolioId, int propertyId) =>
-        from unit in _db.Units.AsNoTracking()
-        where unit.PortfolioId == portfolioId && unit.PropertyId == propertyId
-        join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
-            on new { unit.PortfolioId, UnitId = unit.Id }
-            equals new { occupancy.PortfolioId, occupancy.UnitId }
-        select new UnitResponse
-        {
-            Id = unit.Id,
-            PropertyId = unit.PropertyId,
-            UnitNumber = unit.UnitNumber,
-            FloorPlan = unit.FloorPlan,
-            Bedrooms = unit.Bedrooms,
-            Bathrooms = unit.Bathrooms,
-            SquareFeet = unit.SquareFeet,
-            MarketRent = unit.MarketRent,
-            Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
-                ? DerivedUnitStatus.Offline
-                : occupancy.IsOccupied
-                    ? DerivedUnitStatus.Occupied
-                    : occupancy.HasScheduledMoveIn
-                        ? DerivedUnitStatus.Reserved
-                        : DerivedUnitStatus.Vacant,
-            Notes = unit.Notes,
-            CreatedAt = unit.CreatedAt,
-            UpdatedAt = unit.UpdatedAt,
-        };
 
     private static string? Normalize(string? value)
     {

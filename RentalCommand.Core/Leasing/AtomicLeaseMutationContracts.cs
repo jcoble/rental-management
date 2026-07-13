@@ -91,12 +91,37 @@ public sealed record AtomicRenewalAddendumDraftResult(
     IReadOnlyList<int> ReplacementSignerIds,
     IReadOnlyList<int> ReplacementFinancialEffectIds);
 
+public sealed record AtomicPropertyDispositionMutationResult(
+    int DispositionId,
+    IReadOnlyList<int> LeaseManagementIds,
+    IReadOnlyList<int> TenantAccountIds,
+    IReadOnlyList<int> AutopayEnrollmentIds,
+    IReadOnlyList<int> PartyIds,
+    IReadOnlyList<int> RevokedAccessIds,
+    IReadOnlyList<int> AccessContextIds,
+    IReadOnlyList<int> ManagementHoldIds,
+    IReadOnlyList<int> UnitIds,
+    IReadOnlyList<int> CapitalAssetIds);
+
 /// <summary>
 /// PostgreSQL-owned lease graph mutations. Input sets are validated, joined, partitioned, and
 /// applied by one statement per operation; handlers never materialize a relationship graph.
 /// </summary>
 public interface IAtomicLeaseMutationPersistence
 {
+    Task<AtomicPropertyDispositionMutationResult?> CreatePropertyDispositionAsync(
+        int portfolioId,
+        int propertyId,
+        DateTime closedOnDate,
+        decimal salePrice,
+        decimal sellingCosts,
+        string? buyerName,
+        string? memo,
+        int actorUserId,
+        DateTime changedAtUtc,
+        DateOnly businessDate,
+        CancellationToken ct = default);
+
     Task<bool> ValidateAgreementDraftSignerScopeAsync(
         int portfolioId,
         int leaseManagementId,
