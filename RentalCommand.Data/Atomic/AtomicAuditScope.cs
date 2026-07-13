@@ -28,6 +28,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
     private int _transactionLifecycleDepth;
     private AtomicSetBasedTarget? _activeSetBasedTarget;
     private IReadOnlyList<AtomicRawDmlPermit>? _activeRawDmlPermits;
+    private DateTime? _trackedMutationTimestampUtc;
 
     public Guid ScopeId { get; } = Guid.NewGuid();
     public bool IsActive => _command is not null;
@@ -62,6 +63,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
                 _transactionLifecycleDepth = 0;
                 _activeSetBasedTarget = null;
                 _activeRawDmlPermits = null;
+                _trackedMutationTimestampUtc = null;
                 _boundSemantic.Clear();
                 _mutations.Clear();
                 _rows.Clear();
@@ -220,6 +222,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
         RequireActive();
         lock (_gate)
         {
+            timestamp = _trackedMutationTimestampUtc ?? timestamp;
             var ordinal = ++_ordinal;
             var mutation = new AtomicAuditMutation(
                 _attemptId,
@@ -262,6 +265,20 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
             _mutations.Add(ordinal, new MutationSlot { Mutation = mutation, Row = row });
             _rows.Add(row);
             return mutation;
+        }
+    }
+
+    public void UseDatabaseWallClockForTrackedMutations(DateTime occurredAtUtc)
+    {
+        RequireActive();
+        if (occurredAtUtc == default)
+        {
+            throw new ArgumentException("A database wall-clock timestamp is required.", nameof(occurredAtUtc));
+        }
+
+        lock (_gate)
+        {
+            _trackedMutationTimestampUtc = occurredAtUtc;
         }
     }
 

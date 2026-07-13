@@ -62,6 +62,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<UnitOccupancyProjection> UnitOccupancyProjections => Set<UnitOccupancyProjection>();
     public DbSet<LeaseManagementLifecycleProjection> LeaseManagementLifecycleProjections =>
         Set<LeaseManagementLifecycleProjection>();
+    public DbSet<LeaseReconciliationExceptionProjection> LeaseReconciliationExceptionProjections =>
+        Set<LeaseReconciliationExceptionProjection>();
     public DbSet<LeaseAddendumStatusProjection> LeaseAddendumStatusProjections =>
         Set<LeaseAddendumStatusProjection>();
     public DbSet<TenantAccountBalanceProjection> TenantAccountBalanceProjections =>

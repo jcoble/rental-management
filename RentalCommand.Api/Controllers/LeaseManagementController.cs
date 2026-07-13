@@ -37,16 +37,13 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.transfer-unit.v1");
 
     private readonly IAtomicUnitOfWork _atomic;
-    private readonly TimeProvider _timeProvider;
     private readonly ILeaseService _leaseService;
 
     public LeaseManagementController(
         IAtomicUnitOfWork atomic,
-        TimeProvider timeProvider,
         ILeaseService leaseService)
     {
         _atomic = atomic;
-        _timeProvider = timeProvider;
         _leaseService = leaseService;
     }
 
@@ -114,7 +111,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 sessionId,
                 accessContextId,
                 accessRevision,
-                _timeProvider.GetUtcNow().UtcDateTime,
                 request.PlannedPossessionAtUtc,
                 request.PartyEffectiveFrom,
                 request.Parties.Select(party => new PrepareMoveInParty(
@@ -161,6 +157,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 PrepareMoveInOutcome.AlreadyPrepared => Conflict(new { error = outcome.Value.Error }),
                 PrepareMoveInOutcome.ApplicationNotApproved =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
+                PrepareMoveInOutcome.UnitUnavailable =>
+                    Conflict(new { error = outcome.Value.Error }),
                 PrepareMoveInOutcome.InvalidTemplate =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
                 PrepareMoveInOutcome.InvalidParties =>
