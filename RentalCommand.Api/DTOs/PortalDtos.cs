@@ -4,6 +4,49 @@ using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Enums;
 
 /// <summary>
+/// One tenant-visible rental relationship. The relationship survives agreement corrections and
+/// renewals; <see cref="Agreement"/> is the database-selected governing agreement, or the upcoming
+/// agreement when the relationship has not started yet.
+/// </summary>
+public class PortalLeaseRelationshipResponse
+{
+    public int LeaseManagementId { get; set; }
+    public Guid LeaseManagementPublicId { get; set; }
+    public int PortfolioId { get; set; }
+    public int PropertyId { get; set; }
+    public int UnitId { get; set; }
+    public int TenantId { get; set; }
+    public int? TenantAccountId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
+    public string Lifecycle { get; set; } = string.Empty;
+    public string PropertyName { get; set; } = string.Empty;
+    public string UnitNumber { get; set; } = string.Empty;
+    public string TenantName { get; set; } = string.Empty;
+    public PortalLeaseAgreementResponse? Agreement { get; set; }
+}
+
+/// <summary>Tenant-safe immutable agreement terms selected from the canonical agreement graph.</summary>
+public class PortalLeaseAgreementResponse
+{
+    public int LeaseAgreementId { get; set; }
+    public int VersionNumber { get; set; }
+    public string AgreementNumber { get; set; } = string.Empty;
+    public string AgreementStatus { get; set; } = string.Empty;
+    public bool IsGoverning { get; set; }
+    public LeaseAgreementChangeType ChangeType { get; set; }
+    public LeaseAgreementTermType TermType { get; set; }
+    public DateOnly TermStartOn { get; set; }
+    public DateOnly? TermEndOn { get; set; }
+    public decimal BaseRentAmount { get; set; }
+    public decimal SecurityDepositObligation { get; set; }
+    public decimal LateFeeAmount { get; set; }
+    public short RentDueDay { get; set; }
+    public string Currency { get; set; } = string.Empty;
+    public DateTime? FullyExecutedAtUtc { get; set; }
+    public int? ExecutedStoredFileId { get; set; }
+}
+
+/// <summary>
 /// Tenant-facing balance summary derived from the signed-in tenant's canonical account and ledger.
 /// Outstanding is the open receivable; overdue is the subset whose due date has passed.
 /// </summary>
