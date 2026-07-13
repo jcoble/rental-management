@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -15,6 +16,7 @@ namespace RentalCommand.Api.Tests.Domain;
 public class UnitServiceListTests : IDisposable
 {
     private const int PortfolioId = 1;
+    private const int ActorUserId = 9002;
 
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
@@ -23,7 +25,82 @@ public class UnitServiceListTests : IDisposable
     public UnitServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        SeedCanonicalLeaseReadModel();
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
+    }
+
+    private void SeedCanonicalLeaseReadModel()
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Users.Add(new ApplicationUser
+        {
+            Id = ActorUserId,
+            PortfolioId = PortfolioId,
+            UserName = "unit-tests@rentalcommand.local",
+            NormalizedUserName = "UNIT-TESTS@RENTALCOMMAND.LOCAL",
+            Email = "unit-tests@rentalcommand.local",
+            NormalizedEmail = "UNIT-TESTS@RENTALCOMMAND.LOCAL",
+            DisplayName = "Unit Test Actor",
+            CreatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_unit_occupancy" AS
+            SELECT
+                u."PortfolioId",
+                u."PropertyId",
+                u."Id" AS "UnitId",
+                CURRENT_TIMESTAMP AS "EffectiveNowUtc",
+                CASE WHEN lm."Id" IS NULL THEN 0 ELSE 1 END AS "IsOccupied",
+                lm."Id" AS "CurrentLeaseManagementId",
+                0 AS "HasScheduledMoveIn",
+                NULL AS "NextPlannedPossessionAtUtc",
+                NULL AS "PlannedLeaseManagementId",
+                0 AS "IsInTurnover",
+                0 AS "IsOutOfService",
+                0 AS "IsOnManagementHold",
+                0 AS "HasGoverningAgreementWithoutPossession",
+                0 AS "HasPossessionWithoutGoverningAgreement",
+                NULL AS "OccupancyExceptionCode"
+            FROM "Units" u
+            LEFT JOIN "LeaseManagements" lm
+              ON lm."PortfolioId" = u."PortfolioId"
+             AND lm."UnitId" = u."Id"
+             AND lm."PossessionGivenAtUtc" IS NOT NULL
+             AND lm."PossessionReturnedAtUtc" IS NULL
+             AND lm."CanceledAtUtc" IS NULL;
+
+            CREATE VIEW "vw_lease_management_lifecycle" AS
+            SELECT
+                lm."PortfolioId",
+                lm."PropertyId",
+                lm."UnitId",
+                lm."Id" AS "LeaseManagementId",
+                CURRENT_TIMESTAMP AS "EffectiveNowUtc",
+                date('now') AS "BusinessDate",
+                CASE WHEN lm."NoticeGivenAtUtc" IS NOT NULL THEN 'Ending' ELSE 'Occupied' END AS "Lifecycle",
+                (SELECT la."Id" FROM "LeaseAgreements" la
+                  WHERE la."PortfolioId" = lm."PortfolioId"
+                    AND la."LeaseManagementId" = lm."Id"
+                  ORDER BY la."VersionNumber" DESC LIMIT 1) AS "CurrentAgreementId",
+                NULL AS "UpcomingAgreementId",
+                0 AS "CurrentPartyCount",
+                0 AS "CurrentResidentCount",
+                0 AS "CurrentFinanciallyResponsiblePartyCount",
+                NULL AS "CurrentPrimaryPartyId",
+                NULL AS "CurrentPrimaryTenantId",
+                NULL AS "CurrentPrimaryTenantName",
+                NULL AS "TenantAccountId",
+                0 AS "HasMissingTenantAccount",
+                0 AS "HasMultipleGoverningAgreements",
+                0 AS "HasMultipleCurrentPrimaryTenants",
+                0 AS "HasAccountCloseMismatch",
+                0 AS "HasGoverningAgreementWithoutPossession",
+                0 AS "HasPossessionWithoutGoverningAgreement",
+                0 AS "HasReconciliationException"
+            FROM "LeaseManagements" lm;
+            """);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -67,38 +144,10 @@ public class UnitServiceListTests : IDisposable
         var now = DateTime.UtcNow;
         var tenant = SeedTenant(now);
         var (renewalProperty, renewalUnit) = SeedUnitShell("2A", "Cedar Point Flats", now);
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = renewalProperty,
-            Unit = renewalUnit,
-            Tenant = tenant,
-            LeaseNumber = "L-RENEWAL",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-10),
-            EndDate = now.AddDays(45),
-            MonthlyRent = 1450m,
-            SecurityDeposit = 1450m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        SeedRelationship(renewalProperty, renewalUnit, tenant, now, now.AddDays(45));
 
         var (activeProperty, activeUnit) = SeedUnitShell("3B", "Cedar Point Flats", now);
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = activeProperty,
-            Unit = activeUnit,
-            Tenant = tenant,
-            LeaseNumber = "L-ACTIVE",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-2),
-            EndDate = now.AddDays(180),
-            MonthlyRent = 1500m,
-            SecurityDeposit = 1500m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        SeedRelationship(activeProperty, activeUnit, tenant, now, now.AddDays(180));
         SeedUnitShell("4C", "Harbor View Apartments", now);
         _ctx.Db.SaveChanges();
 
@@ -122,7 +171,7 @@ public class UnitServiceListTests : IDisposable
             sql.Contains("FROM \"Units\"", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
@@ -135,22 +184,7 @@ public class UnitServiceListTests : IDisposable
         var now = DateTime.UtcNow;
         var (property, unit) = SeedUnitShell("101", "Westview Four-Plex", now);
         var tenant = SeedTenant(now);
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-NOTICE",
-            Status = LeaseStatus.NoticeGiven,
-            StartDate = now.AddMonths(-10),
-            EndDate = now.AddDays(30),
-            MoveOutDate = now.AddDays(30),
-            MonthlyRent = 925m,
-            SecurityDeposit = 925m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        SeedRelationship(property, unit, tenant, now, now.AddDays(30), noticeGiven: true);
         _ctx.Db.SaveChanges();
 
         var result = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery());
@@ -165,24 +199,11 @@ public class UnitServiceListTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var (_, availableUnit) = SeedUnitShell("101", "Available Property", now);
-        SeedUnitShell("102", "Occupied Property", now);
+        var (occupiedProperty, occupiedUnit) = SeedUnitShell("102", "Occupied Property", now);
         var (leasedProperty, leasedUnit) = SeedUnitShell("103", "Leased Property", now);
         var tenant = SeedTenant(now);
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = leasedProperty,
-            Unit = leasedUnit,
-            Tenant = tenant,
-            LeaseNumber = "L-LEASED",
-            Status = LeaseStatus.NoticeGiven,
-            StartDate = now.Date,
-            EndDate = now.Date.AddYears(1),
-            MonthlyRent = 1250m,
-            SecurityDeposit = 1250m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
+        SeedRelationship(occupiedProperty, occupiedUnit, tenant, now, now.AddYears(1));
+        SeedRelationship(leasedProperty, leasedUnit, tenant, now, now.AddYears(1), noticeGiven: true);
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
@@ -195,7 +216,7 @@ public class UnitServiceListTests : IDisposable
         result.Select(u => u.Id).Should().Equal(availableUnit.Id);
         _commands.Should().ContainSingle(sql =>
             sql.Contains("Units", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -204,33 +225,7 @@ public class UnitServiceListTests : IDisposable
         var now = DateTime.UtcNow;
         var (property, unit) = SeedUnitShell("2A", "Maple Heights", now);
         var tenant = SeedTenant(now);
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-DOCS",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-2),
-            EndDate = now.AddMonths(10),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var payment = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = now.AddDays(-5),
-            PaidDate = now.AddDays(-5),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
+        var relationship = SeedRelationship(property, unit, tenant, now, now.AddMonths(10));
         var workOrder = new WorkOrder
         {
             PortfolioId = PortfolioId,
@@ -277,18 +272,39 @@ public class UnitServiceListTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.AddRange(lease, payment, workOrder, directExpense, workOrderExpense, inspection);
+        _ctx.Db.AddRange(workOrder, directExpense, workOrderExpense, inspection);
         _ctx.Db.SaveChanges();
 
+        var agreementFile = StoredFile("LeaseAgreement", relationship.Agreement.Id, "lease.pdf", now);
         _ctx.Db.StoredFiles.AddRange(
             StoredFile("Unit", unit.Id, "unit-photo.jpg", now),
-            StoredFile("Lease", lease.Id, "lease.pdf", now),
-            StoredFile("Payment", payment.Id, "rent-check.jpg", now),
+            agreementFile,
             StoredFile("Expense", directExpense.Id, "unit-receipt.jpg", now),
             StoredFile("Expense", workOrderExpense.Id, "repair-receipt.jpg", now),
             StoredFile("WorkOrder", workOrder.Id, "repair-photo.jpg", now),
             StoredFile("Inspection", inspection.Id, "inspection.pdf", now),
             StoredFile("Tenant", tenant.Id, "tenant-only.pdf", now));
+        _ctx.Db.SaveChanges();
+        var artifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = agreementFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+            StorageKey = agreementFile.FilePath,
+            FileName = agreementFile.FileName,
+            ContentType = agreementFile.ContentType,
+            ByteLength = agreementFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _ctx.Db.LegalDocumentArtifacts.Add(artifact);
+        _ctx.Db.SaveChanges();
+        relationship.Agreement.IssuedArtifactId = artifact.Id;
+        relationship.Agreement.IssuedAtUtc = now;
+        relationship.Agreement.ExecutedArtifactId = artifact.Id;
+        relationship.Agreement.FullyExecutedAtUtc = now;
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
@@ -299,12 +315,12 @@ public class UnitServiceListTests : IDisposable
 
         var row = list.Items.Should().ContainSingle().Subject;
         dashboard.Should().NotBeNull();
-        row.DocsNeedingReviewCount.Should().Be(7);
+        row.DocsNeedingReviewCount.Should().Be(6);
         row.DocsNeedingReviewCount.Should().Be(dashboard!.Header.DocsNeedingReviewCount);
         listSql.Should().Contain(sql =>
             sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("Payments", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LeaseAgreements", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LegalDocumentArtifacts", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("Inspections", StringComparison.OrdinalIgnoreCase));
     }
@@ -343,6 +359,75 @@ public class UnitServiceListTests : IDisposable
             UpdatedAt = now,
         });
         _ctx.Db.SaveChanges();
+    }
+
+    private (LeaseManagement Relationship, LeaseAgreement Agreement) SeedRelationship(
+        Property property,
+        Unit unit,
+        Tenant tenant,
+        DateTime now,
+        DateTime endAt,
+        bool noticeGiven = false)
+    {
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"LM-{unit.Id}-{Guid.NewGuid():N}",
+            PlannedPossessionAtUtc = now.AddMonths(-2),
+            PossessionGivenAtUtc = now.AddMonths(-2),
+            NoticeGivenAtUtc = noticeGiven ? now.AddDays(-7) : null,
+            PlannedMoveOutAtUtc = noticeGiven ? endAt : null,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _ctx.Db.LeaseManagements.Add(relationship);
+        _ctx.Db.SaveChanges();
+
+        var startOn = DateOnly.FromDateTime(now.AddMonths(-2));
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{Guid.NewGuid():N}"[..12],
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = startOn,
+            TermEndOn = DateOnly.FromDateTime(endAt),
+            GoverningFromOn = startOn,
+            BaseRentAmount = unit.MarketRent,
+            RentDueDay = 1,
+            SecurityDepositObligation = unit.MarketRent,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.AddRange(
+            agreement,
+            new LeaseManagementParty
+            {
+                PortfolioId = PortfolioId,
+                LeaseManagementId = relationship.Id,
+                TenantId = tenant.Id,
+                Role = LeaseManagementPartyRole.PrimaryTenant,
+                EffectiveFrom = startOn,
+                ChangeReason = "Unit list fixture",
+                CreatedAtUtc = now,
+                CreatedByUserId = ActorUserId,
+            });
+        _ctx.Db.SaveChanges();
+        return (relationship, agreement);
     }
 
     private (Property Property, Unit Unit) SeedUnitShell(
