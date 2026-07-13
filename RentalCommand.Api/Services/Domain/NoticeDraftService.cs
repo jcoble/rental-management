@@ -86,19 +86,19 @@ public class NoticeDraftService : INoticeDraftService
 
         bool WantsType(string type) => policies.ContainsKey(type) &&
             (requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase));
-        var wantsRenewal = WantsType("RenewalOffer");
-        var wantsMoveOut = WantsType("MoveOutReminder");
-        // A tenant-page explicit RentReminder remains the manual flow. Relationship/ledger-scoped
+        var wantsRenewal = WantsType("lease-renewal-offer");
+        var wantsMoveOut = WantsType("lease-non-renewal");
+        // A tenant-page explicit rent reminder remains the manual flow. Relationship/ledger-scoped
         // reminders are charge-grounded so the draft has a real due date and cannot leak another
         // tenant account's candidate into the current relationship.
-        var rentReminderRequested = string.Equals(requestedType, "RentReminder", StringComparison.OrdinalIgnoreCase);
+        var rentReminderRequested = string.Equals(requestedType, "rent-reminder", StringComparison.OrdinalIgnoreCase);
         var wantsRentReminder = rentReminderRequested &&
             !leaseManagementId.HasValue && !tenantAccountId.HasValue && !tenantLedgerEntryId.HasValue;
         var wantsUpcomingRentReminder = requestedType == null ||
             (rentReminderRequested && (leaseManagementId.HasValue || tenantAccountId.HasValue));
         // MonthToMonth is generated portfolio-wide too (within the lease-end window) so the autopilot can
         // auto-send it; it mirrors renewal's lead time.
-        var wantsMonthToMonth = requestedType == null || string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
+        var wantsMonthToMonth = requestedType == null || string.Equals(requestedType, "month-to-month-offer", StringComparison.OrdinalIgnoreCase);
 
         // Preload this portfolio's active notice templates once (DB-side), keyed by type, so each
         // builder can render the landlord's template without a per-lease query.
@@ -160,7 +160,7 @@ public class NoticeDraftService : INoticeDraftService
                     .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
                         d.LeaseManagementId == row.LeaseManagementId &&
-                        d.NoticeType == "RenewalOffer" &&
+                        d.NoticeType == "lease-renewal-offer" &&
                         d.Status == "Draft"));
 
                 var renewalRelationships = await renewalQuery
@@ -171,7 +171,7 @@ public class NoticeDraftService : INoticeDraftService
                 foreach (var relationship in renewalRelationships)
                 {
                     var daysToEnd = relationship.TermEndOn!.Value.DayNumber - today.DayNumber;
-                    created.Add(await BuildRenewalDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("RenewalOffer"), portfolioName, ct));
+                    created.Add(await BuildRenewalDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("lease-renewal-offer"), portfolioName, ct));
                 }
             }
 
@@ -183,7 +183,7 @@ public class NoticeDraftService : INoticeDraftService
                     .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
                         d.LeaseManagementId == row.LeaseManagementId &&
-                        d.NoticeType == "MoveOutReminder" &&
+                        d.NoticeType == "lease-non-renewal" &&
                         d.Status == "Draft"));
 
                 var moveOutRelationships = await moveOutQuery
@@ -194,7 +194,7 @@ public class NoticeDraftService : INoticeDraftService
                 foreach (var relationship in moveOutRelationships)
                 {
                     var daysToEnd = relationship.TermEndOn!.Value.DayNumber - today.DayNumber;
-                    created.Add(await BuildMoveOutDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("MoveOutReminder"), portfolioName, ct));
+                    created.Add(await BuildMoveOutDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("lease-non-renewal"), portfolioName, ct));
                 }
             }
 
@@ -204,7 +204,7 @@ public class NoticeDraftService : INoticeDraftService
                     .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
                         d.LeaseManagementId == row.LeaseManagementId &&
-                        d.NoticeType == "RentReminder" &&
+                        d.NoticeType == "rent-reminder" &&
                         d.Status == "Draft"))
                     .OrderBy(row => row.TermEndOn)
                     .ThenBy(row => row.LeaseManagementId)
@@ -212,7 +212,7 @@ public class NoticeDraftService : INoticeDraftService
 
                 foreach (var relationship in reminderRelationships)
                 {
-                    created.Add(await BuildRentReminderDraftAsync(portfolioId, relationship, now, TemplateFor("RentReminder"), portfolioName, ct));
+                    created.Add(await BuildRentReminderDraftAsync(portfolioId, relationship, now, TemplateFor("rent-reminder"), portfolioName, ct));
                 }
             }
 
@@ -224,7 +224,7 @@ public class NoticeDraftService : INoticeDraftService
                     .Where(row => !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
                         d.LeaseManagementId == row.LeaseManagementId &&
-                        d.NoticeType == "MonthToMonthConversion" &&
+                        d.NoticeType == "month-to-month-offer" &&
                         d.Status == "Draft"));
 
                 var monthToMonthRelationships = await monthToMonthQuery
@@ -235,14 +235,14 @@ public class NoticeDraftService : INoticeDraftService
                 foreach (var relationship in monthToMonthRelationships)
                 {
                     var daysToEnd = relationship.TermEndOn!.Value.DayNumber - today.DayNumber;
-                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("MonthToMonthConversion"), portfolioName, ct));
+                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, relationship, daysToEnd, now, TemplateFor("month-to-month-offer"), portfolioName, ct));
                 }
             }
         }
 
         // Late-rent notices are always grounded in a real open tenant-ledger charge, so even a
         // forced request only produces one when such a charge exists.
-        if (WantsType("LateRentNotice"))
+        if (WantsType("late-rent-late-fee"))
         {
             var lateQuery = MoneyNoticeCandidateQuery(portfolioId)
                 .Where(row =>
@@ -252,7 +252,7 @@ public class NoticeDraftService : INoticeDraftService
                     !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
                         d.LeaseManagementId == row.LeaseManagementId &&
-                        d.NoticeType == "LateRentNotice" &&
+                        d.NoticeType == "late-rent-late-fee" &&
                         d.Status == "Draft"));
             if (recipientTenantId.HasValue)
             {
@@ -309,7 +309,7 @@ public class NoticeDraftService : INoticeDraftService
                     candidate,
                     daysLate,
                     now,
-                    TemplateFor("LateRentNotice"),
+                    TemplateFor("late-rent-late-fee"),
                     portfolioName,
                     ct,
                     relatedLateFeeAmount: row.RelatedLateFeeAmount));
@@ -330,7 +330,7 @@ public class NoticeDraftService : INoticeDraftService
                     row.DueOn < leadWindowEndExclusive &&
                     !_db.NoticeDrafts.Any(d =>
                         d.PortfolioId == portfolioId &&
-                        d.NoticeType == "RentReminder" &&
+                        d.NoticeType == "rent-reminder" &&
                         d.TenantLedgerEntryId == row.TenantLedgerEntryId));
             if (recipientTenantId.HasValue)
             {
@@ -362,7 +362,7 @@ public class NoticeDraftService : INoticeDraftService
                     portfolioId,
                     charge,
                     now,
-                    TemplateFor("RentReminder"),
+                    TemplateFor("rent-reminder"),
                     portfolioName,
                     ct,
                     charge.DueOn,
@@ -470,13 +470,13 @@ public class NoticeDraftService : INoticeDraftService
         }
 
         NoticeDraft draft;
-        if (string.Equals(noticeType, "RentReminder", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(noticeType, "rent-reminder", StringComparison.OrdinalIgnoreCase))
         {
             draft = await BuildRentReminderDraftAsync(
                 portfolioId,
                 charge,
                 now,
-                templateFor("RentReminder"),
+                templateFor("rent-reminder"),
                 portfolioName,
                 ct,
                 charge.DueOn,
@@ -490,7 +490,7 @@ public class NoticeDraftService : INoticeDraftService
                 charge,
                 Math.Max(0, today.DayNumber - charge.DueOn.DayNumber),
                 now,
-                templateFor("LateRentNotice"),
+                templateFor("late-rent-late-fee"),
                 portfolioName,
                 ct,
                 relatedLateFeeAmount,
@@ -553,14 +553,14 @@ public class NoticeDraftService : INoticeDraftService
 
     private static string? InferChargeNoticeType(MoneyNoticeCandidate charge, DateOnly today)
     {
-        if (IsEligibleForChargeNotice(charge, "LateRentNotice", today))
+        if (IsEligibleForChargeNotice(charge, "late-rent-late-fee", today))
         {
-            return "LateRentNotice";
+            return "late-rent-late-fee";
         }
 
-        if (IsEligibleForChargeNotice(charge, "RentReminder", today))
+        if (IsEligibleForChargeNotice(charge, "rent-reminder", today))
         {
-            return "RentReminder";
+            return "rent-reminder";
         }
 
         return null;
@@ -573,13 +573,13 @@ public class NoticeDraftService : INoticeDraftService
             return false;
         }
 
-        if (string.Equals(noticeType, "RentReminder", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(noticeType, "rent-reminder", StringComparison.OrdinalIgnoreCase))
         {
             return charge.EntryType == nameof(TenantLedgerEntryType.RentCharge) &&
                    charge.DueOn >= today;
         }
 
-        if (string.Equals(noticeType, "LateRentNotice", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(noticeType, "late-rent-late-fee", StringComparison.OrdinalIgnoreCase))
         {
             return (charge.EntryType == nameof(TenantLedgerEntryType.RentCharge) ||
                     charge.EntryType == nameof(TenantLedgerEntryType.LateFeeCharge)) &&
@@ -816,7 +816,7 @@ public class NoticeDraftService : INoticeDraftService
             [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         var draft = await ComposeAsync(
-            portfolioId, context, "RenewalOffer",
+            portfolioId, context, "lease-renewal-offer",
             intent: "a friendly lease-renewal offer",
             facts: facts,
             deterministicSubject: deterministicSubject,
@@ -855,7 +855,7 @@ public class NoticeDraftService : INoticeDraftService
             [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, context, "MoveOutReminder",
+            portfolioId, context, "lease-non-renewal",
             intent: "a courteous move-out coordination reminder",
             facts: facts,
             deterministicSubject: deterministicSubject,
@@ -934,7 +934,7 @@ public class NoticeDraftService : INoticeDraftService
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, charge, "LateRentNotice",
+            portfolioId, charge, "late-rent-late-fee",
             intent: $"a {levelLabel} past-due rent reminder ({tone})",
             facts: facts,
             deterministicSubject: deterministicSubject,
@@ -986,7 +986,7 @@ public class NoticeDraftService : INoticeDraftService
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, context, "RentReminder",
+            portfolioId, context, "rent-reminder",
             intent: "a friendly upcoming-rent reminder",
             facts: facts,
             deterministicSubject: deterministicSubject,
@@ -1026,7 +1026,7 @@ public class NoticeDraftService : INoticeDraftService
             [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
-            portfolioId, context, "MonthToMonthConversion",
+            portfolioId, context, "month-to-month-offer",
             intent: "a friendly month-to-month continuation offer",
             facts: facts,
             deterministicSubject: deterministicSubject,

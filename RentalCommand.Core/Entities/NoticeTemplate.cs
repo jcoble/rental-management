@@ -11,7 +11,7 @@ public class NoticeTemplate
     public int Id { get; set; }
     public int PortfolioId { get; set; }
 
-    /// <summary>One of the NoticeDraft type names: RentReminder, RenewalOffer, MonthToMonthConversion, MoveOutReminder, LateRentNotice.</summary>
+    /// <summary>The canonical tenant-notice automation key used by drafts and policies.</summary>
     public string NoticeType { get; set; } = string.Empty;
 
     public string Subject { get; set; } = string.Empty;

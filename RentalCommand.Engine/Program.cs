@@ -200,7 +200,7 @@ builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceSer
 builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));
 builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
-builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
+builder.Services.AddScoped<ITenantNoticeCandidateGenerationService, TenantNoticeCandidateGenerationService>();
 builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
 builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
 builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
@@ -244,7 +244,7 @@ builder.Services.AddHostedService<RecurringExpenseWorker>();
 builder.Services.AddHostedService<AutopayChargeWorker>();
 builder.Services.AddHostedService<RecurringMaintenanceWorker>();
 builder.Services.AddHostedService<LateFeeWorker>();
-builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
+builder.Services.AddHostedService<TenantNoticeCandidateWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
 builder.Services.AddHostedService<NativeEsignReconciliationWorker>();

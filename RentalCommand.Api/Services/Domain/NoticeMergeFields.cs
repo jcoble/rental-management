@@ -23,11 +23,11 @@ public static class NoticeMergeFields
 
     public static IReadOnlyList<string> ForType(string noticeType) => noticeType switch
     {
-        "RentReminder" => [.. Common, RentAmount, RentDueDate],
-        "RenewalOffer" => [.. Common, LeaseStartDate, LeaseEndDate, RentAmount],
-        "MonthToMonthConversion" => [.. Common, LeaseEndDate, RentAmount],
-        "MoveOutReminder" => [.. Common, LeaseEndDate],
-        "LateRentNotice" => [.. Common, OverdueAmount, RentDueDate, LateFeeAmount],
+        "rent-reminder" => [.. Common, RentAmount, RentDueDate],
+        "lease-renewal-offer" => [.. Common, LeaseStartDate, LeaseEndDate, RentAmount],
+        "month-to-month-offer" => [.. Common, LeaseEndDate, RentAmount],
+        "lease-non-renewal" => [.. Common, LeaseEndDate],
+        "late-rent-late-fee" => [.. Common, OverdueAmount, RentDueDate, LateFeeAmount],
         _ => Common,
     };
 

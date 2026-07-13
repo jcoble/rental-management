@@ -13,7 +13,7 @@ public enum NotificationType
     /// <summary>A late fee was assessed on an overdue rent payment (<c>LateFeeService</c>).</summary>
     LateFee,
 
-    /// <summary>An owner-facing reminder that a lease is approaching expiry (<c>LeaseExpiryReminderService</c>).</summary>
+    /// <summary>An owner-facing reminder that a governing agreement is approaching its term end.</summary>
     LeaseExpiry,
 
     /// <summary>A confirmation that a tenant's rent payment was recorded.</summary>

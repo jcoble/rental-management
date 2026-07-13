@@ -13,7 +13,7 @@ public class SimWorkerRegistryTests
     public void RunDueSequence_IsInM4DependencyOrder()
     {
         SimWorkerKeys.RunDueSequence.Should().Equal(
-            "rent-charge", "notice-draft", "lease-expiry-reminder", "late-fee",
+            "rent-charge", "tenant-notice-candidates", "notice-draft", "late-fee",
             "autopay", "debt-service", "recurring-expense", "recurring-maintenance");
 
         // daily-briefing is intentionally NOT part of run-due.
@@ -23,7 +23,7 @@ public class SimWorkerRegistryTests
     [Theory]
     [InlineData(SimWorkerKeys.RentCharge)]
     [InlineData(SimWorkerKeys.NoticeDraft)]
-    [InlineData(SimWorkerKeys.LeaseExpiryReminder)]
+    [InlineData(SimWorkerKeys.TenantNoticeCandidates)]
     [InlineData(SimWorkerKeys.LateFee)]
     [InlineData(SimWorkerKeys.Autopay)]
     [InlineData(SimWorkerKeys.DebtService)]
@@ -71,7 +71,7 @@ public class SimWorkerRegistryTests
     {
         SimWorkerKeys.RentCharge => 1,
         SimWorkerKeys.NoticeDraft => 2,
-        SimWorkerKeys.LeaseExpiryReminder => 3,
+        SimWorkerKeys.TenantNoticeCandidates => 3,
         SimWorkerKeys.LateFee => 4,
         SimWorkerKeys.Autopay => 5,
         SimWorkerKeys.DebtService => 6,
@@ -97,11 +97,11 @@ public class SimWorkerRegistryTests
             .ReturnsAsync(CountFor(SimWorkerKeys.NoticeDraft));
         services.AddSingleton(notice.Object);
 
-        var leaseExpiry = new Mock<ILeaseExpiryReminderService>();
-        leaseExpiry.Setup(s => s.RemindAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => order.Add(SimWorkerKeys.LeaseExpiryReminder))
-            .ReturnsAsync(CountFor(SimWorkerKeys.LeaseExpiryReminder));
-        services.AddSingleton(leaseExpiry.Object);
+        var tenantNoticeCandidates = new Mock<ITenantNoticeCandidateGenerationService>();
+        tenantNoticeCandidates.Setup(s => s.GenerateDueAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add(SimWorkerKeys.TenantNoticeCandidates))
+            .ReturnsAsync(CountFor(SimWorkerKeys.TenantNoticeCandidates));
+        services.AddSingleton(tenantNoticeCandidates.Object);
 
         var lateFee = new Mock<ILateFeeService>();
         lateFee.Setup(s => s.AssessAsync(It.IsAny<CancellationToken>()))

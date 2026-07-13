@@ -37,7 +37,14 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 
         var policyFacts = await _db.TenantNoticePolicies.AsNoTracking()
             .Where(policy => work.Select(item => item.TenantNoticePolicyId).Contains(policy.Id))
-            .Select(policy => new { policy.Id, policy.AutomationKey, policy.Mode, policy.FailureBehavior })
+            .Select(policy => new
+            {
+                policy.Id,
+                policy.AutomationKey,
+                policy.Mode,
+                policy.FailureBehavior,
+                policy.WorkspaceNoticeTemplateVersionId,
+            })
             .ToDictionaryAsync(policy => policy.Id, ct);
 
         var created = 0;
@@ -56,14 +63,11 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
                 var draftIds = result.Drafts.Select(draft => draft.Id).ToArray();
                 if (draftIds.Length > 0)
                 {
-                    var templateVersionId = await _db.TenantNoticePolicies.AsNoTracking()
-                        .Where(row => row.Id == item.TenantNoticePolicyId)
-                        .Select(row => row.WorkspaceNoticeTemplateVersionId)
-                        .SingleAsync(ct);
                     await _db.NoticeDrafts.Where(draft => draftIds.Contains(draft.Id))
                         .ExecuteUpdateAsync(setters => setters
                             .SetProperty(draft => draft.TenantNoticePolicyId, item.TenantNoticePolicyId)
-                            .SetProperty(draft => draft.WorkspaceNoticeTemplateVersionId, templateVersionId), ct);
+                            .SetProperty(draft => draft.WorkspaceNoticeTemplateVersionId,
+                                policy.WorkspaceNoticeTemplateVersionId), ct);
                 }
                 created += result.CreatedCount;
                 if (!await _claims.CompleteAsync(item.Id, token, ct))
