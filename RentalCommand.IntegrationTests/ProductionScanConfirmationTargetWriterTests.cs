@@ -73,6 +73,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await scope.Db.Database.EnsureCreatedAsync();
         await scope.Db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await scope.Db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await scope.Db.Database.ExecuteSqlRawAsync(LeaseManagementLifecycleViewSql.Create);
         await scope.Db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
         var actor = new ApplicationUser
         {
