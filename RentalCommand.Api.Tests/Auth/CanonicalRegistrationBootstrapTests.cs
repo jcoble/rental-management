@@ -179,6 +179,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                 _sqlite.Db,
                 new RlsExecutionContext(),
                 TimeProvider.System),
+            new RlsExecutionContext(),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
     }
