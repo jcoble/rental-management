@@ -307,10 +307,8 @@ public class UnitService : IUnitService
                     && workOrder.Status != WorkOrderStatus.Archived),
                 DocsCount = _db.StoredFiles.Count(file =>
                     file.PortfolioId == portfolioId
-                    && file.EntityId != null
                     && (
-                        (file.EntityType == "Unit" && file.EntityId == unit.Id)
-                        || _db.LegalDocumentArtifacts.Any(artifact =>
+                        _db.LegalDocumentArtifacts.Any(artifact =>
                             artifact.PortfolioId == portfolioId
                             && artifact.StoredFileId == file.Id
                             && _db.LeaseAgreements.Any(legalAgreement =>
@@ -321,22 +319,24 @@ public class UnitService : IUnitService
                                     management.PortfolioId == portfolioId
                                     && management.UnitId == unit.Id
                                     && management.Id == legalAgreement.LeaseManagementId)))
-                        || (file.EntityType == "Expense" && _db.Expenses.Any(expense =>
-                            expense.PortfolioId == portfolioId
-                            && expense.Id == file.EntityId.Value
-                            && (expense.UnitId == unit.Id
-                                || (expense.WorkOrderId != null && _db.WorkOrders.Any(workOrder =>
-                                    workOrder.PortfolioId == portfolioId
-                                    && workOrder.UnitId == unit.Id
-                                    && workOrder.Id == expense.WorkOrderId.Value)))))
-                        || (file.EntityType == "WorkOrder" && _db.WorkOrders.Any(workOrder =>
-                            workOrder.PortfolioId == portfolioId
-                            && workOrder.UnitId == unit.Id
-                            && workOrder.Id == file.EntityId.Value))
-                        || (file.EntityType == "Inspection" && _db.Inspections.Any(inspection =>
-                            inspection.PortfolioId == portfolioId
-                            && inspection.UnitId == unit.Id
-                            && inspection.Id == file.EntityId.Value)))),
+                        || (file.EntityId != null && (
+                            (file.EntityType == "Unit" && file.EntityId == unit.Id)
+                            || (file.EntityType == "Expense" && _db.Expenses.Any(expense =>
+                                expense.PortfolioId == portfolioId
+                                && expense.Id == file.EntityId.Value
+                                && (expense.UnitId == unit.Id
+                                    || (expense.WorkOrderId != null && _db.WorkOrders.Any(workOrder =>
+                                        workOrder.PortfolioId == portfolioId
+                                        && workOrder.UnitId == unit.Id
+                                        && workOrder.Id == expense.WorkOrderId.Value)))))
+                            || (file.EntityType == "WorkOrder" && _db.WorkOrders.Any(workOrder =>
+                                workOrder.PortfolioId == portfolioId
+                                && workOrder.UnitId == unit.Id
+                                && workOrder.Id == file.EntityId.Value))
+                            || (file.EntityType == "Inspection" && _db.Inspections.Any(inspection =>
+                                inspection.PortfolioId == portfolioId
+                                && inspection.UnitId == unit.Id
+                                && inspection.Id == file.EntityId.Value)))))),
             };
     }
 

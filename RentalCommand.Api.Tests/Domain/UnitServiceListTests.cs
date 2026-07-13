@@ -280,7 +280,7 @@ public class UnitServiceListTests : IAsyncLifetime
 
         var row = list.Items.Should().ContainSingle().Subject;
         dashboard.Should().NotBeNull();
-        row.DocsNeedingReviewCount.Should().Be(5);
+        row.DocsNeedingReviewCount.Should().Be(7);
         row.DocsNeedingReviewCount.Should().Be(dashboard!.Header.DocsNeedingReviewCount);
         listSql.Should().Contain(sql =>
             sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase) &&

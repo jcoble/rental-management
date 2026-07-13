@@ -177,9 +177,11 @@ public class UnitDashboardServiceTests : IAsyncLifetime
             TimeSpan.FromMilliseconds(1));
 
         _executedSql.Should().Contain(command => command.Contains("FROM \"WorkOrders\"")
-            && command.Contains("GROUP BY") && command.Contains("SUM"));
+            && command.Contains("GROUP BY")
+            && command.Contains("sum(", StringComparison.OrdinalIgnoreCase));
         _executedSql.Should().Contain(command => command.Contains("FROM \"Expenses\"")
-            && command.Contains("GROUP BY") && command.Contains("SUM"));
+            && command.Contains("GROUP BY")
+            && command.Contains("sum(", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
