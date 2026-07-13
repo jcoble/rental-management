@@ -237,13 +237,28 @@ public class PortalService : IPortalService
                     IsGoverning = (bool?)status.IsGoverning,
                 })
                 .DefaultIfEmpty()
-            from depositBalance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+            from depositAccount in _db.SecurityDepositAccounts.AsNoTracking()
                 .Where(deposit => deposit.PortfolioId == account.PortfolioId
                     && deposit.TenantAccountId == account.Id)
                 .DefaultIfEmpty()
-            from depositAccount in _db.SecurityDepositAccounts.AsNoTracking()
+            from depositBalance in _db.SecurityDepositBalanceProjections.AsNoTracking()
                 .Where(deposit => deposit.PortfolioId == account.PortfolioId
-                    && deposit.Id == depositBalance.SecurityDepositAccountId)
+                    && deposit.SecurityDepositAccountId == depositAccount.Id)
+                .Select(deposit => new
+                {
+                    IsPresent = (bool?)true,
+                    deposit.Currency,
+                    EffectiveNowUtc = (DateTime?)deposit.EffectiveNowUtc,
+                    BusinessDate = (DateOnly?)deposit.BusinessDate,
+                    TotalReceived = (decimal?)deposit.TotalReceived,
+                    TotalDeductions = (decimal?)deposit.TotalDeductions,
+                    TotalRefunded = (decimal?)deposit.TotalRefunded,
+                    TotalTransferredIn = (decimal?)deposit.TotalTransferredIn,
+                    TotalTransferredOut = (decimal?)deposit.TotalTransferredOut,
+                    NetAdjustments = (decimal?)deposit.NetAdjustments,
+                    HeldBalance = (decimal?)deposit.HeldBalance,
+                    deposit.DepositStatus,
+                })
                 .DefaultIfEmpty()
             select new PortalTenantAccountResponse
             {
@@ -301,7 +316,7 @@ public class PortalService : IPortalService
                                 ? null
                                 : agreement.ExecutedArtifact.StoredFileId,
                     },
-                Deposit = depositBalance == null || depositAccount == null
+                Deposit = depositAccount == null || depositBalance.IsPresent != true
                     ? null
                     : new PortalTenantAccountDepositResponse
                     {
@@ -309,17 +324,17 @@ public class PortalService : IPortalService
                         LeaseManagementId = management.Id,
                         SecurityDepositAccountId = depositAccount.Id,
                         OriginatingAgreementId = depositAccount.OriginatingAgreementId,
-                        Currency = depositBalance.Currency,
+                        Currency = depositBalance.Currency!,
                         CreatedAtUtc = depositAccount.CreatedAtUtc,
-                        EffectiveNowUtc = depositBalance.EffectiveNowUtc,
-                        BusinessDate = depositBalance.BusinessDate,
-                        TotalReceived = depositBalance.TotalReceived,
-                        TotalDeductions = depositBalance.TotalDeductions,
-                        TotalRefunded = depositBalance.TotalRefunded,
-                        TotalTransferredIn = depositBalance.TotalTransferredIn,
-                        TotalTransferredOut = depositBalance.TotalTransferredOut,
-                        NetAdjustments = depositBalance.NetAdjustments,
-                        HeldBalance = depositBalance.HeldBalance,
+                        EffectiveNowUtc = depositBalance.EffectiveNowUtc!.Value,
+                        BusinessDate = depositBalance.BusinessDate!.Value,
+                        TotalReceived = depositBalance.TotalReceived!.Value,
+                        TotalDeductions = depositBalance.TotalDeductions!.Value,
+                        TotalRefunded = depositBalance.TotalRefunded!.Value,
+                        TotalTransferredIn = depositBalance.TotalTransferredIn!.Value,
+                        TotalTransferredOut = depositBalance.TotalTransferredOut!.Value,
+                        NetAdjustments = depositBalance.NetAdjustments!.Value,
+                        HeldBalance = depositBalance.HeldBalance!.Value,
                         Status = depositBalance.DepositStatus,
                     },
             };

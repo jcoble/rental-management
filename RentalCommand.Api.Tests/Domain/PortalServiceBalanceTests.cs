@@ -54,16 +54,16 @@ public sealed class PortalServiceBalanceTests
         using var db = NewContext();
         var pageQuery = NewService(db).BuildTenantAccountPageQuery(Scope,
             new PortalTenantAccountListQuery { Sort = sort });
-        var sql = pageQuery.ToQueryString();
+        pageQuery.ToQueryString().Should().Contain("ORDER BY");
 
-        var orderBy = sql[sql.LastIndexOf("ORDER BY", StringComparison.Ordinal)..];
-        orderBy.Should().Contain("PropertyName");
-        orderBy.Should().Contain("UnitNumber");
-        if (descending)
-            orderBy.Should().Contain("DESC");
-        else
-            orderBy.Should().NotContain("DESC");
-        AssertFinalOrderingKey(pageQuery, nameof(PortalTenantAccountResponse.TenantAccountId));
+        var orderings = GetOrderings(pageQuery);
+        orderings.Select(ordering => ordering.Member).Should().Equal(
+            nameof(PortalTenantAccountResponse.PropertyName),
+            nameof(PortalTenantAccountResponse.UnitNumber),
+            nameof(PortalTenantAccountResponse.TenantAccountId));
+        orderings.Select(ordering => ordering.Descending).Should().OnlyContain(
+            value => value == descending,
+            "every stable ordering key must follow the requested direction");
     }
 
     [Fact]
@@ -193,21 +193,37 @@ public sealed class PortalServiceBalanceTests
         sql.Should().NotContain("MembershipRoleAssignments");
     }
 
-    private static void AssertFinalOrderingKey(IQueryable query, string expectedMemberName)
+    private static IReadOnlyList<(string Member, bool Descending)> GetOrderings(IQueryable query)
     {
         var expression = query.Expression;
-        while (expression is MethodCallExpression call
-               && call.Method.Name is nameof(Queryable.Skip) or nameof(Queryable.Take))
+        var orderings = new List<(string Member, bool Descending)>();
+        while (expression is MethodCallExpression call)
         {
+            if (call.Method.Name is nameof(Queryable.Skip) or nameof(Queryable.Take))
+            {
+                expression = call.Arguments[0];
+                continue;
+            }
+            if (call.Method.Name is not (nameof(Queryable.OrderBy)
+                or nameof(Queryable.OrderByDescending)
+                or nameof(Queryable.ThenBy)
+                or nameof(Queryable.ThenByDescending)))
+            {
+                break;
+            }
+
+            var selector = ((UnaryExpression)call.Arguments[1]).Operand
+                .Should().BeAssignableTo<LambdaExpression>().Subject;
+            var member = selector.Body.Should().BeAssignableTo<MemberExpression>()
+                .Which.Member.Name;
+            var descending = call.Method.Name is nameof(Queryable.OrderByDescending)
+                or nameof(Queryable.ThenByDescending);
+            orderings.Add((member, descending));
             expression = call.Arguments[0];
         }
 
-        var finalOrdering = expression.Should().BeOfType<MethodCallExpression>().Subject;
-        finalOrdering.Method.Name.Should().BeOneOf(nameof(Queryable.ThenBy), nameof(Queryable.ThenByDescending));
-        var selector = ((UnaryExpression)finalOrdering.Arguments[1]).Operand
-            .Should().BeOfType<LambdaExpression>().Subject;
-        selector.Body.Should().BeOfType<MemberExpression>()
-            .Which.Member.Name.Should().Be(expectedMemberName);
+        orderings.Reverse();
+        return orderings;
     }
 
     private static PortalService NewService(RentalCommandDbContext db) =>

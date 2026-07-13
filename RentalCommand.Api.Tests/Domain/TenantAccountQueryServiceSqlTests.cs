@@ -159,8 +159,9 @@ public sealed class TenantAccountQueryServiceSqlTests
 
         AssertDepositAuthorized(sql);
         var orderBy = sql[sql.LastIndexOf("ORDER BY", StringComparison.Ordinal)..];
-        orderBy.Should().Contain("PropertyName");
-        orderBy.Should().Contain("UnitNumber");
+        orderBy.Should().MatchRegex(
+            "ORDER BY .*\\\"Name\\\", .*\\\"UnitNumber\\\", .*\\\"Id\\\"",
+            "the default deposit order must remain property, unit, then unique deposit id");
         orderBy.Should().NotContain("DESC",
             "unsupported sort prefixes must not invert the canonical stable default");
         AssertFinalOrderingKey(pageQuery, nameof(TenantAccountDepositListItemResponse.SecurityDepositAccountId));
@@ -328,7 +329,7 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().Contain("TenantAccountId");
         sql.Should().Contain("LeaseManagementId");
         sql.Should().Contain("OriginatingAgreementId");
-        sql.Should().Contain("LeaseManagementLifecycleProjections");
+        sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("PropertyId");
         sql.Should().Contain("UnitId");
         sql.Should().Contain("AccountNumber");
@@ -408,11 +409,11 @@ public sealed class TenantAccountQueryServiceSqlTests
             expression = call.Arguments[0];
         }
 
-        var finalOrdering = expression.Should().BeOfType<MethodCallExpression>().Subject;
+        var finalOrdering = expression.Should().BeAssignableTo<MethodCallExpression>().Subject;
         finalOrdering.Method.Name.Should().BeOneOf(nameof(Queryable.ThenBy), nameof(Queryable.ThenByDescending));
         var selector = ((UnaryExpression)finalOrdering.Arguments[1]).Operand
-            .Should().BeOfType<LambdaExpression>().Subject;
-        selector.Body.Should().BeOfType<MemberExpression>()
+            .Should().BeAssignableTo<LambdaExpression>().Subject;
+        selector.Body.Should().BeAssignableTo<MemberExpression>()
             .Which.Member.Name.Should().Be(expectedMemberName);
     }
 
