@@ -38,13 +38,16 @@ public sealed class LeaseManagementController : ManagementControllerBase
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly ILeaseManagementQueryService _queryService;
+    private readonly ILeaseQaService _qa;
 
     public LeaseManagementController(
         IAtomicUnitOfWork atomic,
-        ILeaseManagementQueryService queryService)
+        ILeaseManagementQueryService queryService,
+        ILeaseQaService qa)
     {
         _atomic = atomic;
         _queryService = queryService;
+        _qa = qa;
     }
 
     [HttpGet("page")]
@@ -97,6 +100,35 @@ public sealed class LeaseManagementController : ManagementControllerBase
 
         var ledger = await _queryService.GetLedgerAsync(access, leaseManagementId, skip, take, ct);
         return ledger == null ? NotFound(new { error = "Tenant account not found" }) : Ok(ledger);
+    }
+
+    [HttpPost("{leaseManagementId:int}/ask")]
+    [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseQuestionResponse>> Ask(
+        int leaseManagementId,
+        [FromBody] LeaseQuestionRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Question))
+        {
+            return BadRequest(new { error = "Question is required." });
+        }
+        if (!TryReadAccessContext(out var access))
+        {
+            return Forbid();
+        }
+        if (!await _queryService.CanReadAsync(access, leaseManagementId, ct))
+        {
+            return NotFound(new { error = "Lease management relationship not found" });
+        }
+
+        var answer = await _qa.AskAsync(
+            GetPortfolioId(), leaseManagementId, request.Question.Trim(), ct);
+        return answer is null
+            ? NotFound(new { error = "No governing agreement document is available." })
+            : Ok(answer);
     }
 
     [HttpPost("prepare-move-in")]

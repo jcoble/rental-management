@@ -7,8 +7,10 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Esign;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
@@ -28,13 +30,100 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         new("lease-agreement.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
+    private readonly ILeaseManagementQueryService _queryService;
+    private readonly IFileStorage _files;
     private readonly string _webBaseUrl;
 
-    public LeaseAgreementController(IAtomicUnitOfWork atomic, RentalCommandDbContext db, IConfiguration configuration)
+    public LeaseAgreementController(
+        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        ILeaseManagementQueryService queryService,
+        IFileStorage files,
+        IConfiguration configuration)
     {
         _atomic = atomic;
         _db = db;
+        _queryService = queryService;
+        _files = files;
         _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
+    }
+
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(LeaseAgreementHistoryPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseAgreementHistoryPageResponse>> ListPage(
+        int leaseManagementId,
+        [FromQuery] LeaseLegalHistoryQuery query,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var page = await _queryService.ListAgreementHistoryPageAsync(access, leaseManagementId, query, ct);
+        return page is null
+            ? NotFound(new { error = "Lease management relationship not found" })
+            : Ok(page);
+    }
+
+    [HttpGet("{leaseAgreementId:int}/artifacts/{artifactId:int}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadArtifact(
+        int leaseManagementId,
+        int leaseAgreementId,
+        int artifactId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var reference = await _queryService.GetAgreementArtifactAsync(
+            access, leaseManagementId, leaseAgreementId, artifactId, ct);
+        if (reference is null) return NotFound(new { error = "Agreement artifact not found" });
+
+        Stream stream;
+        try
+        {
+            stream = await _files.DownloadAsync(reference.StorageKey, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return NotFound(new { error = "Agreement artifact file not found on storage" });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(stream, reference.ContentType, reference.FileName, enableRangeProcessing: true);
+    }
+
+    [HttpGet("{leaseAgreementId:int}/source-scan")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadSourceScan(
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var reference = await _queryService.GetAgreementSourceScanAsync(
+            access, leaseManagementId, leaseAgreementId, ct);
+        if (reference is null) return NotFound(new { error = "Agreement source scan not found" });
+
+        Stream stream;
+        try
+        {
+            stream = await _files.DownloadAsync(reference.StorageKey, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return NotFound(new { error = "Agreement source scan file not found on storage" });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(stream, reference.ContentType, reference.FileName, enableRangeProcessing: true);
     }
 
     [HttpPatch("{leaseAgreementId:int}/draft")]

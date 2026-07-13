@@ -57,6 +57,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             .ThenBy(party => party.TenantName)
             .ThenBy(party => party.LeaseManagementPartyId)
             .ToListAsync(ct);
+        var legalHistoryCounts = await BuildLegalHistoryCountsQuery(access, leaseManagementId)
+            .SingleAsync(ct);
 
         return new LeaseManagementDetailResponse
         {
@@ -66,8 +68,99 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             CancellationReasonCode = header.CancellationReasonCode,
             CancellationNote = header.CancellationNote,
             Parties = parties,
+            AgreementCount = legalHistoryCounts.AgreementCount,
+            AddendumCount = legalHistoryCounts.AddendumCount,
+            LegalArtifactCount = legalHistoryCounts.LegalArtifactCount,
         };
     }
+
+    public Task<bool> CanReadAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        CancellationToken ct = default) =>
+        BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            .AnyAsync(management => management.Id == leaseManagementId, ct);
+
+    public async Task<LeaseAgreementHistoryPageResponse?> ListAgreementHistoryPageAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        LeaseLegalHistoryQuery query,
+        CancellationToken ct = default)
+    {
+        if (!await CanReadAsync(access, leaseManagementId, ct))
+        {
+            return null;
+        }
+
+        var rows = BuildAgreementHistoryQuery(access, leaseManagementId, query);
+        var totalCount = await rows.CountAsync(ct);
+        var items = await ApplyAgreementSort(rows, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+        return new LeaseAgreementHistoryPageResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    public async Task<LeaseAddendumHistoryPageResponse?> ListAddendumHistoryPageAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        LeaseLegalHistoryQuery query,
+        CancellationToken ct = default)
+    {
+        if (!await CanReadAsync(access, leaseManagementId, ct))
+        {
+            return null;
+        }
+
+        var rows = BuildAddendumHistoryQuery(access, leaseManagementId, query);
+        var totalCount = await rows.CountAsync(ct);
+        var items = await ApplyAddendumSort(rows, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+        return new LeaseAddendumHistoryPageResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    public Task<LegalArtifactFileReference?> GetAgreementArtifactAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAgreementId,
+        int artifactId,
+        CancellationToken ct = default) =>
+        BuildAgreementArtifactFileQuery(access, leaseManagementId, leaseAgreementId, artifactId)
+            .SingleOrDefaultAsync(ct);
+
+    public Task<LegalArtifactFileReference?> GetAgreementSourceScanAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct = default) =>
+        BuildAgreementSourceScanFileQuery(access, leaseManagementId, leaseAgreementId)
+            .OrderByDescending(file => file.UploadedAtUtc)
+            .Select(file => new LegalArtifactFileReference(
+                file.StoredFileId, file.StorageKey, file.FileName, file.ContentType))
+            .FirstOrDefaultAsync(ct);
+
+    public Task<LegalArtifactFileReference?> GetAddendumArtifactAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAddendumId,
+        int artifactId,
+        CancellationToken ct = default) =>
+        BuildAddendumArtifactFileQuery(access, leaseManagementId, leaseAddendumId, artifactId)
+            .SingleOrDefaultAsync(ct);
 
     public async Task<LeaseLedgerResponse?> GetLedgerAsync(
         LeaseManagementReadContext access,
@@ -227,6 +320,264 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             GuarantorLegalNoticeEligible = party.GuarantorLegalNoticeEligible,
         };
 
+    internal IQueryable<LeaseLegalHistoryCountsReadRow> BuildLegalHistoryCountsQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId) =>
+        BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            .Where(management => management.Id == leaseManagementId)
+            .Select(management => new LeaseLegalHistoryCountsReadRow
+            {
+                AgreementCount = _db.LeaseAgreements.Count(agreement =>
+                    agreement.PortfolioId == access.PortfolioId
+                    && agreement.LeaseManagementId == management.Id),
+                AddendumCount = _db.LeaseAddenda.Count(addendum =>
+                    addendum.PortfolioId == access.PortfolioId
+                    && addendum.LeaseManagementId == management.Id),
+                LegalArtifactCount = _db.LegalDocumentArtifacts.Count(artifact =>
+                    artifact.PortfolioId == access.PortfolioId
+                    && (_db.LeaseAgreements.Any(agreement =>
+                            agreement.PortfolioId == access.PortfolioId
+                            && agreement.LeaseManagementId == management.Id
+                            && (agreement.IssuedArtifactId == artifact.Id
+                                || agreement.ExecutedArtifactId == artifact.Id))
+                        || _db.LeaseAddenda.Any(addendum =>
+                            addendum.PortfolioId == access.PortfolioId
+                            && addendum.LeaseManagementId == management.Id
+                            && (addendum.IssuedArtifactId == artifact.Id
+                                || addendum.ExecutedArtifactId == artifact.Id)))),
+            });
+
+    internal IQueryable<LeaseAgreementHistoryResponse> BuildAgreementHistoryQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        LeaseLegalHistoryQuery query)
+    {
+        var rows =
+            from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { agreement.PortfolioId, agreement.LeaseManagementId }
+            join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                on new { agreement.PortfolioId, AgreementId = agreement.Id }
+                equals new { status.PortfolioId, status.AgreementId }
+                into statusRows
+            from status in statusRows.DefaultIfEmpty()
+            where management.Id == leaseManagementId
+            select new LeaseAgreementHistoryResponse
+            {
+                LeaseManagementId = management.Id,
+                LeaseAgreementId = agreement.Id,
+                PublicId = agreement.PublicId,
+                VersionNumber = agreement.VersionNumber,
+                AgreementNumber = agreement.AgreementNumber,
+                ChangeType = agreement.ChangeType,
+                ReplacesAgreementId = agreement.ReplacesAgreementId,
+                RenewsAgreementId = agreement.RenewsAgreementId,
+                TermType = agreement.TermType,
+                TermStartOn = agreement.TermStartOn,
+                TermEndOn = agreement.TermEndOn,
+                GoverningFromOn = agreement.GoverningFromOn,
+                SupersededEffectiveOn = agreement.SupersededEffectiveOn,
+                BaseRentAmount = agreement.BaseRentAmount,
+                AgreementStatus = status == null ? "Unknown" : status.AgreementStatus,
+                IsGoverning = status != null && status.IsGoverning,
+                SignerCount = _db.LeaseAgreementSigners.Count(signer =>
+                    signer.PortfolioId == access.PortfolioId
+                    && signer.LeaseAgreementId == agreement.Id),
+                IssuedArtifact = agreement.IssuedArtifact == null ? null : new LegalArtifactSummaryResponse
+                {
+                    LegalDocumentArtifactId = agreement.IssuedArtifact.Id,
+                    PublicId = agreement.IssuedArtifact.PublicId,
+                    ArtifactKind = agreement.IssuedArtifact.ArtifactKind,
+                    FileName = agreement.IssuedArtifact.FileName,
+                    ContentType = agreement.IssuedArtifact.ContentType,
+                    ByteLength = agreement.IssuedArtifact.ByteLength,
+                    ContentSha256 = agreement.IssuedArtifact.ContentSha256,
+                    CreatedAtUtc = agreement.IssuedArtifact.CreatedAtUtc,
+                },
+                ExecutedArtifact = agreement.ExecutedArtifact == null ? null : new LegalArtifactSummaryResponse
+                {
+                    LegalDocumentArtifactId = agreement.ExecutedArtifact.Id,
+                    PublicId = agreement.ExecutedArtifact.PublicId,
+                    ArtifactKind = agreement.ExecutedArtifact.ArtifactKind,
+                    FileName = agreement.ExecutedArtifact.FileName,
+                    ContentType = agreement.ExecutedArtifact.ContentType,
+                    ByteLength = agreement.ExecutedArtifact.ByteLength,
+                    ContentSha256 = agreement.ExecutedArtifact.ContentSha256,
+                    CreatedAtUtc = agreement.ExecutedArtifact.CreatedAtUtc,
+                },
+                IssuedAtUtc = agreement.IssuedAtUtc,
+                FullyExecutedAtUtc = agreement.FullyExecutedAtUtc,
+                VoidedAtUtc = agreement.VoidedAtUtc,
+                CreatedAtUtc = agreement.CreatedAtUtc,
+                UpdatedAtUtc = agreement.UpdatedAtUtc,
+            };
+
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            var status = query.Status.Trim();
+            rows = rows.Where(row => row.AgreementStatus == status);
+        }
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            rows = rows.Where(row => EF.Functions.ILike(row.AgreementNumber, $"%{term}%"));
+        }
+        return rows;
+    }
+
+    internal IQueryable<LeaseAddendumHistoryResponse> BuildAddendumHistoryQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        LeaseLegalHistoryQuery query)
+    {
+        var rows =
+            from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            join addendum in _db.LeaseAddenda.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { addendum.PortfolioId, addendum.LeaseManagementId }
+            join status in _db.LeaseAddendumStatusProjections.AsNoTracking()
+                on new { addendum.PortfolioId, LeaseAddendumId = addendum.Id }
+                equals new { status.PortfolioId, status.LeaseAddendumId }
+                into statusRows
+            from status in statusRows.DefaultIfEmpty()
+            where management.Id == leaseManagementId
+            select new LeaseAddendumHistoryResponse
+            {
+                LeaseManagementId = management.Id,
+                LeaseAddendumId = addendum.Id,
+                PublicId = addendum.PublicId,
+                SeriesPublicId = addendum.SeriesPublicId,
+                BaseAgreementId = addendum.BaseAgreementId,
+                VersionNumber = addendum.VersionNumber,
+                AddendumNumber = addendum.AddendumNumber,
+                Purpose = addendum.Purpose,
+                ReplacesAddendumId = addendum.ReplacesAddendumId,
+                EffectiveFromOn = addendum.EffectiveFromOn,
+                EffectiveThroughOn = addendum.EffectiveThroughOn,
+                SupersededEffectiveOn = addendum.SupersededEffectiveOn,
+                AddendumStatus = status == null ? "Unknown" : status.AddendumStatus,
+                FinancialEffectCount = status == null ? 0 : status.FinancialEffectCount,
+                RecurringRentDelta = _db.LeaseAddendumFinancialEffects
+                    .Where(effect => effect.PortfolioId == access.PortfolioId
+                        && effect.LeaseAddendumId == addendum.Id
+                        && effect.EffectType == LeaseAddendumFinancialEffectType.RecurringRentDelta)
+                    .Sum(effect => (decimal?)effect.Amount) ?? 0m,
+                SignerCount = _db.LeaseAddendumSigners.Count(signer =>
+                    signer.PortfolioId == access.PortfolioId
+                    && signer.LeaseAddendumId == addendum.Id),
+                IssuedArtifact = addendum.IssuedArtifact == null ? null : new LegalArtifactSummaryResponse
+                {
+                    LegalDocumentArtifactId = addendum.IssuedArtifact.Id,
+                    PublicId = addendum.IssuedArtifact.PublicId,
+                    ArtifactKind = addendum.IssuedArtifact.ArtifactKind,
+                    FileName = addendum.IssuedArtifact.FileName,
+                    ContentType = addendum.IssuedArtifact.ContentType,
+                    ByteLength = addendum.IssuedArtifact.ByteLength,
+                    ContentSha256 = addendum.IssuedArtifact.ContentSha256,
+                    CreatedAtUtc = addendum.IssuedArtifact.CreatedAtUtc,
+                },
+                ExecutedArtifact = addendum.ExecutedArtifact == null ? null : new LegalArtifactSummaryResponse
+                {
+                    LegalDocumentArtifactId = addendum.ExecutedArtifact.Id,
+                    PublicId = addendum.ExecutedArtifact.PublicId,
+                    ArtifactKind = addendum.ExecutedArtifact.ArtifactKind,
+                    FileName = addendum.ExecutedArtifact.FileName,
+                    ContentType = addendum.ExecutedArtifact.ContentType,
+                    ByteLength = addendum.ExecutedArtifact.ByteLength,
+                    ContentSha256 = addendum.ExecutedArtifact.ContentSha256,
+                    CreatedAtUtc = addendum.ExecutedArtifact.CreatedAtUtc,
+                },
+                IssuedAtUtc = addendum.IssuedAtUtc,
+                FullyExecutedAtUtc = addendum.FullyExecutedAtUtc,
+                VoidedAtUtc = addendum.VoidedAtUtc,
+                CreatedAtUtc = addendum.CreatedAtUtc,
+                UpdatedAtUtc = addendum.UpdatedAtUtc,
+            };
+
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            var status = query.Status.Trim();
+            rows = rows.Where(row => row.AddendumStatus == status);
+        }
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            rows = rows.Where(row => EF.Functions.ILike(row.AddendumNumber, $"%{term}%"));
+        }
+        return rows;
+    }
+
+    internal IQueryable<LegalArtifactFileReference> BuildAgreementArtifactFileQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAgreementId,
+        int artifactId) =>
+        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        join agreement in _db.LeaseAgreements.AsNoTracking()
+            on new { management.PortfolioId, LeaseManagementId = management.Id }
+            equals new { agreement.PortfolioId, agreement.LeaseManagementId }
+        join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+            on agreement.PortfolioId equals artifact.PortfolioId
+        join file in _db.StoredFiles.AsNoTracking()
+            on new { artifact.PortfolioId, Id = artifact.StoredFileId }
+            equals new { file.PortfolioId, file.Id }
+        where management.Id == leaseManagementId
+            && agreement.Id == leaseAgreementId
+            && artifact.Id == artifactId
+            && (agreement.IssuedArtifactId == artifact.Id || agreement.ExecutedArtifactId == artifact.Id)
+            && file.DeletedAt == null
+        select new LegalArtifactFileReference(artifact.Id, artifact.StorageKey, artifact.FileName, artifact.ContentType);
+
+    internal IQueryable<LegalArtifactFileReference> BuildAddendumArtifactFileQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAddendumId,
+        int artifactId) =>
+        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        join addendum in _db.LeaseAddenda.AsNoTracking()
+            on new { management.PortfolioId, LeaseManagementId = management.Id }
+            equals new { addendum.PortfolioId, addendum.LeaseManagementId }
+        join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+            on addendum.PortfolioId equals artifact.PortfolioId
+        join file in _db.StoredFiles.AsNoTracking()
+            on new { artifact.PortfolioId, Id = artifact.StoredFileId }
+            equals new { file.PortfolioId, file.Id }
+        where management.Id == leaseManagementId
+            && addendum.Id == leaseAddendumId
+            && artifact.Id == artifactId
+            && (addendum.IssuedArtifactId == artifact.Id || addendum.ExecutedArtifactId == artifact.Id)
+            && file.DeletedAt == null
+        select new LegalArtifactFileReference(artifact.Id, artifact.StorageKey, artifact.FileName, artifact.ContentType);
+
+    internal IQueryable<AgreementSourceScanFileReadRow> BuildAgreementSourceScanFileQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAgreementId) =>
+        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        join agreement in _db.LeaseAgreements.AsNoTracking()
+            on new { management.PortfolioId, LeaseManagementId = management.Id }
+            equals new { agreement.PortfolioId, agreement.LeaseManagementId }
+        join file in _db.StoredFiles.AsNoTracking()
+            on new
+            {
+                agreement.PortfolioId,
+                EntityType = nameof(LeaseAgreement),
+                EntityId = (int?)agreement.Id,
+            }
+            equals new { file.PortfolioId, file.EntityType, file.EntityId }
+        where management.Id == leaseManagementId
+            && agreement.Id == leaseAgreementId
+            && file.DeletedAt == null
+        select new AgreementSourceScanFileReadRow
+        {
+            StoredFileId = file.Id,
+            StorageKey = file.FilePath,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            UploadedAtUtc = file.UploadedAt,
+        };
+
     internal IQueryable<CanonicalLedgerHeaderReadRow> BuildCanonicalLedgerHeaderQuery(
         LeaseManagementReadContext access,
         int leaseManagementId) =>
@@ -370,6 +721,45 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 : rows.OrderBy(row => row.UpdatedAtUtc).ThenBy(row => row.LeaseManagementId),
         };
 
+    private static IQueryable<LeaseAgreementHistoryResponse> ApplyAgreementSort(
+        IQueryable<LeaseAgreementHistoryResponse> rows,
+        LeaseLegalHistoryQuery query) => query.SortField switch
+        {
+            "agreementnumber" => query.SortDescending
+                ? rows.OrderByDescending(row => row.AgreementNumber).ThenByDescending(row => row.LeaseAgreementId)
+                : rows.OrderBy(row => row.AgreementNumber).ThenBy(row => row.LeaseAgreementId),
+            "status" => query.SortDescending
+                ? rows.OrderByDescending(row => row.AgreementStatus).ThenByDescending(row => row.VersionNumber)
+                : rows.OrderBy(row => row.AgreementStatus).ThenBy(row => row.VersionNumber),
+            "termstarton" => query.SortDescending
+                ? rows.OrderByDescending(row => row.TermStartOn).ThenByDescending(row => row.VersionNumber)
+                : rows.OrderBy(row => row.TermStartOn).ThenBy(row => row.VersionNumber),
+            "termendon" => query.SortDescending
+                ? rows.OrderByDescending(row => row.TermEndOn).ThenByDescending(row => row.VersionNumber)
+                : rows.OrderBy(row => row.TermEndOn).ThenBy(row => row.VersionNumber),
+            _ => query.SortDescending
+                ? rows.OrderByDescending(row => row.VersionNumber).ThenByDescending(row => row.LeaseAgreementId)
+                : rows.OrderBy(row => row.VersionNumber).ThenBy(row => row.LeaseAgreementId),
+        };
+
+    private static IQueryable<LeaseAddendumHistoryResponse> ApplyAddendumSort(
+        IQueryable<LeaseAddendumHistoryResponse> rows,
+        LeaseLegalHistoryQuery query) => query.SortField switch
+        {
+            "addendumnumber" => query.SortDescending
+                ? rows.OrderByDescending(row => row.AddendumNumber).ThenByDescending(row => row.LeaseAddendumId)
+                : rows.OrderBy(row => row.AddendumNumber).ThenBy(row => row.LeaseAddendumId),
+            "status" => query.SortDescending
+                ? rows.OrderByDescending(row => row.AddendumStatus).ThenByDescending(row => row.VersionNumber)
+                : rows.OrderBy(row => row.AddendumStatus).ThenBy(row => row.VersionNumber),
+            "effectivefromon" => query.SortDescending
+                ? rows.OrderByDescending(row => row.EffectiveFromOn).ThenByDescending(row => row.VersionNumber)
+                : rows.OrderBy(row => row.EffectiveFromOn).ThenBy(row => row.VersionNumber),
+            _ => query.SortDescending
+                ? rows.OrderByDescending(row => row.UpdatedAtUtc).ThenByDescending(row => row.LeaseAddendumId)
+                : rows.OrderBy(row => row.UpdatedAtUtc).ThenBy(row => row.LeaseAddendumId),
+        };
+
     private static LedgerTransactionResponse ToLedgerResponse(
         CanonicalLedgerEntryReadRow entry,
         CanonicalLedgerHeaderReadRow header,
@@ -408,6 +798,22 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         public decimal ReceivableBalance { get; init; }
         public int PastDueCount { get; init; }
         public int TotalEntryCount { get; init; }
+    }
+
+    internal sealed class LeaseLegalHistoryCountsReadRow
+    {
+        public int AgreementCount { get; init; }
+        public int AddendumCount { get; init; }
+        public int LegalArtifactCount { get; init; }
+    }
+
+    internal sealed class AgreementSourceScanFileReadRow
+    {
+        public int StoredFileId { get; init; }
+        public string StorageKey { get; init; } = string.Empty;
+        public string FileName { get; init; } = string.Empty;
+        public string ContentType { get; init; } = string.Empty;
+        public DateTime UploadedAtUtc { get; init; }
     }
 
     internal sealed class CanonicalLedgerEntryReadRow
