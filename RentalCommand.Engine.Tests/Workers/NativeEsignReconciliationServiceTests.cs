@@ -46,7 +46,12 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             .GetField("BatchClaimSql", BindingFlags.Static | BindingFlags.NonPublic)!
             .GetRawConstantValue()!;
 
-        sql.Should().Contain("INNER JOIN \"LeaseAgreements\"");
+        sql.Should().Contain("LEFT JOIN \"LeaseAgreements\" AS agreement");
+        sql.Should().Contain("LEFT JOIN \"LeaseAddenda\" AS addendum");
+        sql.Should().Contain("request.\"LeaseAgreementId\" IS NOT NULL AND agreement.\"Id\" IS NOT NULL");
+        sql.Should().Contain("agreement.\"VoidedAtUtc\" IS NULL");
+        sql.Should().Contain("request.\"LeaseAddendumId\" IS NOT NULL AND addendum.\"Id\" IS NOT NULL");
+        sql.Should().Contain("addendum.\"VoidedAtUtc\" IS NULL");
         sql.Should().Contain("WHERE");
         sql.Should().Contain("ORDER BY request.\"PreparedAtUtc\", request.\"Id\"");
         sql.Should().Contain("LIMIT");

@@ -54,6 +54,7 @@ import '../tenants/tenant_detail_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 import '../tenants/tenant_lease_screen.dart';
 import '../units/unit_command_center_screen.dart';
+import 'mobile_destination.dart';
 import 'mobile_domain_hub.dart';
 import 'mobile_domain_navigation.dart';
 import 'mobile_quick_action_fab.dart';
@@ -199,13 +200,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         'money.owner-reports.read',
       ]))
         MobileShellTabId.money,
-      if (hasAny(const [
-        'work.read',
-        'work.manage',
-        'maintenance.assigned-work.read',
-        'maintenance.assigned-work.update',
-      ]))
-        MobileShellTabId.work,
+      if (canOpenWorkHub(capabilities)) MobileShellTabId.work,
       if (hasAny(const [
         'rentals.read',
         'work.read',
@@ -526,7 +521,17 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
   }
 
-  _TabItem _tabItemFor(MobileShellTabId tab) => _tabs[_tabIds.indexOf(tab)];
+  _TabItem _tabItemFor(MobileShellTabId tab, WorkspaceExperience experience) {
+    if (tab == MobileShellTabId.work) {
+      if (experience == WorkspaceExperience.leasing) {
+        return const _TabItem(label: 'Calendar', icon: Symbols.event_rounded);
+      }
+      if (experience == WorkspaceExperience.maintenance) {
+        return const _TabItem(label: 'My work', icon: Symbols.build_rounded);
+      }
+    }
+    return _tabs[_tabIds.indexOf(tab)];
+  }
 
   Widget _buildLandlordTab(
     MobileShellTabId tab,
@@ -626,7 +631,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
         : _availableLandlordTabs(authState);
     final tabs = tenantMode
         ? _tenantTabs
-        : landlordTabs.map(_tabItemFor).toList(growable: false);
+        : landlordTabs
+              .map((tab) => _tabItemFor(tab, authState.activeExperience))
+              .toList(growable: false);
     final selectedIndex = _selectedIndex >= tabs.length
         ? tabs.length - 1
         : _selectedIndex;

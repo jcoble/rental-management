@@ -26,6 +26,7 @@ internal static class TenantAccountModelConfiguration
         {
             entity.HasKey(e => e.Id);
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.HasAlternateKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId });
             entity.Property(e => e.PublicId).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.AccountNumber).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(3);

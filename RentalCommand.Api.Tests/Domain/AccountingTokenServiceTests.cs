@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -22,14 +23,29 @@ namespace RentalCommand.Api.Tests.Domain;
 /// and blanks the tokens — never a silent failure. Tests the shared <see cref="AccountingTokenService"/>
 /// directly (the worker is a thin DB-claim + advisory-lock wrapper around it).
 /// </summary>
-public sealed class AccountingTokenServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class AccountingTokenServiceTests : IAsyncLifetime
 {
-    private const int PortfolioId = 1; // seeded by SqliteTestContext
+    private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly IDataProtectionProvider _dp = new EphemeralDataProtectionProvider();
+    private MigratedPostgreSqlTestContext _ctx = null!;
 
-    public void Dispose() => _ctx.Dispose();
+    public AccountingTokenServiceTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _ctx.DisposeAsync();
+    }
 
     [Fact]
     public async Task RefreshAsync_RotatesAndReencryptsBothTokens_AndAdvancesExpiry()

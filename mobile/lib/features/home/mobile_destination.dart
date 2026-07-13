@@ -36,6 +36,7 @@ class MobileDestination {
     required this.label,
     required this.subtitle,
     required this.builder,
+    this.capabilityKeys = const [],
   });
 
   final MobileDestinationId id;
@@ -43,6 +44,20 @@ class MobileDestination {
   final String label;
   final String subtitle;
   final WidgetBuilder builder;
+  final List<String> capabilityKeys;
+
+  bool isVisibleFor(Set<String> capabilities) =>
+      capabilityKeys.isEmpty || capabilityKeys.any(capabilities.contains);
+
+  MobileDestination copyWith({String? label, String? subtitle}) =>
+      MobileDestination(
+        id: id,
+        icon: icon,
+        label: label ?? this.label,
+        subtitle: subtitle ?? this.subtitle,
+        builder: builder,
+        capabilityKeys: capabilityKeys,
+      );
 
   void open(BuildContext context) {
     final target = _shellTargetFor(id);
@@ -282,6 +297,12 @@ const workHubDestinations = <MobileDestination>[
     label: 'Orders',
     subtitle: 'Open repairs and maintenance requests',
     builder: _workOrdersBuilder,
+    capabilityKeys: [
+      'work.read',
+      'work.manage',
+      'maintenance.assigned-work.read',
+      'maintenance.assigned-work.update',
+    ],
   ),
   MobileDestination(
     id: MobileDestinationId.calendar,
@@ -289,6 +310,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Calendar',
     subtitle: 'Showings and visits',
     builder: _appointmentsBuilder,
+    capabilityKeys: ['work.read', 'leasing.showings.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.inspections,
@@ -296,6 +318,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Inspections',
     subtitle: 'Walk units with smart checklists',
     builder: _inspectionsBuilder,
+    capabilityKeys: ['work.read', 'work.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.vendors,
@@ -303,6 +326,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Vendors',
     subtitle: 'Text jobs, ratings and scorecards',
     builder: _vendorsBuilder,
+    capabilityKeys: ['work.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.automations,
@@ -310,6 +334,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Automations',
     subtitle: 'Recurring maintenance templates',
     builder: _recurringMaintenanceBuilder,
+    capabilityKeys: ['work.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.notices,
@@ -317,7 +342,36 @@ const workHubDestinations = <MobileDestination>[
     label: 'Notices',
     subtitle: 'Renewal, late-rent and move-out drafts',
     builder: _noticesBuilder,
+    capabilityKeys: [
+      'rentals.manage',
+      'leasing.onboarding.manage',
+      'notifications.manage',
+    ],
   ),
+];
+
+bool canOpenWorkHub(Set<String> capabilities) => workHubDestinations.any(
+  (destination) => destination.isVisibleFor(capabilities),
+);
+
+bool canOpenWorkOrders(Set<String> capabilities) => workHubDestinations
+    .firstWhere(
+      (destination) => destination.id == MobileDestinationId.workOrders,
+    )
+    .isVisibleFor(capabilities);
+
+List<MobileDestination> workDestinationsFor(
+  Set<String> capabilities, {
+  required bool assignedWorkExperience,
+}) => [
+  for (final destination in workHubDestinations)
+    if (destination.isVisibleFor(capabilities))
+      assignedWorkExperience && destination.id == MobileDestinationId.workOrders
+          ? destination.copyWith(
+              label: 'My work',
+              subtitle: 'Repairs and maintenance assigned to you',
+            )
+          : destination,
 ];
 
 const inboxHubDestinations = <MobileDestination>[

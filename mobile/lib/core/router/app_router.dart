@@ -11,6 +11,7 @@ import '../../features/auth/register_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
 import '../../features/auth/verify_email_screen.dart';
 import '../../features/home/home_shell.dart';
+import '../../features/home/mobile_destination.dart';
 import '../../features/home/mobile_domain_hub.dart';
 import '../../features/onboarding/onboarding_choice_screen.dart';
 import '../../features/onboarding/onboarding_live_setup_screen.dart';
@@ -82,13 +83,11 @@ bool _canOpenRoute(AuthStateAuthenticated auth, String path) {
       'leasing.applications.manage',
     ]);
   }
-  if (path == '/work' || path.startsWith('/work-orders/')) {
-    return hasAny(const [
-      'work.read',
-      'work.manage',
-      'maintenance.assigned-work.read',
-      'maintenance.assigned-work.update',
-    ]);
+  if (path == '/work') {
+    return canOpenWorkHub(capabilities);
+  }
+  if (path.startsWith('/work-orders/')) {
+    return canOpenWorkOrders(capabilities);
   }
   if (path == '/money' ||
       path.startsWith('/tenant-accounts/') ||

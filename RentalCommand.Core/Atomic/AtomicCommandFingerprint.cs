@@ -21,6 +21,9 @@ public static class AtomicCommandFingerprint
         "ActorAccessContextId",
         "ActorAccessRevision",
         "DeliveryIdempotencyKey",
+        // Data Protection uses a randomized nonce, so retrying the same Plaid command produces
+        // different ciphertext. The stable request and external-account hashes remain fingerprinted.
+        "ExternalAccountIdCipherText",
         "PreparedAtUtc",
         "AppliedAtUtc",
         "AdmittedAtUtc",

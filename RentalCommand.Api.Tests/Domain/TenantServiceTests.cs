@@ -157,20 +157,28 @@ public class TenantServiceTests : IDisposable
         });
 
         response.Id.Should().BeGreaterThan(0, "tenant creation still succeeds without an email");
-        _ctx.Db.Users.Should().BeEmpty("a tenant with no email gets no Identity login");
+        _ctx.Db.Users.Should().ContainSingle(
+                "a tenant with no email must not add an Identity login beyond the pre-seeded test actor")
+            .Which.Id.Should().Be(ActorUserId);
     }
 
     [Fact]
-    public async Task GetAsync_ReportsPortalAccessState()
+    public async Task GetAsync_ReportsRelationshipScopedPortalAccessState()
     {
-        // A tenant with an email is auto-provisioned on create → active.
-        var active = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
+        // Creating a tenant provisions an Identity login, but no portal authority exists until
+        // an effective rental-relationship party grants that identity access.
+        var relationshipTenant = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
         {
             FirstName = "Active",
             LastName = "Portal",
             Email = "active.portal@example.local",
         });
-        (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("active");
+        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("none");
+
+        var tenantEntity = _ctx.Db.Tenants.Single(tenant => tenant.Id == relationshipTenant.Id);
+        SeedRelationshipMembership(tenantEntity, occupying: true);
+        await _provisioning.SetPortalAccessAsync(relationshipTenant.Id, PortfolioId, enabled: true);
+        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("active");
 
         // A tenant with no email has no login → none.
         var none = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
@@ -181,12 +189,13 @@ public class TenantServiceTests : IDisposable
         });
         (await _sut.GetAsync(PortfolioId, none.Id))!.PortalAccess.Should().Be("none");
 
-        // Turning the active tenant's access off → disabled; back on → active.
-        await _provisioning.SetPortalAccessAsync(active.Id, PortfolioId, enabled: false);
-        (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("disabled");
+        // Revoking the effective relationship grant preserves its history, so the tenant becomes
+        // disabled; enabling provisions a new current relationship grant and restores access.
+        await _provisioning.SetPortalAccessAsync(relationshipTenant.Id, PortfolioId, enabled: false);
+        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("disabled");
 
-        await _provisioning.SetPortalAccessAsync(active.Id, PortfolioId, enabled: true);
-        (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("active");
+        await _provisioning.SetPortalAccessAsync(relationshipTenant.Id, PortfolioId, enabled: true);
+        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("active");
     }
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
@@ -207,10 +216,10 @@ public class TenantServiceTests : IDisposable
     [Fact]
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
     {
-        SeedTenant("Avery", "Ellis", activeLeaseCount: 1);
-        SeedTenant("Blair", "Kline", activeLeaseCount: 3);
-        SeedTenant("Casey", "Moss", activeLeaseCount: 0);
-        SeedTenant("Devon", "Nash", activeLeaseCount: 2);
+        SeedTenant("Avery", "Ellis", activeRelationshipCount: 1);
+        SeedTenant("Blair", "Kline", activeRelationshipCount: 3);
+        SeedTenant("Casey", "Moss", activeRelationshipCount: 0);
+        SeedTenant("Devon", "Nash", activeRelationshipCount: 2);
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
@@ -226,6 +235,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => t.FirstName).Should().Equal("Devon", "Avery");
         result.Items.Select(t => t.ActiveLeaseCount).Should().Equal(2, 1);
 
+        _commands.Should().HaveCount(2, "the count and requested page each execute as one DB-side query");
         _commands.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase));
@@ -239,9 +249,9 @@ public class TenantServiceTests : IDisposable
     [Fact]
     public async Task ListPageAsync_TokenizesHyphenatedSearchTermsInSql()
     {
-        SeedTenant("Avery", "Ellis", activeLeaseCount: 0);
-        SeedTenant("Avery", "Stone", activeLeaseCount: 0);
-        SeedTenant("Blair", "Ellis", activeLeaseCount: 0);
+        SeedTenant("Avery", "Ellis", activeRelationshipCount: 0);
+        SeedTenant("Avery", "Stone", activeRelationshipCount: 0);
+        SeedTenant("Blair", "Ellis", activeRelationshipCount: 0);
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
@@ -257,7 +267,7 @@ public class TenantServiceTests : IDisposable
         tenant.FirstName.Should().Be("Avery");
         tenant.LastName.Should().Be("Ellis");
 
-        _commands.Should().HaveCount(3);
+        _commands.Should().HaveCount(2);
         _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
             .Should().OnlyContain(sql =>
             sql.Contains("LIKE", StringComparison.OrdinalIgnoreCase) ||
@@ -265,16 +275,16 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ListPageAsync_AvailableForLeaseExcludesTenantsAlreadyOccupyingLeasesInSql()
+    public async Task ListPageAsync_AvailableForRentalExcludesCurrentResidentsInSql()
     {
-        SeedTenant("Avery", "Available", activeLeaseCount: 0);
-        SeedTenant("Blair", "Primary", activeLeaseCount: 1);
-        var noticeTenant = SeedTenant("Casey", "Notice", activeLeaseCount: 0);
-        var expiredTenant = SeedTenant("Devon", "Expired", activeLeaseCount: 0);
-        var pendingTenant = SeedTenant("Emery", "Pending", activeLeaseCount: 0);
-        SeedLeaseTenantMembership(noticeTenant, occupying: true, withSeparatePrimaryTenant: true, noticeGiven: true);
-        SeedLeaseTenantMembership(expiredTenant, occupying: false);
-        SeedLeaseTenantMembership(pendingTenant, occupying: false);
+        SeedTenant("Avery", "Available", activeRelationshipCount: 0);
+        SeedTenant("Blair", "Primary", activeRelationshipCount: 1);
+        var noticeTenant = SeedTenant("Casey", "Notice", activeRelationshipCount: 0);
+        var expiredTenant = SeedTenant("Devon", "Expired", activeRelationshipCount: 0);
+        var pendingTenant = SeedTenant("Emery", "Pending", activeRelationshipCount: 0);
+        SeedRelationshipMembership(noticeTenant, occupying: true, withSeparatePrimaryTenant: true, noticeGiven: true);
+        SeedRelationshipMembership(expiredTenant, occupying: false);
+        SeedRelationshipMembership(pendingTenant, occupying: false);
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
@@ -289,7 +299,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Available", "Devon Expired", "Emery Pending");
 
-        _commands.Should().HaveCount(3);
+        _commands.Should().HaveCount(2);
         _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
             .Should().OnlyContain(sql =>
             sql.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase) &&
@@ -299,20 +309,20 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ListPageAsync_AvailableForLeaseWithIncludedRelationshipKeepsCurrentParties()
+    public async Task ListPageAsync_AvailableForRentalWithIncludedRelationshipKeepsCurrentParties()
     {
-        SeedTenant("Avery", "Available", activeLeaseCount: 0);
-        var currentPrimary = SeedTenant("Blair", "Current", activeLeaseCount: 0);
-        var currentMember = SeedTenant("Casey", "Current", activeLeaseCount: 0);
-        var conflictTenant = SeedTenant("Devon", "Conflict", activeLeaseCount: 0);
-        var currentRelationship = SeedLeaseTenantMembership(currentMember, occupying: true, withSeparatePrimaryTenant: true);
+        SeedTenant("Avery", "Available", activeRelationshipCount: 0);
+        var currentPrimary = SeedTenant("Blair", "Current", activeRelationshipCount: 0);
+        var currentMember = SeedTenant("Casey", "Current", activeRelationshipCount: 0);
+        var conflictTenant = SeedTenant("Devon", "Conflict", activeRelationshipCount: 0);
+        var currentRelationship = SeedRelationshipMembership(currentMember, occupying: true, withSeparatePrimaryTenant: true);
         var generatedPrimaryParty = _ctx.Db.LeaseManagementParties.Single(party =>
             party.LeaseManagementId == currentRelationship.Id && party.Role == LeaseManagementPartyRole.PrimaryTenant);
         var generatedPrimaryTenantId = generatedPrimaryParty.TenantId;
         generatedPrimaryParty.TenantId = currentPrimary.Id;
         _ctx.Db.Tenants.Single(t => t.Id == generatedPrimaryTenantId).DeletedAt = DateTime.UtcNow;
         _ctx.Db.SaveChanges();
-        SeedLeaseTenantMembership(conflictTenant, occupying: true);
+        SeedRelationshipMembership(conflictTenant, occupying: true);
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
@@ -327,6 +337,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Available", "Blair Current", "Casey Current");
         result.Items.Should().NotContain(t => t.FirstName == "Devon");
+        _commands.Should().HaveCount(2);
         _commands.Should().OnlyContain(sql =>
             sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase));
     }
@@ -335,14 +346,14 @@ public class TenantServiceTests : IDisposable
     public async Task ListPageAsync_UnitFilterReturnsCurrentOccupantsInSql()
     {
         var (property, targetUnit, otherUnit) = SeedPropertyWithUnits();
-        var activeTenant = SeedTenant("Avery", "Active", activeLeaseCount: 0);
-        var memberTenant = SeedTenant("Blair", "Member", activeLeaseCount: 0);
-        var otherUnitTenant = SeedTenant("Casey", "Other", activeLeaseCount: 0);
-        var expiredTenant = SeedTenant("Devon", "Expired", activeLeaseCount: 0);
-        SeedLeaseOnUnit(activeTenant, property, targetUnit, occupying: true);
-        SeedLeaseOnUnit(memberTenant, property, targetUnit, occupying: true, withSeparatePrimaryTenant: true, noticeGiven: true);
-        SeedLeaseOnUnit(otherUnitTenant, property, otherUnit, occupying: true);
-        SeedLeaseOnUnit(expiredTenant, property, targetUnit, occupying: false);
+        var activeTenant = SeedTenant("Avery", "Active", activeRelationshipCount: 0);
+        var memberTenant = SeedTenant("Blair", "Member", activeRelationshipCount: 0);
+        var otherUnitTenant = SeedTenant("Casey", "Other", activeRelationshipCount: 0);
+        var expiredTenant = SeedTenant("Devon", "Expired", activeRelationshipCount: 0);
+        SeedRelationshipOnUnit(activeTenant, property, targetUnit, occupying: true);
+        SeedRelationshipOnUnit(memberTenant, property, targetUnit, occupying: true, withSeparatePrimaryTenant: true, noticeGiven: true);
+        SeedRelationshipOnUnit(otherUnitTenant, property, otherUnit, occupying: true);
+        SeedRelationshipOnUnit(expiredTenant, property, targetUnit, occupying: false);
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
@@ -357,7 +368,7 @@ public class TenantServiceTests : IDisposable
         result.Items.Select(t => $"{t.FirstName} {t.LastName}")
             .Should().Equal("Avery Active", "Blair Primary Holder", "Blair Member");
 
-        _commands.Should().HaveCount(3);
+        _commands.Should().HaveCount(2);
         _commands.Where(sql => sql.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase))
             .Should().OnlyContain(sql =>
             sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase) &&
@@ -369,34 +380,34 @@ public class TenantServiceTests : IDisposable
     [Fact]
     public async Task DeleteAsync_ThrowsWhenTenantStillOccupiesAUnit()
     {
-        var tenant = SeedTenantWithLease(occupying: true);
+        var tenant = SeedTenantWithRelationship(occupying: true);
 
         var act = async () => await _sut.DeleteAsync(PortfolioId, tenant.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("lease");
+        ex.Which.Message.Should().Contain("current resident");
         (await _sut.GetAsync(PortfolioId, tenant.Id))
             .Should().NotBeNull("a tenant who still occupies a unit must not be deleted");
     }
 
     [Fact]
-    public async Task DeleteAsync_ThrowsWhenTenantHasLeaseHistory()
+    public async Task DeleteAsync_ThrowsWhenTenantHasRentalRelationshipHistory()
     {
-        var tenant = SeedTenantWithLease(occupying: false);
+        var tenant = SeedTenantWithRelationship(occupying: false);
 
         var act = async () => await _sut.DeleteAsync(PortfolioId, tenant.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
-        ex.Which.Message.Should().Contain("lease history");
+        ex.Which.Message.Should().Contain("rental relationship history");
         (await _sut.GetAsync(PortfolioId, tenant.Id))
-            .Should().NotBeNull("a tenant with lease history is preserved for past leases and payments");
+            .Should().NotBeNull("a tenant with relationship history is preserved for agreements and account history");
     }
 
     [Fact]
-    public async Task DeleteAsync_SoftDeletesWhenTenantHasNoLeaseHistory()
+    public async Task DeleteAsync_SoftDeletesWhenTenantHasNoRentalRelationshipHistory()
     {
-        var tenant = SeedTenant("Unlinked", "Tenant", activeLeaseCount: 0);
+        var tenant = SeedTenant("Unlinked", "Tenant", activeRelationshipCount: 0);
 
         var deleted = await _sut.DeleteAsync(PortfolioId, tenant.Id);
 
@@ -405,31 +416,31 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetAsync_ReportsDeleteStateForLeaseHistory()
+    public async Task GetAsync_ReportsDeleteStateForRentalRelationshipHistory()
     {
-        var tenant = SeedTenantWithLease(occupying: false);
+        var tenant = SeedTenantWithRelationship(occupying: false);
 
         var response = await _sut.GetAsync(PortfolioId, tenant.Id);
 
         response!.ActiveLeaseCount.Should().Be(0);
         response.LeaseHistoryCount.Should().Be(1);
         response.CanDelete.Should().BeFalse();
-        response.DeleteBlockedReason.Should().Contain("lease history");
+        response.DeleteBlockedReason.Should().Contain("rental relationship history");
     }
 
     [Fact]
-    public async Task GetAsync_CountsNoticeGivenLeaseAsOccupying()
+    public async Task GetAsync_CountsNoticeGivenRelationshipAsOccupying()
     {
-        var tenant = SeedTenantWithLease(occupying: true, noticeGiven: true);
+        var tenant = SeedTenantWithRelationship(occupying: true, noticeGiven: true);
 
         var response = await _sut.GetAsync(PortfolioId, tenant.Id);
 
-        // ActiveLeaseCount now means "occupying" (Active + NoticeGiven); the web delete-state helper
+        // ActiveLeaseCount is the existing DTO name for occupied rental relationships. The web delete-state helper
         // disables delete while it is > 0, so a notice-given-only tenant is also blocked in the UI.
         response!.ActiveLeaseCount.Should().Be(1);
     }
 
-    private Tenant SeedTenantWithLease(bool occupying, bool noticeGiven = false)
+    private Tenant SeedTenantWithRelationship(bool occupying, bool noticeGiven = false)
     {
         var now = DateTime.UtcNow;
         var tenant = new Tenant
@@ -481,7 +492,7 @@ public class TenantServiceTests : IDisposable
         return tenant;
     }
 
-    private Tenant SeedTenant(string firstName, string lastName, int activeLeaseCount)
+    private Tenant SeedTenant(string firstName, string lastName, int activeRelationshipCount)
     {
         var now = DateTime.UtcNow;
         var tenant = new Tenant
@@ -497,7 +508,7 @@ public class TenantServiceTests : IDisposable
         _ctx.Db.Tenants.Add(tenant);
         _ctx.Db.SaveChanges();
 
-        for (var i = 0; i < activeLeaseCount; i++)
+        for (var i = 0; i < activeRelationshipCount; i++)
         {
             var property = new Property
             {
@@ -537,7 +548,7 @@ public class TenantServiceTests : IDisposable
         return tenant;
     }
 
-    private LeaseManagement SeedLeaseTenantMembership(
+    private LeaseManagement SeedRelationshipMembership(
         Tenant tenant,
         bool occupying,
         bool withSeparatePrimaryTenant = false,
@@ -646,7 +657,7 @@ public class TenantServiceTests : IDisposable
         return (property, targetUnit, otherUnit);
     }
 
-    private void SeedLeaseOnUnit(
+    private void SeedRelationshipOnUnit(
         Tenant tenant,
         Property property,
         Unit unit,

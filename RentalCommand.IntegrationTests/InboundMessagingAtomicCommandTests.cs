@@ -55,7 +55,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
 
         await using (var db = NewContext(includeProbe: false))
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
             _facts = await SeedAsync(db);
         }
 
@@ -508,6 +508,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
 
         var unit = new Unit
         {
+            PortfolioId = firstPortfolio.Id,
             PropertyId = property.Id,
             UnitNumber = "1A",
             Bedrooms = 1,
@@ -530,7 +531,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             UpdatedAtUtc = _now,
             RowVersion = Guid.NewGuid(),
         };
-        db.LeaseManagementParties.Add(new LeaseManagementParty
+        var primaryParty = new LeaseManagementParty
         {
             PortfolioId = firstPortfolio.Id,
             LeaseManagement = relationship,
@@ -540,7 +541,97 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             ChangeReason = "Inbound messaging test fixture",
             CreatedAtUtc = _now,
             CreatedByUserId = admin.Id,
+        };
+        db.LeaseManagements.Add(relationship);
+        db.LeaseManagementParties.Add(primaryParty);
+        await db.SaveChangesAsync();
+
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = firstPortfolio.Id,
+            LeaseManagementId = relationship.Id,
+            AccountNumber = "TA-INBOUND-MESSAGING",
+            Currency = "USD",
+            OpenedAtUtc = _now.AddMonths(-1),
+            CreatedAtUtc = _now.AddMonths(-1),
+            CreatedByUserId = admin.Id,
+        };
+        var sourceVersion = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = firstPortfolio.Id,
+            SourceKind = LegalDocumentSourceKind.BuiltInRenderer,
+            BusinessKey = "inbound-messaging-agreement-source",
+            RendererKey = "integration-inbound-messaging",
+            RendererVersion = 1,
+            SnapshotPayload = "{}",
+            CreatedAtUtc = _now.AddMonths(-1),
+            CreatedByUserId = admin.Id,
+        };
+        db.AddRange(account, sourceVersion);
+        await db.SaveChangesAsync();
+
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = firstPortfolio.Id,
+            LeaseManagementId = relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-INBOUND-MESSAGING",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(_now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(_now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(_now.AddMonths(-1)),
+            BaseRentAmount = 1_000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_000m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersionId = sourceVersion.Id,
+            CreatedAtUtc = _now.AddMonths(-1),
+            UpdatedAtUtc = _now.AddMonths(-1),
+            CreatedByUserId = admin.Id,
+        };
+        db.LeaseAgreements.Add(agreement);
+        await db.SaveChangesAsync();
+        db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = firstPortfolio.Id,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = primaryParty.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = "Emily Chen",
+            EmailSnapshot = "emily.chen@example.test",
+            SigningOrder = 1,
         });
+        await db.SaveChangesAsync();
+
+        var issuedFile = NewStoredFile(firstPortfolio.Id, "inbound-issued.pdf");
+        var executedFile = NewStoredFile(firstPortfolio.Id, "inbound-executed.pdf");
+        db.StoredFiles.AddRange(issuedFile, executedFile);
+        await db.SaveChangesAsync();
+        var issuedArtifact = NewArtifact(
+            firstPortfolio.Id, admin.Id, issuedFile.Id,
+            LegalDocumentArtifactKind.IssuedAgreement, "inbound-issued", 'a');
+        var executedArtifact = NewArtifact(
+            firstPortfolio.Id, admin.Id, executedFile.Id,
+            LegalDocumentArtifactKind.ExecutedAgreement, "inbound-executed", 'b');
+        db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        await db.SaveChangesAsync();
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = _now.AddDays(-10);
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = _now.AddDays(-9);
+        agreement.UpdatedAtUtc = _now.AddDays(-9);
+        relationship.PossessionGivenAtUtc = _now.AddDays(-8);
+        relationship.UpdatedAtUtc = _now.AddDays(-8);
+        await db.SaveChangesAsync();
 
         var authorizedContext = NewAccessContext(admin.Id, firstPortfolio.Id);
         var decoyContext = NewAccessContext(decoyUser.Id, firstPortfolio.Id);
@@ -645,6 +736,40 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         EffectiveFromUtc = _now.AddDays(-1),
         CreatedAtUtc = _now,
         UpdatedAtUtc = _now,
+    };
+
+    private StoredFile NewStoredFile(int portfolioId, string name) => new()
+    {
+        PortfolioId = portfolioId,
+        FileName = name,
+        FilePath = $"tests/{name}",
+        ContentType = "application/pdf",
+        FileSize = 100,
+        UploadedAt = _now.AddDays(-10),
+    };
+
+    private LegalDocumentArtifact NewArtifact(
+        int portfolioId,
+        int userId,
+        int storedFileId,
+        LegalDocumentArtifactKind kind,
+        string key,
+        char hashCharacter) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = portfolioId,
+        StoredFileId = storedFileId,
+        ArtifactKind = kind,
+        StorageKey = $"tests/{key}",
+        FileName = $"{key}.pdf",
+        ContentType = "application/pdf",
+        ByteLength = 100,
+        ContentSha256 = new string(hashCharacter, 64),
+        LegalIssuanceFingerprint = kind == LegalDocumentArtifactKind.IssuedAgreement
+            ? new string('c', 64)
+            : null,
+        CreatedAtUtc = _now.AddDays(-10),
+        CreatedByUserId = userId,
     };
 
     private async Task ResetOpenDispatchAsync(RentalCommandDbContext db)

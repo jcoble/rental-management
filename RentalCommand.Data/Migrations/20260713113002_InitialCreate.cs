@@ -1230,7 +1230,7 @@ namespace RentalCommand.Data.Migrations
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
                     RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
-                    RecipientTenantId = table.Column<int>(type: "integer", nullable: false),
+                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
                     RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
                     Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
                     Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
@@ -2728,6 +2728,7 @@ namespace RentalCommand.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_LeaseManagementParties", x => x.Id);
+                    table.UniqueConstraint("AK_LeaseManagementParties_Id_LeaseManagementId_PortfolioId", x => new { x.Id, x.LeaseManagementId, x.PortfolioId });
                     table.UniqueConstraint("AK_LeaseManagementParties_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
                     table.CheckConstraint("CK_LeaseManagementParty_EffectiveDates", "\"EffectiveThrough\" IS NULL OR \"EffectiveThrough\" >= \"EffectiveFrom\"");
                     table.CheckConstraint("CK_LeaseManagementParty_GuarantorNoticeEligibility", "\"Role\" = 'Guarantor' OR \"GuarantorLegalNoticeEligible\" = false");
@@ -2853,6 +2854,7 @@ namespace RentalCommand.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_TenantAccounts", x => x.Id);
+                    table.UniqueConstraint("AK_TenantAccounts_Id_LeaseManagementId_PortfolioId", x => new { x.Id, x.LeaseManagementId, x.PortfolioId });
                     table.UniqueConstraint("AK_TenantAccounts_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
                     table.CheckConstraint("CK_TenantAccount_Close", "(\"ClosedAtUtc\" IS NULL AND \"CloseReasonCode\" IS NULL AND \"CloseNote\" IS NULL) OR (\"ClosedAtUtc\" IS NOT NULL AND \"CloseReasonCode\" IS NOT NULL)");
                     table.CheckConstraint("CK_TenantAccount_CloseAfterOpen", "\"ClosedAtUtc\" IS NULL OR \"ClosedAtUtc\" >= \"OpenedAtUtc\"");
@@ -4540,8 +4542,10 @@ namespace RentalCommand.Data.Migrations
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
                     LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
                     TenantAccountId = table.Column<int>(type: "integer", nullable: false),
+                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
+                    LeaseAgreementId = table.Column<int>(type: "integer", nullable: true),
+                    LeaseAddendumId = table.Column<int>(type: "integer", nullable: true),
                     TenantLedgerEntryId = table.Column<long>(type: "bigint", nullable: true),
-                    RecipientTenantId = table.Column<int>(type: "integer", nullable: false),
                     PropertyId = table.Column<int>(type: "integer", nullable: true),
                     NoticeType = table.Column<string>(type: "character varying(80)", maxLength: 80, nullable: false),
                     Status = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: false),
@@ -4570,6 +4574,18 @@ namespace RentalCommand.Data.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.SetNull);
                     table.ForeignKey(
+                        name: "FK_NoticeDrafts_LeaseAddenda_LeaseAddendumId_LeaseManagementId~",
+                        columns: x => new { x.LeaseAddendumId, x.LeaseManagementId, x.PortfolioId },
+                        principalTable: "LeaseAddenda",
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDrafts_LeaseAgreements_LeaseAgreementId_LeaseManageme~",
+                        columns: x => new { x.LeaseAgreementId, x.LeaseManagementId, x.PortfolioId },
+                        principalTable: "LeaseAgreements",
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
                         name: "FK_NoticeDrafts_LeaseManagements_LeaseManagementId_PortfolioId",
                         columns: x => new { x.LeaseManagementId, x.PortfolioId },
                         principalTable: "LeaseManagements",
@@ -4588,10 +4604,16 @@ namespace RentalCommand.Data.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.SetNull);
                     table.ForeignKey(
-                        name: "FK_NoticeDrafts_TenantAccounts_TenantAccountId_PortfolioId",
-                        columns: x => new { x.TenantAccountId, x.PortfolioId },
+                        name: "FK_NoticeDrafts_LeaseManagementParties_RecipientLeaseManagemen~",
+                        columns: x => new { x.RecipientLeaseManagementPartyId, x.LeaseManagementId, x.PortfolioId },
+                        principalTable: "LeaseManagementParties",
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDrafts_TenantAccounts_TenantAccountId_LeaseManagement~",
+                        columns: x => new { x.TenantAccountId, x.LeaseManagementId, x.PortfolioId },
                         principalTable: "TenantAccounts",
-                        principalColumns: new[] { "Id", "PortfolioId" },
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_NoticeDrafts_TenantLedgerEntries_TenantLedgerEntryId_Tenant~",
@@ -4599,13 +4621,15 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "TenantLedgerEntries",
                         principalColumns: new[] { "Id", "TenantAccountId", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_NoticeDrafts_Tenants_RecipientTenantId_PortfolioId",
-                        columns: x => new { x.RecipientTenantId, x.PortfolioId },
-                        principalTable: "Tenants",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
                 });
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_NoticeDeliveryEvidence_LeaseManagementParties_RecipientLease~",
+                table: "NoticeDeliveryEvidence",
+                columns: new[] { "RecipientLeaseManagementPartyId", "PortfolioId" },
+                principalTable: "LeaseManagementParties",
+                principalColumns: new[] { "Id", "PortfolioId" },
+                onDelete: ReferentialAction.Restrict);
 
             migrationBuilder.CreateTable(
                 name: "SecurityDepositEntries",
@@ -6458,15 +6482,40 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "RenderedNoticeId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDeliveryEvidence_RenderedNoticeId_RecipientTenantId_C~",
+                name: "IX_NoticeDeliveryEvidence_RenderedNoticeId_RecipientLeaseManage~",
                 table: "NoticeDeliveryEvidence",
-                columns: new[] { "RenderedNoticeId", "RecipientTenantId", "Channel" },
+                columns: new[] { "RenderedNoticeId", "RecipientLeaseManagementPartyId", "Channel" },
                 unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NoticeDeliveryEvidence_RecipientLeaseManagementPartyId_Portf~",
+                table: "NoticeDeliveryEvidence",
+                columns: new[] { "RecipientLeaseManagementPartyId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_ConversationId",
                 table: "NoticeDrafts",
                 column: "ConversationId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NoticeDrafts_LeaseAddendumId",
+                table: "NoticeDrafts",
+                column: "LeaseAddendumId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NoticeDrafts_LeaseAddendumId_LeaseManagementId_PortfolioId",
+                table: "NoticeDrafts",
+                columns: new[] { "LeaseAddendumId", "LeaseManagementId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NoticeDrafts_LeaseAgreementId",
+                table: "NoticeDrafts",
+                column: "LeaseAgreementId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NoticeDrafts_LeaseAgreementId_LeaseManagementId_PortfolioId",
+                table: "NoticeDrafts",
+                columns: new[] { "LeaseAgreementId", "LeaseManagementId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_LeaseManagementId",
@@ -6499,14 +6548,14 @@ namespace RentalCommand.Data.Migrations
                 column: "PropertyId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDrafts_RecipientTenantId",
+                name: "IX_NoticeDrafts_RecipientLeaseManagementPartyId",
                 table: "NoticeDrafts",
-                column: "RecipientTenantId");
+                column: "RecipientLeaseManagementPartyId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDrafts_RecipientTenantId_PortfolioId",
+                name: "IX_NoticeDrafts_RecipientLeaseManagementPartyId_LeaseManagementI~",
                 table: "NoticeDrafts",
-                columns: new[] { "RecipientTenantId", "PortfolioId" });
+                columns: new[] { "RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_RenderedNoticeId",
@@ -6525,9 +6574,9 @@ namespace RentalCommand.Data.Migrations
                 column: "TenantAccountId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDrafts_TenantAccountId_PortfolioId",
+                name: "IX_NoticeDrafts_TenantAccountId_LeaseManagementId_PortfolioId",
                 table: "NoticeDrafts",
-                columns: new[] { "TenantAccountId", "PortfolioId" });
+                columns: new[] { "TenantAccountId", "LeaseManagementId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_TenantLedgerEntryId",

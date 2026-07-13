@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -130,6 +131,7 @@ public class ApplicationServiceTests : IDisposable
 
         var unitA = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "A",
             CreatedAt = DateTime.UtcNow,
@@ -137,6 +139,7 @@ public class ApplicationServiceTests : IDisposable
         };
         var unitB = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "B",
             CreatedAt = DateTime.UtcNow,
@@ -241,65 +244,6 @@ public class ApplicationServiceTests : IDisposable
     {
         var info = await _sut.GetPublicFormInfoAsync("nope");
         info.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetPublicFormInfoAsync_ReturnsDerivedAvailabilityAndFiltersOfflineUnitsDbSide()
-    {
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Maple Grove",
-            Status = PropertyStatus.Active,
-            AddressLine1 = "1100 Maple Ave",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-        _db.Properties.Add(property);
-        await _db.SaveChangesAsync();
-
-        _db.Units.AddRange(
-            new Unit
-            {
-                PropertyId = property.Id,
-                UnitNumber = "1A",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            },
-            new Unit
-            {
-                PropertyId = property.Id,
-                UnitNumber = "2B",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            },
-            new Unit
-            {
-                PropertyId = property.Id,
-                UnitNumber = "3C",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            });
-        await _db.SaveChangesAsync();
-
-        _commands.Clear();
-        var info = await _sut.GetPublicFormInfoAsync(Token);
-
-        info.Should().NotBeNull();
-        var units = info!.Properties.Should().ContainSingle().Subject.Units;
-        units.Select(u => u.UnitNumber).Should().Equal("1A", "2B");
-        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(DerivedUnitStatus.Vacant);
-        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(DerivedUnitStatus.Occupied);
-
-        _commands.Should().HaveCountLessThanOrEqualTo(3);
-        _commands.Should().Contain(sql =>
-            sql.Contains("\"Units\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("\"Status\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
-            (sql.Contains("<>") || sql.Contains("!=")));
     }
 
     [Fact]
@@ -428,6 +372,7 @@ public class ApplicationServiceTests : IDisposable
 
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "B",
             Bedrooms = 2,
@@ -839,6 +784,167 @@ public class ApplicationServiceTests : IDisposable
             return Task.CompletedTask;
         }
     }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+}
+
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
+{
+    private const int PortfolioId = 1;
+    private const int ActorId = 1;
+    private const string Token = "good-token-abc";
+
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly List<string> _commands = [];
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private ApplicationService _sut = null!;
+
+    public ApplicationServicePostgreSqlTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == PortfolioId);
+        portfolio.PublicApplicationToken = Token;
+        await _ctx.Db.SaveChangesAsync();
+
+        _sut = new ApplicationService(
+            _ctx.Db,
+            Mock.Of<IFileStorage>(),
+            Mock.Of<IDataUpdateService>(),
+            Mock.Of<IAuditTrailService>(),
+            new NoopTenantPortalProvisioningService(),
+            NullLogger<ApplicationService>.Instance,
+            TimeProvider.System);
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _ctx.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task GetPublicFormInfoAsync_ReturnsDerivedAvailabilityAndFiltersOfflineUnitsDbSide()
+    {
+        var now = DateTime.UtcNow;
+        var emptyProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Aspen House",
+            Status = PropertyStatus.Active,
+            AddressLine1 = "900 Aspen Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Grove",
+            Status = PropertyStatus.Active,
+            AddressLine1 = "1100 Maple Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.AddRange(emptyProperty, property);
+        await _ctx.Db.SaveChangesAsync();
+
+        var vacant = Unit(property.Id, "1A", now);
+        var occupied = Unit(property.Id, "2B", now);
+        var offline = Unit(property.Id, "3C", now);
+        _ctx.Db.Units.AddRange(vacant, occupied, offline);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.LeaseManagements.Add(new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = occupied.Id,
+            RelationshipNumber = "LM-APPLICATION-PUBLIC-OCCUPIED",
+            PossessionGivenAtUtc = now.AddDays(-1),
+            PossessionAgreementExceptionReason = "Test fixture proves occupancy independently of legal status.",
+            PossessionAgreementExceptionAuthorizedByUserId = ActorId,
+            CreatedAtUtc = now.AddDays(-1),
+            CreatedByUserId = ActorId,
+            UpdatedAtUtc = now.AddDays(-1),
+        });
+        _ctx.Db.UnitOperationalPeriods.Add(new UnitOperationalPeriod
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = offline.Id,
+            Type = UnitOperationalPeriodType.OutOfService,
+            StartedAtUtc = now.AddDays(-1),
+            Reason = "Offline public-application fixture",
+            CreatedAtUtc = now.AddDays(-1),
+            CreatedByUserId = ActorId,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        _commands.Clear();
+        var info = await _sut.GetPublicFormInfoAsync(Token);
+
+        info.Should().NotBeNull();
+        info!.Properties.Select(propertyOption => propertyOption.Name)
+            .Should().Equal("Aspen House", "Maple Grove");
+        info.Properties.Single(propertyOption => propertyOption.Id == emptyProperty.Id).Units
+            .Should().BeEmpty();
+
+        var units = info.Properties.Single(propertyOption => propertyOption.Id == property.Id).Units;
+        units.Select(u => u.UnitNumber).Should().Equal("1A", "2B");
+        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(DerivedUnitStatus.Vacant);
+        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(DerivedUnitStatus.Occupied);
+
+        _commands.Should().HaveCountLessThanOrEqualTo(3);
+        _commands.Should().Contain(sql =>
+            sql.Contains("\"Units\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"IsOutOfService\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LEFT JOIN", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FILTER", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static Unit Unit(int propertyId, string unitNumber, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = propertyId,
+        UnitNumber = unitNumber,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {

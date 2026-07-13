@@ -1,5 +1,6 @@
 using FluentAssertions;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Banking;
 
 namespace RentalCommand.Core.Tests.Atomic;
 
@@ -45,6 +46,36 @@ public sealed class AtomicCommandFingerprintTests
             DeliveryIdempotencyKey: "delivery");
 
         AtomicCommandFingerprint.Create(command with { Amount = 26.50m })
+            .Should().NotBe(AtomicCommandFingerprint.Create(command));
+    }
+
+    [Fact]
+    public void Create_PlaidRetryIgnoresRandomizedCiphertextButPreservesStableHashes()
+    {
+        var command = new PreparePlaidTokenExchangeCommand(
+            PortfolioId: 12,
+            ClientOperationId: "operation-1",
+            RequestHash: "request-hash",
+            PublicTokenHash: "public-token-hash",
+            InstitutionName: "Rental Bank",
+            AccountName: "Checking",
+            AccountMask: "1234",
+            AccountType: "depository",
+            AccountSubtype: "checking",
+            ExternalAccountIdCipherText: "ciphertext-one",
+            ExternalAccountIdHash: "external-account-hash",
+            PreparedAtUtc: new DateTime(2026, 7, 12, 1, 0, 0, DateTimeKind.Utc));
+        var retry = command with
+        {
+            ExternalAccountIdCipherText = "ciphertext-two",
+            PreparedAtUtc = command.PreparedAtUtc.AddMinutes(2),
+        };
+
+        AtomicCommandFingerprint.Create(retry)
+            .Should().Be(AtomicCommandFingerprint.Create(command));
+        AtomicCommandFingerprint.Create(command with { RequestHash = "changed-request-hash" })
+            .Should().NotBe(AtomicCommandFingerprint.Create(command));
+        AtomicCommandFingerprint.Create(command with { ExternalAccountIdHash = "changed-account-hash" })
             .Should().NotBe(AtomicCommandFingerprint.Create(command));
     }
 

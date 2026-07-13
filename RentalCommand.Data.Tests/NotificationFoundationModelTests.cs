@@ -117,7 +117,7 @@ public sealed class NotificationFoundationModelTests
         var expectedDestinationProperties = new[]
         {
             nameof(NoticeDeliveryEvidence.RenderedNoticeId),
-            nameof(NoticeDeliveryEvidence.RecipientTenantId),
+            nameof(NoticeDeliveryEvidence.RecipientLeaseManagementPartyId),
             nameof(NoticeDeliveryEvidence.Channel),
         };
 
@@ -125,6 +125,65 @@ public sealed class NotificationFoundationModelTests
             index.Properties.Single().Name == nameof(NoticeDeliveryEvidence.OutboxMessageId));
         entity.GetIndexes().Should().Contain(index => index.IsUnique &&
             index.Properties.Select(property => property.Name).SequenceEqual(expectedDestinationProperties));
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDeliveryEvidence.RecipientLeaseManagementPartyId),
+                nameof(NoticeDeliveryEvidence.PortfolioId),
+            }));
+    }
+
+    [Fact]
+    public void NoticeDraft_UsesCanonicalRelationshipPartyAndLegalProvenance()
+    {
+        using var db = CreateDb();
+        var entity = db.Model.FindEntityType(typeof(NoticeDraft))!;
+
+        entity.FindProperty("LeaseId").Should().BeNull();
+        entity.FindProperty("PaymentId").Should().BeNull();
+        entity.FindProperty("RecipientTenantId").Should().BeNull();
+        entity.FindProperty(nameof(NoticeDraft.LeaseManagementId)).Should().NotBeNull();
+        entity.FindProperty(nameof(NoticeDraft.TenantAccountId)).Should().NotBeNull();
+        entity.FindProperty(nameof(NoticeDraft.RecipientLeaseManagementPartyId)).Should().NotBeNull();
+        entity.FindProperty(nameof(NoticeDraft.LeaseAgreementId)).Should().NotBeNull();
+        entity.FindProperty(nameof(NoticeDraft.LeaseAddendumId)).Should().NotBeNull();
+        entity.FindProperty(nameof(NoticeDraft.TenantLedgerEntryId)).Should().NotBeNull();
+
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.RecipientLeaseManagementPartyId),
+                nameof(NoticeDraft.LeaseManagementId),
+                nameof(NoticeDraft.PortfolioId),
+            }));
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.TenantAccountId),
+                nameof(NoticeDraft.LeaseManagementId),
+                nameof(NoticeDraft.PortfolioId),
+            }));
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.LeaseAgreementId),
+                nameof(NoticeDraft.LeaseManagementId),
+                nameof(NoticeDraft.PortfolioId),
+            }));
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.TenantLedgerEntryId),
+                nameof(NoticeDraft.TenantAccountId),
+                nameof(NoticeDraft.PortfolioId),
+            }));
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.LeaseAddendumId),
+                nameof(NoticeDraft.LeaseManagementId),
+                nameof(NoticeDraft.PortfolioId),
+            }));
     }
 
     [Fact]

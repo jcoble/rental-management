@@ -136,7 +136,7 @@ public sealed class NoticeDeliveryEvidence
     public long Id { get; set; }
     public int PortfolioId { get; set; }
     public long RenderedNoticeId { get; set; }
-    public int RecipientTenantId { get; set; }
+    public int RecipientLeaseManagementPartyId { get; set; }
     public NoticeRecipientRole RecipientRole { get; set; }
     public NoticeDeliveryChannel Channel { get; set; }
     public string Destination { get; set; } = string.Empty;
@@ -144,6 +144,7 @@ public sealed class NoticeDeliveryEvidence
     public string IdempotencyKey { get; set; } = string.Empty;
     public DateTime CreatedAtUtc { get; set; }
     public RenderedNotice? RenderedNotice { get; set; }
+    public LeaseManagementParty? RecipientLeaseManagementParty { get; set; }
     public OutboxMessage? OutboxMessage { get; set; }
 }
 

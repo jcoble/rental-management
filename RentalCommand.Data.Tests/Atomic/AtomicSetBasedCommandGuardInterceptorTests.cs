@@ -86,6 +86,20 @@ public sealed class AtomicSetBasedCommandGuardInterceptorTests
             .Should().Be(AtomicRawDmlOperation.Insert);
     }
 
+    [Fact]
+    public void PostgreSql_upsert_is_classified_as_one_insert_target()
+    {
+        const string sql = """
+            INSERT INTO "BankTransactions" ("Id", "Description")
+            VALUES (1, 'Rent')
+            ON CONFLICT ("Id") DO UPDATE SET "Description" = EXCLUDED."Description"
+            """;
+
+        AtomicSetBasedCommandGuardInterceptor.ClassifyRawDmlTargets(sql)
+            .Should().Equal(
+                new AtomicRawDmlTarget("BankTransactions", AtomicRawDmlOperation.Insert));
+    }
+
     [Theory]
     [InlineData("INSERT INTO widgets (id) VALUES (1)", (int)AtomicRawDmlOperation.Insert)]
     [InlineData("UPDATE widgets SET id = 2", (int)AtomicRawDmlOperation.Update)]

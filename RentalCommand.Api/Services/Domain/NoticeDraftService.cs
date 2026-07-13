@@ -507,7 +507,15 @@ public class NoticeDraftService : INoticeDraftService
         return new GenerateNoticeDraftsResponse
         {
             CreatedCount = 1,
-            Drafts = [Map(draft)]
+            Drafts = await BuildGenerateResponseDraftsAsync(
+                portfolioId,
+                charge.RecipientTenantId,
+                charge.LeaseManagementId,
+                charge.TenantAccountId,
+                charge.TenantLedgerEntryId,
+                noticeType,
+                [draft],
+                ct)
         };
     }
 
@@ -615,10 +623,11 @@ public class NoticeDraftService : INoticeDraftService
             .SumAsync(fee => (decimal?)fee.OpenAmount, ct) ?? 0m;
     }
 
-    private class NoticeContext
+    internal class NoticeContext
     {
         public int LeaseManagementId { get; init; }
         public int TenantAccountId { get; init; }
+        public int RecipientLeaseManagementPartyId { get; init; }
         public int RecipientTenantId { get; init; }
         public int PropertyId { get; init; }
         public int UnitId { get; init; }
@@ -633,16 +642,18 @@ public class NoticeDraftService : INoticeDraftService
         public short RentDueDay { get; init; }
     }
 
-    private sealed class MoneyNoticeCandidate : NoticeContext
+    internal sealed class MoneyNoticeCandidate : NoticeContext
     {
         public long TenantLedgerEntryId { get; init; }
+        public int? LeaseAgreementId { get; init; }
+        public int? LeaseAddendumId { get; init; }
         public string EntryType { get; init; } = string.Empty;
         public DateOnly DueOn { get; init; }
         public decimal OpenAmount { get; init; }
         public bool IsPastDue { get; init; }
     }
 
-    private IQueryable<NoticeContext> ActiveNoticeContextQuery(int portfolioId) =>
+    internal IQueryable<NoticeContext> ActiveNoticeContextQuery(int portfolioId) =>
         from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
         join management in _db.LeaseManagements.AsNoTracking()
             on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
@@ -653,16 +664,33 @@ public class NoticeDraftService : INoticeDraftService
         join account in _db.TenantAccounts.AsNoTracking()
             on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
             equals new { account.PortfolioId, account.LeaseManagementId }
+        join party in _db.LeaseManagementParties.AsNoTracking()
+            on new
+            {
+                lifecycle.PortfolioId,
+                lifecycle.LeaseManagementId,
+                TenantId = lifecycle.CurrentPrimaryTenantId,
+            }
+            equals new
+            {
+                party.PortfolioId,
+                party.LeaseManagementId,
+                TenantId = (int?)party.TenantId,
+            }
         join tenant in _db.Tenants.AsNoTracking()
-            on new { lifecycle.PortfolioId, Id = lifecycle.CurrentPrimaryTenantId }
-            equals new { tenant.PortfolioId, Id = (int?)tenant.Id }
+            on new { party.PortfolioId, party.TenantId }
+            equals new { tenant.PortfolioId, TenantId = tenant.Id }
         where lifecycle.PortfolioId == portfolioId
             && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
             && !lifecycle.HasReconciliationException
+            && party.Role == LeaseManagementPartyRole.PrimaryTenant
+            && party.EffectiveFrom <= lifecycle.BusinessDate
+            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
         select new NoticeContext
         {
             LeaseManagementId = management.Id,
             TenantAccountId = account.Id,
+            RecipientLeaseManagementPartyId = party.Id,
             RecipientTenantId = tenant.Id,
             PropertyId = management.PropertyId,
             UnitId = management.UnitId,
@@ -695,6 +723,7 @@ public class NoticeDraftService : INoticeDraftService
         {
             LeaseManagementId = context.LeaseManagementId,
             TenantAccountId = context.TenantAccountId,
+            RecipientLeaseManagementPartyId = context.RecipientLeaseManagementPartyId,
             RecipientTenantId = context.RecipientTenantId,
             PropertyId = context.PropertyId,
             UnitId = context.UnitId,
@@ -708,6 +737,8 @@ public class NoticeDraftService : INoticeDraftService
             BaseRentAmount = context.BaseRentAmount,
             RentDueDay = context.RentDueDay,
             TenantLedgerEntryId = entry.Id,
+            LeaseAgreementId = entry.LeaseAgreementId,
+            LeaseAddendumId = entry.LeaseAddendumId,
             EntryType = charge.EntryType,
             DueOn = charge.DueOn.Value,
             OpenAmount = charge.OpenAmount,
@@ -716,7 +747,7 @@ public class NoticeDraftService : INoticeDraftService
 
     private IQueryable<NoticeDraft> BaseQuery(int portfolioId) =>
         _db.NoticeDrafts
-            .Include(d => d.RecipientTenant)
+            .Include(d => d.RecipientLeaseManagementParty).ThenInclude(party => party!.Tenant)
             .Include(d => d.Property)
             .Include(d => d.LeaseManagement).ThenInclude(l => l!.Unit)
             .Where(d => d.PortfolioId == portfolioId);
@@ -733,7 +764,18 @@ public class NoticeDraftService : INoticeDraftService
     {
         if (!recipientTenantId.HasValue && !leaseManagementId.HasValue && !tenantAccountId.HasValue && !tenantLedgerEntryId.HasValue)
         {
-            return created.Select(Map).ToList();
+            if (created.Count == 0)
+            {
+                return [];
+            }
+
+            var createdIds = created.Select(draft => draft.Id).ToArray();
+            var createdDrafts = await BaseQuery(portfolioId)
+                .Where(draft => createdIds.Contains(draft.Id))
+                .OrderBy(draft => draft.TriggerDate)
+                .ThenByDescending(draft => draft.CreatedAt)
+                .ToListAsync(ct);
+            return createdDrafts.Select(Map).ToList();
         }
 
         var query = BaseQuery(portfolioId);
@@ -751,7 +793,9 @@ public class NoticeDraftService : INoticeDraftService
 
         if (recipientTenantId.HasValue)
         {
-            query = query.Where(d => d.RecipientTenantId == recipientTenantId.Value);
+            query = query.Where(d =>
+                d.RecipientLeaseManagementParty != null &&
+                d.RecipientLeaseManagementParty.TenantId == recipientTenantId.Value);
         }
 
         if (leaseManagementId.HasValue)
@@ -1131,8 +1175,14 @@ public class NoticeDraftService : INoticeDraftService
             PortfolioId = portfolioId,
             LeaseManagementId = context.LeaseManagementId,
             TenantAccountId = context.TenantAccountId,
+            RecipientLeaseManagementPartyId = context.RecipientLeaseManagementPartyId,
+            LeaseAgreementId = context is MoneyNoticeCandidate money
+                ? money.LeaseAgreementId ?? context.CurrentAgreementId
+                : context.CurrentAgreementId,
+            LeaseAddendumId = context is MoneyNoticeCandidate moneyContext
+                ? moneyContext.LeaseAddendumId
+                : null,
             TenantLedgerEntryId = tenantLedgerEntryId,
-            RecipientTenantId = context.RecipientTenantId,
             PropertyId = context.PropertyId,
             NoticeType = noticeType,
             Subject = subject,
@@ -1267,16 +1317,20 @@ public class NoticeDraftService : INoticeDraftService
 
     private static NoticeDraftResponse Map(NoticeDraft d)
     {
-        var tenantName = d.RecipientTenant == null
+        var tenant = d.RecipientLeaseManagementParty?.Tenant;
+        var tenantName = tenant == null
             ? ""
-            : $"{d.RecipientTenant.FirstName} {d.RecipientTenant.LastName}".Trim();
+            : $"{tenant.FirstName} {tenant.LastName}".Trim();
         return new NoticeDraftResponse
         {
             Id = d.Id,
             LeaseManagementId = d.LeaseManagementId,
             TenantAccountId = d.TenantAccountId,
+            RecipientLeaseManagementPartyId = d.RecipientLeaseManagementPartyId,
+            LeaseAgreementId = d.LeaseAgreementId,
+            LeaseAddendumId = d.LeaseAddendumId,
             TenantLedgerEntryId = d.TenantLedgerEntryId,
-            RecipientTenantId = d.RecipientTenantId,
+            RecipientTenantId = tenant?.Id ?? 0,
             PropertyId = d.PropertyId,
             TenantName = tenantName,
             PropertyName = d.Property?.Name,
