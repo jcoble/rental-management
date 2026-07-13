@@ -55,7 +55,7 @@ internal static class ScheduleEDepreciationQuery
             let cappedAmount = remaining.HasValue && nonNegativeAmount > remaining.Value
                 ? remaining.Value
                 : nonNegativeAmount
-            let finalAmount = cappedAmount ?? 0m
+            let finalAmount = cappedAmount
             where finalAmount > 0m
             select new ScheduleEDepreciationComponent
             {
