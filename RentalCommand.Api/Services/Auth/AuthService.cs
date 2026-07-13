@@ -11,6 +11,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Auth;
 using Microsoft.Extensions.Options;
 using RentalCommand.Data;
+using RentalCommand.Api.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -126,6 +127,7 @@ public class AuthService : IAuthService
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly ILogger<AuthService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IRlsExecutionContext _rlsExecutionContext;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -140,6 +142,7 @@ public class AuthService : IAuthService
         RentalCommandDbContext db,
         IAuditTrailService audit,
         ICanonicalAccountBootstrapService accountBootstrap,
+        IRlsExecutionContext rlsExecutionContext,
         ILogger<AuthService> logger,
         TimeProvider timeProvider)
     {
@@ -155,6 +158,7 @@ public class AuthService : IAuthService
         _db = db;
         _audit = audit;
         _accountBootstrap = accountBootstrap;
+        _rlsExecutionContext = rlsExecutionContext;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -217,6 +221,11 @@ public class AuthService : IAuthService
         int? accessContextId,
         CancellationToken ct = default)
     {
+        // Password/external-provider verification and the email-confirmation gate have already
+        // succeeded before entering this method. This lease exists only so the server can discover
+        // the verified user's effective workspace options before a canonical context is selected.
+        using var rlsBypass = _rlsExecutionContext.BeginBypass(
+            RlsBypassReason.CredentialVerifiedContextSelection);
         var now = _timeProvider.UtcNow();
         var contexts = await _contextSelection.ListAsync(user.Id, now, ct);
         if (contexts.Count == 0)
@@ -297,6 +306,10 @@ public class AuthService : IAuthService
             return AuthResult.Fail("Invalid or expired refresh token");
         }
 
+        // Successful possession of the opaque, rotating refresh credential is the admission gate
+        // for resolving its session/context. No legacy portfolio or role claim participates.
+        using var rlsBypass = _rlsExecutionContext.BeginBypass(
+            RlsBypassReason.RefreshCredentialContextResolution);
         var now = _timeProvider.UtcNow();
         var session = await (
                 from authSession in _db.AuthSessions.AsNoTracking()

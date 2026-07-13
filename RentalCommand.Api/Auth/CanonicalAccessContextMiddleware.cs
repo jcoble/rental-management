@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using RentalCommand.Api.Data;
 using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Auth;
@@ -22,6 +23,7 @@ public sealed class CanonicalAccessContextMiddleware
     public async Task InvokeAsync(
         HttpContext httpContext,
         IActiveAccessContextResolver resolver,
+        IRlsExecutionContext rlsExecutionContext,
         TimeProvider timeProvider)
     {
         var principal = httpContext.User;
@@ -38,13 +40,18 @@ public sealed class CanonicalAccessContextMiddleware
 
             try
             {
-                var active = await resolver.ResolveAsync(
-                    sessionId,
-                    userId,
-                    accessContextId,
-                    accessRevision,
-                    timeProvider.GetUtcNow().UtcDateTime,
-                    httpContext.RequestAborted);
+                ActiveAccessContext active;
+                using (rlsExecutionContext.BeginBypass(RlsBypassReason.CanonicalJwtAuthorityResolution))
+                {
+                    active = await resolver.ResolveAsync(
+                        sessionId,
+                        userId,
+                        accessContextId,
+                        accessRevision,
+                        timeProvider.GetUtcNow().UtcDateTime,
+                        httpContext.RequestAborted);
+                }
+
                 httpContext.Items[CanonicalAccessContextHttpItem.Key] = active;
             }
             catch (AccessContextUnavailableException)

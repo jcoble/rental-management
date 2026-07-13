@@ -12,6 +12,10 @@ public enum RlsBypassReason
     RegistrationBootstrap = 2,
     BackgroundWorker = 3,
     PlatformOperation = 4,
+    CanonicalJwtAuthorityResolution = 5,
+    CredentialVerifiedContextSelection = 6,
+    RefreshCredentialContextResolution = 7,
+    AccountingOAuthCallback = 8,
 }
 
 public interface IRlsExecutionContext

@@ -40,7 +40,7 @@ public sealed class RlsConnectionInterceptorTests
     }
 
     [Fact]
-    public void ExplicitBackgroundLease_IsTheOnlyBypass()
+    public void ExplicitLease_EnablesBypassOnlyForItsLifetime()
     {
         var execution = new RlsExecutionContext();
         RlsConnectionInterceptor.ResolveSessionState(null, execution.IsBypassActive)
@@ -51,6 +51,22 @@ public sealed class RlsConnectionInterceptorTests
             RlsConnectionInterceptor.ResolveSessionState(null, execution.IsBypassActive)
                 .Should().Be(new RlsSessionState(0, true));
         }
+    }
+
+    [Fact]
+    public void NarrowPreContextLease_IsExceptionSafe()
+    {
+        var execution = new RlsExecutionContext();
+
+        Action act = () =>
+        {
+            using var lease = execution.BeginBypass(RlsBypassReason.CanonicalJwtAuthorityResolution);
+            execution.IsBypassActive.Should().BeTrue();
+            throw new InvalidOperationException("resolver failed");
+        };
+
+        act.Should().Throw<InvalidOperationException>();
+        execution.IsBypassActive.Should().BeFalse();
     }
 
     private static ActiveAccessContext Active(int portfolioId) =>
